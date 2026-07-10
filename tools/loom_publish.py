@@ -59,6 +59,7 @@ ALLOWLIST = [
     "skill",
     "tools/install.ps1",
     "tools/install.sh",
+    "tools/loom_audit.py",
     "tools/loom_lint.py",
     "tools/loom_survey.py",
     "tools/loom_kickoff.py",
@@ -66,6 +67,7 @@ ALLOWLIST = [
     "tools/loom_report.py",
     "tools/loom_publish.py",
     "tools/gen_assets.py",
+    "tools/test_loom_audit.py",
     "tools/test_loom_lint.py",
     "tools/test_loom_tools.py",
     "tools/test_loom_migrate.py",
@@ -84,6 +86,8 @@ OVERLAY = [
     "CHANGELOG.md",
     "FEEDBACK.md",
     "assets",
+    "docs",
+    ".github",
     "tools/publish-tokens.txt",
 ]
 
@@ -92,18 +96,23 @@ TEXT_EXT = {".md", ".py", ".json", ".txt", ".ps1", ".sh", ""}
 
 
 def load_tokens(path):
-    pats = []
+    """Returns (patterns, allowed). `allow:` lines name exact substrings that are
+    deliberately public (the artifact's own URLs); they are removed from each line
+    before token matching, so raw identity tokens still trip everywhere else."""
+    pats, allowed = [], []
     if not path.is_file():
-        return pats
+        return pats, allowed
     for raw in path.read_text(encoding="utf-8").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if line.startswith("re:"):
+        if line.startswith("allow:"):
+            allowed.append(line[6:].strip())
+        elif line.startswith("re:"):
             pats.append((line, re.compile(line[3:])))
         else:
             pats.append((line, re.compile(re.escape(line), re.IGNORECASE)))
-    return pats
+    return pats, allowed
 
 
 def copy_path(rel, out):
@@ -135,7 +144,7 @@ def overlay_path(rel, out):
     return None
 
 
-def scan(out, tokens):
+def scan(out, tokens, allowed=()):
     """Firewall + secret scan + md link check. Returns list of findings."""
     findings = []
     files = [f for f in sorted(out.rglob("*"))
@@ -147,8 +156,11 @@ def scan(out, tokens):
         text = f.read_text(encoding="utf-8", errors="replace")
         is_test = rel.startswith("tools/test_")
         for n, line in enumerate(text.splitlines(), start=1):
+            scanline = line
+            for a in allowed:
+                scanline = scanline.replace(a, "")
             for label, pat in tokens:
-                if pat.search(line):
+                if pat.search(scanline):
                     findings.append(f"FIREWALL {rel}:{n} matches forbidden token "
                                     f"'{label}'")
             if is_test:
@@ -192,12 +204,16 @@ def build(out_dir, check=False):
         shutil.rmtree(out)
         return 2
 
-    tokens = load_tokens(ROOT / "tools" / "publish-tokens.txt")
+    tokens, allowed = load_tokens(ROOT / "tools" / "publish-tokens.txt")
     if not tokens:
         print("loom_publish: WARNING — 0 firewall tokens loaded "
               "(tools/publish-tokens.txt); add your own before publishing")
 
-    findings = scan(out, tokens)
+    findings = scan(out, tokens, allowed)
+    # the no-network audit must also pass on the output tree
+    import loom_audit
+    _, audit_findings = loom_audit.audit(out)
+    findings += [f"AUDIT    {x}" for x in audit_findings]
     if findings:
         for x in findings:
             print(x)

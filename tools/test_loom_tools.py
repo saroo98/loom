@@ -15,7 +15,9 @@ TODAY = dt.date.today().isoformat()
 
 
 def sh(cwd, *args):
-    return subprocess.run(list(args), cwd=cwd, capture_output=True, text=True)
+    assert args[0] == "git"  # keeps the no-network audit's literal-head guarantee
+    return subprocess.run(["git"] + list(args[1:]), cwd=cwd,
+                          capture_output=True, text=True)
 
 
 class SurveyTests(unittest.TestCase):

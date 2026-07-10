@@ -11,17 +11,29 @@
 3. **No central collection.** There is no upstream queue, no shared improvement channel,
    no contribution pipeline to this or any other repository. Every install is sovereign.
 
-## The proof
+## The proof (three layers, all yours to run)
 
-Don't trust the statement — check it:
+1. **The machine audit** — one command, exit code is the verdict:
 
-```bash
-grep -rn "http\|socket\|urllib\|requests" tools/*.py
-```
+   ```bash
+   python tools/loom_audit.py
+   ```
 
-The tools are standard-library Python with no network code. The only network activity in
-the whole system is `git fetch`/`pull`/`push` against remotes **you** configured, run by
-the skill's freshness pulse (ff-only, never merges, skippable) and by you.
+   It AST-parses every tool: any import of a network-capable module
+   (socket, urllib, http, requests, …) is a finding; any subprocess launching
+   anything other than `git` or the Python test runner is a finding. Zero findings
+   or it fails.
+
+2. **The public proof trail** — the same audit plus the full test suite run on every
+   push to this repository via its `verify` workflow, in public, on infrastructure the
+   author doesn't control. Anyone can read every run.
+
+3. **The old-fashioned way** — `grep -rn "http\|socket\|urllib\|requests" tools/*.py`
+   and read the code; it's small on purpose.
+
+The only network activity in the whole system is `git fetch`/`pull`/`push` against
+remotes **you** configured — run by the skill's freshness pulse (ff-only, never merges,
+skippable) and by you.
 
 ## What Loom itself considers private
 

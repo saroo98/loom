@@ -3,14 +3,16 @@
   <img alt="Loom — the planning OS that shows its work" src="assets/banner-light.svg" width="880">
 </picture>
 
-<p>
+<div align="center">
   <img src="assets/mark-stdlib.svg" alt="stdlib-only tools" height="30">
   <img src="assets/mark-notelemetry.svg" alt="zero telemetry, provable" height="30">
   <img src="assets/mark-selfscoring.svg" alt="scores itself, honestly" height="30">
-</p>
+  <br>
+  <a href="https://github.com/saroo98/loom/actions/workflows/verify.yml"><img src="https://github.com/saroo98/loom/actions/workflows/verify.yml/badge.svg" alt="verify: tests + no-network audit" height="20"></a>
+</div>
 
 **The most rigorous planning system an AI coding agent can run — behind the shortest
-command you'll type today.**
+command you'll type today.** ([website](https://saroo98.github.io/loom/))
 
 Loom is a planning operating system for AI agents. Underneath: truth-labeled plans, an
 assumption ledger with break propagation, review gates, atomic work orders, drift
@@ -88,9 +90,17 @@ That one message is a complete brief. Loom takes it from there: surveys the repo
 exists, interrogates what you *didn't* say (the silence sweep), writes the plan pack
 into `<project>/plans/`, gates it against the rubric, and comes back with **one** batched
 set of decisions — each with a recommendation, so a one-word reply unblocks everything.
-Don't overthink the format either: describe your project in plain words and bare `/loom`
-figures out the rest. Small task? `/loom small` skips the ceremony — one work order, two
-checks. Right-sizing is enforced, not aspirational.
+
+And the structure is optional. No name, no "Done =", no format at all — just talk:
+
+```
+/loom I keep losing track of the invoices for my freelance work, build me
+something small that fixes that
+```
+
+Loom infers the mode, the tier, and the finish line itself, labels every guess it had
+to make, and asks you at most one batched question. Small task? `/loom small` skips the
+ceremony — one work order, two checks. Right-sizing is enforced, not aspirational.
 
 | Moment | Command |
 |---|---|
@@ -124,9 +134,11 @@ promise:
 
 - **Nothing leaves your machine.** The learning loop writes to your `~/.loom/` and your
   Loom repo's FEEDBACK queue. No central queue, no upstream channel, no telemetry — the
-  channel *does not exist*. Verify it yourself:
-  `grep -rn "http\|socket\|urllib\|requests" tools/*.py` — the only network activity in
-  the entire system is git, against remotes you configure.
+  channel *does not exist*. Don't take that on faith — audit it in one command:
+  `python tools/loom_audit.py` (AST-level scan: no network-capable imports anywhere,
+  subprocess restricted to git and the test runner; exit 0 = pass). The same audit runs
+  publicly on every push to this repository, so the proof trail is generated in the
+  open, not asserted by the author.
 - **Every install is sovereign.** Your Loom triages its own feedback, grows its own
   chapters, diverges from every other install — by design.
 - **Upstream is optional.** Releases of this repo are imports you may cherry-pick,

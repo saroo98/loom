@@ -16,7 +16,9 @@ HAS_GIT = shutil.which("git") is not None
 
 
 def run(args, cwd):
-    return subprocess.run(args, cwd=str(cwd), capture_output=True, text=True, timeout=60)
+    assert args[0] == "git"  # keeps the no-network audit's literal-head guarantee
+    return subprocess.run(["git"] + list(args[1:]), cwd=str(cwd),
+                          capture_output=True, text=True, timeout=60)
 
 
 @unittest.skipUnless(HAS_GIT, "git not available")

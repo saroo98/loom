@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Loom — a planning OS for AI coding agents</title>
+<meta name="description" content="Loom turns one command into truth-labeled plans, gated execution, and drift detection for AI coding agents — with a learning loop that never leaves your machine. Zero telemetry, provable.">
+<link rel="canonical" href="https://saroo98.github.io/loom/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Loom — a planning OS for AI coding agents">
+<meta property="og:description" content="Truth-labeled plans, gated execution, drift detection — behind one command. Sovereign by architecture: your Loom learns you, locally.">
+<meta property="og:url" content="https://saroo98.github.io/loom/">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Loom — a planning OS for AI coding agents">
+<meta name="twitter:description" content="The most rigorous planning system an agent can run, behind the shortest command you'll type today.">
+<meta name="robots" content="index,follow">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Cpath d='M8 6v20M14 6v20M20 6v20M26 6v20' stroke='%23484f58' stroke-width='1.5'/%3E%3Cpath d='M5 12h22M5 20h22' stroke='%23818cf8' stroke-width='3' stroke-dasharray='4 3'/%3E%3C/svg%3E">
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"SoftwareApplication","name":"Loom",
+"applicationCategory":"DeveloperApplication","operatingSystem":"Windows, macOS, Linux",
+"description":"A planning OS for AI coding agents: truth-labeled plans, assumption ledgers, review gates, drift detection, and a per-user learning loop that never leaves the machine.",
+"url":"https://saroo98.github.io/loom/",
+"codeRepository":"https://github.com/saroo98/loom",
+"license":"https://www.apache.org/licenses/LICENSE-2.0",
+"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"}}
+</script>
+<style>
+:root{
+  --bg:#0b0e13;--bg2:#11151c;--card:#151a23;--line:#252c38;--fg:#e8edf4;--mut:#8b96a5;
+  --a:#818cf8;--b:#2dd4bf;--c:#fbbf24;--ok:#3fb950;
+  --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
+}
+@media (prefers-color-scheme: light){
+  :root{--bg:#ffffff;--bg2:#f6f8fa;--card:#ffffff;--line:#d8dee6;--fg:#1c222b;--mut:#5b6672;
+        --a:#4f46e5;--b:#0d9488;--c:#b45309;--ok:#1a7f37}
+}
+*{box-sizing:border-box;margin:0}
+html{scroll-behavior:smooth}
+body{background:var(--bg);color:var(--fg);font:16px/1.65 -apple-system,'Segoe UI',Helvetica,Arial,sans-serif}
+a{color:var(--a);text-decoration:none}
+a:hover{text-decoration:underline}
+.wrap{max-width:980px;margin:0 auto;padding:0 22px}
+nav{position:sticky;top:0;z-index:9;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+nav .wrap{display:flex;align-items:center;gap:22px;height:54px}
+.wordmark{font-weight:800;letter-spacing:.18em;font-size:15px;color:var(--fg)}
+nav a.lnk{color:var(--mut);font-size:13.5px}
+nav a.lnk:hover{color:var(--fg);text-decoration:none}
+nav .gh{margin-left:auto;font-size:13.5px;border:1px solid var(--line);padding:5px 12px;border-radius:999px}
+header{padding:72px 0 40px;border-bottom:1px solid var(--line);background:
+  radial-gradient(1200px 500px at 70% -10%, color-mix(in srgb,var(--a) 9%,transparent), transparent)}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.15;letter-spacing:-.01em;max-width:21ch}
+.sub{color:var(--mut);font-size:18px;max-width:58ch;margin:18px 0 26px}
+.cta{display:inline-block;border-radius:9px;padding:10px 18px;font-weight:600;font-size:15px}
+.cta.pri{background:var(--a);color:#fff}
+.cta.pri:hover{text-decoration:none;filter:brightness(1.1)}
+.cta.sec{border:1px solid var(--line);color:var(--fg);margin-left:10px}
+.cta.sec:hover{text-decoration:none;border-color:var(--mut)}
+.heroweave{margin-top:42px;border:1px solid var(--line);border-radius:14px;background:var(--bg2);
+           overflow:hidden}
+.heroweave svg{display:block;width:100%;height:auto}
+.weft{stroke-dasharray:13 9;animation:weavein 1.6s ease-out backwards}
+@keyframes weavein{from{stroke-dashoffset:220;opacity:0}to{stroke-dashoffset:0;opacity:1}}
+.shuttle{animation:shuttle 3.2s ease-in-out infinite alternate}
+@keyframes shuttle{from{transform:translateX(0)}to{transform:translateX(38px)}}
+section{padding:58px 0;border-bottom:1px solid var(--line)}
+h2{font-size:26px;letter-spacing:-.01em;margin-bottom:6px}
+.kicker{color:var(--mut);font-size:13px;text-transform:uppercase;letter-spacing:.14em;margin-bottom:10px}
+.lead{color:var(--mut);max-width:62ch;margin-bottom:26px}
+.tabs{display:flex;gap:8px;margin-bottom:12px}
+.tabs button{background:var(--card);border:1px solid var(--line);color:var(--mut);border-radius:999px;
+             padding:6px 16px;font-size:13.5px;cursor:pointer}
+.tabs button[aria-selected="true"]{color:var(--fg);border-color:var(--a)}
+.term{position:relative;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px;
+      font-family:var(--mono);font-size:14px;line-height:1.7;white-space:pre-wrap;min-height:120px}
+.term .p{color:var(--b)}
+.copy{position:absolute;top:10px;right:10px;background:var(--bg2);border:1px solid var(--line);color:var(--mut);
+      border-radius:7px;padding:4px 11px;font-size:12px;cursor:pointer}
+.copy:hover{color:var(--fg)}
+.note{color:var(--mut);font-size:14px;margin-top:12px;max-width:62ch}
+.loop{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin:24px 0 14px}
+.loop button{background:var(--card);border:1.6px solid var(--line);border-radius:11px;padding:13px 8px 11px;
+             cursor:pointer;text-align:center;color:var(--fg)}
+.loop button b{display:block;font-size:14.5px}
+.loop button span{display:block;color:var(--mut);font-size:11px;margin-top:3px;line-height:1.35}
+.loop button[aria-selected="true"]{border-color:var(--a);background:color-mix(in srgb,var(--a) 8%,var(--card))}
+.detail{background:var(--bg2);border:1px solid var(--line);border-left:3px solid var(--a);border-radius:10px;
+        padding:16px 20px;min-height:88px}
+.detail b{display:block;margin-bottom:4px}
+.detail p{color:var(--mut);font-size:14.5px}
+.chips{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin:24px 0 14px}
+.chips button{border-radius:10px;border:1.4px solid;padding:12px 6px;cursor:pointer;
+              font-family:var(--mono);font-size:12.5px;font-weight:700;background:var(--card)}
+.chips button[aria-selected="true"]{outline:2px solid currentColor;outline-offset:1px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:24px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:20px;transition:border-color .15s}
+.card:hover{border-color:var(--a)}
+.card b{display:block;font-size:15.5px;margin-bottom:6px}
+.card p{color:var(--mut);font-size:14px}
+.card .n{font-family:var(--mono);color:var(--a);font-size:12px;display:block;margin-bottom:8px}
+.proof{display:grid;grid-template-columns:1.1fr .9fr;gap:26px;align-items:start}
+.proof ul{list-style:none;display:grid;gap:12px}
+.proof li{padding-left:26px;position:relative;color:var(--mut);font-size:15px}
+.proof li::before{content:"✓";position:absolute;left:0;color:var(--ok);font-weight:700}
+.proof li b{color:var(--fg)}
+details{border:1px solid var(--line);border-radius:10px;background:var(--card);margin-bottom:10px}
+summary{cursor:pointer;padding:13px 18px;font-weight:600;font-size:15px;list-style:none}
+summary::before{content:"+";display:inline-block;width:20px;color:var(--a);font-weight:700}
+details[open] summary::before{content:"–"}
+details p{padding:0 18px 15px 38px;color:var(--mut);font-size:14.5px}
+footer{padding:34px 0 46px;color:var(--mut);font-size:13.5px}
+footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
+@media (max-width:760px){
+  .loop{grid-template-columns:repeat(2,1fr)}
+  .chips{grid-template-columns:repeat(2,1fr)}
+  .cards,.proof{grid-template-columns:1fr}
+  .cta.sec{margin-left:0;margin-top:10px}
+}
+</style>
+</head>
+<body>
+
+<nav><div class="wrap">
+  <span class="wordmark">L O O M</span>
+  <a class="lnk" href="#one-command">One command</a>
+  <a class="lnk" href="#lifecycle">Lifecycle</a>
+  <a class="lnk" href="#labels">Labels</a>
+  <a class="lnk" href="#sovereign">Privacy</a>
+  <a class="lnk" href="#install">Install</a>
+  <a class="gh" href="https://github.com/saroo98/loom">GitHub →</a>
+</div></nav>
+
+<header><div class="wrap">
+  <h1>The heaviest planning machinery, behind the lightest command.</h1>
+  <p class="sub">Loom is a planning OS for AI coding agents: truth-labeled plans, assumption
+  ledgers, review gates, drift detection — and a learning loop that makes <em>your</em> Loom
+  better at <em>your</em> work, entirely on your machine. No runtime, no server, no account.</p>
+  <a class="cta pri" href="https://github.com/saroo98/loom">Get the repo</a>
+  <a class="cta sec" href="#install">Install in 3 commands</a>
+  <div class="heroweave" aria-hidden="true">
+    <svg viewBox="0 0 960 200" xmlns="http://www.w3.org/2000/svg">
+      <g stroke="var(--line)" stroke-width="1.6">
+        <line x1="60" y1="16" x2="60" y2="184"/><line x1="140" y1="16" x2="140" y2="184"/>
+        <line x1="220" y1="16" x2="220" y2="184"/><line x1="300" y1="16" x2="300" y2="184"/>
+        <line x1="380" y1="16" x2="380" y2="184"/><line x1="460" y1="16" x2="460" y2="184"/>
+        <line x1="540" y1="16" x2="540" y2="184"/><line x1="620" y1="16" x2="620" y2="184"/>
+        <line x1="700" y1="16" x2="700" y2="184"/><line x1="780" y1="16" x2="780" y2="184"/>
+        <line x1="860" y1="16" x2="860" y2="184"/><line x1="900" y1="16" x2="900" y2="184"/>
+      </g>
+      <g stroke-width="5" stroke-linecap="round" fill="none">
+        <line class="weft" x1="30" y1="42"  x2="930" y2="42"  stroke="var(--a)" style="animation-delay:.05s"/>
+        <line class="weft" x1="30" y1="74"  x2="930" y2="74"  stroke="var(--b)" style="animation-delay:.25s"/>
+        <line class="weft" x1="30" y1="106" x2="930" y2="106" stroke="var(--c)" style="animation-delay:.45s"/>
+        <line class="weft" x1="30" y1="138" x2="560" y2="138" stroke="var(--a)" style="animation-delay:.65s"/>
+      </g>
+      <line x1="560" y1="138" x2="588" y2="138" stroke="var(--a)" stroke-width="2"/>
+      <g class="shuttle"><path d="M588 138 q16 -10 32 0 q-16 10 -32 0 z" fill="var(--a)"/></g>
+      <text x="30" y="178" fill="var(--mut)" font-size="12" font-family="var(--mono)">plans are woven, checked, and rechecked — the unfinished row is where your project is right now</text>
+    </svg>
+  </div>
+</div></header>
+
+<section id="one-command"><div class="wrap">
+  <div class="kicker">The whole interface</div>
+  <h2>One command. Structure optional.</h2>
+  <p class="lead">Give it a full brief, or just talk. Loom infers the rest, labels every
+  guess it had to make, and asks you at most one batched question.</p>
+  <div class="tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-demo="brief">Full brief</button>
+    <button role="tab" aria-selected="false" data-demo="talk">Just talk</button>
+  </div>
+  <div class="term" id="demo"><button class="copy" data-copy="demo">copy</button><span id="demotext"></span><span class="p">▋</span></div>
+  <p class="note" id="demonote">Four things: a name, one sentence, what "done" looks like, hard limits.
+  That's a complete brief — Loom surveys, plans, gates, and returns one decision batch.</p>
+</div></section>
+
+<section id="lifecycle"><div class="wrap">
+  <div class="kicker">How a run flows</div>
+  <h2>The loop that closes.</h2>
+  <p class="lead">Click any stage. The last one — <em>learn</em> — is what separates a
+  planning system from a planning ritual: it makes run <em>n+1</em> better than run <em>n</em>.</p>
+  <div class="loop" id="loop" role="tablist"></div>
+  <div class="detail" id="loopdetail"></div>
+</div></section>
+
+<section id="labels"><div class="wrap">
+  <div class="kicker">The epistemic spine</div>
+  <h2>Five labels. Nothing unlabeled bears load.</h2>
+  <p class="lead">Every load-bearing claim in every plan carries one. Click each label for
+  its obligation.</p>
+  <div class="chips" id="chips" role="tablist"></div>
+  <div class="detail" id="chipdetail"></div>
+</div></section>
+
+<section id="compounds"><div class="wrap">
+  <div class="kicker">Why it gets ahead and stays ahead</div>
+  <h2>It starts small and it compounds.</h2>
+  <div class="cards">
+    <div class="card"><span class="n">day one</span><b>Clone. Install. /loom.</b>
+      <p>That's the entire setup. It already plans better than an unstructured agent —
+      that part is table stakes.</p></div>
+    <div class="card"><span class="n">every run</span><b>The run feeds the system.</b>
+      <p>Outcomes get checked against predictions. Mistakes become feedback that changes
+      the guidance. Calibration data accumulates — which estimates run hot, which
+      assumptions break.</p></div>
+    <div class="card"><span class="n">a year in</span><b>Fitted to you. Not shippable.</b>
+      <p>Your stacks, your languages, your failure patterns. No shelf, no marketplace,
+      no amount of stars can ship this to anyone else — it grew inside your work.</p></div>
+  </div>
+</div></section>
+
+<section id="sovereign"><div class="wrap">
+  <div class="kicker">Sovereign by architecture</div>
+  <h2>Nothing leaves your machine. Audit it yourself.</h2>
+  <div class="proof">
+    <ul>
+      <li><b>No telemetry, no channel, no exceptions.</b> The learning loop writes to
+        your <span style="font-family:var(--mono)">~/.loom/</span> and your repo's feedback
+        queue. A central queue doesn't exist to opt out of.</li>
+      <li><b>Machine-checkable, not marketing.</b> One command AST-scans every tool:
+        network imports forbidden, subprocess restricted to git and the test runner.</li>
+      <li><b>Proven in public.</b> The same audit and the full test suite run on every
+        push to the repository — a proof trail anyone can read.</li>
+      <li><b>Every install is sovereign.</b> Your Loom diverges from everyone else's,
+        by design. Upstream releases are optional imports, never obligations.</li>
+    </ul>
+    <div class="term"><button class="copy" data-copy="audit">copy</button><span id="auditcmd">python tools/loom_audit.py
+# loom_audit: PASS — 19 files scanned, 0 findings.
+# Network-capable imports: forbidden;
+# subprocess restricted to git + the test runner.</span></div>
+  </div>
+</div></section>
+
+<section id="install"><div class="wrap">
+  <div class="kicker">Five minutes, honestly</div>
+  <h2>Install</h2>
+  <div class="term"><button class="copy" data-copy="install">copy</button><span id="installcmd">git clone https://github.com/saroo98/loom
+cd loom
+tools/install.sh     # macOS/Linux — Windows: tools\install.ps1</span></div>
+  <p class="note">Registers <span style="font-family:var(--mono)">/loom</span> for Claude Code
+  and Codex. Any harness that can follow a markdown skill can run it — the whole skill is one
+  file. Then open any project conversation and describe what you want.</p>
+</div></section>
+
+<section id="faq"><div class="wrap">
+  <div class="kicker">Straight answers</div>
+  <h2>FAQ</h2>
+  <details><summary>Does anything get sent anywhere?</summary>
+    <p>No. Run the audit above — zero network-capable imports, and the only subprocess
+    targets are git and the Python test runner. The only network activity in the system is
+    git, against remotes you configure. This page makes zero third-party requests too.</p></details>
+  <details><summary>Do my lessons improve the upstream repo?</summary>
+    <p>No. Your retro feeds your Loom — that's the point. Every install is owner-operated
+    and instances diverge on purpose.</p></details>
+  <details><summary>Is this a framework I have to adopt?</summary>
+    <p>It's files: markdown guidance plus small standard-library Python tools. Small tasks
+    skip the ceremony entirely; the artifact matrix exists so you only produce what has a
+    consumer.</p></details>
+  <details><summary>How do I know an agent actually follows it?</summary>
+    <p>The mechanical fraction is enforced by a 25+ check linter (gates refuse to open on
+    errors; a pre-commit guard blocks defective packs). The judgment fraction is enforced by
+    gates that demand a review file with cited scores. The honesty fraction is enforced by
+    outcome ledgers — predictions in writing, checked against reality.</p></details>
+  <details><summary>Can it call itself production-ready?</summary>
+    <p>Not by itself — literally. Loom ships a falsifiable 1.0 scorecard and a standing rule
+    that no Loom may score itself: only a non-author session, against real project evidence.
+    A fresh install starts unproven on purpose.</p></details>
+  <details><summary>Can I publish my own Loom?</summary>
+    <p>Yes — the same leak-firewalled publisher that produced the repository is in your
+    tools. Allowlist, forbidden-token firewall, link check, suite-in-output.</p></details>
+</div></section>
+
+<footer><div class="wrap">
+  <span>Apache-2.0</span>
+  <a href="https://github.com/saroo98/loom">github.com/saroo98/loom</a>
+  <a href="https://github.com/saroo98/loom/blob/main/PRIVACY.md">privacy</a>
+  <a href="https://github.com/saroo98/loom/blob/main/CONTRIBUTING.md">contributing</a>
+  <span style="margin-left:auto">this page makes zero third-party requests — view source</span>
+</div></footer>
+
+<script>
+"use strict";
+/* typed command demo */
+const DEMOS = {
+  brief: {
+    text: `/loom plan — recipe-box: a web app where my mom saves and searches her recipes.
+For: one non-technical user, on her phone. Done = she adds a recipe and finds it
+by ingredient, live on a real URL. Constraints: free hosting only. Repo: none.`,
+    note: `Four things: a name, one sentence, what "done" looks like, hard limits. That's a complete brief — Loom surveys, plans, gates, and returns one decision batch.`
+  },
+  talk: {
+    text: `/loom I keep losing track of the invoices for my freelance work, build me
+something small that fixes that`,
+    note: `No name, no format. Loom infers the mode, the tier, and the finish line, labels every guess it had to make, and asks at most one batched question.`
+  }
+};
+const demotext = document.getElementById("demotext");
+const demonote = document.getElementById("demonote");
+let typer = null;
+function typeDemo(key){
+  clearInterval(typer);
+  const full = DEMOS[key].text;
+  demonote.textContent = DEMOS[key].note;
+  let i = 0; demotext.textContent = "";
+  typer = setInterval(() => {
+    demotext.textContent = full.slice(0, i += 3);
+    if (i >= full.length) clearInterval(typer);
+  }, 14);
+}
+document.querySelectorAll(".tabs button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll(".tabs button").forEach(x => x.setAttribute("aria-selected", x === b));
+  typeDemo(b.dataset.demo);
+}));
+typeDemo("brief");
+
+/* lifecycle explorer */
+const STAGES = [
+  ["Intake", "goals + the silence sweep", "Your description is quoted, not paraphrased — and then Loom interrogates what you DIDN'T say: scope edges, failure behavior, quality bar, operational reality. Hits become labeled assumptions, never silent guesses."],
+  ["Plan", "artifacts + assumption ledger", "Only artifacts with a consumer get produced — a matrix decides which, with a one-line reason for every skip. Every load-bearing claim is labeled; every assumption gets risk_if_wrong and verify_by in a ledger."],
+  ["Gate G1", "lint + verification battery", "A 25+ check linter must pass first — mechanically. Then eight verification passes in composition order, then a scored review against a 10-dimension rubric. Preferably by a session that didn't write the plan."],
+  ["Work orders", "atomic, verifiable, routed", "Each one executable by one agent in one sitting, with acceptance criteria a reviewer can reproduce, declared file-touch boundaries, and escalation triggers. Oversized orders get flagged by the linter."],
+  ["Verify", "criteria + negative checks", "Done means every criterion demonstrated with evidence in a close-out block — including negative checks: what must NOT have changed. Criteria written after implementation are confessions, not criteria."],
+  ["Outcomes", "predictions vs reality", "The pack's predictions get checked against what actually happened — held, broke-caught, broke-cost. Kept even when embarrassing. Especially then."],
+  ["Learn", "~/.loom + feedback — yours", "The run teaches your profile (defaults, calibration) and queues anonymized lesson-shapes into your repo's feedback queue. Your Loom's next version fixes what misled it. Nothing leaves your machine."],
+  ["Resume", "staleness recheck; repo wins", "Coming back later? Loom diffs the world first: repo moved, assumptions aged, capabilities changed. Drifted artifacts get re-gated. The repo is the truth — the plan adapts to it, never the reverse."]
+];
+const loop = document.getElementById("loop");
+const loopdetail = document.getElementById("loopdetail");
+STAGES.forEach(([t, s], i) => {
+  const b = document.createElement("button");
+  b.setAttribute("role", "tab");
+  b.innerHTML = `<b>${t}</b><span>${s}</span>`;
+  b.addEventListener("click", () => selectStage(i));
+  loop.appendChild(b);
+});
+function selectStage(i){
+  [...loop.children].forEach((x, j) => x.setAttribute("aria-selected", j === i));
+  loopdetail.innerHTML = `<b>${STAGES[i][0]}</b><p>${STAGES[i][2]}</p>`;
+}
+selectStage(0);
+
+/* labels explorer */
+const LABELS = [
+  ["[FACT]", "var(--ok)", "Verified this session, or cited to a checkable source. Obligation: name the source — file and line, command output, a document read now. Recalled API details never count."],
+  ["[ASSUMPTION]", "var(--c)", "Proceeding as if true. Obligation: a ledger entry with basis, risk_if_wrong, and verify_by. When one breaks, everything built on it gets flagged — mechanically."],
+  ["[SPECULATION]", "var(--a)", "Plausible, unverified, from memory or extrapolation. Obligation: must never be load-bearing for irreversible steps. The linter hunts hedge-words stated as facts."],
+  ["[UNKNOWN]", "var(--mut)", "An identified gap. Obligation: attach a resolution path or an explicit acceptance. Unknowns never stall a plan — they become labeled work."],
+  ["[HUMAN-DECISION]", "#f85149", "The requester must choose. Obligation: record options plus a recommendation, batch them so one reply unblocks everything — and never guess silently on anything irreversible."]
+];
+const chips = document.getElementById("chips");
+const chipdetail = document.getElementById("chipdetail");
+LABELS.forEach(([name, color, desc], i) => {
+  const b = document.createElement("button");
+  b.setAttribute("role", "tab");
+  b.textContent = name;
+  b.style.color = color; b.style.borderColor = color;
+  b.addEventListener("click", () => selectChip(i));
+  chips.appendChild(b);
+});
+function selectChip(i){
+  [...chips.children].forEach((x, j) => x.setAttribute("aria-selected", j === i));
+  chipdetail.innerHTML = `<b style="font-family:var(--mono)">${LABELS[i][0]}</b><p>${LABELS[i][2]}</p>`;
+}
+selectChip(1);
+
+/* copy buttons */
+const COPIES = {
+  demo: () => demotext.textContent,
+  audit: () => "python tools/loom_audit.py",
+  install: () => document.getElementById("installcmd").textContent
+};
+document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(COPIES[b.dataset.copy]()); b.textContent = "copied"; }
+  catch (_) { b.textContent = "select + copy"; }
+  setTimeout(() => b.textContent = "copy", 1400);
+}));
+</script>
+</body>
+</html>

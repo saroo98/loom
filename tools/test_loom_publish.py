@@ -35,7 +35,9 @@ class PublishTests(unittest.TestCase):
                     "templates/work-order.md", "templates/hooks/pre-commit",
                     "skill/loom/SKILL.md", "tools/loom_lint.py",
                     "tools/loom_publish.py", "tools/publish-tokens.txt",
-                    "assets/banner-light.svg", "assets/lifecycle-dark.svg"]:
+                    "assets/banner-light.svg", "assets/lifecycle-dark.svg",
+                    "docs/index.html", "docs/robots.txt", "docs/sitemap.xml",
+                    ".github/workflows/verify.yml", "tools/loom_audit.py"]:
             self.assertTrue((self.out / rel).is_file(), f"missing from cut: {rel}")
 
     def test_owner_layer_absent(self):
@@ -65,11 +67,11 @@ class PublishTests(unittest.TestCase):
         seeded = "contact: " + "xizir" + "sar" + "o" + "@example.com"  # fragments —
         try:                       # this source file must not carry the token itself
             leak.write_text(original + "\n" + seeded + "\n", encoding="utf-8")
-            tokens = loom_publish.load_tokens(
+            tokens, allowed = loom_publish.load_tokens(
                 LOOM_ROOT / "tools" / "publish-tokens.txt")
             if not tokens:  # public tree ships a placeholder token file
                 self.skipTest("no owner tokens in this tree")
-            findings = loom_publish.scan(self.out, tokens)
+            findings = loom_publish.scan(self.out, tokens, allowed)
             self.assertTrue(any("FIREWALL" in f for f in findings))
         finally:
             leak.write_text(original, encoding="utf-8")

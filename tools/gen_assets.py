@@ -47,12 +47,14 @@ def weave(x0, y0, w, h, p, rows=7, cols=13, unfinished=2):
         e.append(f"<line x1='{x0}' y1='{y:.0f}' x2='{x2:.0f}' y2='{y:.0f}' "
                  f"stroke='{col}' stroke-width='5' stroke-linecap='round' "
                  f"stroke-dasharray='13 9' stroke-dashoffset='{off}'/>")
-        if r == rows - unfinished:  # the working row gets the shuttle
-            sx, sy = x2 + 10, y
-            e.append(f"<path d='M{sx} {sy} q14 -9 28 0 q-14 9 -28 0 z' "
+        if r == rows - unfinished and unfinished:
+            # the shuttle sits ON the working row, its thread continuing the row —
+            # read at a glance: this row is mid-weave, the tool is carrying the yarn
+            e.append(f"<line x1='{x2:.0f}' y1='{y:.0f}' x2='{x2 + 14:.0f}' "
+                     f"y2='{y:.0f}' stroke='{col}' stroke-width='2'/>")
+            sx = x2 + 14
+            e.append(f"<path d='M{sx} {y} q15 -9 30 0 q-15 9 -30 0 z' "
                      f"fill='{col}' opacity='0.95'/>")
-            e.append(f"<path d='M{sx + 28} {sy} q26 4 44 -6' stroke='{col}' "
-                     f"stroke-width='1.6' fill='none' stroke-dasharray='3 4'/>")
     return "".join(e)
 
 
@@ -108,12 +110,13 @@ def lifecycle(p):
                      f"stroke='{p['mut']}' stroke-width='1.6' marker-end='url(#ar)'/>")
     for i, ((x, y), (title, sub)) in enumerate(zip(pos, NODES)):
         col = yarn[i % 3]
+        cx = x + NW / 2
         e.append(f"<g><rect x='{x}' y='{y}' width='{NW}' height='{NH}' rx='9' "
                  f"fill='{p['card']}' stroke='{col}' stroke-width='1.8'/>"
-                 f"<text x='{x + 14}' y='{y + 24}' {FONT} font-size='15' "
-                 f"font-weight='700' fill='{p['fg']}'>{title}</text>"
-                 f"<text x='{x + 14}' y='{y + 43}' {FONT} font-size='11.5' "
-                 f"fill='{p['mut']}'>{sub}</text></g>")
+                 f"<text x='{cx}' y='{y + 24}' {FONT} font-size='15' "
+                 f"text-anchor='middle' font-weight='700' fill='{p['fg']}'>{title}</text>"
+                 f"<text x='{cx}' y='{y + 43}' {FONT} font-size='11.5' "
+                 f"text-anchor='middle' fill='{p['mut']}'>{sub}</text></g>")
     e.append(f"<text x='{W / 2}' y='{H / 2 - 6}' {FONT} font-size='15' text-anchor='middle' "
              f"font-weight='600' fill='{p['fg']}'>every pass tightens the weave</text>")
     e.append(f"<text x='{W / 2}' y='{H / 2 + 16}' {FONT} font-size='12' text-anchor='middle' "
@@ -152,14 +155,16 @@ def growth(p):
                      f"stroke-width='2' marker-end='url(#gr)'/>")
     # panel 1: sparse weave — three weft threads on a small frame
     e.append(weave(xs[0] + 30, 52, PW - 60, PH - 60, p, rows=3, cols=7, unfinished=1))
-    # panel 2: the loop — weave feeding a circular arrow back into itself
-    cx, cy, r = xs[1] + PW / 2, 22 + PH / 2, 56
-    e.append(weave(xs[1] + 30, 52, PW - 60, 60, p, rows=2, cols=7, unfinished=0))
-    e.append(f"<path d='M {cx + r} {cy + 26} A {r} {r} 0 1 1 {cx + r * 0.5} "
-             f"{cy - 20}' fill='none' stroke='{p['b']}' stroke-width='3.5' "
+    # panel 2: the loop — a short woven strip, and a circular arrow returning to it,
+    # drawn fully BELOW the strip so nothing overlaps
+    cx = xs[1] + PW / 2
+    e.append(weave(xs[1] + 30, 44, PW - 60, 44, p, rows=2, cols=7, unfinished=0))
+    cy, r = 158, 46
+    e.append(f"<path d='M {cx + r} {cy} A {r} {r} 0 1 1 {cx} {cy - r}' "
+             f"fill='none' stroke='{p['b']}' stroke-width='3.5' "
              f"marker-end='url(#gr)'/>")
     for j, word in enumerate(["outcomes", "feedback", "calibration"]):
-        e.append(f"<text x='{cx}' y='{cy + 14 + j * 16}' {FONT} font-size='11' "
+        e.append(f"<text x='{cx}' y='{cy - 10 + j * 16}' {FONT} font-size='11' "
                  f"text-anchor='middle' fill='{p['mut']}'>{word}</text>")
     # panel 3: dense cloth — full rows, all colors, plus accretion tags
     e.append(weave(xs[2] + 30, 46, PW - 60, PH - 90, p, rows=8, cols=13, unfinished=1))

@@ -1,0 +1,26 @@
+name: verify
+
+# The public proof trail: the full test suite + the no-network audit run on every
+# push, in public. A green badge means "the privacy claim was machine-checked on
+# infrastructure the author doesn't control", not "trust us".
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: test suite
+        run: python -m unittest discover -s tools -p "test_*.py" -v
+      - name: no-network / no-telemetry audit
+        run: python tools/loom_audit.py
