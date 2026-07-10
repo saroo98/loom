@@ -1,0 +1,15 @@
+{
+  "loom_version": "0.7.0",
+  "autonomy": "A2",
+  "pack_path": "plans/",
+  "freshness_window_days": 14,
+  "auto_decide": {
+    "min_reversibility": "MED",
+    "spend_limit": 0
+  },
+  "hard_stops_extra": [],
+  "routing_map": {},
+  "language": "en",
+  "ask_me_first": [],
+  "use_profile": true
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/manifest.schema.json",
+  "title": "Loom planning-pack manifest (frontmatter)",
+  "description": "Machine-checkable shape of plans/MANIFEST.md frontmatter. Body sections per templates/pack/MANIFEST.md.",
+  "type": "object",
+  "required": ["artifact", "project", "tier", "status", "last_verified", "loom_version"],
+  "additionalProperties": true,
+  "properties": {
+    "artifact": { "const": "manifest" },
+    "project": { "type": "string" },
+    "tier": {
+      "enum": ["S", "M", "L", "XL"],
+      "description": "S packs normally don't exist (single WO instead); if one does, it must say why."
+    },
+    "status": {
+      "enum": ["draft", "gated", "active", "stale", "maintenance", "archived"],
+      "description": "Pack-level status. 'stale' = a pack-wide staleness trigger fired (loom/execution/staleness.md); individual artifacts carry their own status per loom/planning/plan-authoring.md."
+    },
+    "last_verified": { "type": "string", "format": "date" },
+    "loom_version": {
+      "type": "string",
+      "description": "Loom version that produced the pack (CHANGELOG.md) — makes stale guidance traceable."
+    },
+    "repo_head": {
+      "type": "string",
+      "description": "Commit hash at last survey; staleness rechecks diff against it. Absent only when no repo exists yet."
+    },
+    "freshness_window_days": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 14,
+      "description": "Time-based staleness trigger (loom/execution/staleness.md)."
+    }
+  }
+}

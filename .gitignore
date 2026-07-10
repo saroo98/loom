@@ -1,0 +1,21 @@
+# OS noise
+Thumbs.db
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
+
+# Scratch space for agents trying things out — never commit scratch work
+scratch/
+*.tmp
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated pack views (loom_report) — disposable by design, regenerate any time
+report.html
+
+# Built public cuts (loom_publish) — regenerate per release; publishing is a decision
+dist/

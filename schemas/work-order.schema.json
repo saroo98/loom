@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/work-order.schema.json",
+  "title": "Loom work order (frontmatter)",
+  "description": "Machine-checkable shape of a work order's YAML frontmatter. Body sections are defined in loom/execution/work-orders.md and templates/work-order.md.",
+  "type": "object",
+  "required": ["id", "title", "status", "routing", "size", "last_verified"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^WO-[0-9]{3,}$",
+      "description": "Unique within the pack, e.g. WO-007"
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 100,
+      "description": "Verb + outcome. Conjunctions ('and', 'also') signal a needed split."
+    },
+    "status": {
+      "enum": ["draft", "ready", "blocked", "in-progress", "done", "cancelled"]
+    },
+    "depends_on": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^(WO|D)-[0-9]{3,}$" },
+      "default": [],
+      "description": "WO ids (and open D- decision ids that block this WO). Must form a DAG across the pack."
+    },
+    "blocks": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^WO-[0-9]{3,}$" },
+      "default": []
+    },
+    "routing": {
+      "enum": ["frontier-reasoning", "strong-coding", "fast-cheap", "specialist", "human"],
+      "description": "Capability class per loom/execution/routing.md — never a model name."
+    },
+    "size": {
+      "enum": ["S", "M"],
+      "description": "S: <1h, M: one sitting. There is deliberately no L — split it."
+    },
+    "last_verified": {
+      "type": "string",
+      "format": "date",
+      "description": "Date the WO's inlined facts were last checked against the repo."
+    },
+    "touches": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Path globs this WO may modify. Concurrently-ready WOs must have disjoint touches (loom/execution/parallel-work.md); overlap is lint W07."
+    },
+    "assumptions": {
+      "type": "array",
+      "items": { "type": "string", "pattern": "^A-[0-9]{3,}$" },
+      "description": "Ledger ids this WO rests on (mirrors the Epistemic notes section)."
+    }
+  }
+}

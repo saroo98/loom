@@ -1,0 +1,43 @@
+#!/bin/sh
+# Loom pack guard — commit-time tripwire for the planning pack in THIS repo.
+#
+# What it does: when the commit stages files under the pack directory, run loom_lint;
+# lint ERRORS block the commit (they would block the gate anyway — better to hear it
+# now), warnings print and pass. Commits that don't touch the pack cost nothing.
+#
+# Install (agent does this during /loom plan, or by hand):
+#   1. copy this file to <repo>/.git/hooks/pre-commit   (only if none exists — never
+#      overwrite someone's hook; chain manually if you have one)
+#   2. replace the two placeholders below
+#   3. make it executable on POSIX: chmod +x .git/hooks/pre-commit
+#
+# Bypass (standard git, e.g. for a WIP commit): git commit --no-verify
+# Remove: delete .git/hooks/pre-commit. Nothing else to clean up.
+#
+# Safety: if python or Loom is missing the guard prints a note and PASSES —
+# a guard must never brick commits on a machine change.
+
+LOOM="{{LOOM_PATH}}"
+PACK="{{PACK_DIR}}"   # pack path relative to the repo root, e.g. plans
+
+# Only wake up when staged files touch the pack
+if ! git diff --cached --name-only | grep -q "^$PACK/"; then
+    exit 0
+fi
+
+PY="$(command -v python || command -v python3 || command -v py)"
+if [ -z "$PY" ] || [ ! -f "$LOOM/tools/loom_lint.py" ]; then
+    echo "loom guard: python or Loom not found — skipping pack lint (guard is best-effort)"
+    exit 0
+fi
+
+echo "loom guard: pack files staged — linting $PACK"
+"$PY" "$LOOM/tools/loom_lint.py" "$PACK" --repo .
+rc=$?
+if [ $rc -ne 0 ]; then
+    echo ""
+    echo "loom guard: lint ERRORS block this commit (they block gates too)."
+    echo "Fix them, or bypass deliberately with: git commit --no-verify"
+    exit 1
+fi
+exit 0

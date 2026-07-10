@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/loom-config.schema.json",
+  "title": "Loom per-project configuration (loom.config.json)",
+  "description": "Lives at the target repo root. Lets the human state preferences once; agents read it every session. Created on the first /loom plan run from templates/loom.config.json.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "loom_version": {
+      "type": "string",
+      "description": "Loom version this config was written against."
+    },
+    "autonomy": {
+      "enum": [
+        "A0",
+        "A1",
+        "A2",
+        "A3"
+      ],
+      "default": "A2",
+      "description": "Operative autonomy level per loom/core/autonomy.md. Session words override this; this overrides the default."
+    },
+    "pack_path": {
+      "type": "string",
+      "default": "plans/",
+      "description": "Where the planning pack lives, relative to repo root. Must be gitignored if the repo is public (privacy rule 3)."
+    },
+    "freshness_window_days": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 14
+    },
+    "auto_decide": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "The decision budget for A2/A3 (loom/core/autonomy.md).",
+      "properties": {
+        "min_reversibility": {
+          "enum": [
+            "MED",
+            "HIGH"
+          ],
+          "default": "MED",
+          "description": "Agent may auto-decide only choices at or above this reversibility."
+        },
+        "spend_limit": {
+          "type": "number",
+          "default": 0,
+          "description": "Maximum spend (in the requester's currency) the agent may commit without asking. 0 = any real money is a human matter."
+        }
+      }
+    },
+    "hard_stops_extra": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Project-specific never-delegable items, added to the standard hard-stop list (e.g. \"anything touching MQL5/Experts/\")."
+    },
+    "routing_map": {
+      "type": "object",
+      "description": "Current capability-class -> model mapping for this project (loom/execution/routing.md). Keys are the five classes.",
+      "propertyNames": {
+        "enum": [
+          "frontier-reasoning",
+          "strong-coding",
+          "fast-cheap",
+          "specialist",
+          "human"
+        ]
+      },
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "language": {
+      "type": "string",
+      "description": "Primary human language / locale for deliverables (e.g. \"en\", \"fa\", \"th\"). Localization decisions still follow loom/adaptation/."
+    },
+    "ask_me_first": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Verbatim topics the requester wants surfaced before any action, regardless of autonomy level."
+    },
+    "use_profile": {
+      "type": "boolean",
+      "default": true,
+      "description": "false = this project runs fully stateless: no ~/.loom reads/writes, no outbox entries (loom/core/user-memory.md rule 7). CLI --no-profile does the same per run."
+    }
+  }
+}
