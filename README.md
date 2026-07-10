@@ -21,7 +21,7 @@ today. (<a href="https://saroo98.github.io/loom/">website</a>)</p>
 <a href="BENCHMARK.md">
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img alt="Benchmark: Opus 4.8 low + Loom scored 90.1, matching Fable 5 at max effort (89.8) and beating naked Opus (76.8)" src="assets/benchmark-cover.png" width="960">
+  <img alt="Benchmark: Opus 4.8 low + Loom scored 90.1, matching Fable 5 at max effort (89.8) using fewer tokens and less time" src="assets/benchmark-light.svg" width="960">
 </picture>
 </a>
 

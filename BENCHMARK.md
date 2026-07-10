@@ -64,7 +64,12 @@ then stop.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img alt="Benchmark scorecard: score by category for the three configurations, best in each row in green" src="assets/benchmark-light.svg" width="960">
+  <img alt="Benchmark result: Opus 4.8 low + Loom scored 90.1, matching Fable 5 at max effort using fewer tokens and less time" src="assets/benchmark-light.svg" width="960">
+</picture>
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-scores-dark.svg">
+  <img alt="Full scorecard: score per category for the three configurations, best in each row in green" src="assets/benchmark-scores-light.svg" width="960">
 </picture>
 
 Headline (higher is better except cost; **bold** = best):

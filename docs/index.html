@@ -10,8 +10,7 @@
 <meta property="og:title" content="Loom — an alive planning OS for AI coding agents">
 <meta property="og:description" content="It shows its work and learns from every run. On a smaller model at low effort, Loom matched a frontier model at max effort — fewer tokens, less time. The more you use it, the better it gets.">
 <meta property="og:url" content="https://saroo98.github.io/loom/">
-<meta property="og:image" content="https://saroo98.github.io/loom/benchmark-cover.png">
-<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Loom — an alive planning OS for AI coding agents">
 <meta name="twitter:description" content="A smaller model at low effort, running Loom, matched a frontier model at max effort — fewer tokens, less time. The more you use it, the better it gets.">
 <meta name="robots" content="index,follow">
@@ -28,12 +27,14 @@
 <style>
 :root{
   --bg:#0b0e13;--bg2:#11151c;--card:#151a23;--line:#252c38;--fg:#e8edf4;--mut:#8b96a5;
-  --a:#818cf8;--b:#2dd4bf;--c:#fbbf24;--ok:#3fb950;
+  --a:#818cf8;--b:#2dd4bf;--c:#fbbf24;--ok:#3fb950;--win:#3fb950;
+  --bh1:#4f8ff2;--bh2:#9b8cf0;--bh3:#f0a92a;
   --mono:ui-monospace,'Cascadia Code',Consolas,monospace;
 }
 @media (prefers-color-scheme: light){
   :root{--bg:#ffffff;--bg2:#f6f8fa;--card:#ffffff;--line:#d8dee6;--fg:#1c222b;--mut:#5b6672;
-        --a:#4f46e5;--b:#0d9488;--c:#b45309;--ok:#1a7f37}
+        --a:#4f46e5;--b:#0d9488;--c:#b45309;--ok:#1a7f37;--win:#12a150;
+        --bh1:#2f6fe0;--bh2:#6d5bd0;--bh3:#d98a00}
 }
 *{box-sizing:border-box;margin:0}
 html{scroll-behavior:smooth}
@@ -406,10 +407,11 @@ document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", asyn
 
 /* interactive benchmark */
 const BENCH = {
+  hues: ["var(--bh1)", "var(--bh2)", "var(--bh3)"],
   configs: [
-    { name: "Opus 4.8 · low",        hue: "#3987e5", mean: 76.8, hidden: "8 / 10",  tokens: 50799,  time: 128,  loom: false },
-    { name: "Opus 4.8 · low · Loom", hue: "#9085e9", mean: 90.1, hidden: "10 / 10", tokens: 74363,  time: 254,  loom: true  },
-    { name: "Fable 5 · max",         hue: "#eda100", mean: 89.8, hidden: "10 / 10", tokens: 123561, time: 1241, loom: false }
+    { name: "Opus 4.8 · low",        short: "Opus 4.8 low",        mean: 76.8, hidden: "8 / 10",  tokens: 50799,  time: 128,  loom: false },
+    { name: "Opus 4.8 · low · Loom", short: "Opus 4.8 low + Loom", mean: 90.1, hidden: "10 / 10", tokens: 74363,  time: 254,  loom: true  },
+    { name: "Fable 5 · max",         short: "Fable 5 max",         mean: 89.8, hidden: "10 / 10", tokens: 123561, time: 1241, loom: false }
   ],
   cats: ["Hidden-test correctness", "HTML quality", "CSS quality", "JavaScript appropriateness",
          "Accessibility depth", "Responsive / mobile", "Performance", "Visual design",
@@ -420,7 +422,6 @@ const BENCH = {
     [97, 91, 88, 87, 88, 91, 97, 89, 90, 82, 93, 84]
   ]
 };
-const WIN = "#0a7f2e";
 let benchSpot = 1, benchMode = "quality";
 const fmtTime = s => Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s";
 const bcards = document.getElementById("benchCards");
@@ -430,30 +431,40 @@ const bnote = document.getElementById("benchNote");
 function renderCards() {
   bcards.innerHTML = "";
   BENCH.configs.forEach((c, i) => {
-    const on = benchSpot === i;
+    const on = benchSpot === i, hue = BENCH.hues[i];
     const el = document.createElement("button");
-    el.style.cssText = `text-align:center;cursor:pointer;border-radius:11px;padding:14px 12px;` +
-      `background:${on ? "color-mix(in srgb," + c.hue + " 12%,var(--card))" : "var(--card)"};` +
-      `border:${on ? "2px" : "1px"} solid ${on ? c.hue : "var(--line)"};` +
-      `opacity:${benchSpot === -1 || on ? "1" : ".6"};transition:.15s`;
+    el.style.cssText = "text-align:center;cursor:pointer;border-radius:11px;padding:14px 12px;transition:.15s;" +
+      "background:" + (on ? "color-mix(in srgb," + hue + " 14%,var(--card))" : "var(--card)") + ";" +
+      "border:" + (on ? "2px solid " + hue : "1px solid var(--line)") + ";" +
+      "opacity:" + (benchSpot === -1 || on ? "1" : ".72");
     el.setAttribute("aria-pressed", on);
     el.innerHTML =
-      `<div style="font-weight:600;font-size:13.5px">${c.name}</div>` +
-      `<div style="font-size:30px;font-weight:800;margin:5px 0 2px;color:${c.loom ? c.hue : "var(--fg)"}">${c.mean}</div>` +
-      `<div style="color:var(--mut);font-size:11.5px">${c.hidden} tests · ${(c.tokens / 1000).toFixed(1)}k tok · ${fmtTime(c.time)}${c.loom ? "" : " · no Loom"}</div>`;
+      '<div style="font-weight:600;font-size:13.5px;display:flex;align-items:center;justify-content:center;gap:7px">' +
+        '<span style="width:9px;height:9px;border-radius:50%;background:' + hue + '"></span>' + c.name + '</div>' +
+      '<div style="font-size:30px;font-weight:800;margin:5px 0 2px;color:' + (c.loom ? hue : "var(--fg)") + '">' + c.mean + '</div>' +
+      '<div style="color:var(--mut);font-size:11.5px">' + c.hidden + ' tests · ' + (c.tokens / 1000).toFixed(1) + 'k tok · ' + fmtTime(c.time) + (c.loom ? "" : " · no Loom") + '</div>';
     el.addEventListener("click", () => { benchSpot = (benchSpot === i ? -1 : i); renderCards(); renderView(); });
     bcards.appendChild(el);
   });
 }
 
-function bar(label, sub, frac, color, val, dim, bold) {
+function bar(i, label, frac, val, leader, dim) {
+  const hue = BENCH.hues[i];
   const row = document.createElement("div");
-  row.style.cssText = "display:grid;grid-template-columns:150px 1fr auto;align-items:center;gap:10px;margin:7px 0;opacity:" + (dim ? ".28" : "1") + ";transition:.25s";
-  row.innerHTML =
-    `<div style="font-size:12.5px;color:var(--fg)">${label}<span style="color:var(--mut)"> ${sub || ""}</span></div>` +
-    `<div style="height:12px;border-radius:6px;background:var(--bg2);overflow:hidden"><div style="height:100%;width:0;border-radius:6px;background:${color};transition:width .5s ease"></div></div>` +
-    `<div style="font-size:12.5px;font-weight:${bold ? "800" : "500"};color:${bold ? WIN : "var(--fg)"};min-width:52px;text-align:right">${val}</div>`;
-  requestAnimationFrame(() => { row.querySelector("div > div").style.width = Math.max(2, frac * 100) + "%"; });
+  row.style.cssText = "display:grid;grid-template-columns:160px 1fr 58px;align-items:center;gap:11px;margin:6px 0;transition:.25s;opacity:" + (dim ? ".5" : "1");
+  const lab = document.createElement("div");
+  lab.style.cssText = "font-size:12.5px;color:var(--fg);display:flex;align-items:center;gap:7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis";
+  lab.innerHTML = '<span style="width:9px;height:9px;border-radius:50%;background:' + hue + ';flex:none"></span>' + label;
+  const track = document.createElement("div");
+  track.style.cssText = "height:13px;border-radius:7px;background:rgba(130,140,155,.22);overflow:hidden";
+  const pct = Math.max(3, frac * 100) + "%";
+  const fill = document.createElement("div");
+  fill.style.cssText = "height:100%;border-radius:7px;background:" + hue + ";transition:width .5s cubic-bezier(.2,.7,.2,1);width:" + pct;
+  track.appendChild(fill);
+  const value = document.createElement("div");
+  value.style.cssText = "font-size:13px;font-weight:" + (leader ? "800" : "600") + ";text-align:right;color:" + (leader ? "var(--win)" : "var(--fg)");
+  value.textContent = val;
+  row.append(lab, track, value);
   return row;
 }
 
@@ -464,30 +475,28 @@ function renderView() {
       const col = [0, 1, 2].map(c => BENCH.scores[c][r]);
       const best = Math.max(...col);
       const block = document.createElement("div");
-      block.style.cssText = "padding:8px 0;border-bottom:1px solid var(--line)";
-      block.innerHTML = `<div style="font-size:12.5px;font-weight:600;margin-bottom:4px">${cat}</div>`;
+      block.style.cssText = "padding:9px 0;border-bottom:1px solid var(--line)";
+      block.innerHTML = '<div style="font-size:13px;font-weight:600;margin-bottom:5px">' + cat + '</div>';
       BENCH.configs.forEach((c, i) => {
         const v = BENCH.scores[i][r];
-        const dim = benchSpot !== -1 && benchSpot !== i;
-        block.appendChild(bar(c.name.replace(" · ", "·").slice(0, 16), "", v / 100, c.hue, v, dim, v === best));
+        block.appendChild(bar(i, c.short, v / 100, v, v === best, benchSpot !== -1 && benchSpot !== i));
       });
       bview.appendChild(block);
     });
-    bnote.innerHTML = "Score 0–100 per category (higher is better). Best in each is <b style='color:" + WIN + "'>green</b>. " +
-      "Loom leads correctness, scope, and placeholder honesty; the frontier model leads accessibility, responsive, and performance.";
+    bnote.innerHTML = "Score 0–100 per category (higher is better); best in each row in <b style='color:var(--win)'>green</b>. " +
+      "Loom leads correctness, scope discipline, and placeholder honesty; the frontier model leads accessibility, responsive, and performance.";
   } else {
-    const key = benchMode, lowerBetter = true;
-    const max = Math.max(...BENCH.configs.map(c => c[key]));
+    const key = benchMode;
+    const mx = Math.max(...BENCH.configs.map(c => c[key]));
     const best = Math.min(...BENCH.configs.map(c => c[key]));
     BENCH.configs.forEach((c, i) => {
-      const dim = benchSpot !== -1 && benchSpot !== i;
-      const val = key === "time" ? fmtTime(c.time) : c.tokens.toLocaleString();
-      bview.appendChild(bar(c.name, "", c[key] / max, c.hue, val, dim, c[key] === best));
+      const val = key === "time" ? fmtTime(c.time) : c.tokens.toLocaleString() + " tok";
+      bview.appendChild(bar(i, c.name, c[key] / mx, val, c[key] === best, benchSpot !== -1 && benchSpot !== i));
     });
     bnote.innerHTML = (key === "tokens"
-      ? "Tokens spent (lower is better). Loom's cost sits well under the frontier model's — "
-      : "Wall-clock time (lower is better). Loom finished in a fraction of the frontier model's time — ") +
-      "for the top quality score. <b style='color:" + WIN + "'>Green</b> marks the leanest run.";
+      ? "Tokens spent — lower is better. Loom's run costs well under the frontier model's "
+      : "Wall-clock time — lower is better. Loom finishes in a fraction of the frontier model's time ") +
+      "for the same top quality score. Bar length is the actual amount; <b style='color:var(--win)'>green</b> marks the leanest run.";
   }
 }
 
