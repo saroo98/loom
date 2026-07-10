@@ -73,19 +73,24 @@ tools/install.sh          # macOS/Linux — Windows: tools\install.ps1
 ```
 
 The installer registers `/loom` for Claude Code and Codex (any skills-capable harness
-works — the whole skill is one markdown file: `skill/loom/SKILL.md`). Then, in any
-project conversation:
+works — the whole skill is one markdown file: `skill/loom/SKILL.md`).
+
+Then, in any project conversation, tell it four things: **a name, one sentence, what
+"done" looks like, and your hard limits.** Like this:
 
 ```
-/loom plan — <name>: <one sentence>. For: <who uses it>.
-Done = <observable finish line>. Constraints: <hard limits, or "none">. Repo: <path|none>.
+/loom plan — recipe-box: a web app where my mom saves and searches her recipes.
+For: one non-technical user, on her phone. Done = she adds a recipe and finds it
+by ingredient, live on a real URL. Constraints: free hosting only. Repo: none.
 ```
 
-The agent surveys the repo, interrogates what you *didn't* say (the silence sweep),
-writes the pack into `<project>/plans/`, gates it against the rubric, and hands you one
-batched set of decisions — each with a recommendation, so a one-word reply unblocks
-everything. Small task? `/loom small` skips the ceremony: one work order, two checks.
-Right-sizing is enforced, not aspirational.
+That one message is a complete brief. Loom takes it from there: surveys the repo if one
+exists, interrogates what you *didn't* say (the silence sweep), writes the plan pack
+into `<project>/plans/`, gates it against the rubric, and comes back with **one** batched
+set of decisions — each with a recommendation, so a one-word reply unblocks everything.
+Don't overthink the format either: describe your project in plain words and bare `/loom`
+figures out the rest. Small task? `/loom small` skips the ceremony — one work order, two
+checks. Right-sizing is enforced, not aspirational.
 
 | Moment | Command |
 |---|---|

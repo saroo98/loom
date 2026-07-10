@@ -62,7 +62,7 @@ def banner(p):
 {weave(36, 30, 250, 170, p)}
 <text x='340' y='118' {FONT} font-size='82' font-weight='800' letter-spacing='8' fill='{p["fg"]}'>LOOM</text>
 <text x='344' y='156' {FONT} font-size='21' fill='{p["mut"]}'>the planning OS that shows its work</text>
-<text x='344' y='188' {FONT} font-size='14' fill='{p["mut"]}'>truth-labeled plans &#183; gated execution &#183; drift detection &#183; a loop that learns you &#8212; locally</text>
+<text x='344' y='188' {FONT} font-size='14' fill='{p["mut"]}'>truth-labeled plans &#183; gates &#183; drift detection &#183; a loop that learns you &#8212; locally</text>
 </svg>"""
 
 
@@ -135,8 +135,8 @@ def growth(p):
              f"markerWidth='8' markerHeight='8' orient='auto'>"
              f"<path d='M0,0 L8,4 L0,8 z' fill='{p['mut']}'/></marker></defs>")
     xs = [20, 20 + PW + G, 20 + 2 * (PW + G)]  # 20..304, 328..612, 636..920 (< 940)
-    titles = [("day one", "clone · install · /loom — that is the whole setup"),
-              ("every run", "outcomes, feedback, and calibration flow back in"),
+    titles = [("day one", "clone · install · /loom — the whole setup"),
+              ("every run", "outcomes + calibration flow back in"),
               ("a year in", "fitted to you — no shelf ships this")]
     for i, x in enumerate(xs):
         e.append(f"<rect x='{x}' y='22' width='{PW}' height='{PH}' rx='10' "
@@ -163,12 +163,12 @@ def growth(p):
                  f"text-anchor='middle' fill='{p['mut']}'>{word}</text>")
     # panel 3: dense cloth — full rows, all colors, plus accretion tags
     e.append(weave(xs[2] + 30, 46, PW - 60, PH - 90, p, rows=8, cols=13, unfinished=1))
-    tags = ["your stacks", "your languages", "your failure patterns"]
+    tags = ["your stacks", "your languages", "your failures"]
     for j, tag in enumerate(tags):
-        tx = xs[2] + 24 + j * 88
-        e.append(f"<rect x='{tx}' y='{PH - 16}' width='{80}' height='20' rx='10' "
+        tx = xs[2] + 12 + j * 89  # 3 chips of 84 + 5px gaps = 262, inside the 284 panel
+        e.append(f"<rect x='{tx}' y='{PH - 16}' width='84' height='20' rx='10' "
                  f"fill='{p['card']}' stroke='{yarn[j]}' stroke-width='1.2'/>"
-                 f"<text x='{tx + 40}' y='{PH - 2}' {FONT} font-size='9.5' "
+                 f"<text x='{tx + 42}' y='{PH - 2}' {FONT} font-size='9.5' "
                  f"text-anchor='middle' fill='{p['fg']}'>{tag}</text>")
     e.append("</svg>")
     return "".join(e)
@@ -176,24 +176,25 @@ def growth(p):
 
 LABELS = [
     ("[FACT]", "cite the source", "fact", "factbg"),
-    ("[ASSUMPTION]", "ledger it: risk + verify_by", "assum", "assumbg"),
+    ("[ASSUMPTION]", "ledger: risk + verify_by", "assum", "assumbg"),
     ("[SPECULATION]", "never load-bearing", "spec", "specbg"),
     ("[UNKNOWN]", "attach a resolution path", "unk", "unkbg"),
-    ("[HUMAN-DECISION]", "batch it, with a recommendation", "dec", "decbg"),
+    ("[HUMAN-DECISION]", "batch it, recommend one", "dec", "decbg"),
 ]
 
 
 def labels(p):
-    W, H, CW, G = 940, 74, 180, 10
+    # 5 chips of 176 + 4 gaps of 9 = 916, centered in 940 -> 12px side margins
+    W, H, CW, G, M = 940, 74, 176, 9, 12
     e = [f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W} {H}' role='img' "
          f"aria-label='the five epistemic labels'>"]
     for i, (name, oblig, fgk, bgk) in enumerate(LABELS):
-        x = i * (CW + G)
+        x = M + i * (CW + G)
         e.append(f"<g><rect x='{x + 0.5}' y='0.5' width='{CW}' height='{H - 1}' rx='10' "
                  f"fill='{p[bgk]}' stroke='{p[fgk]}' stroke-width='1.4'/>"
-                 f"<text x='{x + 14}' y='30' font-family='ui-monospace,Consolas,monospace' "
-                 f"font-size='14.5' font-weight='700' fill='{p[fgk]}'>{name}</text>"
-                 f"<text x='{x + 14}' y='52' {FONT} font-size='11.5' "
+                 f"<text x='{x + 13}' y='30' font-family='ui-monospace,Consolas,monospace' "
+                 f"font-size='14' font-weight='700' fill='{p[fgk]}'>{name}</text>"
+                 f"<text x='{x + 13}' y='52' {FONT} font-size='11.5' "
                  f"fill='{p['fg']}'>{oblig}</text></g>")
     e.append("</svg>")
     return "".join(e)
