@@ -125,6 +125,7 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
   <a class="lnk" href="#one-command">One command</a>
   <a class="lnk" href="#lifecycle">Lifecycle</a>
   <a class="lnk" href="#labels">Labels</a>
+  <a class="lnk" href="#benchmark">Benchmark</a>
   <a class="lnk" href="#sovereign">Privacy</a>
   <a class="lnk" href="#install">Install</a>
   <a class="gh" href="https://github.com/saroo98/loom">GitHub →</a>
@@ -209,6 +210,32 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
       <p>Your stacks, your languages, your failure patterns. No shelf, no marketplace,
       no amount of stars can ship this to anyone else — it grew inside your work.</p></div>
   </div>
+</div></section>
+
+<section id="benchmark"><div class="wrap">
+  <div class="kicker">Measured, not asserted</div>
+  <h2>One brief. Three sessions. Blind grading.</h2>
+  <p class="lead">The same one-line task went to three isolated agent sessions with sealed
+  acceptance tests written beforehand; a separate blind evaluator scored the deployed
+  pages on cited evidence. This is the first benchmark — more will follow on harder tasks.</p>
+  <div class="loop" style="grid-template-columns:repeat(3,1fr)">
+    <div style="background:var(--card);border:1px solid var(--line);border-radius:11px;padding:14px 12px;text-align:center">
+      <b style="font-size:14px">Opus 4.8 · low</b>
+      <div style="font-size:30px;font-weight:700;margin:6px 0 2px">76.8</div>
+      <span style="color:var(--mut);font-size:12px">8/10 tests · 50.8k tok · 2m 08s · no Loom</span></div>
+    <div style="background:color-mix(in srgb,var(--b) 9%,var(--card));border:1.6px solid var(--b);border-radius:11px;padding:14px 12px;text-align:center">
+      <b style="font-size:14px">Opus 4.8 · low · Loom</b>
+      <div style="font-size:30px;font-weight:700;margin:6px 0 2px;color:var(--b)">90.1</div>
+      <span style="color:var(--mut);font-size:12px">10/10 tests · 74.4k tok · 4m 14s</span></div>
+    <div style="background:var(--card);border:1px solid var(--line);border-radius:11px;padding:14px 12px;text-align:center">
+      <b style="font-size:14px">Fable 5 · max</b>
+      <div style="font-size:30px;font-weight:700;margin:6px 0 2px">89.8</div>
+      <span style="color:var(--mut);font-size:12px">10/10 tests · 123.6k tok · 20m 41s · no Loom</span></div>
+  </div>
+  <p class="note">A small model at low effort, running Loom, matched the frontier model at
+  maximum effort — on about 60% of the tokens and one-fifth of the time — and beat the same
+  model without Loom by 13 points. Full method, all twelve category scores, costs, and
+  caveats: <a href="https://github.com/saroo98/loom/blob/main/BENCHMARK.md">BENCHMARK.md</a>.</p>
 </div></section>
 
 <section id="sovereign"><div class="wrap">

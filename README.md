@@ -25,6 +25,12 @@ That asymmetry is the entire design — the machinery is heavy so your hand neve
 No runtime. No server. No account. Markdown guidance plus small standard-library Python
 tools, in a git repo you own outright.
 
+> **Benchmarked.** Same one-line brief, three isolated sessions, sealed hidden tests,
+> blind grading: **Claude Opus 4.8 at low effort + Loom scored 90.1/100 and passed all
+> ten sealed tests** — matching Claude Fable 5 at maximum effort (89.8) on about 60% of
+> the tokens and one-fifth of the time, and beating the same model without Loom by 13
+> points. Full method, scores, costs, and caveats: [BENCHMARK.md](BENCHMARK.md).
+
 ## It starts small and it compounds
 
 <picture>

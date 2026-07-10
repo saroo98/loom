@@ -85,6 +85,7 @@ OVERLAY = [
     "PRIVACY.md",
     "CONTRIBUTING.md",
     "CHANGELOG.md",
+    "BENCHMARK.md",
     "FEEDBACK.md",
     "assets",
     "docs",
