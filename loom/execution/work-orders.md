@@ -88,6 +88,16 @@ The single highest-leverage field. Rules:
   while the library documents another is a wrong-fact acceptance vector; prefer
   "calendar-clean" fixtures (same-calendar anniversaries) where the expectation is
   arithmetic-free. (Earned: one Jalali/Gregorian fixture defect, 2026-07-10.)
+- **No interaction may fake success.** A form that confirms "you're subscribed" while
+  storing nothing, a button that pretends to order — these are lies wearing polish. If
+  the backend isn't in scope: cut the interaction, visibly stub it ("coming soon",
+  disabled state), or wire the honest minimum. A criterion covering any user-visible
+  action asserts what ACTUALLY happens, not what the confirmation text claims.
+- **The deliverable's feature list answers to the scope ladder, not to momentum.**
+  Before building, every feature beyond the MUST rung names its consumer or gets cut —
+  the same law packs obey (`artifact-matrix.md`), applied to the product. The stronger
+  the builder, the more this line matters: capability is a gold-plating temptation, and
+  unrequested features ship unreviewed risk.
 - Include at least one **negative check** (what must NOT have changed) on any WO touching
   shared code — that's the blast-radius guard.
 - Criteria written after implementation are confessions, not criteria. They ship with the WO.

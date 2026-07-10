@@ -46,10 +46,37 @@ Decisions, not aspirations:
 Pick the baseline and state it (e.g., "WCAG 2.1 AA for keyboard nav + contrast; screen-reader
 depth is LATER rung"). An unstated baseline means "none, discovered at review".
 
+**The concrete floor for anything web-shaped** — each item is minutes to ship and a
+defect-class killer; skipping one is a decision, recorded, not an oversight:
+- Skip link, first element in the body; visible on focus.
+- Authored `:focus-visible` styles — browser defaults don't survive brand CSS.
+- `prefers-reduced-motion` covers *every* animation AND smooth-scroll, not just the big one.
+- Disclosure widgets (nav toggles, accordions): `aria-expanded` kept true-to-state,
+  Escape closes, and focus returns to the trigger on close.
+- Async confirmations announce via a live region, not just a visual swap.
+- Decorative vector art `aria-hidden`; meaningful vector art labeled.
+
 ### 6. Content & tone
 Voice, terminology (glossary-stable), placeholder policy. **Real-content rule:** test layouts
 with realistic content in the target language — Arabic-script RTL text, long German words,
 whatever the audience implies. Lorem ipsum hides every overflow bug that matters.
+
+**Copy that could only belong to this product.** Customer-visible prose earns its place
+by specificity: a number, a name, a place, or a sensory concrete outperforms any
+adjective ("fired in batches of forty, every Monday" beats "artisanal"). Recurring
+named details woven across sections make a page read as a real thing rather than a
+template. Anchor at least one detail in the audience's region when the audience is local.
+
+**Placeholder routing — disclosures go to the owner, never to the visitor.** Placeholder
+*content* belongs on the page shaped so it cannot be mistaken for fact (reserved phone
+prefixes, obviously-fictional locales, unlinked social handles); placeholder *awareness*
+("swap in your real ones", "est. on your corner") belongs in the pack and the handoff
+note. A customer surface that admits it's a template has shipped a defect, not honesty.
+
+**One fact, one source.** Anything restated across surfaces — hours, prices, names, in
+visible copy, page metadata, social tags, structured data — is written once and swept
+once before handoff (`loom/verification/contradiction-detection.md`, restated-fact
+sweep). Every surface that repeats a fact is a chance to contradict it.
 
 ## Handoff form
 

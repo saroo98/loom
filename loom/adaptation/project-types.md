@@ -25,7 +25,16 @@ in-session per `loom/verification/hallucination-check.md` before load-bearing us
 - **Emphasis:** UI/UX is the center of gravity (may absorb architecture); content plan and
   real copy early — layout with fictional copy is fictional layout; SEO/performance as
   explicit scope rungs.
-- **Testing:** visual/manual checklist per breakpoint; link and asset checks; Lighthouse-class
+- **Performance defaults (deviating is a decision, not a habit):** system font stacks
+  first — a webfont is a chosen dependency, never a reflex; inline vector art over image
+  files at small scale; zero third-party requests as the baseline; script deferred and
+  optional (the page works with it off); animations on compositor properties only. One
+  trap worth naming: styling that hides content until a script reveals it must be gated
+  on a class the SAME script sets — split the gate from the enhancer and a failed load
+  strands the content invisible.
+- **Testing:** the deliverable smoke battery (`loom/planning/testing-plan.md` §6) —
+  scripted static checks, measured per-breakpoint probes, event-dispatch behavior
+  checks; plus the restated-fact sweep for anything the page says twice; Lighthouse-class
   budget if performance is a stated goal.
 - **Release:** DNS/hosting steps are release-plan steps (and rollback = keep old hosting
   live until verified).

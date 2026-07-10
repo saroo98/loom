@@ -55,6 +55,27 @@ Where test data comes from (fixtures/factories/anonymized — **never production
 personal data**), what services are faked vs real, and how CI runs it all. If CI doesn't
 exist, decide whether it enters scope (usually a SHOULD at tier L).
 
+### 6. The deliverable smoke battery (anything UI-shaped, any tier — including S)
+A test *plan* can be skipped at tier S; proving the deliverable cannot. The battery is
+cheap, scripted, and runs in the artifact's real medium before handoff:
+
+1. **Static self-checks, scripted — never eyeballed.** A throwaway script beats reading:
+   tag/brace balance, duplicate ids, every local asset reference resolves, every
+   fragment link has a matching target. Minutes to write; kills whole defect classes.
+2. **Probe the served artifact, don't admire it.** Serve locally and *measure*: horizontal
+   overflow as a number (scroll width vs client width) at phone/tablet/desktop widths;
+   layout collapse verified from computed styles per breakpoint; console clean; the
+   things that should resolve (fonts, animations, dynamic state) actually resolved.
+3. **Behavior by dispatched events, not by looks.** Fill the form with a test value and
+   submit it — assert the visible outcome and the reset. Click the toggle — assert the
+   state attribute, not the pixels. Press Escape — assert closed. If it has behavior,
+   the check is an event plus an assertion.
+4. **A probe that fails changes the code, then the WHOLE battery reruns.** A fix without
+   a re-run is a new unverified claim.
+
+The battery's findings are close-out evidence (paste the probe outputs). Skipping the
+battery on a shippable UI is a decision record, not a default.
+
 ## Failure modes
 
 - **Coverage theater** — a percentage target driving trivial tests while money paths go bare.

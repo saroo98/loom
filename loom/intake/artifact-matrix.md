@@ -16,6 +16,13 @@ one honest line in the MANIFEST.
 Tie-break rule: choose the **lower** tier and record the promotion trigger. Gates catch
 under-planning cheaply; over-planning is never caught because unused documents don't complain.
 
+**Where the saved budget goes.** Tiering down is not doing less — it is spending the
+same attention where it converts: on the deliverable's craft (composition passes, copy
+specificity) and on *proof* (the smoke battery, the restated-fact sweep, behavior probed
+in the artifact's real medium). A slim pack plus a hard verification loop beats a rich
+pack plus an admired-from-a-distance deliverable, at every tier where both fit the
+budget. Planning documents never impressed a user; the artifact did.
+
 ## The matrix
 
 ●&nbsp;required ◐ produce if the modifier column applies ○ skip by default

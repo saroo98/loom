@@ -40,6 +40,14 @@ story. Instead:
    - plan ↔ survey (the plan assuming what the survey disproved)
 4. **Directional reads.** For each pair of artifacts that share a noun, read only the shared-
    noun sentences side by side.
+5. **Restated-fact sweep (deliverables).** The pass above hunts the *plan*; this one hunts
+   the *product*. Any fact a deliverable states more than once — opening hours, prices,
+   names, dates, contact details — gets collected into one table from EVERY surface that
+   restates it: visible copy, page titles and metadata, social/share tags, structured
+   data, generated summaries. One divergence is one defect ("open every day from 8" in a
+   tagline vs "Sundays from 10" in the hours table is a customer standing at a locked
+   door). The fix is structural, not editorial: give the fact one authoritative spot and
+   make every other surface derive from or get checked against it before handoff.
 
 ## Questions to ask
 
