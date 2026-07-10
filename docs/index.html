@@ -4,15 +4,16 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loom — a planning OS for AI coding agents</title>
-<meta name="description" content="Loom is an alive planning OS for AI coding agents: truth-labeled plans, gated execution, drift detection — and it learns from every run, unasked, entirely on your machine. Zero telemetry, provable.">
+<meta name="description" content="Loom is an alive planning OS for AI coding agents that shows its work and learns from every run. On a smaller model at low effort it matched a frontier model at maximum effort — using fewer tokens and less time. Zero telemetry, provable.">
 <link rel="canonical" href="https://saroo98.github.io/loom/">
 <meta property="og:type" content="website">
-<meta property="og:title" content="Loom — a planning OS for AI coding agents">
-<meta property="og:description" content="Truth-labeled plans, gated execution, drift detection — behind one command. Sovereign by architecture: your Loom learns you, locally.">
+<meta property="og:title" content="Loom — an alive planning OS for AI coding agents">
+<meta property="og:description" content="It shows its work and learns from every run. On a smaller model at low effort, Loom matched a frontier model at max effort — fewer tokens, less time. The more you use it, the better it gets.">
 <meta property="og:url" content="https://saroo98.github.io/loom/">
-<meta name="twitter:card" content="summary">
-<meta name="twitter:title" content="Loom — a planning OS for AI coding agents">
-<meta name="twitter:description" content="The most rigorous planning system an agent can run, behind the shortest command you'll type today.">
+<meta property="og:image" content="https://saroo98.github.io/loom/benchmark-cover.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Loom — an alive planning OS for AI coding agents">
+<meta name="twitter:description" content="A smaller model at low effort, running Loom, matched a frontier model at max effort — fewer tokens, less time. The more you use it, the better it gets.">
 <meta name="robots" content="index,follow">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Cpath d='M8 6v20M14 6v20M20 6v20M26 6v20' stroke='%23484f58' stroke-width='1.5'/%3E%3Cpath d='M5 12h22M5 20h22' stroke='%23818cf8' stroke-width='3' stroke-dasharray='4 3'/%3E%3C/svg%3E">
 <script type="application/ld+json">
@@ -115,6 +116,9 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
   .chips{grid-template-columns:repeat(2,1fr)}
   .cards,.proof{grid-template-columns:1fr}
   .cta.sec{margin-left:0;margin-top:10px}
+  nav a.lnk{display:none}
+  #benchCards{grid-template-columns:1fr!important}
+  #benchModes{flex-wrap:wrap}
 }
 </style>
 </head>
@@ -133,13 +137,13 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
 
 <header><div class="wrap">
   <h1>The heaviest planning machinery, behind the lightest command.</h1>
-  <p class="sub"><strong style="color:var(--fg)">Loom is alive. It shows its work. It learns
-  from every run — unasked.</strong><br>A planning OS for AI coding agents: truth-labeled
-  plans, assumption ledgers, review gates, drift detection — and a learning loop that makes
-  <em>your</em> Loom better at <em>your</em> work, entirely on your machine. No runtime, no
-  server, no account.</p>
+  <p class="sub"><strong style="color:var(--fg)">Loom is alive. It shows its work, it learns
+  from every run — and the more you use it, the better it gets.</strong><br>A planning OS
+  for AI coding agents. In a blind benchmark, a smaller model at low effort running Loom
+  <em>matched a frontier model at maximum effort</em> — on fewer tokens and less time.
+  No runtime, no server, no account.</p>
   <a class="cta pri" href="https://github.com/saroo98/loom">Get the repo</a>
-  <a class="cta sec" href="#install">Install in 3 commands</a>
+  <a class="cta sec" href="#benchmark">See the benchmark</a>
   <div class="heroweave" aria-hidden="true">
     <svg viewBox="0 0 960 200" xmlns="http://www.w3.org/2000/svg">
       <g stroke="var(--line)" stroke-width="1.6">
@@ -216,26 +220,22 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
   <div class="kicker">Measured, not asserted</div>
   <h2>One brief. Three sessions. Blind grading.</h2>
   <p class="lead">The same one-line task went to three isolated agent sessions with sealed
-  acceptance tests written beforehand; a separate blind evaluator scored the deployed
-  pages on cited evidence. This is the first benchmark — more will follow on harder tasks.</p>
-  <div class="loop" style="grid-template-columns:repeat(3,1fr)">
-    <div style="background:var(--card);border:1px solid var(--line);border-radius:11px;padding:14px 12px;text-align:center">
-      <b style="font-size:14px">Opus 4.8 · low</b>
-      <div style="font-size:30px;font-weight:700;margin:6px 0 2px">76.8</div>
-      <span style="color:var(--mut);font-size:12px">8/10 tests · 50.8k tok · 2m 08s · no Loom</span></div>
-    <div style="background:color-mix(in srgb,var(--b) 9%,var(--card));border:1.6px solid var(--b);border-radius:11px;padding:14px 12px;text-align:center">
-      <b style="font-size:14px">Opus 4.8 · low · Loom</b>
-      <div style="font-size:30px;font-weight:700;margin:6px 0 2px;color:var(--b)">90.1</div>
-      <span style="color:var(--mut);font-size:12px">10/10 tests · 74.4k tok · 4m 14s</span></div>
-    <div style="background:var(--card);border:1px solid var(--line);border-radius:11px;padding:14px 12px;text-align:center">
-      <b style="font-size:14px">Fable 5 · max</b>
-      <div style="font-size:30px;font-weight:700;margin:6px 0 2px">89.8</div>
-      <span style="color:var(--mut);font-size:12px">10/10 tests · 123.6k tok · 20m 41s · no Loom</span></div>
+  acceptance tests written beforehand. A separate blind evaluator — <strong>Claude Fable 5
+  at maximum effort, in an isolated environment</strong> — scored the deployed pages on
+  cited evidence. Click a configuration to spotlight it, and switch what the bars measure.
+  This is the first benchmark; more will follow on harder tasks.</p>
+
+  <div id="benchCards" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 18px"></div>
+
+  <div class="tabs" id="benchModes" role="tablist">
+    <button role="tab" aria-selected="true" data-mode="quality">Quality — by category</button>
+    <button role="tab" aria-selected="false" data-mode="tokens">Cost — tokens</button>
+    <button role="tab" aria-selected="false" data-mode="time">Speed — wall time</button>
   </div>
-  <p class="note">A small model at low effort, running Loom, matched the frontier model at
-  maximum effort — on about 60% of the tokens and one-fifth of the time — and beat the same
-  model without Loom by 13 points. Full method, all twelve category scores, costs, and
-  caveats: <a href="https://github.com/saroo98/loom/blob/main/BENCHMARK.md">BENCHMARK.md</a>.</p>
+  <div id="benchView" style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px"></div>
+  <p class="note" id="benchNote"></p>
+  <p class="note">Full method, all twelve category scores, and caveats:
+  <a href="https://github.com/saroo98/loom/blob/main/BENCHMARK.md">BENCHMARK.md</a>.</p>
 </div></section>
 
 <section id="sovereign"><div class="wrap">
@@ -403,6 +403,99 @@ document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", asyn
   catch (_) { b.textContent = "select + copy"; }
   setTimeout(() => b.textContent = "copy", 1400);
 }));
+
+/* interactive benchmark */
+const BENCH = {
+  configs: [
+    { name: "Opus 4.8 · low",        hue: "#3987e5", mean: 76.8, hidden: "8 / 10",  tokens: 50799,  time: 128,  loom: false },
+    { name: "Opus 4.8 · low · Loom", hue: "#9085e9", mean: 90.1, hidden: "10 / 10", tokens: 74363,  time: 254,  loom: true  },
+    { name: "Fable 5 · max",         hue: "#eda100", mean: 89.8, hidden: "10 / 10", tokens: 123561, time: 1241, loom: false }
+  ],
+  cats: ["Hidden-test correctness", "HTML quality", "CSS quality", "JavaScript appropriateness",
+         "Accessibility depth", "Responsive / mobile", "Performance", "Visual design",
+         "Content & copy", "Scope discipline", "File hygiene", "Placeholder honesty"],
+  scores: [
+    [78, 78, 76, 86, 62, 72, 88, 80, 84, 82, 80, 55],
+    [98, 91, 88, 87, 85, 86, 95, 85, 89, 90, 91, 96],
+    [97, 91, 88, 87, 88, 91, 97, 89, 90, 82, 93, 84]
+  ]
+};
+const WIN = "#0a7f2e";
+let benchSpot = 1, benchMode = "quality";
+const fmtTime = s => Math.floor(s / 60) + "m " + String(s % 60).padStart(2, "0") + "s";
+const bcards = document.getElementById("benchCards");
+const bview = document.getElementById("benchView");
+const bnote = document.getElementById("benchNote");
+
+function renderCards() {
+  bcards.innerHTML = "";
+  BENCH.configs.forEach((c, i) => {
+    const on = benchSpot === i;
+    const el = document.createElement("button");
+    el.style.cssText = `text-align:center;cursor:pointer;border-radius:11px;padding:14px 12px;` +
+      `background:${on ? "color-mix(in srgb," + c.hue + " 12%,var(--card))" : "var(--card)"};` +
+      `border:${on ? "2px" : "1px"} solid ${on ? c.hue : "var(--line)"};` +
+      `opacity:${benchSpot === -1 || on ? "1" : ".6"};transition:.15s`;
+    el.setAttribute("aria-pressed", on);
+    el.innerHTML =
+      `<div style="font-weight:600;font-size:13.5px">${c.name}</div>` +
+      `<div style="font-size:30px;font-weight:800;margin:5px 0 2px;color:${c.loom ? c.hue : "var(--fg)"}">${c.mean}</div>` +
+      `<div style="color:var(--mut);font-size:11.5px">${c.hidden} tests · ${(c.tokens / 1000).toFixed(1)}k tok · ${fmtTime(c.time)}${c.loom ? "" : " · no Loom"}</div>`;
+    el.addEventListener("click", () => { benchSpot = (benchSpot === i ? -1 : i); renderCards(); renderView(); });
+    bcards.appendChild(el);
+  });
+}
+
+function bar(label, sub, frac, color, val, dim, bold) {
+  const row = document.createElement("div");
+  row.style.cssText = "display:grid;grid-template-columns:150px 1fr auto;align-items:center;gap:10px;margin:7px 0;opacity:" + (dim ? ".28" : "1") + ";transition:.25s";
+  row.innerHTML =
+    `<div style="font-size:12.5px;color:var(--fg)">${label}<span style="color:var(--mut)"> ${sub || ""}</span></div>` +
+    `<div style="height:12px;border-radius:6px;background:var(--bg2);overflow:hidden"><div style="height:100%;width:0;border-radius:6px;background:${color};transition:width .5s ease"></div></div>` +
+    `<div style="font-size:12.5px;font-weight:${bold ? "800" : "500"};color:${bold ? WIN : "var(--fg)"};min-width:52px;text-align:right">${val}</div>`;
+  requestAnimationFrame(() => { row.querySelector("div > div").style.width = Math.max(2, frac * 100) + "%"; });
+  return row;
+}
+
+function renderView() {
+  bview.innerHTML = "";
+  if (benchMode === "quality") {
+    BENCH.cats.forEach((cat, r) => {
+      const col = [0, 1, 2].map(c => BENCH.scores[c][r]);
+      const best = Math.max(...col);
+      const block = document.createElement("div");
+      block.style.cssText = "padding:8px 0;border-bottom:1px solid var(--line)";
+      block.innerHTML = `<div style="font-size:12.5px;font-weight:600;margin-bottom:4px">${cat}</div>`;
+      BENCH.configs.forEach((c, i) => {
+        const v = BENCH.scores[i][r];
+        const dim = benchSpot !== -1 && benchSpot !== i;
+        block.appendChild(bar(c.name.replace(" · ", "·").slice(0, 16), "", v / 100, c.hue, v, dim, v === best));
+      });
+      bview.appendChild(block);
+    });
+    bnote.innerHTML = "Score 0–100 per category (higher is better). Best in each is <b style='color:" + WIN + "'>green</b>. " +
+      "Loom leads correctness, scope, and placeholder honesty; the frontier model leads accessibility, responsive, and performance.";
+  } else {
+    const key = benchMode, lowerBetter = true;
+    const max = Math.max(...BENCH.configs.map(c => c[key]));
+    const best = Math.min(...BENCH.configs.map(c => c[key]));
+    BENCH.configs.forEach((c, i) => {
+      const dim = benchSpot !== -1 && benchSpot !== i;
+      const val = key === "time" ? fmtTime(c.time) : c.tokens.toLocaleString();
+      bview.appendChild(bar(c.name, "", c[key] / max, c.hue, val, dim, c[key] === best));
+    });
+    bnote.innerHTML = (key === "tokens"
+      ? "Tokens spent (lower is better). Loom's cost sits well under the frontier model's — "
+      : "Wall-clock time (lower is better). Loom finished in a fraction of the frontier model's time — ") +
+      "for the top quality score. <b style='color:" + WIN + "'>Green</b> marks the leanest run.";
+  }
+}
+
+document.querySelectorAll("#benchModes button").forEach(b => b.addEventListener("click", () => {
+  document.querySelectorAll("#benchModes button").forEach(x => x.setAttribute("aria-selected", x === b));
+  benchMode = b.dataset.mode; renderView();
+}));
+renderCards(); renderView();
 </script>
 </body>
 </html>

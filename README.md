@@ -11,10 +11,24 @@
   <a href="https://github.com/saroo98/loom/actions/workflows/verify.yml"><img src="https://github.com/saroo98/loom/actions/workflows/verify.yml/badge.svg" alt="verify: tests + no-network audit" height="20"></a>
 </div>
 
-<h3 align="center">Loom is alive. It shows its work. It learns from every run — unasked.</h3>
+<h3 align="center">Loom is alive. It shows its work. It learns from every run — and the more you work with it, the better it gets.</h3>
 
-The most rigorous planning system an AI coding agent can run — behind the shortest
-command you'll type today. ([website](https://saroo98.github.io/loom/))
+<p align="center"><b>On a smaller model at low effort, Loom matched a frontier model
+running at maximum effort — using fewer tokens and less time.</b> The most rigorous
+planning system an AI coding agent can run, behind the shortest command you'll type
+today. (<a href="https://saroo98.github.io/loom/">website</a>)</p>
+
+<a href="BENCHMARK.md">
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
+  <img alt="Benchmark: Opus 4.8 low + Loom scored 90.1, matching Fable 5 at max effort (89.8) and beating naked Opus (76.8)" src="assets/benchmark-cover.png" width="960">
+</picture>
+</a>
+
+<p align="center"><sub>First benchmark — one brief, three isolated sessions, sealed
+hidden tests. Built and scored blind by <b>Claude Fable 5 at maximum effort in an
+isolated environment</b>; deliverables graded on cited evidence. Full method, all twelve
+category scores, costs, and caveats: <a href="BENCHMARK.md">BENCHMARK.md</a>.</sub></p>
 
 Loom is a planning operating system for AI agents. Underneath: truth-labeled plans, an
 assumption ledger with break propagation, review gates, atomic work orders, drift
@@ -24,12 +38,6 @@ That asymmetry is the entire design — the machinery is heavy so your hand neve
 
 No runtime. No server. No account. Markdown guidance plus small standard-library Python
 tools, in a git repo you own outright.
-
-> **Benchmarked.** Same one-line brief, three isolated sessions, sealed hidden tests,
-> blind grading: **Claude Opus 4.8 at low effort + Loom scored 90.1/100 and passed all
-> ten sealed tests** — matching Claude Fable 5 at maximum effort (89.8) on about 60% of
-> the tokens and one-fifth of the time, and beating the same model without Loom by 13
-> points. Full method, scores, costs, and caveats: [BENCHMARK.md](BENCHMARK.md).
 
 ## It starts small and it compounds
 
@@ -49,6 +57,8 @@ Give it a year of real projects and you're holding a planning system fitted to y
 stacks, your languages, your failure patterns — one that no shelf, no marketplace, and
 no amount of stars can ship to anyone else, because it grew inside your work. The
 ceiling isn't our roadmap. It's your usage.
+
+**The more you work with it, the better it gets.**
 
 ## Three commitments most tools don't make
 

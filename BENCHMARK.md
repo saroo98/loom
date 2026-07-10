@@ -51,10 +51,11 @@ then stop.
   mobile usability, broken references, HTML validity, fabricated-claim check, third-party
   requests, accessibility floor, and more) were written and fixed before any session ran.
   No session saw them.
-- **Blind, deliverable-only grading.** A separate evaluator session received the live
-  pages under anonymous labels and was told nothing about what produced them. Every score
-  cites file-and-line evidence or a computed value (WCAG contrast ratios, anchor/id
-  cross-checks, per-asset HTTP status, DOM parse).
+- **Blind, deliverable-only grading, run in isolation by Claude Fable 5 at maximum
+  effort.** A separate evaluator session — Fable 5 at max effort, in an isolated
+  environment with no knowledge of what produced the pages — received the live pages
+  under anonymous labels. Every score cites file-and-line evidence or a computed value
+  (WCAG contrast ratios, anchor/id cross-checks, per-asset HTTP status, DOM parse).
 - **Verbatim deployment.** Each page is published exactly as its session built it — no
   fixes, no touch-ups. The links at the bottom are those artifacts.
 - **Costs are the harness-reported totals** for each session. Nothing is estimated.
