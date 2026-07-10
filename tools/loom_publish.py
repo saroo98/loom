@@ -72,6 +72,7 @@ ALLOWLIST = [
     "tools/test_loom_tools.py",
     "tools/test_loom_migrate.py",
     "tools/test_loom_pipeline.py",
+    "tools/test_loom_privacy.py",
     "tools/test_loom_report.py",
     "tools/test_loom_guard.py",
     "tools/test_loom_publish.py",

@@ -11,8 +11,10 @@
   <a href="https://github.com/saroo98/loom/actions/workflows/verify.yml"><img src="https://github.com/saroo98/loom/actions/workflows/verify.yml/badge.svg" alt="verify: tests + no-network audit" height="20"></a>
 </div>
 
-**The most rigorous planning system an AI coding agent can run — behind the shortest
-command you'll type today.** ([website](https://saroo98.github.io/loom/))
+<h3 align="center">Loom is alive. It shows its work. It learns from every run — unasked.</h3>
+
+The most rigorous planning system an AI coding agent can run — behind the shortest
+command you'll type today. ([website](https://saroo98.github.io/loom/))
 
 Loom is a planning operating system for AI agents. Underneath: truth-labeled plans, an
 assumption ledger with break propagation, review gates, atomic work orders, drift
