@@ -75,6 +75,8 @@ def _owner_id(home, root, may_create):
 
 
 def _targets(root, home):
+    root = Path(root).expanduser().resolve()
+    home = Path(home).expanduser().resolve()
     skill = root / "skill" / "loom" / "SKILL.md"
     prompt = root / "skill" / "codex-prompt" / "loom.md"
     for source in (skill, prompt):

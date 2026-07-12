@@ -94,6 +94,21 @@ class PythonInstallerTests(unittest.TestCase):
                     target.destination.read_text(encoding="utf-8"))
                 for target in targets))
 
+    def test_targets_canonicalize_equivalent_root_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = self.make_root(tmp)
+            alias = root / ".." / root.name
+            home = Path(tmp) / "home"
+
+            targets = loom_install._targets(alias, home)
+
+            self.assertTrue(all(
+                target.source.is_relative_to(root.resolve())
+                for target in targets))
+            self.assertTrue(all(
+                target.destination.is_relative_to(home.resolve())
+                for target in targets))
+
     def test_mid_transaction_io_failure_rolls_back_created_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = self.make_root(tmp)
