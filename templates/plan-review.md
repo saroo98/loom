@@ -5,7 +5,7 @@ gate: <G0|G1|G2|G3|G4|G5>
 date: <YYYY-MM-DD>
 reviewer: "<model/session — note if same as author>"
 verdict: <pass | pass-with-fixes | fail>
-loom_version: "0.7.0"
+loom_version: "0.8.0"
 ---
 
 # <Gate> review — <project> — <date>

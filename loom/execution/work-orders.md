@@ -28,6 +28,7 @@ depends_on: [WO-004]
 blocks: []
 routing: strong-coding # capability class, see routing.md
 size: S                # S: <1h · M: one sitting · L: split it
+touches: [auth/**]     # complete modification boundary; required even for one file
 last_verified: 2026-07-08
 ---
 
@@ -66,6 +67,12 @@ Conditions under which the implementer stops and reports instead of improvising 
 
 ## Epistemic notes
 Assumptions this WO rests on (ledger IDs), unknowns it may surface.
+
+## Close-out
+Pending until implementation. When complete: check every criterion, paste reproducible
+evidence, set status `done`, then seal chronology with:
+`python <loom>/tools/loom_gate.py close-wo <pack> --repo <target> --wo <this-file>`.
+If that command refuses, the WO is not done.
 ```
 
 ## Acceptance criteria discipline
@@ -74,6 +81,13 @@ The single highest-leverage field. Rules:
 - Every criterion is a command with expected output, or an observation a reviewer can
   reproduce. "Works correctly" is not a criterion; "the three commands in testing-plan §2
   exit 0" is.
+- **A criterion about rendered or running behavior is met by *observing the artifact*, not by
+  citing its source.** "The CSS sets 44px", "the handler returns 200" are source claims; the
+  criterion is "rendered in a browser at 1280 and 360px, both themes — no overlap or clipping"
+  or "`curl` returns 200 with a fresh token". Any human-facing UI carries at least one observed
+  render check across its states and widths (`loom/execution/design-floor.md` §12;
+  `loom/verification/self-verification.md` step 6). The most confident source-read pass ships a
+  broken page.
 - **Human-routed WOs use the attestation pattern:** a dated attestation *artifact* with a
   count or named observable — "`i18n review: pass`, dated, in close-out", "2 promote
   actions with timestamps" — never a bare "owner confirms". (Pattern earned by a real run:
@@ -98,9 +112,22 @@ The single highest-leverage field. Rules:
   the same law packs obey (`artifact-matrix.md`), applied to the product. The stronger
   the builder, the more this line matters: capability is a gold-plating temptation, and
   unrequested features ship unreviewed risk.
+- **But on a self-contained, low-risk deliverable, the core promise's own completeness is
+  table stakes — not gold-plating.** The whole *smallest* journey — normal use **+ recovery/
+  error + repeat/reset + accessible feedback** — is *inside* the MUST rung; cutting the split,
+  the reset, or the error path as "extra" ships a toy, not the product. Gold-plating is a
+  feature that opens a *second* domain, workflow, or remote dependency (accounts, saved
+  history, tax rules, payments) — those still get cut. For a human-facing UI, this test and
+  the full craft floor live in `loom/execution/design-floor.md` (§9); cite its numbered floor
+  in the criteria.
 - Include at least one **negative check** (what must NOT have changed) on any WO touching
   shared code — that's the blast-radius guard.
 - Criteria written after implementation are confessions, not criteria. They ship with the WO.
+- A `done` label is not causal evidence. `loom_gate close-wo` compares declared `touches`
+  against the target snapshot bound before planning and refuses an unchanged pre-existing
+  deliverable. G1 seals the immutable plan content and complete WO set; later edits may only
+  change status, criterion checkmarks, and close-out evidence. Lint blocks every done WO without
+  that sealed completion record.
 
 ## Escalation triggers (default set — extend per WO)
 
@@ -111,6 +138,10 @@ The implementer stops and reports (rather than improvising) when:
 - The change can't be done without touching out-of-scope areas.
 - A frozen contract would need to change.
 - Anything on the danger-zones list must be modified and the WO didn't say so.
+- The feature *works, but not the way the requester imagines it* (an avatar field that
+  takes a URL where they pictured an uploader). Surface the gap as a `[HUMAN-DECISION]` —
+  do not silently build the larger feature they didn't ask for into a production change.
+  The honest half-answer, flagged, beats the impressive whole one, unrequested.
 
 Escalation is cheap; a wrong improvisation inside a stale WO is expensive. Say so in the
 implementer kickoff prompt (`loom/prompts/prompt-library.md`).
@@ -123,8 +154,9 @@ payoff of contract-first planning. MANIFEST lists the current frontier (ready + 
 
 Every WO declares `touches:` — the path globs it may modify. Concurrently-ready WOs need
 disjoint `touches`; multi-agent runtime rules (claiming, heartbeats, handoff briefs) are in
-`loom/execution/parallel-work.md`. Exceeding declared `touches` mid-work is an escalation
-trigger, not a judgment call.
+`loom/execution/parallel-work.md`. Simultaneous implementers use isolated worktrees/copies and
+merge/seal one WO at a time; a shared dirty target cannot provide causal attribution. Exceeding
+declared `touches` mid-work is an escalation trigger, not a judgment call.
 
 ## Sizing failures
 

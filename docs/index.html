@@ -4,21 +4,21 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Loom — a planning OS for AI coding agents</title>
-<meta name="description" content="Loom is an alive planning OS for AI coding agents that shows its work and learns from every run. On a smaller model at low effort it matched a frontier model at maximum effort — using fewer tokens and less time. Zero telemetry, provable.">
+<meta name="description" content="Loom is a fail-closed planning OS for AI coding agents: scoped learning, complete state checks, causal lifecycle evidence, and honest benchmark accounting.">
 <link rel="canonical" href="https://saroo98.github.io/loom/">
 <meta property="og:type" content="website">
 <meta property="og:title" content="Loom — an alive planning OS for AI coding agents">
-<meta property="og:description" content="It shows its work and learns from every run. On a smaller model at low effort, Loom matched a frontier model at max effort — fewer tokens, less time. The more you use it, the better it gets.">
+<meta property="og:description" content="It shows its work, blocks unknown state, scopes owner learning, and reports complete token usage without calling subsets totals.">
 <meta property="og:url" content="https://saroo98.github.io/loom/">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="Loom — an alive planning OS for AI coding agents">
-<meta name="twitter:description" content="A smaller model at low effort, running Loom, matched a frontier model at max effort — fewer tokens, less time. The more you use it, the better it gets.">
+<meta name="twitter:description" content="Trustworthy planning: causal lifecycle records, scoped bounded memory, domain discovery, and fail-closed publication.">
 <meta name="robots" content="index,follow">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230d1117'/%3E%3Cpath d='M8 6v20M14 6v20M20 6v20M26 6v20' stroke='%23484f58' stroke-width='1.5'/%3E%3Cpath d='M5 12h22M5 20h22' stroke='%23818cf8' stroke-width='3' stroke-dasharray='4 3'/%3E%3C/svg%3E">
 <script type="application/ld+json">
 {"@context":"https://schema.org","@type":"SoftwareApplication","name":"Loom",
 "applicationCategory":"DeveloperApplication","operatingSystem":"Windows, macOS, Linux",
-"description":"A planning OS for AI coding agents: truth-labeled plans, assumption ledgers, review gates, drift detection, and a per-user learning loop that never leaves the machine.",
+"description":"A planning OS for AI coding agents: truth-labeled plans, assumption ledgers, review gates, drift detection, and local per-install learning with explicit owner-controlled export.",
 "url":"https://saroo98.github.io/loom/",
 "codeRepository":"https://github.com/saroo98/loom",
 "license":"https://www.apache.org/licenses/LICENSE-2.0",
@@ -138,10 +138,10 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
 
 <header><div class="wrap">
   <h1>The heaviest planning machinery, behind the lightest command.</h1>
-  <p class="sub"><strong style="color:var(--fg)">Loom is alive. It shows its work, it learns
-  from every run — and the more you use it, the better it gets.</strong><br>A planning OS
+  <p class="sub"><strong style="color:var(--fg)">Loom shows its work, blocks unknown state,
+  and measures whether calibration improves.</strong><br>A planning OS
   for AI coding agents. In a blind benchmark, a smaller model at low effort running Loom
-  <em>matched a frontier model at maximum effort</em> — on fewer tokens and less time.
+  <em>scored 90.1 vs 76.8 in one same-model web run</em> — with n=1 and corrected cost caveats.
   No runtime, no server, no account.</p>
   <a class="cta pri" href="https://github.com/saroo98/loom">Get the repo</a>
   <a class="cta sec" href="#benchmark">See the benchmark</a>
@@ -185,8 +185,8 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
 <section id="lifecycle"><div class="wrap">
   <div class="kicker">How a run flows</div>
   <h2>The loop that closes.</h2>
-  <p class="lead">Click any stage. The last one — <em>learn</em> — is what separates a
-  planning system from a planning ritual: it makes run <em>n+1</em> better than run <em>n</em>.</p>
+  <p class="lead">Click any stage. The last one records bounded prediction/outcome evidence.
+  Run <em>n+1</em> is called better only when recent measured error is lower.</p>
   <div class="loop" id="loop" role="tablist"></div>
   <div class="detail" id="loopdetail"></div>
 </div></section>
@@ -205,15 +205,15 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
   <h2>It starts small and it compounds.</h2>
   <div class="cards">
     <div class="card"><span class="n">day one</span><b>Clone. Install. /loom.</b>
-      <p>That's the entire setup. It already plans better than an unstructured agent —
-      that part is table stakes.</p></div>
-    <div class="card"><span class="n">every run</span><b>The run feeds the system.</b>
-      <p>Outcomes get checked against predictions. Mistakes become feedback that changes
-      the guidance. Calibration data accumulates — which estimates run hot, which
-      assumptions break.</p></div>
-    <div class="card"><span class="n">a year in</span><b>Fitted to you. Not shippable.</b>
-      <p>Your stacks, your languages, your failure patterns. No shelf, no marketplace,
-      no amount of stars can ship this to anyone else — it grew inside your work.</p></div>
+      <p>That's the setup. The first run starts with explicit state, epistemic, domain,
+      lifecycle, and verification contracts.</p></div>
+    <div class="card"><span class="n">at retro</span><b>Evidence can feed the system.</b>
+      <p>Consequential numeric predictions are checked against outcomes. Controlled generic
+      patterns may be queued locally; contribution remains explicit.</p></div>
+    <div class="card"><span class="n">over time</span><b>Bounded and measurable.</b>
+      <p>Typed preferences and exact matched-domain/project observations stay isolated. Reports
+      compare early and recent error for one named metric and exact domain; routine selection
+      never loads raw history.</p></div>
   </div>
 </div></section>
 
@@ -223,14 +223,14 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
   <p class="lead">The same one-line task went to three isolated agent sessions with sealed
   acceptance tests written beforehand. A separate blind evaluator — <strong>Claude Fable 5
   at maximum effort, in an isolated environment</strong> — scored the deployed pages on
-  cited evidence. Click a configuration to spotlight it, and switch what the bars measure.
-  This is the first benchmark; more will follow on harder tasks.</p>
+  cited evidence. It was one web run per arm; B2's pack/G1 was retrospective, and its complete
+  four-field usage was 1,278,126 processed token events. Click a configuration to spotlight
+  it. This is directional artifact evidence, not a general or cost-saving claim.</p>
 
   <div id="benchCards" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 18px"></div>
 
   <div class="tabs" id="benchModes" role="tablist">
     <button role="tab" aria-selected="true" data-mode="quality">Quality — by category</button>
-    <button role="tab" aria-selected="false" data-mode="tokens">Cost — tokens</button>
     <button role="tab" aria-selected="false" data-mode="time">Speed — wall time</button>
   </div>
   <div id="benchView" style="background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px 20px"></div>
@@ -241,53 +241,58 @@ footer .wrap{display:flex;flex-wrap:wrap;gap:8px 26px;align-items:center}
 
 <section id="sovereign"><div class="wrap">
   <div class="kicker">Sovereign by architecture</div>
-  <h2>Nothing leaves your machine. Audit it yourself.</h2>
+  <h2>Memory stays local; audit the shipped source yourself.</h2>
   <div class="proof">
     <ul>
-      <li><b>No telemetry, no channel, no exceptions.</b> The learning loop writes to
-        your <span style="font-family:var(--mono)">~/.loom/</span> and your repo's feedback
-        queue. A central queue doesn't exist to opt out of.</li>
-      <li><b>Machine-checkable, not marketing.</b> One command AST-scans every tool:
-        network imports forbidden, subprocess restricted to git and the test runner.</li>
-      <li><b>Proven in public.</b> The same audit and the full test suite run on every
-        push to the repository — a proof trail anyone can read.</li>
+      <li><b>Scoped local memory.</b> Typed state is UUID-bound per install; project/domain
+        observations load only for exact scope. Contribution is explicit and same-instance.</li>
+      <li><b>Machine-checkable, with stated limits.</b> One command recursively audits shipped
+        Python, shell, workflow, browser-executable, and rendered-Markdown sources for the
+        network-capable constructs and active remote resources it knows how to detect. It does
+        not audit the host agent, editor, operating system, Git remote, or unknown secret shapes.</li>
+      <li><b>Checkable in public.</b> The public workflow is configured to run the same audit and
+        full test suite on pushes and pull requests. The result of each workflow run — not the
+        configuration alone — is the evidence that run passed.</li>
       <li><b>Every install is sovereign.</b> Your Loom diverges from everyone else's,
         by design. Upstream releases are optional imports, never obligations.</li>
     </ul>
     <div class="term"><button class="copy" data-copy="audit">copy</button><span id="auditcmd">python tools/loom_audit.py
-# loom_audit: PASS — 19 files scanned, 0 findings.
-# Network-capable imports: forbidden;
-# subprocess restricted to git + the test runner.</span></div>
+# exit 0 = no violation detected in the files scanned
+# Git is allowed only for owner-requested synchronization.</span></div>
   </div>
 </div></section>
 
 <section id="install"><div class="wrap">
-  <div class="kicker">Five minutes, honestly</div>
+  <div class="kicker">Local, checkable, reversible</div>
   <h2>Install</h2>
   <div class="term"><button class="copy" data-copy="install">copy</button><span id="installcmd">git clone https://github.com/saroo98/loom
 cd loom
-tools/install.sh     # macOS/Linux — Windows: tools\install.ps1</span></div>
+tools/install.sh
+tools/install.sh --check     # Windows: tools\install.ps1 -Check</span></div>
   <p class="note">Registers <span style="font-family:var(--mono)">/loom</span> for Claude Code
-  and Codex. Any harness that can follow a markdown skill can run it — the whole skill is one
-  file. Then open any project conversation and describe what you want.</p>
+  and Codex. Other harnesses can integrate the one-file markdown skill when they support an
+  equivalent instruction entry point. Then open a project conversation and describe the work.</p>
 </div></section>
 
 <section id="faq"><div class="wrap">
   <div class="kicker">Straight answers</div>
   <h2>FAQ</h2>
   <details><summary>Does anything get sent anywhere?</summary>
-    <p>No. Run the audit above — zero network-capable imports, and the only subprocess
-    targets are git and the Python test runner. The only network activity in the system is
-    git, against remotes you configure. This page makes zero third-party requests too.</p></details>
+    <p><code>loom_memory.py</code> has no network path; contribution is a local same-install
+    write. The source audit checks shipped Python, shell, workflow, browser-executable, and
+    rendered-Markdown files for its declared patterns; owner-requested Git synchronization is
+    its only allowed process/network exception. The host agent/editor, operating system, owner-run
+    Git commands, and unknown patterns are outside that claim. This page itself makes zero
+    third-party requests.</p></details>
   <details><summary>Do my lessons improve the upstream repo?</summary>
-    <p>No. Your retro feeds your Loom — that's the point. Every install is owner-operated
-    and instances diverge on purpose.</p></details>
+    <p>No automatic upstream channel exists. Retro records local scoped evidence; only an
+    explicit same-instance contribution command can update that Loom root's feedback.</p></details>
   <details><summary>Is this a framework I have to adopt?</summary>
     <p>It's files: markdown guidance plus small standard-library Python tools. Small tasks
     skip the ceremony entirely; the artifact matrix exists so you only produce what has a
     consumer.</p></details>
   <details><summary>How do I know an agent actually follows it?</summary>
-    <p>The mechanical fraction is enforced by a 25+ check linter (gates refuse to open on
+    <p>The mechanical fraction is enforced by the linter and lifecycle chain (gates refuse to open on
     errors; a pre-commit guard blocks defective packs). The judgment fraction is enforced by
     gates that demand a review file with cited scores. The honesty fraction is enforced by
     outcome ledgers — predictions in writing, checked against reality.</p></details>
@@ -347,11 +352,11 @@ typeDemo("brief");
 const STAGES = [
   ["Intake", "goals + the silence sweep", "Your description is quoted, not paraphrased — and then Loom interrogates what you DIDN'T say: scope edges, failure behavior, quality bar, operational reality. Hits become labeled assumptions, never silent guesses."],
   ["Plan", "artifacts + assumption ledger", "Only artifacts with a consumer get produced — a matrix decides which, with a one-line reason for every skip. Every load-bearing claim is labeled; every assumption gets risk_if_wrong and verify_by in a ledger."],
-  ["Gate G1", "lint + verification battery", "A 25+ check linter must pass first — mechanically. Then eight verification passes in composition order, then a scored review against a 10-dimension rubric. Preferably by a session that didn't write the plan."],
+  ["Gate G1", "lint + verification battery", "Strict lint must pass first — mechanically. Then the verification passes, a cited scorecard, review-hash sealing, and implementation authorization against an unchanged target."],
   ["Work orders", "atomic, verifiable, routed", "Each one executable by one agent in one sitting, with acceptance criteria a reviewer can reproduce, declared file-touch boundaries, and escalation triggers. Oversized orders get flagged by the linter."],
   ["Verify", "criteria + negative checks", "Done means every criterion demonstrated with evidence in a close-out block — including negative checks: what must NOT have changed. Criteria written after implementation are confessions, not criteria."],
   ["Outcomes", "predictions vs reality", "The pack's predictions get checked against what actually happened — held, broke-caught, broke-cost. Kept even when embarrassing. Especially then."],
-  ["Learn", "~/.loom + feedback — yours", "The run teaches your profile (defaults, calibration) and queues anonymized lesson-shapes into your repo's feedback queue. Your Loom's next version fixes what misled it. Nothing leaves your machine."],
+  ["Learn", "typed + bounded + scoped", "Retro may record numeric prediction/outcome pairs and controlled generic feedback candidates. Preferences change only when explicitly stated. Selection loads exact scope; contribution is a separate explicit local command."],
   ["Resume", "staleness recheck; repo wins", "Coming back later? Loom diffs the world first: repo moved, assumptions aged, capabilities changed. Drifted artifacts get re-gated. The repo is the truth — the plan adapts to it, never the reverse."]
 ];
 const loop = document.getElementById("loop");
@@ -409,9 +414,9 @@ document.querySelectorAll(".copy").forEach(b => b.addEventListener("click", asyn
 const BENCH = {
   hues: ["var(--bh1)", "var(--bh2)", "var(--bh3)"],
   configs: [
-    { name: "Opus 4.8 · low",        short: "Opus 4.8 low",        mean: 76.8, hidden: "8 / 10",  tokens: 50799,  time: 128,  loom: false },
-    { name: "Opus 4.8 · low · Loom", short: "Opus 4.8 low + Loom", mean: 90.1, hidden: "10 / 10", tokens: 74363,  time: 254,  loom: true  },
-    { name: "Fable 5 · max",         short: "Fable 5 max",         mean: 89.8, hidden: "10 / 10", tokens: 123561, time: 1241, loom: false }
+    { name: "Opus 4.8 · low",        short: "Opus 4.8 low",        mean: 76.8, hidden: "8 / 10",  time: 128,  loom: false },
+    { name: "Opus 4.8 · low · Loom", short: "Opus 4.8 low + Loom", mean: 90.1, hidden: "10 / 10", time: 254,  loom: true  },
+    { name: "Fable 5 · max",         short: "Fable 5 max",         mean: 89.8, hidden: "10 / 10", time: 1241, loom: false }
   ],
   cats: ["Hidden-test correctness", "HTML quality", "CSS quality", "JavaScript appropriateness",
          "Accessibility depth", "Responsive / mobile", "Performance", "Visual design",
@@ -442,7 +447,7 @@ function renderCards() {
       '<div style="font-weight:600;font-size:13.5px;display:flex;align-items:center;justify-content:center;gap:7px">' +
         '<span style="width:9px;height:9px;border-radius:50%;background:' + hue + '"></span>' + c.name + '</div>' +
       '<div style="font-size:30px;font-weight:800;margin:5px 0 2px;color:' + (c.loom ? hue : "var(--fg)") + '">' + c.mean + '</div>' +
-      '<div style="color:var(--mut);font-size:11.5px">' + c.hidden + ' tests · ' + (c.tokens / 1000).toFixed(1) + 'k tok · ' + fmtTime(c.time) + (c.loom ? "" : " · no Loom") + '</div>';
+      '<div style="color:var(--mut);font-size:11.5px">' + c.hidden + ' tests · ' + fmtTime(c.time) + (c.loom ? "" : " · no Loom") + '</div>';
     el.addEventListener("click", () => { benchSpot = (benchSpot === i ? -1 : i); renderCards(); renderView(); });
     bcards.appendChild(el);
   });
@@ -490,13 +495,12 @@ function renderView() {
     const mx = Math.max(...BENCH.configs.map(c => c[key]));
     const best = Math.min(...BENCH.configs.map(c => c[key]));
     BENCH.configs.forEach((c, i) => {
-      const val = key === "time" ? fmtTime(c.time) : c.tokens.toLocaleString() + " tok";
+      const val = fmtTime(c.time);
       bview.appendChild(bar(i, c.name, c[key] / mx, val, c[key] === best, benchSpot !== -1 && benchSpot !== i));
     });
-    bnote.innerHTML = (key === "tokens"
-      ? "Tokens spent — lower is better. Loom's run costs well under the frontier model's "
-      : "Wall-clock time — lower is better. Loom finishes in a fraction of the frontier model's time ") +
-      "for the same top quality score. Bar length is the actual amount; <b style='color:var(--win)'>green</b> marks the leanest run.";
+    bnote.innerHTML = "Observed wall-clock time — lower is better. This is not a token/cost " +
+      "comparison; the corrected benchmark explains why the old token bars were invalid. " +
+      "Bar length is observed time; <b style='color:var(--win)'>green</b> marks the shortest run.";
   }
 }
 

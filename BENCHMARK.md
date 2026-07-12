@@ -1,161 +1,109 @@
-# Benchmark — does Loom change the output?
+# Benchmark — observed quality, corrected cost and chronology
 
-One brief, three isolated agent sessions, blind grading. This is the first Loom
-benchmark; more will follow, on harder and more varied tasks. The result of this one is
-below in full — costs, defects, and the places Loom did not lead included.
+This page preserves Loom's first isolated landing-page experiment without granting it evidence
+the run did not produce. One brief was run once in three agent configurations and graded blind
+against prewritten acceptance tests. It is directional evidence for this task family, not proof
+of general superiority.
 
-## The three configurations
+## Configurations and task
 
-Each session received the same one-line task and nothing else. The two Opus sessions
-were given byte-identical instructions; the **only** difference between them was whether
-the prompt invoked Loom.
+| # | Model / effort | Loom invoked |
+|---|---|---|
+| A2 | Claude Opus 4.8 / low | no |
+| B2 | Claude Opus 4.8 / low | yes |
+| C | Claude Fable 5 / maximum | no |
 
-| # | Model | Effort | Loom |
-|---|---|---|---|
-| 1 | Claude Opus 4.8 | low | — |
-| 2 | Claude Opus 4.8 | low | **Loom** |
-| 3 | Claude Fable 5 | max | — |
+> Build a landing page for a small neighborhood coffee shop called “Driftwood Coffee”.
+> Static files only, served as-is.
 
-The task, verbatim:
+The A2 and B2 prompts were byte-identical except for `/loom` invocation and the skill pointer.
+Ten sealed pass/fail checks were fixed before the runs. A separate isolated evaluator graded the
+live deliverables under anonymous labels and cited file/line or computed evidence.
 
-> Build a landing page for a small neighborhood coffee shop called "Driftwood Coffee".
-> (static files only, served as-is)
+## Deliverable results
 
-## The exact prompts
-
-**Configurations 1 and 3 (no Loom)** received the same instruction:
-
-```
-Build a landing page for a small neighborhood coffee shop called "Driftwood Coffee".
-
-Work entirely inside <working directory>. Static files only (it will be served as-is).
-Do not use the Skill tool or any skill, plugin, or planning-system files — work directly,
-with your own judgment only. When done, state what you built and any questions you would
-have asked, then stop.
-```
-
-**Configuration 2 (Loom)** — identical but for the invocation and the skill pointer:
-
-```
-/loom Build a landing page for a small neighborhood coffee shop called "Driftwood Coffee".
-
-Work entirely inside <working directory>. Static files only (it will be served as-is).
-The /loom skill is at <path to the installed skill> — read it and follow it as the skill
-it is. When done, state what you built and any questions you would have asked (or batched),
-then stop.
-```
-
-## Method
-
-- **Sealed acceptance tests.** Ten pass/fail checks (static integrity, name prominence,
-  mobile usability, broken references, HTML validity, fabricated-claim check, third-party
-  requests, accessibility floor, and more) were written and fixed before any session ran.
-  No session saw them.
-- **Blind, deliverable-only grading, run in isolation by Claude Fable 5 at maximum
-  effort.** A separate evaluator session — Fable 5 at max effort, in an isolated
-  environment with no knowledge of what produced the pages — received the live pages
-  under anonymous labels. Every score cites file-and-line evidence or a computed value
-  (WCAG contrast ratios, anchor/id cross-checks, per-asset HTTP status, DOM parse).
-- **Verbatim deployment.** Each page is published exactly as its session built it — no
-  fixes, no touch-ups. The links at the bottom are those artifacts.
-- **Costs are the harness-reported totals** for each session. Nothing is estimated.
-
-## Results
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img alt="Benchmark result: Opus 4.8 low + Loom scored 90.1, matching Fable 5 at max effort using fewer tokens and less time" src="assets/benchmark-light.svg" width="960">
-</picture>
-
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-scores-dark.svg">
-  <img alt="Full scorecard: score per category for the three configurations, best in each row in green" src="assets/benchmark-scores-light.svg" width="960">
-</picture>
-
-Headline (higher is better except cost; **bold** = best):
-
-| Metric | Opus 4.8 · low | Opus 4.8 · low · Loom | Fable 5 · max |
+| Metric | A2 naked | B2 Loom-invoked | C naked/max |
 |---|---:|---:|---:|
-| Sealed tests passed | 8 / 10 | **10 / 10** | **10 / 10** |
-| Category mean (of 12) | 76.8 | **90.1** | 89.8 |
+| Sealed tests | 8 / 10 | **10 / 10** | **10 / 10** |
+| 12-category mean | 76.8 | **90.1** | 89.8 |
 | Adversarial defects | 9 | **5** | 16 † |
-| Tokens | 50,799 | 74,363 | 123,561 |
-| Wall time | 2m 08s | 4m 14s | 20m 41s |
+| Observed wall time | 127.6 s | 253.6 s | 1,240.9 s |
 
-† The frontier-model page was assessed in a separate grading pass with its own severity
-threshold, so its defect count is not directly comparable to the two Opus figures; the
-category scores are on the same rubric.
+† C used a different grading pass/severity threshold; its defect count is not comparable to
+the A2/B2 pair. Category means across different graders also carry grader drift.
 
-Category scores, 0–100 (**bold** = best in row; shown in green in the chart above):
+Within the same-model/same-grader A2/B2 pair, the Loom-invoked artifact scored 13.3 points
+higher and passed two more sealed checks. With one stochastic run per arm, this is an observed
+association, not an estimated average effect.
 
-| Category | Opus 4.8 · low | Opus 4.8 · low · Loom | Fable 5 · max |
-|---|---:|---:|---:|
-| Hidden-test correctness | 78 | **98** | 97 |
-| HTML quality & semantics | 78 | **91** | **91** |
-| CSS quality & architecture | 76 | **88** | **88** |
-| JavaScript appropriateness | 86 | **87** | **87** |
-| Accessibility depth | 62 | 85 | **88** |
-| Responsive / mobile quality | 72 | 86 | **91** |
-| Performance & asset discipline | 88 | 95 | **97** |
-| Visual design & typography | 80 | 85 | **89** |
-| Content & copywriting | 84 | 89 | **90** |
-| Scope discipline | 82 | **90** | 82 |
-| File / project hygiene | 80 | 91 | **93** |
-| Placeholder honesty | 55 | **96** | 84 |
+## Token accounting correction
 
-## The result
+The earlier page called 74,363 B2's “token total.” That was false. It is a harness field named
+`subagent_tokens`; the harness definition was not preserved, so it is a subset of unknown
+meaning `[UNVERIFIED]`. The same limitation applies to the displayed A2/C harness values.
 
-**Claude Opus 4.8 at low effort, running Loom, scored 90.1 and passed all ten sealed
-tests — matching the frontier model (Fable 5) at maximum effort while using about 60% of
-its tokens and one-fifth of its wall time.** A 0.3-point margin between two different
-models is a tie in craft; a tie between a small model with a method and the strongest
-model thinking as hard as it can, reached roughly five times faster, is the entire case
-for a planning system.
+An independent reconstruction of B2's preserved response-usage records found:
 
-The same-model comparison is not a tie. Same model, same effort, same prompt, the only
-change being the `/loom` invocation: **+13.3 mean points, ten sealed tests against eight,
-five adversarial defects against nine, and zero medium-severity defects against two.**
+| B2 usage field | Count |
+|---|---:|
+| Non-cache input | 19,222 |
+| Cache-creation input | 54,035 |
+| Cache-read input | 1,189,952 |
+| Output | 14,917 |
+| **Processed token events (sum of the four fields)** | **1,278,126** |
 
-## What the evaluator found
+“Processed token events” is deliberately not called provider-billed tokens or cost. Cache
+pricing/weights were not captured, so a billing-equivalent value is `[UNVERIFIED]`. The old
+74,363 figure understated this complete four-field sum by about 17.2×.
 
-- **Without Loom, the Opus page shipped content that misleads a visitor:** two social
-  links that resolve to nowhere, a press quote attributed to an invented publication and
-  presented as a real endorsement, a realistic street address stated as fact, two
-  computed WCAG AA contrast failures, and a third-party font preconnect that opens a
-  connection it never uses.
-- **With Loom, the same model shipped nothing broken and nothing dishonest:** every
-  anchor resolves, zero external requests, every placeholder announces itself while
-  staying in voice, all contrast pairs pass AA, and a keyboard skip link with a visible
-  focus state is present. Both pages invented the same amount of scope; the difference
-  was finish.
-- **The frontier model produced an excellent page** — leading on accessibility depth,
-  responsive build, and performance — and still shipped the benchmark's most instructive
-  defect: a newsletter form that told visitors they were subscribed while storing
-  nothing, and a tagline promising hours its own schedule contradicted.
+`tools/loom_benchmark.py` now rejects any run record missing one of the four fields, reports
+them separately, and leaves provider-billed equivalent `null` unless the caller supplies all
+four explicit weights. No subset may be labeled total.
 
-Across all three, the worst defects were failures of truthfulness rather than
-engineering. That is the failure class Loom's discipline is built around, which is why
-the Loom configuration's placeholder-honesty and correctness scores are the load-bearing
-numbers in the table, not incidental ones.
+## Chronology correction
 
-## Caveats
+The preserved B2 transcript writes the three deliverable files before it writes MANIFEST, the
+work order, and G1. The pack/G1 phase did not change a deliverable file. Therefore:
 
-- **One run per configuration.** Single runs of a stochastic system are directional, not
-  proof. A repeated-run benchmark is the next step.
-- **One task family** — a static landing page. Whether the effect holds for applications,
-  CLIs, and APIs is untested, and is what later benchmarks will measure.
-- Configuration 3 versus the others is a cross-model comparison, not a controlled
-  ablation. Configurations 1 and 2 **are** a controlled ablation — only the `/loom`
-  invocation differs.
-- The evaluator is a language-model session: blind, evidence-cited, and machine-checked
-  where possible, but not a human judge.
+- B2 is evidence that an agent exposed to Loom produced a strong artifact in this run;
+- B2 is **not** evidence that a pre-implementation G1 gate caused that artifact;
+- the retrospective pack receives no causal planning credit; and
+- the 846,456 processed token events spent after the deliverable on pack/G1 work were overhead
+  for this task, not release-gating value.
 
-## Reproduce it
+Lifecycle v2 now prevents recurrence: the target file-hash baseline must exist before planning,
+the unchanged state must reach authorization, and a done WO must bind post-authorization changes
+inside declared `touches`. Tier S uses the same proof through the compact standalone lifecycle.
 
-Write your acceptance tests before any session runs, keep the building sessions unaware,
-grade blind against the deliverables only, and report the costs even when they are
-unflattering. The deployed pages, exactly as built:
+## What the artifacts actually show
 
-- **Opus 4.8 · low** — https://saroo98.github.io/bench-opus-low/
-- **Opus 4.8 · low · Loom** — https://saroo98.github.io/bench-opus-low-loom/
-- **Fable 5 · max** — https://saroo98.github.io/bench-fable-max/
+- A2 shipped dead social links, an invented press endorsement presented as real, a realistic
+  address presented as fact, two computed contrast failures, and an unused third-party font
+  preconnect.
+- B2 had no broken anchors or external requests, declared placeholders, passed the measured
+  contrast checks, and included keyboard/focus affordances.
+- C led several craft categories but shipped a newsletter interaction that claimed success
+  without storing anything and contradictory hours copy.
+
+Truthfulness failures dominated the material defects. That observation supports preserving
+Loom's evidence/placeholder discipline; it does not establish cross-domain performance.
+
+## Limits and the next valid experiment
+
+- n=1 per arm; no confidence interval.
+- One static website family; CLI, mobile, ETL/ML, accounting, real-time 3D, firmware, and
+  research remain untested by this benchmark.
+- A2/B2 is the controlled comparison; C is cross-model and cross-grader context only.
+- Model grading is not a substitute for human or domain-expert review.
+- The B2 lifecycle chronology was retrospective.
+
+A valid follow-up must pre-register acceptance tests and usage schema, run repeated seeds, use
+the same grader protocol, record all four token fields and wall time, exercise multiple domains,
+and require lifecycle authorization before any deliverable change. Until then, no “world-best,”
+cost-saving, or generalization claim is supported.
+
+Artifacts as originally published:
+
+- A2: https://saroo98.github.io/bench-lp-a2/
+- B2: https://saroo98.github.io/bench-lp-b2/
+- C: https://saroo98.github.io/bench-fable-max/

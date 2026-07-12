@@ -98,12 +98,112 @@ def mig_070(pack, apply, log):
     return False
 
 
+def mig_071(pack, apply, log):
+    """0.7.0 -> 0.7.1: real-medium UI design-floor advisory."""
+    log("note", "0.7.1: any human-facing UI work order must cite the design floor and "
+                "include a real rendered-medium observation; source inspection is not proof")
+    return False
+
+
+def _frontmatter_set(text, key, value):
+    pattern = rf"(?m)^{re.escape(key)}\s*:.*$"
+    line = f"{key}: {value}"
+    if re.search(pattern, text):
+        return re.sub(pattern, line, text, count=1)
+    close = text.find("\n---", 4)
+    if close < 0:
+        return text
+    return text[:close] + "\n" + line + text[close:]
+
+
+def mig_080(pack, apply, log):
+    """0.7.1 -> 0.8.0: fail-closed lifecycle v2, domain scope, and full WO contract."""
+    changed = False
+    manifest = pack / "MANIFEST.md"
+    text = manifest.read_text(encoding="utf-8", errors="replace")
+    fm, _ = parse_frontmatter(text)
+    lifecycle = pack / "lifecycle.json"
+    lifecycle_v2 = False
+    if lifecycle.is_file():
+        try:
+            import json
+            lifecycle_v2 = json.loads(lifecycle.read_text(encoding="utf-8")) \
+                .get("schema_version") == 2
+        except (OSError, UnicodeError, ValueError):
+            lifecycle_v2 = False
+    mode = str((fm or {}).get("execution_mode", ""))
+    if not mode or (mode == "planned" and not lifecycle_v2):
+        text = _frontmatter_set(text, "execution_mode", "build-first")
+        changed = True
+        log("applied" if apply else "pending",
+            "MANIFEST execution_mode -> build-first because pre-0.8 causal chronology "
+            "cannot be proven; start a fresh lifecycle v2 plan to regain planned credit")
+    if not (fm or {}).get("domain_id"):
+        text = _frontmatter_set(text, "domain_id", "unclassified")
+        changed = True
+        log("applied" if apply else "pending", "MANIFEST domain_id -> unclassified")
+    if not (fm or {}).get("domain_ids"):
+        primary_domain = str((fm or {}).get("domain_id") or "unclassified")
+        text = _frontmatter_set(text, "domain_ids", f"[{primary_domain}]")
+        changed = True
+        log("applied" if apply else "pending",
+            f"MANIFEST domain_ids -> [{primary_domain}]")
+    if not (fm or {}).get("domain_coverage"):
+        text = _frontmatter_set(text, "domain_coverage", "unknown")
+        changed = True
+        log("applied" if apply else "pending",
+            "MANIFEST domain_coverage -> unknown (blocks execution until discovery)")
+    if "| domain-discovery.md |" not in text:
+        row = ("| domain-discovery.md | produce | 0.8 migration requires domain "
+               f"classification | draft | {dt.date.today().isoformat()} |\n")
+        match = re.search(r"(?m)^\| work orders \|", text)
+        if match:
+            text = text[:match.start()] + row + text[match.start():]
+        else:
+            text += "\n## Migration-required artifact\n\n" + row
+        changed = True
+        log("applied" if apply else "pending",
+            "MANIFEST: add produced domain-discovery.md row")
+    if apply:
+        manifest.write_text(text, encoding="utf-8")
+
+    discovery = pack / "domain-discovery.md"
+    if not discovery.is_file():
+        changed = True
+        log("applied" if apply else "pending", "create domain-discovery.md in blocked draft state")
+        if apply:
+            template = (LOOM_ROOT / "templates" / "domain-discovery.md") \
+                .read_text(encoding="utf-8")
+            template = template.replace("<safe-domain-id>", "unclassified") \
+                .replace("<domain>", "unclassified") \
+                .replace("<YYYY-MM-DD>", dt.date.today().isoformat()) \
+                .replace("<current>", current_version())
+            discovery.write_text(template, encoding="utf-8")
+
+    for wo in sorted((pack / "work-orders").glob("*.md")) \
+            if (pack / "work-orders").is_dir() else []:
+        wo_text = wo.read_text(encoding="utf-8", errors="replace")
+        wo_fm, _ = parse_frontmatter(wo_text)
+        for key in ("depends_on", "blocks", "touches"):
+            if key not in (wo_fm or {}):
+                wo_text = _frontmatter_set(wo_text, key, "[]")
+                changed = True
+                log("applied" if apply else "pending", f"{wo.name}: add required {key}: []")
+        if apply:
+            wo.write_text(wo_text, encoding="utf-8")
+    log("note", "0.8.0: empty touches and unknown domain coverage deliberately block "
+                "execution; classify them from current repo/domain evidence, then run strict lint")
+    return changed
+
+
 MIGRATIONS = [
     ("0.2.0", mig_020),
     ("0.3.0", mig_030),
     ("0.4.0", mig_040),
     ("0.6.2", mig_062),
     ("0.7.0", mig_070),
+    ("0.7.1", mig_071),
+    ("0.8.0", mig_080),
 ]
 
 # --------------------------------------------------------------------------------

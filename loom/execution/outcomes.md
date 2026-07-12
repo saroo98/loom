@@ -47,19 +47,22 @@ For each capability class used: count clean / escalated / redone. Patterns to ac
 Record the adjusted instinct as a sentence in outcomes.md; update `loom.config.json`
 `routing_map` if the roster itself changed.
 
-## Aggregation across packs (Loom-release time)
+## Bounded aggregation at retro
 
-The release ritual (`loom/meta/evolving-loom.md`) sweeps outcome ledgers of packs completed
-since the last version — patterns, not project details, cross the privacy boundary:
+Packs remain the project-local source evidence. Nothing scans arbitrary project paths at
+Loom-release time. At G4/G5, the retro explicitly converts consequential numeric predictions
+to `[0,1]` pairs and calls `tools/loom_memory.py record-outcome` with the exact domain and,
+when appropriate, generated project ID. General judgment uses `domain=general`; domain
+behavior never does.
 
-- Confidence words vs reality: if "~90%" claims held ~60% of the time, the calibration
-  guidance gets a correction, quoted from data.
-- Recurring `unpredicted` rows → missing-coverage candidates for the artifact matrix.
-- Recurring `broke-caught` mechanisms → the mechanisms that earn their cost (keep, teach);
-  mechanisms that never catch anything → over-prescription candidates (relax).
+`loom_memory.py report` compares early and recent mean absolute error and reports the sample
+counts. Active raw evidence is capped; bounded aggregate windows preserve longitudinal
+measurement. A lower recent error is evidence of improvement. Merely having two ledgers or
+more rows is not.
 
-This is what ROADMAP's category 3 and 11 "100" definitions mean by *measured*: the loop
-exists the moment two packs have outcome ledgers.
+Recurring qualitative failures may enter the structured outbox only as controlled generic
+pattern/action values. Free-form project details stay in the pack. Contribution into the
+same Loom installation is explicit and UUID-bound.
 
 ## Failure modes
 
@@ -67,5 +70,7 @@ exists the moment two packs have outcome ledgers.
   an outcomes table with zero `broke-*` rows on a nontrivial project is itself miscalibrated.
 - **Blame framing** — rows about *who* erred instead of *which prediction* failed. The
   ledger tunes the system, not the agents; write predictions, not conduct.
-- **Retro theater** — written, never swept. Aggregation is a named release-ritual step so
-  the ledgers have a consumer (artifact-must-have-a-consumer applies to Loom too).
+- **Retro theater** — written, never measured. G4/G5 is incomplete until consequential
+  numeric predictions have either been recorded or explicitly marked unmeasurable.
+- **Cross-domain averaging** — a web outcome recorded as `general`. Treat that as a scope
+  defect; correct the record before using its report.

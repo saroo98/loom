@@ -61,8 +61,11 @@ and records.
 - **Checks:** every acceptance criterion demonstrated (command output / reproducible
   observation); negative checks pass (no out-of-scope diff); escalation triggers respected
   (an improvised-through trigger = automatic fail); task-fit against the WO text.
-- **Exit:** criteria evidenced in the WO's close-out block; WO `done`; MANIFEST frontier
-  updated.
+- **Exit:** criteria evidenced in the WO's close-out block; WO set `done`; `loom_gate.py
+  close-wo <pack> --repo <target> --wo <file>` succeeds and binds post-authorization changed
+  paths; MANIFEST frontier updated. The closer also proves the immutable WO plan matches the
+  complete set sealed at G1. An unchanged pre-existing deliverable or post-G1 plan insertion
+  fails this gate. Parallel branches merge and seal one at a time in a clean integration tree.
 - **Decider:** agent — but danger-zone WOs (survey list) additionally require a review by a
   session that didn't implement them (`loom/execution/routing.md` rule 5).
 - **Failure handling:** criteria unmet → WO stays open. Criteria unmeetable as written →
@@ -70,8 +73,9 @@ and records.
 
 ## G4 — Slice review / release readiness
 
-- **Entry:** a coherent slice (milestone, or the whole tier-M/L build) has all WOs `done`;
-  `tools/loom_lint.py` zero errors (run with `--repo` for the drift check).
+- **Entry:** a coherent slice (milestone, or the whole tier-M/L build) has all WOs `done`
+  with sealed completion records; `tools/loom_lint.py <pack> --repo <target>
+  --strict-staleness` reports zero errors.
 - **Checks:** full battery with weight on long-context consistency (spine walk) and task-fit
   **against the original request**; ledger reconciliation (which assumptions did reality
   confirm/break — update, don't just read); release readiness checklist from
@@ -102,3 +106,6 @@ and records.
   trust chain alive; a false complete record poisons it.
 - Consecutive gate failures for the same root cause escalate per the lifecycle replan
   triggers — gates detect planning defects; they don't fix them.
+- Lifecycle writes use a token-owned `.loom-lifecycle.lock`. A busy or leftover lock fails
+  closed; it is never deleted on age alone. Remove that exact lock only after proving no gate
+  writer is alive, then rerun `loom_gate verify` before continuing.

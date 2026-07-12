@@ -6,6 +6,13 @@ center of gravity and may absorb the architecture plan (declare the merge in MAN
 
 Template: `templates/uiux-plan.md`.
 
+**Craft companion:** this file plans *what* screens and components exist and in what flow;
+`loom/execution/design-floor.md` governs whether each is *built well* — token roles, themes
+recomposed not inverted, measured contrast floors (4.5:1 / 3:1), the full state grammar,
+honest interaction, motion tiers, the bespoke/substitution test, and the a11y floor. It loads
+at **every** tier, including a single Tier-S work order, so small interactive builds are held
+to the same craft. UI work orders cite it by number in their acceptance criteria.
+
 ## Contents
 
 ### 1. Users & platforms

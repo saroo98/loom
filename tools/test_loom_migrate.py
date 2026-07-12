@@ -79,9 +79,25 @@ class MigrateTests(unittest.TestCase):
         loom_migrate.migrate(self.pack, apply=True, target="0.4.0")
         self.assertEqual(loom_migrate.migrate(self.pack, apply=False, target="0.4.0"), 0)
 
-    def test_current_version_reads_changelog(self):
+    def test_current_version_reads_single_version_file(self):
         v = loom_migrate.current_version()
-        self.assertRegex(v, r"^\d+\.\d+\.\d+$")
+        self.assertEqual(v, (loom_migrate.LOOM_ROOT / "VERSION").read_text(
+            encoding="utf-8").strip())
+
+    def test_080_migration_adds_semantic_blockers_not_just_stamps(self):
+        code = loom_migrate.migrate(self.pack, apply=True, target="0.8.0")
+        self.assertEqual(code, 0)
+        manifest = (self.pack / "MANIFEST.md").read_text(encoding="utf-8")
+        wo = (self.pack / "work-orders" / "WO-001-a.md").read_text(encoding="utf-8")
+        self.assertIn("execution_mode: build-first", manifest)
+        self.assertIn("domain_id: unclassified", manifest)
+        self.assertIn("domain_coverage: unknown", manifest)
+        self.assertIn("domain-discovery.md", manifest)
+        self.assertTrue((self.pack / "domain-discovery.md").is_file())
+        self.assertIn("depends_on: []", wo)
+        self.assertIn("blocks: []", wo)
+        self.assertIn("touches: []", wo)
+        self.assertIn('loom_version: "0.8.0"', manifest)
 
 
 if __name__ == "__main__":

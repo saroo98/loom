@@ -31,13 +31,14 @@ requirements out). Everything else Loom derives from the repo.
 | Check pack health | `/loom lint` |
 | SEE the pack (one HTML page: DAG, ledger, live lint) | `/loom report` |
 | Gate a milestone | `/loom gate G4` |
-| Milestone shipped / project done | automatic — bare `/loom` runs retro + contribute at the natural end (manual: `/loom retro`) |
+| Milestone shipped / project done | bare `/loom` runs retro at the natural end (manual: `/loom retro`) |
 | Teach/correct a preference | `/loom profile set <key> <value>` — or just say "remember that I…" |
-| Force-send queued lessons now | `/loom contribute` (normally automatic, D-010) |
+| Explicitly merge controlled queued lessons into this Loom install | `/loom contribute` |
 
 ## The loop back to Loom
 
-Bare `/loom` auto-closes each run: retro fills that project's `plans/outcomes.md`, teaches
-`~/.loom/`, and contributes compact anonymized patterns to Loom's `FEEDBACK.md` — no extra
-typing. In Loom's home chat: **"aggregate"** / **"retro aggregate"** harvests and triages
-everything; **"score Loom"** runs the independent scorecard when evidence has accumulated.
+Bare `/loom` auto-closes each run with retro: it fills that project's `plans/outcomes.md`,
+records bounded numeric calibration, and may queue a controlled generic pattern locally.
+Nothing drains that queue without the explicit `/loom contribute` command. In Loom's home
+chat: **"aggregate"** / **"retro aggregate"** compacts and triages the local queue;
+**"score Loom"** runs the independent scorecard when evidence has accumulated.

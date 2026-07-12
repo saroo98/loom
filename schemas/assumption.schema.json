@@ -24,22 +24,18 @@
       "description": "Evidence or origin. A prior ('usually true') must identify itself as one."
     },
     "risk_if_wrong": {
-      "type": "object",
-      "required": ["level", "impact"],
-      "properties": {
-        "level": { "enum": ["LOW", "MED", "HIGH"] },
-        "impact": { "type": "string", "description": "One concrete sentence: what breaks." }
-      }
+      "type": "string",
+      "pattern": "^(LOW|MED|HIGH)\\s+[—-]\\s+.+",
+      "description": "Canonical Markdown scalar: severity, dash, then one concrete impact sentence."
     },
     "verify_by": {
       "type": "string",
       "description": "An event, not an intention: a gate ('G1 exit'), a WO start ('before WO-004'), or an ISO date. Must precede the assumption's first irreversible use."
     },
     "used_in": {
-      "type": "array",
-      "minItems": 1,
-      "items": { "type": "string" },
-      "description": "Artifact sections and WO ids relying on this. Completeness is what makes the staleness chain work."
+      "type": "string",
+      "minLength": 1,
+      "description": "Canonical Markdown comma-separated artifact/WO references. The linter resolves each reference."
     },
     "resolution_note": {
       "type": "string",

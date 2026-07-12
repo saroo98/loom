@@ -14,6 +14,12 @@ in good faith — the check is mechanical skepticism applied to your own memory.
 policies, model names, prices. No exceptions for confidence — confidence is exactly the
 feeling hallucination produces.
 
+This extends to the **live state of the running system**, not just static facts. When
+something "should work but doesn't" — a login that fails, a count that drifts — query the
+system for its actual state before theorizing about causes (does the record even have a
+`passwordHash`? does the documented credential match the real one?). A guessed diagnosis
+of live state is a hallucination with a shorter half-life; one query settles it.
+
 ## When to use
 
 - Gate G1 on every plan; G2 on scaffold instructions (the densest hallucination habitat:

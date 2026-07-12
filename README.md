@@ -5,30 +5,16 @@
 
 <div align="center">
   <img src="assets/mark-stdlib.svg" alt="stdlib-only tools" height="30">
-  <img src="assets/mark-notelemetry.svg" alt="zero telemetry, provable" height="30">
+  <img src="assets/mark-notelemetry.svg" alt="shipped source network-policy audited" height="30">
   <img src="assets/mark-selfscoring.svg" alt="scores itself, honestly" height="30">
-  <br>
-  <a href="https://github.com/saroo98/loom/actions/workflows/verify.yml"><img src="https://github.com/saroo98/loom/actions/workflows/verify.yml/badge.svg" alt="verify: tests + no-network audit" height="20"></a>
 </div>
 
-<h3 align="center">Loom is alive. It shows its work. It learns from every run — and the more you work with it, the better it gets.</h3>
+<h3 align="center">Loom shows its work, fails closed on unknown state, and measures whether owner calibration improves.</h3>
 
-<p align="center"><b>On a smaller model at low effort, Loom matched a frontier model
-running at maximum effort — using fewer tokens and less time.</b> The most rigorous
-planning system an AI coding agent can run, behind the shortest command you'll type
-today. (<a href="https://saroo98.github.io/loom/">website</a>)</p>
-
-<a href="BENCHMARK.md">
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img alt="Benchmark: Opus 4.8 low + Loom scored 90.1, matching Fable 5 at max effort (89.8) using fewer tokens and less time" src="assets/benchmark-light.svg" width="960">
-</picture>
-</a>
-
-<p align="center"><sub>First benchmark — one brief, three isolated sessions, sealed
-hidden tests. Built and scored blind by <b>Claude Fable 5 at maximum effort in an
-isolated environment</b>; deliverables graded on cited evidence. Full method, all twelve
-category scores, costs, and caveats: <a href="BENCHMARK.md">BENCHMARK.md</a>.</sub></p>
+<p align="center"><b>In one same-model landing-page comparison, the Loom-invoked artifact
+scored 90.1 vs 76.8 and passed 10/10 vs 8/10 sealed checks.</b> n=1, one web task, and the
+pack/G1 was retrospective. Complete B2 response usage was 1,278,126 processed token events,
+not the previously advertised 74,363 subset. <a href="BENCHMARK.md">Corrected record.</a></p>
 
 Loom is a planning operating system for AI agents. Underneath: truth-labeled plans, an
 assumption ledger with break propagation, review gates, atomic work orders, drift
@@ -43,22 +29,18 @@ tools, in a git repo you own outright.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/growth-dark.svg">
-  <img alt="a Loom compounds: day one, every run, a year in" src="assets/growth-light.svg" width="940">
+  <img alt="Loom learning: explicit start, scoped retro, bounded evidence" src="assets/growth-light.svg" width="940">
 </picture>
 
-Day one, Loom already plans better than an unstructured agent — that part is table
-stakes. The part nobody else ships: **every run feeds it.** Outcomes get checked against
-predictions. Mistakes become FEEDBACK entries that change the guidance itself.
-Calibration data accumulates — which estimates run hot, which assumptions break, which
-question styles you actually answer. Your `~/.loom/` learns your defaults; your Loom
-grows deep-dives for *your* domains.
+Day one supplies explicit epistemics, state checks, atomic work orders, and gates. At retro,
+consequential numeric predictions can be recorded against outcomes. Typed stated preferences
+and exact matched-domain/project observations load through one hard context cap; raw history
+and unmatched domains do not.
 
-Give it a year of real projects and you're holding a planning system fitted to your
-stacks, your languages, your failure patterns — one that no shelf, no marketplace, and
-no amount of stars can ship to anyone else, because it grew inside your work. The
-ceiling isn't our roadmap. It's your usage.
-
-**The more you work with it, the better it gets.**
+`loom_memory report` compares early and recent error for one required metric and one exact
+domain (`general` by default). Loom calls this improvement only when recent measured error is
+lower; accumulating rows alone is not improvement. Active memory,
+outcomes, and contribution queues all have hard bounds.
 
 ## Three commitments most tools don't make
 
@@ -66,7 +48,7 @@ ceiling isn't our roadmap. It's your usage.
    labels. Every `[ASSUMPTION]` lives in a ledger with `risk_if_wrong` and `verify_by` —
    and when one breaks, everything built on it gets flagged, mechanically.
 2. **It notices when the world moves.** Packs carry freshness stamps and repo-head
-   anchors; a 25+ check linter catches drift, cycles, unverifiable acceptance criteria,
+   anchors; the linter catches drift, cycles, unverifiable acceptance criteria,
    secrets, hedge-words, oversized work orders, and criteria resting on facts the same
    work order admits are unverified — before any gate spends judgment on them.
 3. **It answers to evidence, including about itself.** Loom ships the falsifiable
@@ -80,16 +62,20 @@ ceiling isn't our roadmap. It's your usage.
   <img alt="the Loom lifecycle loop" src="assets/lifecycle-light.svg" width="940">
 </picture>
 
-The loop closes. That last node — *Learn* — is what separates a planning system from a
-planning ritual: gates and ledgers keep single runs honest; the loop makes run *n+1*
-better than run *n*.
+The loop closes. That last node records scoped evidence; gates and ledgers keep single runs
+honest, and the calibration report tests whether recent error is actually lower than early
+error. No improvement is claimed from accumulation alone.
 
 ## Quickstart — three commands, then one
+
+Requires CPython 3.11–3.13. The verification workflow is configured for Windows, Linux, and
+macOS at Python 3.11 and 3.13.
 
 ```bash
 git clone <this-repo-or-your-copy> loom
 cd loom
 tools/install.sh          # macOS/Linux — Windows: tools\install.ps1
+tools/install.sh --check  # Windows: tools\install.ps1 -Check
 ```
 
 The installer registers `/loom` for Claude Code and Codex (any skills-capable harness
@@ -106,8 +92,8 @@ by ingredient, live on a real URL. Constraints: free hosting only. Repo: none.
 
 That one message is a complete brief. Loom takes it from there: surveys the repo if one
 exists, interrogates what you *didn't* say (the silence sweep), writes the plan pack
-into `<project>/plans/`, gates it against the rubric, and comes back with **one** batched
-set of decisions — each with a recommendation, so a one-word reply unblocks everything.
+into `<project>/plans/`, gates it against the rubric, and batches the current decision set —
+each with a recommendation. This is the interaction policy, not a measured round-trip guarantee.
 
 And the structure is optional. No name, no "Done =", no format at all — just talk:
 
@@ -116,9 +102,15 @@ And the structure is optional. No name, no "Done =", no format at all — just t
 something small that fixes that
 ```
 
-Loom infers the mode, the tier, and the finish line itself, labels every guess it had
-to make, and asks you at most one batched question. Small task? `/loom small` skips the
-ceremony — one work order, two checks. Right-sizing is enforced, not aspirational.
+Loom infers the mode, tier, and finish line and labels every guess it had to make. Intake policy
+permits at most one batched question before the next gate; unresolved irreversible forks still
+block. Small task? `/loom small` loads a bounded compact kernel, produces
+one standalone work order, and uses a baseline/authorize/close hash chain—no pack or G1.
+
+Measure the fixed source load instead of estimating it: `python tools/loom_context.py
+session-tier-s-core --json` (or `session-tier-mplus`). It reports exact UTF-8 bytes, Unicode
+characters, lines, and file hashes; tokenizer and provider-cache totals remain `null` unless a
+real harness reports them. Route-dependent project/guidance context is explicitly excluded.
 
 | Moment | Command |
 |---|---|
@@ -140,23 +132,20 @@ ceremony — one work order, two checks. Right-sizing is enforced, not aspiratio
   <img alt="the five epistemic labels" src="assets/labels-light.svg" width="940">
 </picture>
 
-Missing information never stalls a plan — it becomes a labeled assumption with a
-verification deadline. Silent guessing on irreversible choices is forbidden — that's
-what `[HUMAN-DECISION]` is for, batched so you answer once per gate, not once per
-question.
+Ordinary missing product information becomes a labeled assumption with a verification
+deadline. Unknown freshness, privacy ownership, domain invariants, or irreversible authority
+blocks the dependent action. Silent guessing on irreversible choices is forbidden.
 
 ## Sovereign by architecture
 
 Your Loom answers to you and to no one else — and that's structural, not a policy
 promise:
 
-- **Nothing leaves your machine.** The learning loop writes to your `~/.loom/` and your
-  Loom repo's FEEDBACK queue. No central queue, no upstream channel, no telemetry — the
-  channel *does not exist*. Don't take that on faith — audit it in one command:
-  `python tools/loom_audit.py` (AST-level scan: no network-capable imports anywhere,
-  subprocess restricted to git and the test runner; exit 0 = pass). The same audit runs
-  publicly on every push to this repository, so the proof trail is generated in the
-  open, not asserted by the author.
+- **Memory commands are local and instance-bound.** They use local standard-library file IO;
+  contribution is explicit and refuses another install UUID. `python tools/loom_audit.py`
+  recursively checks shipped Python, shell/workflow, browser-executable, and rendered-Markdown
+  surfaces for its declared network/process patterns. Git is the owner-requested synchronization
+  exception. The audit does not inspect the host agent, editor, OS, or unknown patterns.
 - **Every install is sovereign.** Your Loom triages its own feedback, grows its own
   chapters, diverges from every other install — by design.
 - **Upstream is optional.** Releases of this repo are imports you may cherry-pick,
@@ -167,7 +156,7 @@ Details: [`PRIVACY.md`](PRIVACY.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) ·
 
 ## Discipline you can diff
 
-Nothing here runs on trust. The mechanical fraction is enforced by `loom_lint` (gates
+The parts called mechanical are enforced by `loom_lint` and `loom_gate` (gates
 refuse to open on errors; a pre-commit guard blocks defective packs at commit time).
 The judgment fraction is enforced by gates that demand a review file with cited scores —
 by a session that didn't write the plan, when the harness can spawn one. The honesty
@@ -176,7 +165,9 @@ reality, kept even when they're embarrassing. Especially then.
 
 ## FAQ
 
-**Does anything get sent anywhere?** No — see the grep above. Architecture, not policy.
+**Does Loom memory send anything?** No network path exists in `loom_memory.py`; contribution
+is a same-install local file operation. Git or the host agent may use network only when you
+explicitly direct them; `PRIVACY.md` states the source audit's exact scope.
 
 **Do my lessons improve this upstream repo?** No. Your retro feeds *your* Loom. That's
 the point.
@@ -184,9 +175,9 @@ the point.
 **Which agents does it work with?** Installers ship for Claude Code and Codex. Any
 harness that can follow a markdown skill can run it.
 
-**What if my project repo is public?** Handled: packs live outside public repos or in
-verified-ignored directories, and lint scans for secrets and identifying tokens on
-every run.
+**What if my project repo is public?** Keep packs outside public repos or in verified-ignored
+directories. Lint checks implemented secret/path/host shapes; publishing additionally uses a
+positive allowlist, configured owner tokens, whole-output UTF-8 scan, and semantic human review.
 
 **Is this a framework I have to adopt?** It's files. The artifact matrix exists
 precisely so you produce only what has a consumer; tier-S work skips the pack entirely.

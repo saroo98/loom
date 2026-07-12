@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/outcome-store.schema.json",
+  "title": "Bounded owner-learning outcome store",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instance_id", "total_count", "records", "partitions"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "instance_id": { "type": "string", "format": "uuid" },
+    "total_count": { "type": "integer", "minimum": 0 },
+    "records": {
+      "type": "array",
+      "maxItems": 512,
+      "items": { "$ref": "outcome.schema.json" }
+    },
+    "partitions": {
+      "type": "object",
+      "maxProperties": 128,
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "metric", "domain", "sample_count", "sum_absolute_error",
+          "first_errors", "recent_errors", "updated_at"
+        ],
+        "properties": {
+          "metric": {
+            "enum": ["confidence", "tier-estimate", "effort-estimate", "rework-rate", "verification-escape-rate"]
+          },
+          "domain": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+          "sample_count": { "type": "integer", "minimum": 1 },
+          "sum_absolute_error": { "type": "number", "minimum": 0 },
+          "first_errors": {
+            "type": "array", "maxItems": 64,
+            "items": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "recent_errors": {
+            "type": "array", "maxItems": 64,
+            "items": { "type": "number", "minimum": 0, "maximum": 1 }
+          },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

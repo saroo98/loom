@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/outcome.schema.json",
+  "title": "Owner-learning calibration outcome",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "id", "instance_id", "metric", "predicted", "actual",
+    "absolute_error", "domain", "project_id", "recorded_at"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "id": { "type": "string", "format": "uuid" },
+    "instance_id": { "type": "string", "format": "uuid" },
+    "metric": {
+      "enum": ["confidence", "tier-estimate", "effort-estimate", "rework-rate", "verification-escape-rate"]
+    },
+    "predicted": { "type": "number", "minimum": 0, "maximum": 1 },
+    "actual": { "type": "number", "minimum": 0, "maximum": 1 },
+    "absolute_error": { "type": "number", "minimum": 0, "maximum": 1 },
+    "domain": { "type": "string" },
+    "project_id": { "type": ["string", "null"], "pattern": "^p-[0-9a-f]{32}$" },
+    "recorded_at": { "type": "string", "format": "date-time" }
+  }
+}

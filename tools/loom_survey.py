@@ -16,14 +16,17 @@ Exit codes: 0 ok, 2 usage/IO problem.
 
 import argparse
 import datetime as dt
+import hashlib
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "build",
              "target", ".idea", ".vscode", "vendor", ".next", "out", "bin", "obj"}
 FILE_CAP = 20000
+STATE_FILE_CAP = 100000
 
 ECOSYSTEM_MARKERS = [
     ("package.json", "Node.js / JavaScript"),
@@ -60,13 +63,150 @@ TEST_FILE_RE = re.compile(r"(^test_.*\.py$|_test\.(py|go|rb)$|\.(test|spec)\.[jt
                           r"|Tests?\.cs$)")
 
 
-def git(repo, *args, timeout=20):
+class SurveyError(RuntimeError):
+    """Repository state could not be established safely."""
+
+
+@dataclass(frozen=True)
+class RepoState:
+    is_git: bool
+    mode: str = "git"
+    head: str = ""
+    branch: str = ""
+    staged: tuple = ()
+    unstaged: tuple = ()
+    untracked: tuple = ()
+    state_hash: str = ""
+    excluded: tuple = ()
+
+    @property
+    def dirty(self):
+        return bool(self.staged or self.unstaged or self.untracked)
+
+
+def run_git(repo, *args, allowed=(0,), timeout=20):
     try:
-        out = subprocess.run(["git", "-C", str(repo)] + list(args),
-                             capture_output=True, text=True, timeout=timeout)
-        return out.stdout.strip() if out.returncode == 0 else None
-    except (OSError, subprocess.TimeoutExpired):
-        return None
+        result = subprocess.run(
+            ["git", "-C", str(repo)] + list(args), capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=timeout)
+    except OSError as exc:
+        raise SurveyError(f"git unavailable: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SurveyError(f"git timed out while running {' '.join(args)}") from exc
+    if result.returncode not in allowed:
+        detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic"
+        raise SurveyError(
+            f"git {' '.join(args)} failed ({result.returncode}): {detail}")
+    return result
+
+
+def _nul_paths(text):
+    return tuple(sorted(path for path in text.split("\0") if path))
+
+
+def _hash_untracked(root, paths, digest):
+    for rel in paths:
+        path = root / rel
+        digest.update(b"untracked\0" + rel.encode("utf-8") + b"\0")
+        try:
+            if path.is_symlink():
+                digest.update(str(path.readlink()).encode("utf-8"))
+            else:
+                with path.open("rb") as stream:
+                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                        digest.update(chunk)
+        except OSError as exc:
+            raise SurveyError(f"cannot hash untracked file {rel}: {exc}") from exc
+
+
+def _enforce_state_file_cap(*path_sets):
+    count = len({path for paths in path_sets for path in paths})
+    if count > STATE_FILE_CAP:
+        raise SurveyError(
+            f"workspace state contains {count} visible files, above the complete-snapshot "
+            f"safety limit of {STATE_FILE_CAP}; no partial state hash was produced")
+
+
+def _filesystem_state(root, excluded):
+    files = []
+    try:
+        for path in root.rglob("*"):
+            if not path.is_file() or ".git" in path.relative_to(root).parts:
+                continue
+            rel = path.relative_to(root).as_posix()
+            if any(rel == prefix or rel.startswith(prefix + "/")
+                   for prefix in excluded):
+                continue
+            files.append(rel)
+            if len(files) > STATE_FILE_CAP:
+                _enforce_state_file_cap(files)
+    except OSError as exc:
+        raise SurveyError(f"cannot enumerate workspace state: {exc}") from exc
+    digest = hashlib.sha256(b"filesystem\0")
+    _hash_untracked(root, tuple(sorted(files)), digest)
+    return RepoState(
+        is_git=False, mode="filesystem", untracked=tuple(sorted(files)),
+        state_hash=digest.hexdigest(), excluded=excluded)
+
+
+def _state_pathspec(excluded):
+    return ("--", ".", *(f":(exclude){path.rstrip('/')}/**" for path in excluded))
+
+
+def repo_state(root_path, exclude_prefixes=None):
+    """Return a content-sensitive snapshot of committed and local Git state."""
+    root = Path(root_path).resolve()
+    if exclude_prefixes is None:
+        exclude_prefixes = ("plans",) if (root / "plans" / "MANIFEST.md").is_file() else ()
+    excluded = tuple(sorted(str(path).replace("\\", "/").strip("/")
+                            for path in exclude_prefixes if str(path).strip("/\\")))
+    pathspec = _state_pathspec(excluded)
+    try:
+        probe = run_git(root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
+    except SurveyError:
+        if (root / ".git").exists():
+            raise
+        return _filesystem_state(root, excluded)
+    if probe.returncode != 0:
+        diagnostic = (probe.stderr or probe.stdout).lower()
+        if "not a git repository" in diagnostic or "not a git directory" in diagnostic:
+            return _filesystem_state(root, excluded)
+        raise SurveyError(
+            "cannot determine Git state: " + (probe.stderr.strip() or "unknown error"))
+    if probe.stdout.strip() != "true":
+        return _filesystem_state(root, excluded)
+    head_result = run_git(
+        root, "rev-parse", "--verify", "HEAD", allowed=(0, 1, 128))
+    if head_result.returncode == 0:
+        head = head_result.stdout.strip()
+        branch = run_git(root, "branch", "--show-current").stdout.strip() or "(detached)"
+    else:
+        symbolic = run_git(root, "symbolic-ref", "-q", "HEAD", allowed=(0, 1))
+        if symbolic.returncode != 0 or not symbolic.stdout.strip().startswith("refs/heads/"):
+            detail = head_result.stderr.strip() or head_result.stdout.strip() or "invalid HEAD"
+            raise SurveyError(f"Git HEAD is indeterminate: {detail}")
+        head = ""
+        branch = symbolic.stdout.strip()[len("refs/heads/"):]
+    staged = _nul_paths(run_git(
+        root, "diff", "--cached", "--name-only", "-z", *pathspec).stdout)
+    unstaged = _nul_paths(run_git(
+        root, "diff", "--name-only", "-z", *pathspec).stdout)
+    untracked = _nul_paths(run_git(
+        root, "ls-files", "--others", "--exclude-standard", "-z", *pathspec).stdout)
+    _enforce_state_file_cap(staged, unstaged, untracked)
+    digest = hashlib.sha256()
+    digest.update(b"head\0" + head.encode("ascii") + b"\0")
+    for label, args in (
+        (b"staged", ("diff", "--cached", "--binary")),
+        (b"unstaged", ("diff", "--binary")),
+    ):
+        digest.update(label + b"\0")
+        digest.update(run_git(root, *args, *pathspec).stdout.encode("utf-8"))
+    _hash_untracked(root, untracked, digest)
+    return RepoState(
+        is_git=True, mode="git", head=head, branch=branch, staged=staged,
+        unstaged=unstaged, untracked=untracked, state_hash=digest.hexdigest(),
+        excluded=excluded)
 
 
 def walk_files(root):
@@ -146,13 +286,12 @@ def top_structure(root, files, depth=1):
 
 
 def survey(root_path):
-    root = Path(root_path)
+    root = Path(root_path).resolve()
     today = dt.date.today().isoformat()
     files = walk_files(root)
-    head = git(root, "rev-parse", "HEAD")
-    branch = git(root, "branch", "--show-current")
-    dirty = git(root, "status", "--porcelain")
-    log = git(root, "log", "--oneline", "-15")
+    state = repo_state(root)
+    log = (run_git(root, "log", "--oneline", "-15").stdout.strip()
+           if state.is_git and state.head else "")
     names = {f.name for f in files}
     fact = f"[FACT — loom_survey {today}]"
 
@@ -162,19 +301,32 @@ def survey(root_path):
     L.append(f'project: "{root.name}"')
     L.append("status: draft")
     L.append(f"last_verified: {today}")
-    if head:
-        L.append(f'repo_head: "{head}"')
+    if state.is_git:
+        L.append(f'repo_head: "{state.head}"' if state.head else "repo_head: null")
+    L.append(f'repo_state_hash: "{state.state_hash}"')
+    L.append(f'repo_state_mode: "{state.mode}"')
     L.append("generated_by: loom_survey (facts) + agent judgment (TODO sections)")
     L.append("---")
     L.append(f"\n# Repo survey — {root.name}\n")
 
     L.append("## Git state")
-    if head:
-        L.append(f"- HEAD: `{head}` on branch `{branch or '?'}` {fact}")
-        L.append(f"- Working tree: {'DIRTY — ' + str(len(dirty.splitlines())) + ' file(s)' if dirty else 'clean'} {fact}")
+    if state.is_git:
+        local_count = len(set(state.staged + state.unstaged + state.untracked))
+        display_head = state.head or "(unborn — no commit)"
+        L.append(f"- HEAD: `{display_head}` on branch `{state.branch}` {fact}")
+        L.append(f"- Working tree: {'DIRTY - ' + str(local_count) + ' path(s)' if state.dirty else 'clean'} {fact}")
+        L.append(f"- Repository state hash: `{state.state_hash}` {fact}")
+        if state.excluded:
+            L.append(f"- State-hash exclusions (private pack only): "
+                     f"{list(state.excluded)} {fact}")
+        L.append(f"- Staged: {list(state.staged) or 'none'} {fact}")
+        L.append(f"- Unstaged: {list(state.unstaged) or 'none'} {fact}")
+        L.append(f"- Untracked: {list(state.untracked) or 'none'} {fact}")
         L.append(f"- Recent commits {fact}:\n```\n{log or '(none)'}\n```")
     else:
-        L.append(f"- Not a git repository (or git unavailable) {fact}")
+        L.append(f"- Not a Git repository; filesystem state is still hashed {fact}")
+        L.append(f"- Filesystem state hash: `{state.state_hash}` across "
+                 f"{len(state.untracked)} file(s) {fact}")
 
     L.append(f"\n## Ecosystems detected {fact}")
     ecos = detect_ecosystems(root, files)
@@ -200,7 +352,7 @@ def survey(root_path):
     test_dirs = sorted({f.parts[0] for f in files
                         if f.parts[0].lower() in ("test", "tests", "__tests__", "spec")})
     L.append(f"- Test-looking files: {len(test_files)}; test dirs at root: {test_dirs or 'none'}")
-    L.append("- Do they RUN and PASS? → judgment TODO below (run them; record command + output)")
+    L.append("- Do they RUN and PASS? -> judgment TODO below (run them; record command + output)")
 
     L.append(f"\n## Structure (files per top-level dir) {fact}")
     for name, n in top_structure(root, files)[:15]:
@@ -230,28 +382,49 @@ def survey(root_path):
 
 
 def delta(root_path, since):
-    root = Path(root_path)
+    root = Path(root_path).resolve()
     today = dt.date.today().isoformat()
-    head = git(root, "rev-parse", "HEAD")
-    if head is None:
-        print("loom_survey: --since requires a git repository", file=sys.stderr)
-        sys.exit(2)
-    rng = f"{since}..HEAD"
-    commits = git(root, "log", "--oneline", rng)
-    stat = git(root, "diff", "--stat", rng)
-    namestat = git(root, "diff", "--name-only", rng) or ""
-    changed = namestat.splitlines()
-    manifests = [c for c in changed if Path(c).name in
+    state = repo_state(root)
+    if not state.is_git:
+        raise SurveyError("--since requires a git repository")
+    if not state.head:
+        raise SurveyError(
+            "--since requires a committed HEAD; this Git repository is valid but unborn")
+    verify = run_git(root, "rev-parse", "--verify", f"{since}^{{commit}}",
+                     allowed=(0, 128))
+    if verify.returncode != 0:
+        raise SurveyError(f"invalid base commit: {since}")
+    base = verify.stdout.strip()
+    ancestor = run_git(root, "merge-base", "--is-ancestor", base, state.head,
+                       allowed=(0, 1))
+    if ancestor.returncode != 0:
+        raise SurveyError(
+            f"base commit {since} is not an ancestor of HEAD {state.head}")
+    rng = f"{base}..{state.head}"
+    commits = run_git(root, "log", "--oneline", rng).stdout.strip()
+    committed = _nul_paths(run_git(
+        root, "diff", "--name-only", "-z", rng).stdout)
+    all_changed = tuple(sorted(set(
+        committed + state.staged + state.unstaged + state.untracked)))
+    manifests = [c for c in all_changed if Path(c).name in
                  {m for m, _ in ECOSYSTEM_MARKERS if not m.startswith('*')} | set(LOCKFILES)]
-    ci = [c for c in changed if ".github/workflows" in c or Path(c).name in
+    ci = [c for c in all_changed if ".github/workflows" in c or Path(c).name in
           {"Jenkinsfile", ".gitlab-ci.yml", "azure-pipelines.yml"}]
-    danger = [c for c in changed if DANGER_RE.search(c)]
+    danger = [c for c in all_changed if DANGER_RE.search(c)]
 
     L = [f"# Staleness delta — {root.name} — {today}",
-         f"- Range: `{since}` → `{head}`",
+         f"- Range: `{base}` -> `{state.head}`",
          f"- Commits in range: {len(commits.splitlines()) if commits else 0}",
+         f"- Repository state hash: `{state.state_hash}`",
          "\n## Commits\n```", commits or "(none — repo_head current)", "```",
-         "\n## Changed files (diffstat)\n```", stat or "(none)", "```"]
+         "\n## Committed changes"]
+    L.extend([f"- `{path}`" for path in committed] or ["- none"])
+    L.append("\n## Staged changes")
+    L.extend([f"- `{path}`" for path in state.staged] or ["- none"])
+    L.append("\n## Unstaged changes")
+    L.extend([f"- `{path}`" for path in state.unstaged] or ["- none"])
+    L.append("\n## Untracked files")
+    L.extend([f"- `{path}`" for path in state.untracked] or ["- none"])
     if manifests:
         L += ["\n## Dependency/manifest changes — re-verify version facts"] + \
              [f"- `{m}`" for m in manifests]
@@ -276,11 +449,17 @@ def main(argv=None):
     if not Path(args.repo).is_dir():
         print(f"loom_survey: not a directory: {args.repo}", file=sys.stderr)
         return 2
-    text = delta(args.repo, args.since) if args.since else survey(args.repo)
+    try:
+        text = delta(args.repo, args.since) if args.since else survey(args.repo)
+    except SurveyError as exc:
+        print(f"loom_survey: INDETERMINATE — {exc}", file=sys.stderr)
+        return 2
     if args.out:
         Path(args.out).write_text(text, encoding="utf-8")
         print(f"written: {args.out}")
     else:
+        if hasattr(sys.stdout, "reconfigure"):
+            sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
         print(text)
     return 0
 

@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.8.0 — trust boundaries become executable
+
+- Safe, ownership-marked publication with whole-output text scanning and local-reference
+  validation.
+- Complete fail-closed workspace state and strict resume/execution freshness.
+- Lifecycle v2 chronology and post-authorization work-order completion evidence.
+- Typed, bounded, per-install owner learning with exact matched-domain/project selection and
+  explicit same-instance contribution.
+- Domain adapters plus a G1-blocking discovery contract for unknown domains.
+- Checkable, ownership-safe, reversible installers and one machine-readable `VERSION`.
+
+No test/file count is hand-authored here; release checks derive those values from the tree and
+the command run.
+
+**Correction notice:** entries below are historical release records, not current contracts.
+Version 0.8 supersedes 0.7's “silent application,” unattended-contribution, and “nothing leaves”
+wording. Current selection is explicit and scoped; contribution requires an owner command; the
+memory tool has no network path; owner-requested Git/export and the host agent remain outside that
+tool-level claim.
+
 ## 0.7.0 — first public cut
 
 Everything present at the first release:

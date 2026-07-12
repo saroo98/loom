@@ -6,20 +6,19 @@ this repository.** Every install is sovereign; each one evolves for its owner.
 ## Make it yours (the intended flow)
 
 1. **Clone, then re-home.** Clone this repo, then point `origin` at a remote you own
-   (private is a fine default) — or keep it purely local. Your Loom's freshness pulse
-   syncs against *your* remote, and everything the learning loop writes stays in *your*
-   tree.
+   (private is a fine default) — or keep it purely local. Loom never fetches/pulls on load;
+   synchronize only when you explicitly choose. Learning state stays local to this install.
 2. **Install once.** `tools/install.sh` / `tools\install.ps1` stamps your clone's
    location into the `/loom` skill.
-3. **Let the loop run.** Every real project run appends honest entries to your
-   `FEEDBACK.md` and teaches your `~/.loom/`. Triage the queue with the playbook in
+3. **Close the loop deliberately.** Retros record bounded numeric outcomes and may queue a
+   controlled generic pattern locally. Only explicit `/loom contribute` merges that queue
+   into this install's `FEEDBACK.md`. Triage with the playbook in
    [`loom/meta/evolving-loom.md`](loom/meta/evolving-loom.md) — fix guidance that misled
    you, delete guidance nobody uses, grow deep-dives for your domains. That ritual *is*
    contribution here.
-4. **Diverge proudly.** A year in, your Loom should look different from this snapshot:
-   your language deep-dives under `loom/adaptation/`, your calibration data, your
-   triage judgments. Upstream releases are optional imports — cherry-pick what serves
-   you, skip the rest. Divergence from upstream is success, not drift.
+4. **Diverge deliberately.** Domain/project memory stays in scoped local state; core guidance
+   changes only through reviewed authored edits. Upstream releases are optional imports—check
+   and cherry-pick what serves you, skip the rest.
 
 ## About changes to this repository
 

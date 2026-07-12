@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Conservative lower-tier-first classifier for Loom planning overhead."""
+
+import argparse
+import json
+import re
+import sys
+
+RISK_RE = re.compile(
+    r"(?i)\b(auth(?:entication|orization)?|payment|billing|tax|migration|delete|"
+    r"production|credential|firmware|hardware|medical|safety|financial|trading)\b")
+PROGRAM_RE = re.compile(
+    r"(?i)\b(platform|multi[- ]service|multiple apps|migration program|enterprise|"
+    r"full product|from scratch|real[- ]time 3d|accounting software|"
+    r"(?:build|create|develop|launch)\s+"
+    r"(?:(?:a|an|the|new|full|cross[- ]platform|and|release|ship|launch|"
+    r"production|end[- ]to[- ]end|etl|ml|data)\s+){0,6}"
+    r"(?:mobile app|desktop app|data pipeline|etl pipeline|ml pipeline|firmware))\b")
+DISCIPLINED_DELIVERABLE_RE = re.compile(
+    r"(?i)\b(?:build|create|develop|produce|write)\s+"
+    r"(?:(?:a|an|the|new|reproducible)\s+){0,4}"
+    r"(?:command[- ]line (?:developer )?tool|cli tool|research write[- ]?up|"
+    r"research paper|literature review)\b")
+SMALL_RE = re.compile(
+    r"(?i)\b(single[- ]file|one file|small script|bug fix|add a flag|landing page|"
+    r"static page|command[- ]line flag|rename|copy change)\b")
+
+
+def classify(description, *, files=None, days=None, new_components=0,
+             new_boundaries=0, implementers=1, irreversible=False):
+    text = str(description or "").strip()
+    reasons = []
+    tier = "S"
+    risk_hits = sorted(set(match.group(0).lower() for match in RISK_RE.finditer(text)))
+    program_hits = sorted(set(match.group(0).lower() for match in PROGRAM_RE.finditer(text)))
+    disciplined_hits = sorted(set(
+        match.group(0).lower() for match in DISCIPLINED_DELIVERABLE_RE.finditer(text)))
+    if program_hits or (days is not None and days > 10) or new_components >= 3 \
+            or new_boundaries >= 3 or implementers >= 3:
+        tier = "L"
+        reasons.append("product/subsystem or multi-implementer signals require a release pack")
+    elif risk_hits or disciplined_hits or irreversible or (days is not None and days > 1) \
+            or new_components > 0 or new_boundaries > 0 \
+            or (files is not None and files > 5) or implementers > 1:
+        tier = "M"
+        reasons.append("risk, boundary, duration, or coordination exceeds one low-risk sitting")
+    else:
+        reasons.append("one implementer, one sitting, low blast radius; no architecture signal")
+        if SMALL_RE.search(text):
+            reasons.append("description contains an explicit small-work shape")
+    promotion = []
+    if tier == "S":
+        promotion = [
+            "promote to M if survey finds a new component/boundary, >5 touched files, "
+            "irreversible state, or more than one sitting",
+        ]
+    elif tier == "M":
+        promotion = [
+            "promote to L if survey finds three or more subsystems/boundaries, "
+            "multi-milestone release work, or three implementers",
+        ]
+    return {
+        "schema_version": 1,
+        "tier": tier,
+        "reasons": reasons,
+        "risk_terms": risk_hits,
+        "program_terms": program_hits,
+        "disciplined_deliverable_terms": disciplined_hits,
+        "promotion_triggers": promotion,
+        "policy": "ties choose the lower tier; observed survey facts may promote",
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--description", required=True)
+    parser.add_argument("--files", type=int)
+    parser.add_argument("--days", type=float)
+    parser.add_argument("--new-components", type=int, default=0)
+    parser.add_argument("--new-boundaries", type=int, default=0)
+    parser.add_argument("--implementers", type=int, default=1)
+    parser.add_argument("--irreversible", action="store_true")
+    args = parser.parse_args(argv)
+    numeric = (args.files, args.days, args.new_components,
+               args.new_boundaries, args.implementers)
+    if any(value is not None and value < 0 for value in numeric) or args.implementers < 1:
+        print(json.dumps({"status": "error", "error": "numeric inputs are out of range"}))
+        return 1
+    result = classify(
+        args.description, files=args.files, days=args.days,
+        new_components=args.new_components, new_boundaries=args.new_boundaries,
+        implementers=args.implementers, irreversible=args.irreversible)
+    print(json.dumps({"status": "ok", "result": result}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

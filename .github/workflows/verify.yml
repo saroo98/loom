@@ -1,8 +1,7 @@
 name: verify
 
-# The public proof trail: the full test suite + the no-network audit run on every
-# push, in public. A green badge means "the privacy claim was machine-checked on
-# infrastructure the author doesn't control", not "trust us".
+# Public proof trail for the exact source checks below. A green badge does not audit
+# the host agent, editor, OS services, Git remote, or semantic domain correctness.
 
 on:
   push:
@@ -14,13 +13,20 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
-          python-version: "3.11"
+          python-version: ${{ matrix.python }}
       - name: test suite
         run: python -m unittest discover -s tools -p "test_*.py" -v
       - name: no-network / no-telemetry audit
         run: python tools/loom_audit.py
+      - name: release/version coherence
+        run: python tools/loom_release_check.py

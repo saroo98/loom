@@ -41,6 +41,17 @@ Self-verification produces claims like "I checked X" — hold them to the FACT s
 5. **Diff-the-intent.** Compare what you *set out* to produce (the gate's entry criteria,
    the WO's intent, the artifact matrix's selection) against what exists. Missing pieces
    hide behind completed impressive ones.
+6. **Observe the running artifact, not its source.** A claim about behavior or output is
+   verified only by exercising the deliverable *in its real medium* and observing the actual
+   result — never by reading the code and confirming it "says" the right thing. Render a page
+   in a real browser and look; run a CLI and read its output; call the endpoint and inspect the
+   response; execute the job and check the rows; launch the app and drive the flow. "The source
+   specifies X" is `[SPECULATION]` about behavior until X is *observed*. The medium is
+   project-specific — the pack's testing plan and the work order's acceptance commands name the
+   concrete way THIS project is rendered and observed, and the instance's calibration accrues the
+   defect shapes only the running artifact reveals. The defects this step exists to catch — a
+   shattered layout, an overlapping control, an empty response, an off-by-one row — live *only*
+   in the running state and are invisible to source review.
 
 ## Questions to ask
 
@@ -67,6 +78,10 @@ Self-verification produces claims like "I checked X" — hold them to the FACT s
 - **Critique without consequence** — finding real issues, filing them as "notes", shipping
   anyway. A finding either changes the artifact, becomes an accepted-risk line with an
   owner, or was noise — pick one, in writing.
+- **Source-certification** — ticking a behavioral criterion by reading the code ("the CSS sets
+  44px", "the handler returns 200") instead of running the artifact and observing it. The most
+  dangerous passes are the confident ones written from source over a deliverable that is visibly
+  broken the instant it renders. Method step 6 is the antidote.
 
 ## When confidence is low
 
@@ -101,7 +116,7 @@ plus the closing block every gate requires:
 | Intake | Role-flip as requester; quote-check the goal against the original message |
 | Planning | Full method; adversarial pass on the architecture's weakest boundary |
 | Scaffolding | Mechanical sweep IS the gate (G2 = command output) |
-| Implementation | Per-WO: acceptance criteria run for real; diff-the-intent vs the WO text |
+| Implementation | Per-WO: acceptance criteria **observed on the running artifact** (rendered/executed in its real medium, not read from source); diff-the-intent vs the WO text |
 | Review | Empathy inversion over the whole slice; fix-blindness check on everything patched since G1 |
 | Release | Checklist anti-theater: every box's evidence physically present in the review file |
 | Maintenance | Cold re-entry is free here (time passed) — spend it on the runbook's commands |

@@ -1,13 +1,32 @@
 # Project-type adaptation
 
-The lifecycle, gates, and epistemics never change. What changes per project type: **planning
-emphasis, testing peculiarities, release mechanics, and the characteristic pitfalls.** This
-file is a modifier catalog — apply the section(s) that match; multi-type projects apply
-several.
+The epistemic and evidence disciplines persist. Artifact names, planning emphasis,
+verification media, release meaning, and even whether implementation exists must adapt to
+the work. This file is an adapter catalog, not a claim of universal expertise.
+
+Run `python <loom>/tools/loom_domain.py --description <request>` before selecting artifacts.
+Record its `memory_domain` and `coverage` in MANIFEST. It selects only evidenced adapters;
+it never falls back to web/software. Multi-type projects apply every returned adapter but
+choose one primary memory domain.
 
 Everything here about specific platforms is knowledge that decays — treat concrete platform
 requirements (store policies, signing procedures, API levels) as `[SPECULATION]` to verify
 in-session per `loom/verification/hallucination-check.md` before load-bearing use.
+
+## Adapter contract and unknown domains
+
+An adapter supplies six questions, not answers: governing invariants, failure modes,
+authoritative sources, real verification medium, release/rollback meaning, and the domain
+expert decisions that cannot be delegated.
+
+If the selector returns `coverage: unknown`, G1 is blocked. Produce `domain-discovery.md`
+from `templates/domain-discovery.md` and a first work order whose only deliverable is verified
+domain invariants. Evidence must come from current authoritative standards/specifications,
+the target repository/hardware/data, or a named qualified human review. Do not claim
+coverage from model memory. Once every load-bearing invariant has evidence and a real
+verification medium, change MANIFEST from `domain_coverage: unknown` to `verified`; lint
+then checks the artifact contract. If evidence cannot be obtained, keep `[UNKNOWN]` and do
+not gate the dependent work.
 
 ## Web application (SPA/SSR, dashboards, tools)
 
@@ -81,6 +100,74 @@ in-session per `loom/verification/hallucination-check.md` before load-bearing us
 - **Pitfalls:** breaking scripted consumers with "improved" output (machine-mode is the
   hedge); interactive prompts that break automation (always plan a non-interactive path).
 
+## Accounting / bookkeeping software
+
+- **Emphasis:** journal/posting model before UI; every posted transaction balances by
+  construction; currency and rounding policy is explicit; corrections preserve history;
+  periods, reconciliation, permissions, and jurisdiction/effective dates are contracts.
+- **Testing:** property tests for balanced postings and conservation; golden ledgers for
+  reversals, splits, refunds, exchange, close/reopen, and reconciliation; immutable audit-
+  trail checks; migration and backup/restore against representative data. Tax logic needs
+  current jurisdiction-specific authoritative evidence or remains `[UNKNOWN]`.
+- **Release:** version schema and rule sets separately; reconcile pre/post migration totals;
+  rollback must preserve every posting and audit event. Destructive repair is a human gate.
+- **Pitfalls:** binary floating point for money; editable posted rows; tax rules treated as
+  timeless; UI totals used as correctness evidence; an unbalanced import silently accepted.
+
+## Real-time 3D configurator / spatial application
+
+- **Emphasis:** coordinate handedness, units, pivots, transforms, collision/placement rules,
+  asset formats and ownership; target device matrix; explicit frame-time, draw-call, triangle,
+  texture, and GPU-memory budgets; camera/selection/accessibility behavior.
+- **Testing:** deterministic scene/configuration fixtures; asset validation at ingestion;
+  pixel/geometry checks where stable; interaction flows in the real renderer; CPU/GPU profiles
+  on the weakest supported real device. A unit test or DOM snapshot cannot prove frame rate.
+- **Release:** version code, scenes, configuration schema, and assets as one compatibility
+  set; CDN/cache invalidation and fallback assets are rollback work, not hosting trivia.
+- **Pitfalls:** web breakpoints mistaken for spatial UX; desktop-GPU evidence generalized to
+  mobile; inconsistent meters/centimeters; unbounded materials/textures; beautiful idle
+  frame measured instead of worst-case interaction.
+
+## Firmware / hardware system
+
+- **Emphasis:** exact board/revision/BOM/toolchain; I/O and electrical boundaries; timing,
+  memory, power, thermal, and endurance budgets; boot/update/recovery states; physical safe
+  state and irreversible operations. Hardware constraints outrank software defaults.
+- **Testing:** static/host tests where useful, then simulator/emulator evidence, then
+  hardware-in-loop on the declared revision. Exercise brownout, watchdog, corrupt update,
+  sensor/actuator failure, and recovery. Record instruments, firmware hash, and board ID.
+- **Release:** reproducible binary + toolchain manifest + flashing instructions + known-good
+  recovery image. Physical rollback feasibility is explicit; bricking or unsafe actuation is
+  never delegated or auto-approved.
+- **Pitfalls:** assuming datasheet limits equal system margins; testing one prototype revision;
+  timing/power inferred from desktop simulation; no recovery path; changing hardware and
+  firmware without a compatibility matrix.
+
+## Research, analysis, or non-software writeup
+
+- **Emphasis:** research question, audience, inclusion/exclusion method, source provenance,
+  claims/evidence matrix, uncertainty, ethics/licensing, and the observable publication
+  artifact. Architecture/UI/scaffold plans normally skip with reasons.
+- **Testing:** reproducible search/query/data steps; citation-to-source verification; claim
+  contradiction and counterevidence pass; calculation/data rerun; plagiarism/licensing check;
+  qualified peer review where domain stakes require it.
+- **Release:** freeze source bibliography, data/code snapshot where allowed, review status,
+  and correction/version policy. Rollback means withdrawal/correction, not redeploy.
+- **Pitfalls:** fluent synthesis with no source trail; secondary source promoted over primary;
+  software work orders forced onto reading/writing; absence of counterevidence called proof.
+
+## Cross-platform mobile app
+
+- **Emphasis:** declare each OS/device floor and what is native versus shared; lifecycle,
+  permissions, offline/sync, accessibility/input, notifications, and native bridge contracts.
+- **Testing:** shared tests plus platform-specific lifecycle and integration tests; real devices
+  on each supported OS; airplane mode, process death, background/foreground, upgrade, and
+  permission denial. One platform's emulator is not cross-platform evidence.
+- **Release:** independent signing/store tracks, review constraints, staged rollout, crash
+  thresholds, data migration, and platform-specific rollback limits.
+- **Pitfalls:** "write once" assumption; native bridge errors discovered at release; desktop/web
+  responsive rules substituted for touch, keyboard, safe-area, and lifecycle behavior.
+
 ## Library / SDK
 
 - **Emphasis:** public API surface = the contract, designed first, frozen hardest;
@@ -92,7 +179,19 @@ in-session per `loom/verification/hallucination-check.md` before load-bearing us
 - **Pitfalls:** leaking internals into the public surface (boundary clarity dimension);
   breaking changes disguised as fixes; README examples that stopped compiling months ago.
 
-## Data / ML project
+## Data / ETL pipeline
+
+- **Emphasis:** source/target schemas, lineage and ownership, keys/deduplication, event time,
+  late data, idempotency, replay/backfill, schema evolution, retention/PII, capacity and cost.
+- **Testing:** contract fixtures at every boundary; duplicate/out-of-order/late/corrupt inputs;
+  repeat-run equivalence; partial failure/restart; backfill in a production-shaped isolated
+  medium; row/count/hash reconciliation and explicit tolerated loss.
+- **Release:** version jobs and schemas; shadow/canary runs; checkpoint and watermark handling;
+  rollback without double-writing; backfill and deletion playbooks.
+- **Pitfalls:** a happy-path sample called data quality; destructive replay; local file sizes
+  generalized to production; schema drift silently coerced; lineage existing only in prose.
+
+## Machine-learning project
 
 - **Emphasis:** data contracts (schemas, provenance, refresh cadence) dominate; evaluation
   criteria defined *before* modeling (else "looks good" ships); reproducibility decisions
@@ -186,3 +285,7 @@ in-session per `loom/verification/hallucination-check.md` before load-bearing us
 Platform choice open → it's a `[HUMAN-DECISION]` with a recommendation derived from audience
 facts (their devices, their distribution reality), not from what's pleasant to build. The
 recommendation states what evidence would flip it.
+
+If the domain itself is unclear, do not ask "web or app?" by reflex. Run the selector, show
+its evidence, and if coverage remains unknown perform the domain-discovery flow above before
+G1. A recommendation without domain invariants is `[SPECULATION]`, never a gate input.

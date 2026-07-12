@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/memory-record.schema.json",
+  "title": "Scoped Loom owner-memory record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id", "scope", "category", "statement", "provenance", "evidence_count",
+    "confidence", "domain", "project_id", "created_at", "last_confirmed",
+    "expires_at", "status", "supersedes", "preference_key", "preference_value"
+  ],
+  "properties": {
+    "id": { "type": "string", "format": "uuid" },
+    "scope": { "enum": ["global", "domain", "project", "temporary"] },
+    "category": { "enum": ["preference", "calibration", "process", "domain"] },
+    "statement": { "type": "string", "minLength": 1, "maxLength": 1000 },
+    "provenance": { "enum": ["stated", "observed", "inferred"] },
+    "evidence_count": { "type": "integer", "minimum": 1 },
+    "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+    "domain": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+    "project_id": { "type": ["string", "null"], "pattern": "^p-[0-9a-f]{32}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "last_confirmed": { "type": "string", "format": "date-time" },
+    "expires_at": { "type": ["string", "null"], "format": "date-time" },
+    "status": { "enum": ["active", "retired", "tombstone"] },
+    "supersedes": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+    "preference_key": { "type": ["string", "null"] },
+    "preference_value": { "type": ["string", "null"] }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "scope": { "const": "global" } } },
+      "then": {
+        "properties": {
+          "category": { "const": "preference" },
+          "domain": { "type": "null" },
+          "project_id": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "domain" } } },
+      "then": {
+        "properties": {
+          "domain": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+          "project_id": { "type": "null" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "project" } } },
+      "then": {
+        "properties": {
+          "domain": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
+          "project_id": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": { "const": "active" },
+          "category": { "const": "preference" }
+        },
+        "required": ["status", "category"]
+      },
+      "then": {
+        "properties": {
+          "provenance": { "const": "stated" },
+          "preference_key": { "type": "string", "minLength": 1 },
+          "preference_value": { "type": "string", "minLength": 1 }
+        }
+      }
+    }
+  ]
+}

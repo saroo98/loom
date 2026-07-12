@@ -1,51 +1,65 @@
-# Privacy
+# Privacy and sovereignty — exact guarantees
 
-## The commitments
+## What the shipped Loom code guarantees
 
-1. **Zero telemetry, forever.** Loom sends nothing anywhere: no usage data, no crash
-   reports, no analytics, no "anonymous statistics". This is a design commitment, not a
-   current limitation — a future version that phones home would not be Loom.
-2. **The learning loop is local.** Loom learns its owner through two file locations:
-   `~/.loom/` (your profile and calibration) and your Loom repo's `FEEDBACK.md`. Both are
-   plain files you can read, edit, or delete. Nothing about you exists anywhere else.
-3. **No central collection.** There is no upstream queue, no shared improvement channel,
-   no contribution pipeline to this or any other repository. Every install is sovereign.
+1. `tools/loom_memory.py` performs local standard-library file IO only. It stores active
+   state under `~/.loom/instances/<installation UUID>/`; every record/outcome/outbox is
+   validated against that UUID.
+2. Arbitrary observations require an exact domain; project observations additionally require
+   an installation-namespaced opaque project ID. Global active memory accepts only typed,
+   explicitly stated general preferences. Raw/other-scope history is never selected.
+3. Active memory, selected context, outcomes, summary partitions, tombstones, and the
+   contribution outbox have hard bounds. Tool-generated FEEDBACK contributions compact to 100
+   active entries in the same command; direct manual edits require `compact-feedback` to
+   reapply that bound. FEEDBACK is not loaded during planning. Inactive archives are never
+   loaded into planning context.
+4. Contribution is never automatic. The command accepts controlled generic pattern/action
+   values only and refuses a receiver with another installation UUID. It is a local write to
+   that same Loom root, not a network transfer.
+5. Per-install state and planning packs are absent from the positive public allowlist.
+   Publication scans every shipped UTF-8 file and filename for forbidden owner tokens and
+   secret patterns; opaque files block.
 
-## The proof (three layers, all yours to run)
+## Executable-source audit: scope, not mythology
 
-1. **The machine audit** — one command, exit code is the verdict:
+Run:
 
-   ```bash
-   python tools/loom_audit.py
-   ```
+```text
+python tools/loom_audit.py
+```
 
-   It AST-parses every tool: any import of a network-capable module
-   (socket, urllib, http, requests, …) is a finding; any subprocess launching
-   anything other than `git` or the Python test runner is a finding. Zero findings
-   or it fails.
+It recursively parses shipped Python, resolves import/subprocess aliases and dynamic imports,
+scans shell/workflow executable text, and checks browser-executable HTML/SVG/JavaScript/CSS for
+network APIs or active remote resources; rendered Markdown remote resources are checked too.
+Detected network-capable imports, browser network paths, shell bypasses, download primitives,
+non-allowlisted processes, or workflow actions outside exact immutable commit pins fail. Runtime
+subprocess is limited to Git and Python; installer regression tests may invoke only the checked
+local installer scripts. Inert external hyperlinks and metadata URLs are reported as content,
+not falsely classified as automatic network execution.
 
-2. **The public proof trail** — the same audit plus the full test suite run on every
-   push to this repository via its `verify` workflow, in public, on infrastructure the
-   author doesn't control. Anyone can read every run.
+Exit 0 means these checks found no violation in the files scanned. It does **not** audit or
+make promises about the host agent/model provider, editor, operating system, Git server,
+plugins, future files, or commands the owner runs separately.
 
-3. **The old-fashioned way** — `grep -rn "http\|socket\|urllib\|requests" tools/*.py`
-   and read the code; it's small on purpose.
+Git is the one declared external-process exception. Loom never fetches or pulls merely because
+the skill loaded. A network Git operation occurs only after an explicit owner request.
 
-The only network activity in the whole system is `git fetch`/`pull`/`push` against
-remotes **you** configured — run by the skill's freshness pulse (ff-only, never merges,
-skippable) and by you.
+## Planning-pack privacy
 
-## What Loom itself considers private
+Planning packs expose strategy and must stay private. Public target repositories keep packs
+outside the repo or in a verified ignored location. Plans contain no credentials, account
+data, connection strings, personal data, or secret values—even as examples. Need-to-know work
+orders, not whole packs, are routed to external agent services.
 
-Loom plans real projects, and plans reveal strategy. Its own rules
-([`loom/core/privacy.md`](loom/core/privacy.md)) therefore treat every planning pack as
-private: packs stay out of public repos (or in verified-ignored directories), secrets
-never appear in plans even as examples, and the linter scans for secret-shaped content
-(E12) and identifying tokens in anything queued by the learning loop (W21) on every run.
+## Publishing a Loom cut
 
-## If you make your Loom repo public
+`loom_publish.py` builds a versioned, ownership-marked output through a positive allowlist.
+It refuses dangerous paths, symlinks, unmarked existing directories, modified/foreign marked
+directories, owner-layer builds with zero configured forbidden tokens, any undecodable shipped
+file, every firewall/secret hit, broken supported local reference, source/public version drift,
+and a failing staged suite. The previous valid output remains untouched when staging fails.
 
-Your call — it's your Loom. The mechanical gates exist for exactly this case: FEEDBACK
-entries are written as anonymized lesson-shapes (no project names, no paths, no domain
-nouns), the outbox anonymization sniff flags violations before they land, and your packs
-and `~/.loom/` are never part of the Loom repo anyway.
+No scanner can prove that arbitrary prose contains no sensitive idea. The mechanical guarantee
+is precise: only allowlisted sources can ship; every shipped byte must decode as UTF-8 text;
+every configured forbidden token and implemented secret pattern is checked. Human review is
+still required for semantic confidentiality.

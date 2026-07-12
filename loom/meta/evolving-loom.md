@@ -5,9 +5,10 @@ Loom asks target projects for discipline; this file is the same discipline point
 
 ## The release ritual (every version, in order)
 
-1. **Burn down FEEDBACK.md first.** New features wait behind known defects — a planning
-   system that ignores its own bug reports teaches agents to do the same. Triage per the
-   playbook below until the queue is empty (fixed, or rejected-with-note).
+1. **Triage every active FEEDBACK entry first.** New features wait behind known defects.
+   Then run `loom_memory.py compact-feedback --loom-root <loom>`: resolved history and
+   active overflow move to the ignored `.loom-private/` archive; the active file remains
+   bounded. Never delete or publish the archive.
 2. **Plan the release as a Loom exercise.** ROADMAP.md holds the outcome list for the
    version (it is the product plan); a full pack is overkill when planner = implementer =
    same session (tier-M collapse), but the outcomes must be written *before* the building.
@@ -15,23 +16,29 @@ Loom asks target projects for discipline; this file is the same discipline point
 4. **Mechanical checks green** — all of:
    - `python -m unittest discover -s tools -p "test_*.py"` (includes the end-to-end
      pipeline test and a lint of Loom's own `plans/` pack)
-   - every schema parses; internal reference sweep finds zero broken paths
+   - `python tools/loom_release_check.py --json` (one version, schema/reference/installer
+     coherence) and `python tools/loom_audit.py` (the declared no-network source boundary)
+   - `python tools/loom_context.py session-tier-s-core --json` and the relevant M+/UI route
+     when context-loading files changed; this reports exact bytes/characters and explicitly
+     reports tokenizer/cache fields as unknown unless measured elsewhere
    - `loom_lint` self-fixtures pass (they run inside the test suite)
-   - **Numeric claims in CHANGELOG/README (test counts, file counts) are quoted from
-     command output captured in the same session — never composed from memory.**
+   - **Do not publish volatile numeric claims in current docs.** If a count or timing is needed
+     as evidence, capture the exact command, timestamp, scope, and output in a release-evidence
+     record from the same session; never copy it forward as a timeless total.
      *(Correction from data: plans/outcomes.md row "Tests: 43 total" — a memory-composed
      count that was wrong by 8; caught pre-commit at v0.4.)*
 5. **Battery on the diff.** Contradiction scan between changed and unchanged files is the
    highest-yield pass — new capabilities silently invalidating old text is Loom's own
    biggest defect class (both 0.1 and 0.2 shipped fixes caught exactly there).
-6. **Version mechanics:** CHANGELOG entry; template `loom_version` stamps bumped;
-   `loom_migrate` (v0.4+) taught the migration from the previous version; ROADMAP statuses
-   updated honestly — including scores that went *down* on re-assessment.
-7. **Ship** (commit, push — the upstream repo stays private), then reinstall the skill
-   if it changed (`tools/install.ps1` / `install.sh`). Owners who maintain a public cut:
-   `python tools/loom_publish.py --check` must build clean (firewall, links, suite in
-   the output tree) before any push to the public artifact — and that push is always a
-   deliberate human act, never part of this ritual.
+6. **Version mechanics:** update the single machine-readable `VERSION`; add the CHANGELOG entry;
+   teach `loom_migrate` the prior-version transition; and update ROADMAP statuses honestly —
+   including scores that went *down*. `loom_release_check` must prove every template, schema,
+   entry point, and installed rendering agrees with `VERSION`; no hand-stamped second source.
+7. **Prepare shipping, but do not ship without explicit owner authority.** Run
+   `python tools/loom_publish.py --check` to build and test the ownership-marked versioned public
+   output. After an owner-authorized local install, run `tools/install.ps1 -Check` or
+   `tools/install.sh --check`. Commit, push, publication, and deployment are separate deliberate
+   owner actions; none is implied by this ritual or by a clean build.
 
 ## FEEDBACK triage playbook
 
@@ -45,22 +52,21 @@ the entry itself (never delete the entry):
 | **over-prescription** | Loom's rule fought correct judgment | Relax to default+trigger form; check siblings for the same rigidity |
 | **tooling-bug** | lint/survey/kickoff/migrate/report/guard misbehaved | Fix + regression test in the same change |
 | **wontfix** | Cost exceeds benefit, or violates a principle | Say why under the entry — an unexplained rejection will be re-filed |
-| **noise** | No actionable value (auto-contributed era, D-010) | One-word close: `✔ <date> noise` — fast and blame-free; the filter lives here by design |
+| **noise** | No actionable value | One-word close: `✔ <date> noise` — fast and blame-free |
 
 Two entries pointing at the same file from different projects = priority, regardless of
-class. Since contributions arrive unattended (D-010), triage is also the **value filter**:
-judge every entry, keep FEEDBACK lean, and enforce the compact format — rewrite bulky
-entries down at triage rather than letting clutter compound. One entry contradicting a core principle = suspect the entry first, the principle
+class. Contributions arrive only through explicit owner action and contain controlled
+pattern/action values. Triage still judges value, keeps the active queue lean, and compacts
+resolved history. One entry contradicting a core principle = suspect the entry first, the principle
 second — but actually check.
 
 ## Sovereign divergence (D-012)
 
-Every Loom install runs this same ritual on **its own** FEEDBACK queue. Instances diverge
-by design: your Loom accretes your domain chapters, your calibration, your triage
-judgments — a year in, two Looms should look meaningfully different, and that is success,
-not drift. Nothing flows between instances: no central queue, no upstream channel.
-Upstream releases (if your install descends from a published cut) are optional imports —
-cherry-pick what serves you; never treat divergence from upstream as breakage.
+Every Loom install runs this ritual on **its own** FEEDBACK queue. The ignored installation
+UUID binds its outbox and private archive; a different receiver UUID is mechanically refused.
+Domain/project memory remains in typed per-instance stores and never becomes a core chapter
+without deliberate authored work. Upstream releases are optional owner-requested imports;
+automatic fetch/pull is forbidden.
 
 ## Rules for changing Loom
 

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/lifecycle.schema.json",
+  "title": "Loom causal lifecycle record",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "mode",
+    "baseline_files",
+    "events",
+    "work_order_completions"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 2 },
+    "mode": { "enum": ["planned", "build-first"] },
+    "baseline_files": { "type": "object" },
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "event",
+          "at",
+          "repo_state_mode",
+          "repo_state_hash",
+          "previous_event_hash",
+          "event_hash"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "event": {
+            "enum": [
+              "planning-started",
+              "g1-sealed",
+              "implementation-authorized"
+            ]
+          },
+          "at": { "type": "string" },
+          "repo_state_mode": { "enum": ["git", "filesystem"] },
+          "repo_state_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "event_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "work_order_plans": {
+            "type": "object"
+          },
+          "work_order_plans_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "work_order_completions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "work_order",
+          "work_order_file",
+          "work_order_sha256",
+          "completed_at",
+          "repo_state_mode",
+          "repo_state_hash",
+          "changed_paths",
+          "after_hashes",
+          "completion_hash"
+        ],
+        "additionalProperties": true,
+        "properties": {
+          "work_order": {
+            "type": "string",
+            "pattern": "^WO-[0-9]{3,}$"
+          },
+          "work_order_file": { "type": "string" },
+          "work_order_sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "completed_at": { "type": "string" },
+          "repo_state_mode": { "enum": ["git", "filesystem"] },
+          "repo_state_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "changed_paths": {
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+          },
+          "after_hashes": { "type": "object" },
+          "completion_hash": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    }
+  }
+}

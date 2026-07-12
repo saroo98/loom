@@ -76,6 +76,16 @@ cheap, scripted, and runs in the artifact's real medium before handoff:
 The battery's findings are close-out evidence (paste the probe outputs). Skipping the
 battery on a shippable UI is a decision record, not a default.
 
+**One thing the battery cannot assert: motion.** Animation and CSS-transition end states
+depend on timing that is throttled or absent wherever the battery runs — a backgrounded
+tab starves `requestAnimationFrame`, and jsdom never fires `animationend` at all. So
+**split motion criteria**: unit/probe-test the state you set directly (the class added,
+the value written), and verify the state a *transition or animation* clears in a real,
+foregrounded browser or a scripted human scroll-test. Never gate a WO on "the animation
+finished" inside a headless or hidden runner — it will pass or hang for the wrong reason.
+Geometry probes (a popover's bounding box is on-screen, width == height) are the cheap
+exception: they catch first-frame position races a human review never sees.
+
 ## Failure modes
 
 - **Coverage theater** — a percentage target driving trivial tests while money paths go bare.

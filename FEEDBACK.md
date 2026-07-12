@@ -6,10 +6,12 @@ queue for your Loom's next version — triaged by the playbook in
 `loom/meta/evolving-loom.md` before any new feature work (release ritual step 1).
 
 This queue is **yours**: entries come from your runs and your `~/.loom/` outbox, and they
-improve your instance only. Nothing here is sent anywhere.
+improve your instance only. Loom has no automatic export channel; owner-run Git or other
+explicit export remains outside that tool-level guarantee.
 
-**Rules:** newest entry last; never edit or delete prior entries; no target-project
-secrets or private content — describe the failure, not the project internals.
+**Rules:** newest active entry last; no target-project secrets or private content—describe
+the failure, not the project internals. Do not silently rewrite history. The bounded compactor
+moves old bodies unchanged to the ignored local `.loom-private/` archive.
 
 ## Entry format (compact — clutter compounds)
 
@@ -21,6 +23,7 @@ secrets or private content — describe the failure, not the project internals.
 
 Triage appends one line: `- ✔ <date> <class>: <what changed>` (classes per
 `loom/meta/evolving-loom.md`; "noise" is a legitimate class and carries no blame — the
-value filter lives here, at triage, since entries arrive unattended).
+value filter lives here, at triage; entry creation may be local, but contribution to this file
+always requires the owner's explicit command).
 
 ---

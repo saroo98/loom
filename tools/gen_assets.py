@@ -64,7 +64,7 @@ def banner(p):
 {weave(36, 30, 250, 170, p)}
 <text x='340' y='118' {FONT} font-size='82' font-weight='800' letter-spacing='8' fill='{p["fg"]}'>LOOM</text>
 <text x='344' y='156' {FONT} font-size='21' fill='{p["mut"]}'>the planning OS that shows its work</text>
-<text x='344' y='188' {FONT} font-size='14' fill='{p["mut"]}'>truth-labeled plans &#183; gates &#183; drift detection &#183; a loop that learns you &#8212; locally</text>
+<text x='344' y='188' {FONT} font-size='14' fill='{p["mut"]}'>truth labels &#183; fail-closed state &#183; causal gates &#183; scoped local learning</text>
 </svg>"""
 
 
@@ -126,21 +126,20 @@ def lifecycle(p):
 
 
 def growth(p):
-    """Three panels: day one (a few threads) -> every run (the loop feeds back) ->
-    a year in (dense cloth). The compounding story, drawn instead of claimed."""
+    """Three panels: explicit start -> scoped retro -> bounded measured history."""
     W, H, PW, PH, G = 940, 300, 284, 216, 24
     yarn = [p["a"], p["b"], p["c"]]
     e = [f"<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 {W} {H}' role='img' "
-         f"aria-label='a Loom compounds: day one, every run, a year in'>"]
+         f"aria-label='Loom learning: explicit start, scoped retro, bounded evidence'>"]
     e.append(f"<rect x='0.5' y='0.5' width='{W - 1}' height='{H - 1}' rx='14' "
              f"fill='{p['card']}' stroke='{p['line']}'/>")
     e.append(f"<defs><marker id='gr' viewBox='0 0 8 8' refX='7' refY='4' "
              f"markerWidth='8' markerHeight='8' orient='auto'>"
              f"<path d='M0,0 L8,4 L0,8 z' fill='{p['mut']}'/></marker></defs>")
     xs = [20, 20 + PW + G, 20 + 2 * (PW + G)]  # 20..304, 328..612, 636..920 (< 940)
-    titles = [("day one", "clone · install · /loom — the whole setup"),
-              ("every run", "outcomes + calibration flow back in"),
-              ("a year in", "fitted to you — no shelf ships this")]
+    titles = [("day one", "explicit state · labels · gates"),
+              ("at retro", "typed outcomes recorded locally"),
+              ("over time", "bounded, scoped, measurable")]
     for i, x in enumerate(xs):
         e.append(f"<rect x='{x}' y='22' width='{PW}' height='{PH}' rx='10' "
                  f"fill='{p['card']}' stroke='{p['line']}'/>")
@@ -163,12 +162,12 @@ def growth(p):
     e.append(f"<path d='M {cx + r} {cy} A {r} {r} 0 1 1 {cx} {cy - r}' "
              f"fill='none' stroke='{p['b']}' stroke-width='3.5' "
              f"marker-end='url(#gr)'/>")
-    for j, word in enumerate(["outcomes", "feedback", "calibration"]):
+    for j, word in enumerate(["outcomes", "scope", "compact"]):
         e.append(f"<text x='{cx}' y='{cy - 10 + j * 16}' {FONT} font-size='11' "
                  f"text-anchor='middle' fill='{p['mut']}'>{word}</text>")
     # panel 3: dense cloth — full rows, all colors, plus accretion tags
     e.append(weave(xs[2] + 30, 46, PW - 60, PH - 90, p, rows=8, cols=13, unfinished=1))
-    tags = ["your stacks", "your languages", "your failures"]
+    tags = ["stated prefs", "domain scope", "error trend"]
     for j, tag in enumerate(tags):
         tx = xs[2] + 12 + j * 89  # 3 chips of 84 + 5px gaps = 262, inside the 284 panel
         e.append(f"<rect x='{tx}' y='{PH - 16}' width='84' height='20' rx='10' "
@@ -237,9 +236,9 @@ def main():
     (OUT / "mark-stdlib.svg").write_text(
         mark("stdlib-only tools", ICON_SHUTTLE, 170), encoding="utf-8")
     (OUT / "mark-notelemetry.svg").write_text(
-        mark("zero telemetry, provable", ICON_OFFLINE, 210), encoding="utf-8")
+        mark("executable source audited", ICON_OFFLINE, 225), encoding="utf-8")
     (OUT / "mark-selfscoring.svg").write_text(
-        mark("scores itself, honestly", ICON_GAUGE, 200), encoding="utf-8")
+        mark("external evidence scorecard", ICON_GAUGE, 220), encoding="utf-8")
     n = len(list(OUT.glob("*.svg")))
     print(f"wrote {n} assets to {OUT}")
 

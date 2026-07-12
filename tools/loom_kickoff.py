@@ -17,7 +17,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from loom_lint import parse_frontmatter  # noqa: E402
+import loom_lint  # noqa: E402
 
 TEMPLATE = """Execute work order {wid} for project {project}. The work order text follows at the end of
 this prompt; it is your contract.
@@ -42,32 +42,49 @@ Rules:
 """
 
 
-def build(wo_path, loom_path=None, project=None):
+def _render(text, fm, loom_path=None, project=None):
+    touches = fm.get("touches", [])
+    if isinstance(touches, str):
+        touches = [touches] if touches else []
+    loom = (loom_path or str(Path(__file__).resolve().parent.parent)) \
+        .replace("\\", "/").rstrip("/")
+    return TEMPLATE.format(
+        wid=fm["id"],
+        project=project or fm.get("project", "(see MANIFEST)"),
+        loom=loom,
+        touches=", ".join(touches) if touches else
+        "(none declared — treat any shared-path edit as escalation)",
+        body=text.strip(),
+    )
+
+
+def build(wo_path, loom_path=None, project=None, repo_path=None):
     p = Path(wo_path)
     if not p.is_file():
         print(f"loom_kickoff: work order not found: {p}", file=sys.stderr)
         return None, 1
     text = p.read_text(encoding="utf-8", errors="replace")
-    fm, _ = parse_frontmatter(text)
+    fm, _ = loom_lint.parse_frontmatter(text)
     if fm is None or not fm.get("id"):
         print(f"loom_kickoff: {p} has no valid frontmatter/id — lint it first", file=sys.stderr)
         return None, 1
     status = fm.get("status", "")
     if status not in ("ready", "in-progress"):
-        print(f"loom_kickoff: WARNING — {fm['id']} status is '{status}', not ready/in-progress; "
-              "generating anyway, but check blockers", file=sys.stderr)
-    touches = fm.get("touches", [])
-    if isinstance(touches, str):
-        touches = [touches] if touches else []
-    loom = (loom_path or str(Path(__file__).resolve().parent.parent)).replace("\\", "/").rstrip("/")
-    prompt = TEMPLATE.format(
-        wid=fm["id"],
-        project=project or fm.get("project", "(see MANIFEST)"),
-        loom=loom,
-        touches=", ".join(touches) if touches else "(none declared — treat any shared-path edit as escalation)",
-        body=text.strip(),
-    )
-    return prompt, 0
+        print(f"loom_kickoff: BLOCKED — {fm['id']} status is '{status}', "
+              "not ready/in-progress", file=sys.stderr)
+        return None, 1
+    if p.parent.name != "work-orders" or not (p.parent.parent / "MANIFEST.md").is_file():
+        print("loom_kickoff: BLOCKED — WO is not inside a Loom pack", file=sys.stderr)
+        return None, 1
+    pack = p.parent.parent
+    repo = Path(repo_path).resolve() if repo_path else pack.parent.resolve()
+    report = loom_lint.lint(pack, repo_path=repo, strict_staleness=True)
+    if report.errors:
+        for finding in report.errors:
+            print(f"loom_kickoff: BLOCKED — {finding['code']} {finding['msg']}",
+                  file=sys.stderr)
+        return None, 1
+    return _render(text, fm, loom_path, project), 0
 
 
 def main(argv=None):
@@ -75,9 +92,10 @@ def main(argv=None):
     ap.add_argument("wo", help="path to the work-order .md file")
     ap.add_argument("--loom-path", help="Loom repo root (default: this tool's repo)")
     ap.add_argument("--project", help="project name for the prompt header")
+    ap.add_argument("--repo", help="target repo root (default: parent of pack)")
     ap.add_argument("--out", help="write to file instead of stdout")
     args = ap.parse_args(argv)
-    prompt, code = build(args.wo, args.loom_path, args.project)
+    prompt, code = build(args.wo, args.loom_path, args.project, args.repo)
     if prompt is None:
         return code
     if args.out:

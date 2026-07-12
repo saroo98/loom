@@ -88,7 +88,7 @@ project: "<name>"
 tier: M            # with one-line justification below
 status: draft
 last_verified: <today>
-loom_version: "0.7.0"
+loom_version: "0.8.0"
 ---
 
 # Intake Note — <project>

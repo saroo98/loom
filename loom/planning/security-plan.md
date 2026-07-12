@@ -54,6 +54,12 @@ surface).
 ### 6. Dependency & supply chain stance
 Lockfiles committed; update policy reference (maintenance plan owns cadence); what gets
 audited before adoption (new dependency = at minimum: maintained? typosquat check? license?).
+Bundled *assets* (fonts, icons, images) get the same gate as code dependencies: a
+user-supplied asset is not a licensed asset. Verify provenance as a `[FACT]` before
+anything ships publicly — a font's own name-table (copyright / foundry / license URL)
+answers "do we have the rights?" more reliably than the owner's say-so, and gating the
+public merge on that fact, not on assurance, is what catches an unshippable proprietary
+file before launch rather than after.
 
 ### 7. Hooks into the other artifacts
 - Testing plan: abuse cases as test cases for the top threats (at least the money and auth

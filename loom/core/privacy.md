@@ -14,16 +14,25 @@ violation cannot be rolled back.
 - The existence and content of unreleased features, strategy, weaknesses, and timelines that
   plans necessarily reveal.
 
-## Instance sovereignty (D-012)
+## Instance sovereignty
 
-Every Loom install is owner-operated, and the learning loop closes inside it: retro writes
-to the owner's `~/.loom/` and to the FEEDBACK queue of the repo `$LOOM` points at — *their*
-Loom. There is no central queue, no upstream contribution channel, and no telemetry; the
-channel does not exist, provably — the tools contain no network code except git against the
-user's own remotes. Instances diverge by design: each accretes its owner's domain chapters,
-and upstream releases are optional imports, never required updates. If an owner chooses to
-make their Loom repo public, rules 1–6 below and the anonymization gates protect what their
-loop writes.
+`tools/loom_memory.py` binds each installation to an ignored UUID and keeps its active state
+under that UUID in `~/.loom/instances/`. Project observations require an installation-
+namespaced project ID plus a domain; domain observations load only for an exact domain.
+Contribution is explicit, accepts controlled generic values only, and refuses a different
+receiver UUID. No memory command opens a network connection.
+
+`tools/loom_audit.py` recursively scans shipped Python, shell/workflow policy surfaces,
+browser-executable HTML/SVG/JavaScript/CSS, and rendered Markdown resources. It fails on detected
+network clients, active remote resources, dynamic-import bypasses, shells, non-allowlisted
+processes, or workflow actions outside the exact immutable commit allowlist. Git is the
+one declared process exception for owner-requested source synchronization; Loom never fetches
+or pulls automatically. This is a claim about the audited shipped code, not about the host
+agent, editor, Git remote, operating system, or future unscanned files.
+
+Per-install state (`.loom-instance-id`, `.loom-private/`, and `~/.loom/instances/`) is outside
+the positive publication allowlist. The firewall decodes and scans every shipped file as
+UTF-8 text and scans every filename; an opaque file or any forbidden token blocks the build.
 
 ## Rules
 
@@ -48,6 +57,10 @@ loop writes.
    live in a public repo must contain only what is safe to publish (build commands,
    conventions). Anything strategic stays in the private pack. See
    `loom/execution/project-instructions.md`.
+7. **No implicit learning export.** Retro may write project outcomes and local typed memory.
+   It may queue a controlled generic lesson. Only an explicit owner invocation may drain that
+   queue into the same installation's FEEDBACK file; lint, install, plan, retro, and publish
+   never do so.
 
 ## Scrub checklist (run before anything crosses a privacy boundary)
 

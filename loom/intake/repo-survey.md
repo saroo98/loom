@@ -8,6 +8,14 @@ from inferences, every fact carrying evidence (`file:line`, command output). It 
 standard artifact frontmatter (`artifact: survey`, `status`, `last_verified` — see
 `loom/planning/plan-authoring.md`); `loom_lint` checks it like any other pack artifact.
 
+Start with `python <loom>/tools/loom_survey.py <repo>`. Its state record is distinct from its
+bounded architecture inventory: the inventory may stop at 20,000 relevant files and says so,
+but the freshness fingerprint never returns a partial success. For Git it binds HEAD plus staged,
+unstaged, and untracked Git-visible content; for a non-Git workspace it hashes every non-pack
+file. If complete state exceeds the 100,000-file safety bound or any file/Git operation is
+indeterminate, the command fails and execution stays blocked. Ignored cache/build output and the
+private pack are explicitly excluded from product state.
+
 ## State: no repo
 
 There is nothing to survey, but there are decisions to record:
@@ -49,8 +57,9 @@ ends. Read in this order, stop when additional reading stops changing your concl
 3. **Entry points and wiring:** main/index/app files, DI/config setup, routing tables.
 4. **CI/CD config:** what is actually checked and deployed — often truer than the README.
 5. **Tests:** where, what kind, do they pass, roughly what they cover.
-6. **Recent history:** `git log --oneline -30`, active branches — where is the heat, what
-   conventions do commit messages follow.
+6. **Complete current state, then history:** preserve the generated `repo_state_hash`; list
+   staged, unstaged, and untracked paths; then inspect `git log --oneline -30` and active branches
+   for context. History cannot account for local changes.
 7. **Danger zones:** auth, payments, migrations, trading/execution logic, anything with
    "don't touch" energy. List them explicitly — work orders will need the list.
 
@@ -87,5 +96,10 @@ a real audit run, 2026-07-10 — see FEEDBACK.)*
   Django app" is `[SPECULATION]` until manage.py and settings confirm it.
 - Secrets encountered during survey: path only, never the value; flag as a finding
   (`loom/core/privacy.md` rule 2).
-- Stamp the survey with the commit hash surveyed (`git rev-parse HEAD`). Staleness rechecks
-  diff against it (`loom/execution/staleness.md`).
+- Stamp the survey and MANIFEST with both generated values: `repo_head` (when Git exists) and
+  `repo_state_hash`. Staleness rechecks compare both (`loom/execution/staleness.md`). Do not copy
+  a hash after subsequent product-state edits; re-run the survey.
+- A local snapshot cannot prove remote facts current. Record the observed lockfile/manifests and
+  the exact real-medium check for dependency advisories, platform APIs, regulations, datasheets,
+  research evidence, or other time-sensitive domain authorities. If that check cannot be made,
+  label it `[UNKNOWN]` and block any gate that relies on it.

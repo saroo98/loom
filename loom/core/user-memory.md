@@ -1,94 +1,176 @@
-# User memory — Loom learns each user, privately
+# User memory — scoped, bounded, sovereign
 
-The per-user layer: Loom's memory of *how this human works*, accumulated across all their
-projects and applied everywhere, silently. It is the personal half of the two-tier learning
-loop (`loom/meta/plan-learner-public.md`); the global half stays FEEDBACK + releases.
+Loom may learn how its owner works, but only through `tools/loom_memory.py`. Raw Markdown
+profiles are legacy input, not active memory. An agent MUST NOT read `~/.loom/profile.md`,
+`calibration.md`, `projects.md`, or `feedback-outbox.md` into context.
 
-**The commitments come first:** everything here is plain files on the user's machine, in
-`~/.loom/`. The user can read, edit, or delete any of it. Nothing leaves the machine —
-`/loom contribute` moves patterns between two private locations on the same machine (user
-home → the FEEDBACK queue of *your own* Loom repo, the one `$LOOM` points at), automatically
-(D-010; D-012 — every Loom install is owner-operated, so this never crosses to anyone
-else's Loom). There is no telemetry, and there never will be.
+## Guarantees and their enforcement
 
-## Layout — `~/.loom/`
+| Guarantee | Mechanical control |
+|---|---|
+| Install isolation | Each Loom root has an ignored `.loom-instance-id` UUID. State lives only under `~/.loom/instances/<that UUID>/`; every store and contribution carries and verifies the same UUID. |
+| Project isolation | `project-id` derives an installation-namespaced opaque ID from the resolved project root. Project records require both that ID and an explicit domain; selection matches both. Paths are not stored. |
+| Domain isolation | Arbitrary observations require a domain. A selector loads only the exact requested domain(s), supplied explicitly in one bounded call. Domain stack preferences cannot be global. |
+| Transfer safety | Global active memory accepts only typed, explicitly `stated` general preferences. Arbitrary global prose is rejected. Cross-project calibration is numeric outcome data, not recalled prose. |
+| Bounded context | Active records: 256; tombstones: 64; selected JSON: at most 8,000 characters; per-scope partition caps apply. Hard stops: 32 and overflow refuses rather than discarding one. Outbox: 128 entries/256 KiB. Active outcomes: 512 with 128 bounded aggregate partitions. Tool-generated active FEEDBACK: 100 entries. |
+| Staleness and drift | Observed records expire after 365 days; inferred records after 90. Preferences cannot be observed or inferred: only the owner can state them, and a replacement retires the old value. |
+| Explicit export | Contribution is never automatic. It accepts only controlled generic pattern/action enums and refuses a receiver whose install UUID differs. It writes no project text. |
+| Local operation | `loom_memory.py` uses only local files and Python's standard library. `loom_audit.py` mechanically rejects network/process bypasses in shipped executable sources. Git synchronization, when explicitly requested, is a separate operation. |
 
-| File | Holds | Written by |
-|---|---|---|
-| `profile.md` | Standing preferences: autonomy default, routing roster, languages/locales, standing hard-stops, report taste, stack tastes | retro + `/loom profile set` (+ hand-editing, always allowed) |
-| `calibration.md` | Cross-project reality data: confidence-vs-outcome by claim class, routing hit-rates, tier/size estimate accuracy, recurring failure shapes | retro (append-mostly) |
-| `projects.md` | Pointer index only: project → pack path, status, last retro date | plan + retro |
-| `feedback-outbox.md` | Anonymized lesson-shapes queued for Loom-core contribution | retro; drained by `/loom contribute` |
+Inactive JSONL archives are local evidence stores and are never selected into agent context.
+The `.loom-private/` installation archive is ignored by Git and absent from the publication
+allowlist.
 
-Templates: `templates/user-home/`. First run of any `/loom` command may create the
-directory from templates (that act is loggable, not silent — say "created ~/.loom" once).
+## First use
 
-## The seven rules (each earned; violating any is a FEEDBACK-worthy defect)
+Initialize once and retain the returned UUID for commands in the session. Initialization also
+copies any preexisting flat Markdown candidate lines into the inactive legacy quarantine; it
+imports zero active records:
 
-1. **Background aggregation, not live mutation.** The user home updates at retro and
-   aggregation moments only — never mid-work-order. During work, the pack is the sole
-   authority; memory writes wait for the reflective moments.
-2. **Relevance-gated defaults, never overrides.** The profile tunes *defaults*. Full
-   precedence: **session words > loom.config.json > profile > Loom defaults.** The profile
-   never overrides project facts, repo conventions, or anything the requester said —
-   in-session words always win.
-3. **Silent application.** Never narrate the mechanism: no "per your profile…", no
-   "I see from your calibration…", no "as you usually prefer…". Preferences surface as
-   good defaults, full stop. If the user asks *why* a default, answer honestly with the
-   pointer (`~/.loom/profile.md`, line such-and-such).
-4. **Must-actually-write.** "Remember that I…" / "forget the…" MUST produce a real file
-   edit before it is acknowledged — acknowledging without writing is lying. The verbs are
-   `/loom profile view | set | forget`, and prose requests count the same as verbs.
-5. **Sensitivity floor.** Work preferences only. Never: personal attributes, health,
-   relationships, moods, secrets (privacy rule 2 applies to memory too), or anything whose
-   presence in the file would embarrass the user if read aloud. When in doubt, it stays out.
-6. **Staleness on recall.** Profile entries are `[ASSUMPTION]`-class at read time, with the
-   file as basis. If the current repo contradicts the profile ("prefers pnpm" but this repo
-   uses npm), **the repo wins**, silently; the retro may note the exception. Calibration
-   entries carry dates; old entries decay in weight, and the aggregation may retire them.
-7. **The off switch is absolute.** `use_profile: false` in the project's loom.config.json,
-   or `--no-profile` on any invocation → Loom runs fully stateless: no reads, no writes,
-   no outbox entries from that session. No degraded mode, no nagging.
-
-## What flows where (tier boundaries)
-
-- **Retro → profile/calibration (Tier 1):** what the run revealed about *the user* —
-  preferences confirmed or contradicted, estimate accuracy, which question styles they
-  answered vs ignored. Project-specific facts stay in the project's pack.
-- **Retro → outbox (Tier 2 candidate):** project-independent lesson-shapes only, written
-  anonymized at capture time (no project names, no paths, no domain nouns) — the same
-  standard as FEEDBACK entries.
-- **`/loom contribute`:** drains the outbox into the FEEDBACK queue of *your own* Loom
-  repo and empties it. **Automatic** at the end of bare `/loom` runs (D-010; kept for
-  everyone by D-012 — every install is owner-operated, so unattended contribute never
-  crosses an ownership boundary). The mechanical gates are the anonymization sniff
-  (lint W21) and the compact 3-line entry format; the *value* judgment happens at
-  triage, which may mark entries noise without ceremony. The gates stay even though the
-  flow is local, because an owner may choose to make their Loom repo public.
-
-## Entry shapes (keep them boring)
-
-`profile.md` — one keyed line per preference, dated, with provenance:
-
-```markdown
-- autonomy_default: A2                     # set 2026-07-10, source: stated
-- languages: fa, en                        # set 2026-07-10, source: observed (2 projects)
-- hard_stop: never touch live trading accounts   # set 2026-07-10, source: stated
+```text
+python <loom>/tools/loom_memory.py init --loom-root <loom>
 ```
 
-`calibration.md` — dated append-mostly observations with counts, not adjectives:
+For project-scoped work, derive the opaque project identity instead of inventing a slug:
 
-```markdown
-- 2026-07-10 | tier estimates: 2/2 held at planned tier (n=2, small sample)
-- 2026-07-10 | author maturity-confidence ran ~30pts hot across v0.2–v0.5 (source: Loom self-pack outcomes)
+```text
+python <loom>/tools/loom_memory.py project-id --instance <uuid> --project-root <target>
 ```
 
-Provenance values: `stated` (user said it — strongest), `observed (n projects)` (pattern),
-`inferred` (weakest; two contradictions retire it).
+Both commands emit one JSON result. A missing, malformed, or cross-instance store is an
+error, not a cold-start fallback.
 
-## Lint
+## What may be loaded
 
-`loom_lint.py --home [path]` checks the user home: files parse, entries carry dates and
-provenance, secret scan (E12) runs on every file, outbox entries pass the anonymization
-sniff (project-name-shaped tokens flagged). Run it whenever something feels off; retro
-runs it automatically after writing.
+Before planning, determine the domain honestly (see `loom/adaptation/project-types.md`).
+Then make one bounded selection:
+
+```text
+python <loom>/tools/loom_memory.py select --instance <uuid> \
+  --domain <primary-domain> [--domain <second-domain> ...] \
+  --project <opaque-project-id> --max-chars 8000
+```
+
+Selection returns:
+
+1. typed general preferences for this installation;
+2. records whose domain exactly matches one of the explicitly supplied domains;
+3. records whose domain is in that exact set and whose project ID also matches; and
+4. unexpired temporary records with the same scope.
+
+It never returns other domains, projects, installations, tombstones, retired records,
+expired records, archives, outcomes, or the feedback outbox. A project selector without an
+explicit domain set fails. All matched domains share the one character budget; unmatched
+domains are never loaded.
+
+Precedence remains: **current session words > target `loom.config.json` > selected stated
+preference > Loom default**. Repository facts and conventions always beat preferences.
+Apply selected defaults silently; if asked why, cite the selected record ID.
+
+`use_profile: false` or `--no-profile` is absolute: do not initialize, select, write,
+measure, queue, or contribute owner memory for that run.
+
+## Scope contract
+
+- `global`: typed stated preferences only: autonomy, report style, decision batching,
+  language, and hard stops. It cannot carry a domain or project.
+- `domain`: observations and the `stack_preference` preference. It requires a safe domain
+  ID and forbids a project ID.
+- `project`: project-local observations. It requires the exact domain plus a generated
+  project ID.
+- `temporary`: expiring context. It requires a domain; if project-bound, it also requires
+  a generated project ID.
+
+Project facts belong in the project's pack. Domain invariants belong in domain scope.
+Only owner-stated working preferences and numeric calibration can transfer generally.
+
+## Remember, change, and forget
+
+Owner preference changes use the typed API, and the write must succeed before the agent
+acknowledges it:
+
+```text
+python <loom>/tools/loom_memory.py set-preference --instance <uuid> \
+  autonomy_default A1
+python <loom>/tools/loom_memory.py set-preference --instance <uuid> \
+  --domain web stack_preference React
+python <loom>/tools/loom_memory.py forget --instance <uuid> <record-id>
+```
+
+Setting the same key in the same scope retires the prior value. Forgetting creates a bounded
+tombstone so compaction cannot silently resurrect it. Unsupported keys, multiline values,
+inferred preferences, and domainless stack preferences fail.
+
+Legacy Markdown state has no trustworthy scope. `init` quarantines it once and never promotes
+it. If an owner deliberately edits a legacy file afterward, this explicit command rescans it:
+
+```text
+python <loom>/tools/loom_memory.py migrate-legacy --instance <uuid>
+```
+
+The command copies candidate lines to `legacy-quarantine.jsonl` with provenance and imports
+zero active records. The owner must re-state any preference worth keeping.
+
+## Measurable learning
+
+At G4/G5, convert consequential predictions into normalized values in `[0,1]` and record
+their outcomes with a controlled metric. Use `domain=general` only for genuinely
+domain-independent judgment; otherwise name the selected domain. A project ID is optional
+evidence metadata and, when present, must be generated by `project-id`.
+
+```text
+python <loom>/tools/loom_memory.py record-outcome --instance <uuid> \
+  --metric confidence --predicted 0.90 --actual 0.60 --domain general
+python <loom>/tools/loom_memory.py report --instance <uuid> \
+  --metric confidence --domain general
+```
+
+The report gives total sample count, early-window and recent-window mean absolute error,
+and whether recent error is lower. It reports `improved: null` when evidence is insufficient;
+accumulation alone is never called improvement. The atomic outcome store retains at most 512
+recent raw records while bounded first/recent windows preserve longitudinal measurement.
+Overflow raw evidence moves to an inactive per-instance archive. A report requires one metric
+and one exact domain; omission defaults to `general`, never an all-domain blend.
+
+## Compaction and contribution
+
+`compact` deduplicates records, expires old observations, enforces every active cap, and
+archives overflow. Normal writes compact when needed; retro should also run it explicitly.
+
+Feedback candidates are controlled values, not prose:
+
+```text
+python <loom>/tools/loom_memory.py queue-feedback --instance <uuid> \
+  --pattern stale-state --action fail-closed --evidence-count 3
+```
+
+Only an explicit `/loom contribute` or equivalent owner command may run:
+
+```text
+python <loom>/tools/loom_memory.py contribute --instance <uuid> --loom-root <loom>
+```
+
+The receiver must carry the same installation UUID. Contribution is idempotent and writes
+only the controlled pattern, action, and count to that install's `FEEDBACK.md`. The same locked
+transaction compacts tool-generated active entries to 100 and archives overflow under the
+ignored `.loom-private/` directory. It never runs at auto-close, retro, lint, install, or publish.
+
+At release triage—or after direct manual FEEDBACK edits—reapply the same active bound while
+preserving old bodies in the ignored local archive:
+
+```text
+python <loom>/tools/loom_memory.py compact-feedback --loom-root <loom>
+```
+
+Finally run `python <loom>/tools/loom_lint.py --home`. Any invalid or cross-instance active
+state is blocking. Inactive archives are deliberately outside routine context and lint cost.
+
+## Crash recovery and lock ownership
+
+Memory writes use token-owned exclusive lock files: `.loom-instance-init.lock` at a Loom root,
+`.lock` inside an instance directory, and `.loom-feedback.lock` beside FEEDBACK. They are never
+deleted merely because a clock threshold elapsed; a slow live writer therefore cannot be
+mistaken for a crashed one. A leftover lock blocks the command. Recovery is deliberately manual:
+first prove no Loom memory process is writing that root/instance, preserve the lock contents for
+diagnosis if needed, remove only the exact named lock, then rerun validation before the write.
+Never bulk-delete locks or remove one while writer ownership is uncertain.

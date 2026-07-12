@@ -1,8 +1,16 @@
 # Parallel work — several agents, one pack, no collisions
 
 Protocol for running multiple implementers (different models, different sessions, or
-Claude + Codex sharing one folder) against the same planning pack without coordination by
-luck. Everything here assumes the WO DAG already exists; this file governs the *runtime*.
+Claude + Codex) against the same planning pack without coordination by luck. Everything here
+assumes the WO DAG already exists; this file governs the *runtime*.
+
+**Isolation law:** simultaneous implementation never shares one mutable target working tree.
+Use one Git worktree/branch (or one complete non-Git copy) per in-progress WO. A shared pack may
+coordinate claims, but each implementer mutates only its isolated target. Merge one WO at a time
+into the integration tree, then run `loom_gate close-wo` there before merging the next. This
+serialization is what lets the gate prove that every changed path belongs to the WO; no filesystem
+can reliably infer which agent authored an interleaved change in one directory. If isolation or a
+stable baseline is unavailable, the frontier is serial, not parallel.
 
 ## The three instruments
 
@@ -62,7 +70,11 @@ see `loom/meta/evidence/`):
   use `git diff --stat`, the planner records file hashes at frontier-open (one command:
   `find … | xargs sha256sum > baseline-hashes.txt`); implementers and reviewers diff
   against it. Without git or a baseline, scope compliance is unattestable — don't open a
-  parallel frontier that way.
+   parallel frontier that way.
+- **G3 integration is serialized.** Parallel implementation branches may finish in any order,
+  but only one WO's diff is present in the integration tree when `loom_gate close-wo` runs. The
+  closer refuses any path outside that WO's `touches`; do not disable that refusal to accommodate
+  a shared dirty tree.
 
 ## Slicing rules (for the planner)
 
@@ -99,6 +111,9 @@ also what makes stale-claim takeover safe.
   already running.
 - After any batch of parallel WOs merges, run `loom_lint` (touches overlap, DAG, staleness)
   plus a contradiction spot-check on the shared contracts — the merge is where plans meet.
+- Before each merge, require the integration tree to match the last lifecycle checkpoint. Merge
+  exactly one completed branch, seal that WO, then repeat. A second branch already present is an
+  out-of-scope change and correctly blocks the first close.
 
 ## Failure modes
 

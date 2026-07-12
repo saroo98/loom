@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/memory-store.schema.json",
+  "title": "Bounded per-instance active memory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instance_id", "records"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "instance_id": { "type": "string", "format": "uuid" },
+    "records": {
+      "type": "array",
+      "maxItems": 320,
+      "items": { "$ref": "memory-record.schema.json" }
+    }
+  }
+}

@@ -4,7 +4,7 @@
   "title": "Loom work order (frontmatter)",
   "description": "Machine-checkable shape of a work order's YAML frontmatter. Body sections are defined in loom/execution/work-orders.md and templates/work-order.md.",
   "type": "object",
-  "required": ["id", "title", "status", "routing", "size", "last_verified"],
+  "required": ["id", "title", "status", "depends_on", "blocks", "routing", "size", "touches", "last_verified"],
   "additionalProperties": true,
   "properties": {
     "id": {

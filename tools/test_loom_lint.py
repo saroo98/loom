@@ -1,6 +1,8 @@
 """Tests for loom_lint. Run: python -m unittest discover -s tools -p "test_*.py" """
 
 import datetime as dt
+import json
+import re
 import sys
 import tempfile
 import unittest
@@ -8,6 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_lint  # noqa: E402
+import loom_gate  # noqa: E402
+import loom_survey  # noqa: E402
 
 TODAY = dt.date.today().isoformat()
 
@@ -25,11 +29,39 @@ artifact: manifest
 project: "test"
 tier: M
 status: active
+execution_mode: planned
 last_verified: {TODAY}
 loom_version: "{loom_lint.current_version()}"
+domain_id: mobile
+domain_ids: [mobile]
+domain_coverage: adapter
 freshness_window_days: 14
 ---
 # Pack
+
+## Artifacts
+| Artifact | Decision | Why (one line) | Status | last_verified |
+|---|---|---|---|---|
+| intake.md | produce | required intake | gated | {TODAY} |
+| survey.md | skip | fixture has no target repo | — | — |
+| product.md | skip | test scope is fixed | — | — |
+| architecture.md | skip | no architecture change | — | — |
+| uiux.md | skip | lint fixture only | — | — |
+| contracts.md | skip | no boundary | — | — |
+| testing.md | skip | acceptance criteria carry the fixture test | — | — |
+| release-rollback.md | skip | fixture is not released | — | — |
+| security.md | skip | no security boundary | — | — |
+| maintenance.md | skip | no operator | — | — |
+| scaffold.md | skip | repo shape already exists | — | — |
+| domain-discovery.md | skip | shipped mobile adapter selected | — | — |
+| work orders | produce | executable frontier | ready | {TODAY} |
+| routing | skip | one implementer | — | — |
+| project instructions | skip | fixture does not ship instructions | — | — |
+
+## Work order frontier
+| WO | Status | Routing | Claimed by | Claimed at (UTC) | Heartbeat |
+|---|---|---|---|---|---|
+| WO-001 | ready | strong-coding | — | — | — |
 """)
     write(root, "assumptions.md", f"""---
 artifact: assumption-ledger
@@ -60,19 +92,107 @@ last_verified: {TODAY}
 ---
 # Intake
 Mobile-first per [ASSUMPTION A-001]; storage per D-001.
+
+## Domain adaptation
+The `mobile` adapter requires real-device and lifecycle evidence.
 """)
     write(root, "work-orders/WO-001-build-ui.md", f"""---
 id: WO-001
 title: Build UI
 status: ready
 depends_on: []
+blocks: []
 routing: strong-coding
 size: S
+touches: [src/ui.py]
 last_verified: {TODAY}
 ---
 ## Intent
 Build it. Rests on A-001.
+
+## Context
+- Mobile audience [ASSUMPTION A-001 — assumptions.md].
+
+## Preconditions
+- G1 sealed; repository state verified.
+
+## Task
+Produce the fixture UI outcome inside the declared scope.
+
+## Acceptance criteria
+- [ ] `python -m unittest` exits 0.
+- [ ] Negative: `git diff --stat` contains only `src/ui.py`.
+
+## Out of scope
+- Storage changes.
+
+## Escalation triggers
+- Stop if `src/ui.py` does not exist.
+
+## Epistemic notes
+- Rests on A-001.
+
+## Close-out
+Pending implementation evidence.
 """)
+    write(root, "reviews/G1-plan-review.md", f"""---
+artifact: gate-review
+project: "test"
+gate: G1
+date: {TODAY}
+reviewer: "independent-test-reviewer"
+reviewer_independence: independent
+verdict: pass
+open_high_findings: 0
+rubric_average: 4.0
+rubric_min: 4
+loom_version: "{loom_lint.current_version()}"
+---
+# G1 review
+
+## Rubric scorecard (G1/G4)
+| Dimension | Score | Evidence (pack location) |
+|---|---|---|
+| 1 Goal fidelity | 4 | intake.md |
+| 2 Epistemic hygiene | 4 | assumptions.md |
+| 3 Right-sizing | 4 | MANIFEST.md |
+| 4 Decision quality | 4 | decisions.md |
+| 5 Boundary clarity | 4 | MANIFEST.md |
+| 6 WO executability | 4 | work-orders/WO-001-build-ui.md |
+| 7 Verifiability | 4 | work-orders/WO-001-build-ui.md |
+| 8 Failure preparedness | 4 | work-orders/WO-001-build-ui.md |
+| 9 Adaptation fit | 4 | intake.md |
+| 10 Clarity | 4 | MANIFEST.md |
+""")
+    state = loom_survey.RepoState(
+        is_git=False, mode="filesystem", state_hash="a" * 64)
+    pack_path = Path(root).resolve()
+    if pack_path.name == "plans" and (pack_path.parent / ".git").exists():
+        try:
+            state = loom_survey.repo_state(
+                pack_path.parent, exclude_prefixes=(pack_path.name,))
+        except loom_survey.SurveyError:
+            pass
+    baseline = {}
+    first = loom_gate.make_event(
+        "planning-started", state,
+        baseline_snapshot_sha256=loom_gate._mapping_hash(baseline))
+    review = Path(root) / "reviews" / "G1-plan-review.md"
+    second = loom_gate.make_event(
+        "g1-sealed", state, first["event_hash"],
+        review="reviews/G1-plan-review.md", review_sha256=loom_gate._sha256(review),
+        work_order_plans=loom_gate._work_order_plan_snapshot(root),
+        work_order_plans_sha256=loom_gate._mapping_hash(
+            loom_gate._work_order_plan_snapshot(root)))
+    third = loom_gate.make_event(
+        "implementation-authorized", state, second["event_hash"],
+        g1_event_hash=second["event_hash"])
+    write(root, "lifecycle.json", json.dumps({
+        "schema_version": loom_gate.SCHEMA_VERSION, "mode": "planned",
+        "baseline_files": baseline,
+        "events": [first, second, third],
+        "work_order_completions": [],
+    }, indent=2) + "\n")
 
 
 def codes(rep):
@@ -104,6 +224,20 @@ class LintTests(unittest.TestCase):
         p.write_text(p.read_text(encoding="utf-8").replace("status: ready", "status: finished"),
                      encoding="utf-8")
         self.assertIn("E04", codes(self.lint()))
+
+    def test_manifest_schema_const_is_executable(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "artifact: manifest", "artifact: not-a-manifest"), encoding="utf-8")
+        self.assertIn("E18", codes(self.lint()))
+
+    def test_work_order_schema_title_limit_is_executable(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(
+            wo.read_text(encoding="utf-8").replace(
+                "title: Build UI", "title: " + ("x" * 101)), encoding="utf-8")
+        self.assertIn("E18", codes(self.lint()))
 
     def test_wo_filename_mismatch(self):
         p = Path(self.root) / "work-orders/WO-001-build-ui.md"
@@ -148,19 +282,202 @@ body
                      encoding="utf-8")
         self.assertIn("E10", codes(self.lint()))
 
+    def test_assumption_schema_shape_is_executable(self):
+        ledger = Path(self.root) / "assumptions.md"
+        ledger.write_text(
+            ledger.read_text(encoding="utf-8").replace(
+                "risk_if_wrong: MED — layout rework", "risk_if_wrong: vague"),
+            encoding="utf-8")
+        self.assertIn("E18", codes(self.lint()))
+
     def test_orphan_assumption_reference(self):
         p = Path(self.root) / "intake.md"
         p.write_text(p.read_text(encoding="utf-8") + "\nAlso rests on A-999.\n",
                      encoding="utf-8")
         self.assertIn("E11", codes(self.lint()))
 
+    def test_missing_assumption_ledger_and_reference_both_block(self):
+        (Path(self.root) / "assumptions.md").unlink()
+        intake = Path(self.root) / "intake.md"
+        intake.write_text(
+            intake.read_text(encoding="utf-8") + "\nRests on A-999.\n",
+            encoding="utf-8")
+        found = codes(self.lint())
+        self.assertIn("E13", found)
+        self.assertIn("E11", found)
+
+    def test_missing_decision_log_and_reference_both_block(self):
+        (Path(self.root) / "decisions.md").unlink()
+        intake = Path(self.root) / "intake.md"
+        intake.write_text(
+            intake.read_text(encoding="utf-8") + "\nBlocked by D-999.\n",
+            encoding="utf-8")
+        found = codes(self.lint())
+        self.assertIn("E13", found)
+        self.assertIn("E14", found)
+
+    def test_tier_m_pack_requires_a_work_order(self):
+        for path in (Path(self.root) / "work-orders").glob("*.md"):
+            path.unlink()
+        self.assertIn("E13", codes(self.lint()))
+
+    def test_work_order_requires_scope_and_both_dependency_directions(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        text = wo.read_text(encoding="utf-8")
+        for line in ("depends_on: []\n", "blocks: []\n", "touches: [src/ui.py]\n"):
+            text = text.replace(line, "")
+        wo.write_text(text, encoding="utf-8")
+        missing = [f for f in self.lint().errors if f["code"] == "E03"]
+        self.assertEqual(
+            {key for finding in missing for key in ("depends_on", "blocks", "touches")
+             if key in finding["msg"]},
+            {"depends_on", "blocks", "touches"})
+
+    def test_ready_work_order_requires_all_contract_sections(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        text = re.sub(
+            r"(?ms)^## Context\n.*?(?=^## Preconditions)", "",
+            wo.read_text(encoding="utf-8"))
+        wo.write_text(text, encoding="utf-8")
+        self.assertIn("E19", codes(self.lint()))
+
+    def test_active_work_order_requires_nonempty_touches(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(
+            wo.read_text(encoding="utf-8").replace(
+                "touches: [src/ui.py]", "touches: []"), encoding="utf-8")
+        self.assertIn("E19", codes(self.lint()))
+
+    def test_done_work_order_requires_checked_criteria_and_closeout_evidence(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(
+            wo.read_text(encoding="utf-8").replace(
+                "status: ready", "status: done"), encoding="utf-8")
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "| WO-001 | ready |", "| WO-001 | done |"), encoding="utf-8")
+        self.assertIn("E19", codes(self.lint()))
+
+    def test_terminal_planned_pack_requires_g4_and_g5_records(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        text = wo.read_text(encoding="utf-8").replace("status: ready", "status: done")
+        text = text.replace("- [ ]", "- [x]")
+        text = text.replace(
+            "Pending implementation evidence.", "Evidence: command exited 0; scope observed.")
+        wo.write_text(text, encoding="utf-8")
+        manifest = Path(self.root) / "MANIFEST.md"
+        text = manifest.read_text(encoding="utf-8")
+        text = text.replace("status: active", "status: maintenance")
+        text = text.replace("| WO-001 | ready |", "| WO-001 | done |")
+        manifest.write_text(text, encoding="utf-8")
+        found = codes(self.lint())
+        self.assertIn("E17", found)
+        self.assertIn("E20", found)
+        messages = " ".join(f["msg"] for f in self.lint().errors)
+        self.assertIn("G4", messages)
+        self.assertIn("G5", messages)
+
+    def test_declared_produced_artifact_must_exist(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "| architecture.md | skip |", "| architecture.md | produce |"),
+            encoding="utf-8")
+        self.assertIn("E15", codes(self.lint()))
+
+    def test_manifest_frontier_status_must_match_work_order(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "| WO-001 | ready |", "| WO-001 | done |"), encoding="utf-8")
+        self.assertIn("E15", codes(self.lint()))
+
+    def test_active_pack_requires_passing_g1_record(self):
+        (Path(self.root) / "reviews" / "G1-plan-review.md").unlink()
+        self.assertIn("E15", codes(self.lint()))
+
+    def test_active_planned_pack_requires_authorized_lifecycle_chain(self):
+        (Path(self.root) / "lifecycle.json").unlink()
+        self.assertIn("E17", codes(self.lint()))
+
+    def test_tampered_lifecycle_chain_blocks(self):
+        lifecycle = Path(self.root) / "lifecycle.json"
+        data = json.loads(lifecycle.read_text(encoding="utf-8"))
+        data["events"][0]["repo_state_hash"] = "0" * 64
+        lifecycle.write_text(json.dumps(data), encoding="utf-8")
+        self.assertIn("E17", codes(self.lint()))
+
+    def test_build_first_mode_is_honest_and_blocks_executable_work(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "execution_mode: planned", "execution_mode: build-first"),
+            encoding="utf-8")
+        (Path(self.root) / "lifecycle.json").unlink()
+        (Path(self.root) / "reviews" / "G1-plan-review.md").unlink()
+        rep = self.lint()
+        self.assertFalse(any(f["code"] == "E15" for f in rep.errors), rep.findings)
+        self.assertIn("E17", codes(rep))
+        self.assertIn("W16", codes(rep))
+
+    def test_g1_record_must_contain_complete_passing_rubric(self):
+        review = Path(self.root) / "reviews" / "G1-plan-review.md"
+        text = re.sub(r"(?m)^\| 10 Clarity \|.*\n", "", review.read_text(encoding="utf-8"))
+        review.write_text(text, encoding="utf-8")
+        self.assertIn("E15", codes(self.lint()))
+
+    def test_g1_declared_scores_must_match_measured_rows(self):
+        review = Path(self.root) / "reviews" / "G1-plan-review.md"
+        review.write_text(
+            review.read_text(encoding="utf-8").replace(
+                "rubric_average: 4.0", "rubric_average: 3.5"), encoding="utf-8")
+        self.assertIn("E15", codes(self.lint()))
+
+    def test_g1_rubric_evidence_paths_must_exist(self):
+        review = Path(self.root) / "reviews" / "G1-plan-review.md"
+        review.write_text(
+            review.read_text(encoding="utf-8").replace(
+                "| 1 Goal fidelity | 4 | intake.md |",
+                "| 1 Goal fidelity | 4 | missing-evidence.md |"),
+            encoding="utf-8")
+        report = self.lint()
+        self.assertTrue(any("evidence path does not exist" in item["msg"]
+                            for item in report.errors), report.findings)
+
+    def test_manifest_must_account_for_every_matrix_row(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        text = manifest.read_text(encoding="utf-8")
+        text = re.sub(r"(?m)^\| security\.md \|.*\n", "", text)
+        manifest.write_text(text, encoding="utf-8")
+        self.assertIn("E15", codes(self.lint()))
+
+    def test_historical_pack_has_explicit_safe_exemption(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        text = manifest.read_text(encoding="utf-8")
+        text = text.replace("status: active", "status: maintenance")
+        text = text.replace("execution_mode: planned", "execution_mode: historical")
+        text = text.replace(
+            "| work orders | produce | executable frontier | ready | " + TODAY + " |",
+            "| work orders | skip | historical outcomes-only pack | — | — |")
+        text = re.sub(r"(?m)^\| WO-001 \|.*\n", "", text)
+        manifest.write_text(text, encoding="utf-8")
+        for path in (Path(self.root) / "work-orders").glob("*.md"):
+            path.unlink()
+        for path in (Path(self.root) / "reviews").glob("*.md"):
+            path.unlink()
+        rep = self.lint()
+        self.assertFalse(any(f["code"] in {"E13", "E15"} for f in rep.errors),
+                         rep.findings)
+
     def test_secret_pattern(self):
+        fixture_value = "sk_live_" + "abcdef1234567890"
         write(self.root, "contracts.md", f"""---
 artifact: contracts
 status: draft
 last_verified: {TODAY}
 ---
-api_key: sk_live_abcdef1234567890
+api_key: {fixture_value}
 """)
         self.assertIn("E12", codes(self.lint()))
 
@@ -174,6 +491,17 @@ api_key: <PLACEHOLDER>
 """)
         self.assertNotIn("E12", codes(self.lint()))
 
+    def test_real_secret_is_not_hidden_by_placeholder_on_same_line(self):
+        fixture = "pass" + "word: fake-but-secret-shaped-12345 <VALUE>"
+        write(self.root, "contracts.md", f"""---
+artifact: contracts
+status: draft
+last_verified: {TODAY}
+---
+{fixture}
+""")
+        self.assertIn("E12", codes(self.lint()))
+
     def test_stale_artifact_warns(self):
         p = Path(self.root) / "intake.md"
         p.write_text(p.read_text(encoding="utf-8").replace(TODAY, "2020-01-01"),
@@ -181,6 +509,31 @@ api_key: <PLACEHOLDER>
         rep = self.lint()
         self.assertIn("W03", codes(rep))
         self.assertEqual(rep.errors, [])  # staleness is a warning, not an error
+
+    def test_age_check_covers_every_authoritative_artifact(self):
+        for path in Path(self.root).rglob("*.md"):
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(TODAY, "2020-01-01"),
+                encoding="utf-8")
+        findings = [f for f in self.lint().findings if f["code"] == "W03"]
+        names = {Path(f["path"]).name for f in findings}
+        self.assertEqual(
+            names,
+            {"MANIFEST.md", "assumptions.md", "decisions.md", "intake.md",
+             "WO-001-build-ui.md"})
+
+    def test_strict_staleness_turns_expired_state_into_errors(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(TODAY, "2020-01-01"),
+            encoding="utf-8")
+        rep = loom_lint.lint(self.root, strict_staleness=True)
+        self.assertTrue(any(f["code"] == "E16" for f in rep.errors), rep.findings)
+
+    def test_strict_staleness_requires_repository_path_even_when_dates_are_current(self):
+        rep = loom_lint.lint(self.root, strict_staleness=True)
+        messages = "\n".join(f["msg"] for f in rep.errors if f["code"] == "E16")
+        self.assertIn("repository path was not supplied", messages)
 
     def test_hedge_phrase_warns(self):
         p = Path(self.root) / "intake.md"
@@ -209,11 +562,11 @@ api_key: <PLACEHOLDER>
 """, encoding="utf-8")
         self.assertIn("W01", codes(self.lint()))
 
-    def test_unknown_decision_reference_warns(self):
+    def test_unknown_decision_reference_blocks(self):
         p = Path(self.root) / "intake.md"
         p.write_text(p.read_text(encoding="utf-8") + "\nSee D-042 for details.\n",
                      encoding="utf-8")
-        self.assertIn("W06", codes(self.lint()))
+        self.assertIn("E14", codes(self.lint()))
 
     def test_exit_codes(self):
         self.assertEqual(loom_lint.main([self.root]), 0)
@@ -411,6 +764,93 @@ last_verified: {TODAY}
         self.assertNotIn("W14", codes(self.lint()))
 
 
+class DomainCoverageTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.pack = Path(self.tmp.name)
+        good_pack(self.pack)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def set_manifest(self, domain_id, coverage, decision):
+        path = self.pack / "MANIFEST.md"
+        text = path.read_text(encoding="utf-8")
+        text = re.sub(r"(?m)^domain_id: .+$", f"domain_id: {domain_id}", text)
+        text = re.sub(r"(?m)^domain_ids: .+$", f"domain_ids: [{domain_id}]", text)
+        text = re.sub(
+            r"(?m)^domain_coverage: .+$", f"domain_coverage: {coverage}", text)
+        text = re.sub(
+            r"(?m)^\| domain-discovery\.md \| .+$",
+            f"| domain-discovery.md | {decision} | custom domain evidence | gated | {TODAY} |",
+            text)
+        path.write_text(text, encoding="utf-8")
+
+    def write_discovery(self, domain_id, status="verified", row_status="verified"):
+        write(self.pack, "domain-discovery.md", f"""---
+artifact: domain-discovery
+domain_id: {domain_id}
+status: {status}
+last_verified: {TODAY}
+loom_version: "{loom_lint.current_version()}"
+---
+# Domain discovery
+## Coverage statement
+[FACT — source below] Coverage reviewed.
+## Authoritative sources and qualified reviewers
+| Source/reviewer | Authority for | Current/version evidence | Accessed | Limits |
+|---|---|---|---|---|
+| governing standard | safety invariant | current edition | {TODAY} | one jurisdiction |
+## Invariant ledger
+| Invariant | Evidence | Failure if wrong | Required real medium | Status |
+|---|---|---|---|---|
+| safe state | governing standard | unsafe operation | hardware review | {row_status} |
+## Forbidden default transfers
+No web defaults.
+## Artifact and gate adaptation
+Hardware review is the release medium.
+""")
+
+    def test_unknown_domain_cannot_pass_g1(self):
+        self.set_manifest("marine-navigation", "unknown", "produce")
+        self.write_discovery("marine-navigation", status="draft", row_status="unknown")
+        report = loom_lint.lint(self.pack)
+        self.assertTrue(any(item["code"] == "E22" and "G1 is blocked" in item["msg"]
+                            for item in report.errors), report.findings)
+
+    def test_verified_custom_domain_requires_complete_discovery(self):
+        self.set_manifest("marine-navigation", "verified", "produce")
+        self.write_discovery("marine-navigation")
+        report = loom_lint.lint(self.pack)
+        self.assertFalse(any(item["code"] == "E22" for item in report.errors),
+                         report.findings)
+
+    def test_unknown_adapter_claim_is_rejected(self):
+        self.set_manifest("marine-navigation", "adapter", "skip")
+        report = loom_lint.lint(self.pack)
+        self.assertTrue(any(item["code"] == "E22" and "no shipped adapter" in item["msg"]
+                            for item in report.errors), report.findings)
+
+    def test_project_config_domain_mismatch_is_blocking(self):
+        repo = self.pack / "target-repo"
+        repo.mkdir()
+        (repo / "loom.config.json").write_text(json.dumps({
+            "loom_version": loom_lint.current_version(),
+            "domain_id": "accounting",
+            "domain_ids": ["accounting"],
+            "use_profile": True,
+        }), encoding="utf-8")
+        manifest = self.pack / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "execution_mode: planned", "execution_mode: build-first"),
+            encoding="utf-8")
+        (self.pack / "lifecycle.json").unlink()
+        report = loom_lint.lint(self.pack, repo_path=repo)
+        self.assertTrue(any(item["code"] == "E22" and "config domain_id" in item["msg"]
+                            for item in report.errors), report.findings)
+
+
 class HomeLintTests(unittest.TestCase):
     """--home mode (v0.6 user memory). All fixtures backslash-free by construction."""
 
@@ -422,7 +862,8 @@ class HomeLintTests(unittest.TestCase):
         def head(artifact):
             return ("---" + chr(10) + f"artifact: {artifact}" + chr(10) +
                     'owner: "t"' + chr(10) + f"created: {TODAY}" + chr(10) +
-                    'loom_version: "0.6.0"' + chr(10) + "---" + chr(10))
+                    f'loom_version: "{loom_lint.current_version()}"' + chr(10) +
+                    "---" + chr(10))
         write(self.home, "profile.md", head("user-profile") +
               "# Loom profile" + chr(10) + "## Defaults" + chr(10) +
               f"- autonomy_default: A2            # set {TODAY}, source: stated" + chr(10))
@@ -454,7 +895,7 @@ class HomeLintTests(unittest.TestCase):
         self.assertEqual(rep.errors, [])
 
     def test_secret_in_profile_is_error(self):
-        self._append("profile.md", "- api_key: sk_live_abcdef1234567890")
+        self._append("profile.md", "- api" + "_key: sk_live_" + "abcdef1234567890")
         self.assertIn("E12", self.hcodes())
 
     def test_profile_entry_without_provenance_warns(self):
@@ -464,6 +905,37 @@ class HomeLintTests(unittest.TestCase):
     def test_pathy_outbox_line_warns(self):
         self._append("feedback-outbox.md", "- pattern: failed in /Users/me/proj")
         self.assertIn("W21", self.hcodes())
+
+    def test_named_project_outbox_line_is_rejected(self):
+        self._append(
+            "feedback-outbox.md",
+            "- Synthetic-Project, tier M, dataset generation worked")
+        self.assertIn("W21", self.hcodes())
+
+    def test_duplicate_profile_key_is_error(self):
+        self._append(
+            "profile.md",
+            f"- autonomy_default: A1 # set {TODAY}, source: stated")
+        self.assertIn("E21", self.hcodes())
+
+    def test_invalid_profile_provenance_is_error(self):
+        self._append(
+            "profile.md",
+            f"- report_style: concise # set {TODAY}, source: guessed")
+        self.assertIn("E21", self.hcodes())
+
+    def test_six_year_old_profile_entry_warns(self):
+        self._append(
+            "profile.md",
+            "- report_style: verbose # set 2020-01-01, source: inferred")
+        self.assertIn("W24", self.hcodes())
+
+    def test_old_home_version_warns(self):
+        profile = self.home / "profile.md"
+        profile.write_text(
+            profile.read_text(encoding="utf-8").replace(
+                loom_lint.current_version(), "0.1.0"), encoding="utf-8")
+        self.assertIn("W11", self.hcodes())
 
     def test_cli_home_flag(self):
         self.assertEqual(loom_lint.main(["--home", str(self.home)]), 0)

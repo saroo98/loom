@@ -10,6 +10,12 @@ Thumbs.db
 scratch/
 *.tmp
 
+# Per-install sovereign state — never version or publish
+.loom-instance-id
+.loom-instance-init.lock
+.loom-private/
+.loom-feedback.lock
+
 # Python
 __pycache__/
 *.pyc

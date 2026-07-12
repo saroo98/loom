@@ -71,6 +71,12 @@ Discovered late, they invalidate layouts, components, fonts, and content plans.
   label; "Month" matches month-nav buttons) — strict-mode locator collisions are the
   symptom. Exact-match posture (`exact: true` or equivalent) from the first test, not
   after the third collision. (Earned: 3 collisions in one e2e slice, 2026-07-10.)
+- **Clip masks clip the FINAL state too, not just the reveal.** A `clip-path: inset()`
+  or masked reveal animation leaves the mask in place at rest — and tall ascenders in
+  Arabic-script languages (گ, ك, ل) or accented Latin get shaved off in the settled
+  layout, not only mid-animation. `inset()` cannot go negative to escape its own box;
+  the fix is vertical `padding-block` headroom on the clipped element, budgeted for the
+  tallest glyph in the target script. (Earned: clipped ascenders on a reveal, 2026-07-10.)
 
 ## Worked instance: Persian (Farsi, `fa`)
 

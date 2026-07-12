@@ -1,5 +1,7 @@
 {
-  "loom_version": "0.7.0",
+  "loom_version": "0.8.0",
+  "domain_id": "unclassified",
+  "domain_ids": ["unclassified"],
   "autonomy": "A2",
   "pack_path": "plans/",
   "freshness_window_days": 14,

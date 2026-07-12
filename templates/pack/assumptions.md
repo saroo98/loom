@@ -3,7 +3,7 @@ artifact: assumption-ledger
 project: "<name>"
 status: active
 last_verified: <YYYY-MM-DD>
-loom_version: "0.7.0"
+loom_version: "0.8.0"
 ---
 
 # Assumption ledger — <project>

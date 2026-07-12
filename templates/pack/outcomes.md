@@ -3,7 +3,7 @@ artifact: outcomes
 project: "<name>"
 status: draft
 last_verified: <YYYY-MM-DD>
-loom_version: "0.7.0"
+loom_version: "0.8.0"
 ---
 
 # Outcome ledger — <project>
