@@ -133,6 +133,15 @@ class PublishTests(unittest.TestCase):
                     loom_publish.validate_output_path(
                         path, allow_outside=True, replace_existing=True)
 
+    def test_only_exact_macos_var_alias_is_exempt_from_symlink_refusal(self):
+        with mock.patch.object(loom_publish.sys, "platform", "darwin"), \
+                mock.patch.object(Path, "resolve", return_value=Path("/private/var")):
+            self.assertTrue(loom_publish._is_macos_system_var_alias(Path("/var")))
+            self.assertFalse(loom_publish._is_macos_system_var_alias(Path("/tmp")))
+        with mock.patch.object(loom_publish.sys, "platform", "linux"), \
+                mock.patch.object(Path, "resolve", return_value=Path("/private/var")):
+            self.assertFalse(loom_publish._is_macos_system_var_alias(Path("/var")))
+
     def test_custom_output_requires_explicit_opt_in(self):
         with tempfile.TemporaryDirectory() as tmp:
             out = Path(tmp) / "new-public"
@@ -143,6 +152,7 @@ class PublishTests(unittest.TestCase):
         marker = self.out / loom_publish.OUTPUT_MARKER
         self.assertTrue(marker.is_file())
         self.assertTrue(loom_publish._marker_is_valid(self.out))
+        self.assertNotIn(b"\r\n", marker.read_bytes())
 
     def test_foreign_addition_to_marked_output_blocks_replacement(self):
         with tempfile.TemporaryDirectory() as tmp:

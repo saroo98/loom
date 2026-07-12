@@ -96,6 +96,7 @@ def _targets(root, home):
 
 
 def _render(source, root, owner):
+    root = Path(root).expanduser().resolve()
     try:
         body = _normalize(source.read_text(encoding="utf-8"))
     except (OSError, UnicodeError) as exc:

@@ -101,6 +101,7 @@ class PythonInstallerTests(unittest.TestCase):
             home = Path(tmp) / "home"
 
             targets = loom_install._targets(alias, home)
+            owner = "00000000-0000-0000-0000-000000000000"
 
             self.assertTrue(all(
                 target.source.is_relative_to(root.resolve())
@@ -108,6 +109,9 @@ class PythonInstallerTests(unittest.TestCase):
             self.assertTrue(all(
                 target.destination.is_relative_to(home.resolve())
                 for target in targets))
+            self.assertEqual(
+                loom_install._render(targets[0].source, alias, owner),
+                loom_install._render(targets[0].source, root.resolve(), owner))
 
     def test_mid_transaction_io_failure_rolls_back_created_files(self):
         with tempfile.TemporaryDirectory() as tmp:

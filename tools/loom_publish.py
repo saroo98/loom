@@ -249,7 +249,15 @@ def _write_marker(out):
         "files": _tree_hashes(out),
     }
     (out / OUTPUT_MARKER).write_text(
-        json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        json.dumps(data, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8", newline="\n")
+
+
+def _is_macos_system_var_alias(path):
+    """Recognize the fixed macOS /var compatibility alias, never arbitrary symlinks."""
+    return sys.platform == "darwin" \
+        and path == Path("/var") \
+        and path.resolve() == Path("/private/var")
 
 
 def validate_output_path(out_dir, *, allow_outside=False,
@@ -262,7 +270,8 @@ def validate_output_path(out_dir, *, allow_outside=False,
     """
     raw = Path(out_dir).expanduser().absolute()
     for component in (raw, *raw.parents):
-        if component.exists() and component.is_symlink():
+        if component.exists() and component.is_symlink() \
+                and not _is_macos_system_var_alias(component):
             raise ValueError(f"output path contains a symlink component: {component}")
     out = raw.resolve()
     root = ROOT.resolve()
