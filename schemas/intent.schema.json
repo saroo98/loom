@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/intent.schema.json",
+  "title": "Immutable pure Loom PreparedInvocation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "instance_id", "project_id", "invocation_id",
+    "request_hash", "canonical_target_identity", "survey_hash",
+    "world_fingerprint", "intent", "domains", "route_contract", "hard_stops",
+    "config_source", "retry_key", "prepared_at", "prepared_hash"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "instance_id": { "type": "string", "format": "uuid" },
+    "project_id": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" },
+    "invocation_id": { "type": "string", "format": "uuid" },
+    "request_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "canonical_target_identity": {
+      "type": "string", "pattern": "^target-sha256:[0-9a-f]{64}$"
+    },
+    "survey_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "world_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "intent": {
+      "enum": ["plan", "resume", "execute", "review", "repair", "close",
+               "status", "remember", "forget", "why", "undo"]
+    },
+    "domains": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" }
+    },
+    "route_contract": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent", "blocked", "code", "recommendation", "evidence", "confidence",
+        "needs_owner", "routine_question_count", "target_mutation_count",
+        "journal_mutation_count", "network_call_count", "contribution_count",
+        "real_home_call_count", "tier", "autonomy", "use_profile",
+        "requires_domain_discovery"
+      ],
+      "properties": {
+        "intent": {
+          "enum": ["plan", "resume", "execute", "review", "repair", "close",
+                   "status", "remember", "forget", "why", "undo"]
+        },
+        "blocked": { "type": "boolean" },
+        "code": { "type": "string", "minLength": 1 },
+        "recommendation": { "type": "string", "maxLength": 1000 },
+        "evidence": {
+          "type": "array", "maxItems": 16,
+          "items": { "type": "string", "maxLength": 200 }
+        },
+        "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
+        "needs_owner": { "type": "boolean" },
+        "routine_question_count": { "const": 0 },
+        "target_mutation_count": { "const": 0 },
+        "journal_mutation_count": { "const": 0 },
+        "network_call_count": { "const": 0 },
+        "contribution_count": { "const": 0 },
+        "real_home_call_count": { "const": 0 },
+        "tier": { "enum": ["S", "M", "L"] },
+        "autonomy": { "enum": ["A0", "A1", "A2", "A3"] },
+        "use_profile": { "type": "boolean" },
+        "requires_domain_discovery": { "type": "boolean" }
+      }
+    },
+    "hard_stops": {
+      "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true,
+      "prefixItems": [
+        { "const": "safety.no-unapproved-external-effects" },
+        { "const": "safety.no-irreversible-action-under-uncertainty" },
+        { "const": "safety.no-owner-data-cross-scope" }
+      ],
+      "items": false
+    },
+    "config_source": {
+      "enum": ["explicit", "repository", "owner", "builtin-safe-default"]
+    },
+    "retry_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "prepared_at": { "type": "string", "format": "date-time" },
+    "prepared_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+  }
+}

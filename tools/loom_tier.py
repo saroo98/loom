@@ -11,11 +11,7 @@ RISK_RE = re.compile(
     r"production|credential|firmware|hardware|medical|safety|financial|trading)\b")
 PROGRAM_RE = re.compile(
     r"(?i)\b(platform|multi[- ]service|multiple apps|migration program|enterprise|"
-    r"full product|from scratch|real[- ]time 3d|accounting software|"
-    r"(?:build|create|develop|launch)\s+"
-    r"(?:(?:a|an|the|new|full|cross[- ]platform|and|release|ship|launch|"
-    r"production|end[- ]to[- ]end|etl|ml|data)\s+){0,6}"
-    r"(?:mobile app|desktop app|data pipeline|etl pipeline|ml pipeline|firmware))\b")
+    r"full product|multi[- ]subsystem|cross[- ]service)\b")
 DISCIPLINED_DELIVERABLE_RE = re.compile(
     r"(?i)\b(?:build|create|develop|produce|write)\s+"
     r"(?:(?:a|an|the|new|reproducible)\s+){0,4}"
@@ -39,11 +35,11 @@ def classify(description, *, files=None, days=None, new_components=0,
             or new_boundaries >= 3 or implementers >= 3:
         tier = "L"
         reasons.append("product/subsystem or multi-implementer signals require a release pack")
-    elif risk_hits or disciplined_hits or irreversible or (days is not None and days > 1) \
+    elif risk_hits or irreversible or (days is not None and days > 1) \
             or new_components > 0 or new_boundaries > 0 \
             or (files is not None and files > 5) or implementers > 1:
         tier = "M"
-        reasons.append("risk, boundary, duration, or coordination exceeds one low-risk sitting")
+        reasons.append("observed risk, boundary, duration, or coordination exceeds one low-risk sitting")
     else:
         reasons.append("one implementer, one sitting, low blast radius; no architecture signal")
         if SMALL_RE.search(text):
@@ -67,7 +63,7 @@ def classify(description, *, files=None, days=None, new_components=0,
         "program_terms": program_hits,
         "disciplined_deliverable_terms": disciplined_hits,
         "promotion_triggers": promotion,
-        "policy": "ties choose the lower tier; observed survey facts may promote",
+        "policy": "labels never promote; ties choose the lower tier; only risk or observed scope may promote",
     }
 
 

@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/session-journal.schema.json",
+  "title": "Loom automatic runtime session journal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instance_id", "project_id", "events"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "instance_id": {"type": "string", "format": "uuid"},
+    "project_id": {"type": "string", "pattern": "^p-[0-9a-f]{32}$"},
+    "events": {
+      "type": "array", "maxItems": 4096,
+      "items": {"$ref": "#/$defs/event"}
+    }
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "event": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "event_id", "kind", "session_id",
+                   "operation_id", "recorded_at", "payload", "previous_hash",
+                   "event_hash"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "event_id": {"type": "string", "format": "uuid"},
+        "kind": {"enum": ["session-opened", "session-interrupted",
+                            "session-reconciled", "session-receipt-sealed"]},
+        "session_id": {"type": "string", "format": "uuid"},
+        "operation_id": {"$ref": "#/$defs/digest"},
+        "recorded_at": {"type": "string", "format": "date-time"},
+        "payload": {"type": "object"},
+        "previous_hash": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "event_hash": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

@@ -16,10 +16,16 @@ Exit codes: 0 ok, 2 usage/IO problem.
 
 import argparse
 import datetime as dt
+import errno
 import hashlib
+import os
 import re
+import stat
 import subprocess
 import sys
+
+import loom_reliability
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,6 +33,15 @@ SKIP_DIRS = {".git", "node_modules", "__pycache__", ".venv", "venv", "dist", "bu
              "target", ".idea", ".vscode", "vendor", ".next", "out", "bin", "obj"}
 FILE_CAP = 20000
 STATE_FILE_CAP = 100000
+MAX_STATE_FILE_BYTES = 64 * 1024 * 1024 * 1024
+MAX_STATE_TOTAL_BYTES = 512 * 1024 * 1024 * 1024
+STATE_HASH_DEADLINE_SECONDS = 60.0
+GIT_CONFIG_CAP = 256 * 1024
+MAX_XATTRS_PER_ENTRY = 128
+MAX_XATTR_VALUE_BYTES = 1024 * 1024
+MAX_XATTR_TOTAL_BYTES = 16 * 1024 * 1024
+FILTER_DRIVER_RE = re.compile(r"^filter\.([A-Za-z0-9._-]{1,128})\."
+                              r"(?:clean|smudge|process)$", re.I)
 
 ECOSYSTEM_MARKERS = [
     ("package.json", "Node.js / JavaScript"),
@@ -84,19 +99,124 @@ class RepoState:
         return bool(self.staged or self.unstaged or self.untracked)
 
 
-def run_git(repo, *args, allowed=(0,), timeout=20):
+@dataclass(frozen=True)
+class _WorkspaceEntry:
+    rel: str
+    path: Path
+    kind: str
+    device: int
+    inode: int
+    mode: int
+    size: int
+    mtime_ns: int
+    uid: int
+    gid: int
+    flags: int
+    attributes: int
+
+
+def _git_environment():
+    environment = {
+        key: value for key, value in os.environ.items()
+        if not key.upper().startswith("GIT_")
+    }
+    environment.update({
+        "GIT_OPTIONAL_LOCKS": "0",
+        "GIT_TERMINAL_PROMPT": "0",
+    })
+    return environment
+
+
+def _configured_filter_drivers(repo, timeout=20):
+    """Return bounded configured content-filter names without executing them."""
+    command = [
+        "git", "--no-pager", "-c", "core.fsmonitor=false", "-C", str(repo),
+        "config", "--null", "--name-only", "--get-regexp",
+        r"^filter\..*\.(clean|smudge|process)$",
+    ]
     try:
         result = subprocess.run(
-            ["git", "-C", str(repo)] + list(args), capture_output=True,
-            text=True, encoding="utf-8", errors="replace", timeout=timeout)
+            command, capture_output=True, timeout=timeout, env=_git_environment())
     except OSError as exc:
         raise SurveyError(f"git unavailable: {exc}") from exc
     except subprocess.TimeoutExpired as exc:
-        raise SurveyError(f"git timed out while running {' '.join(args)}") from exc
-    if result.returncode not in allowed:
-        detail = result.stderr.strip() or result.stdout.strip() or "no diagnostic"
+        raise SurveyError("git timed out while inspecting content-filter configuration") \
+            from exc
+    if result.returncode not in (0, 1):
+        detail = result.stderr.decode("utf-8", errors="replace").strip() or "no diagnostic"
         raise SurveyError(
-            f"git {' '.join(args)} failed ({result.returncode}): {detail}")
+            f"git filter-configuration query failed ({result.returncode}): {detail}")
+    if len(result.stdout) > GIT_CONFIG_CAP:
+        raise SurveyError("Git content-filter configuration exceeds its safety bound")
+    drivers = set()
+    for raw in result.stdout.split(b"\0"):
+        if not raw:
+            continue
+        try:
+            key = raw.decode("utf-8")
+        except UnicodeError as exc:
+            raise SurveyError("Git content-filter configuration is not UTF-8") from exc
+        match = FILTER_DRIVER_RE.fullmatch(key)
+        if not match:
+            raise SurveyError(f"unsafe Git content-filter key cannot be neutralized: {key!r}")
+        drivers.add(match.group(1))
+        if len(drivers) > 1024:
+            raise SurveyError("Git content-filter driver count exceeds its safety bound")
+    return tuple(sorted(drivers, key=str.casefold))
+
+
+def run_git(repo, *args, allowed=(0,), timeout=20, filter_drivers=None,
+            binary=False):
+    """Run a read-only Git query without inheriting effectful Git controls.
+
+    Repository inspection is a trust boundary.  Ambient ``GIT_*`` variables can
+    redirect the repository or make an otherwise read-only command write trace
+    files, while diff drivers/textconv and fsmonitor can execute arbitrary local
+    programs.  Loom therefore supplies the repository explicitly, strips every
+    ambient Git control, disables the effectful extension points used by its
+    query set, and asks Git not to take optional locks.
+    """
+    git_args = list(args)
+    if git_args and git_args[0] == "diff":
+        git_args[1:1] = ["--no-ext-diff", "--no-textconv"]
+        if filter_drivers is None:
+            filter_drivers = _configured_filter_drivers(repo, timeout=timeout)
+    else:
+        filter_drivers = filter_drivers or ()
+    filter_overrides = []
+    for driver in filter_drivers:
+        if not re.fullmatch(r"[A-Za-z0-9._-]{1,128}", driver):
+            raise SurveyError("invalid prevalidated Git content-filter driver")
+        for endpoint in ("clean", "smudge", "process"):
+            filter_overrides.extend(["-c", f"filter.{driver}.{endpoint}="])
+        filter_overrides.extend(["-c", f"filter.{driver}.required=false"])
+    command = [
+        "git", "--no-pager", "-c", "core.fsmonitor=false",
+        *filter_overrides, "-C", str(repo), *git_args,
+    ]
+    try:
+        options = {
+            "capture_output": True,
+            "timeout": timeout,
+            "env": _git_environment(),
+        }
+        if not binary:
+            options.update({
+                "text": True, "encoding": "utf-8", "errors": "replace",
+            })
+        result = subprocess.run(command, **options)
+    except OSError as exc:
+        raise SurveyError(f"git unavailable: {exc}") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SurveyError(f"git timed out while running {' '.join(git_args)}") from exc
+    if result.returncode not in allowed:
+        stderr = result.stderr.decode("utf-8", errors="backslashreplace") \
+            if isinstance(result.stderr, bytes) else result.stderr
+        stdout = result.stdout.decode("utf-8", errors="backslashreplace") \
+            if isinstance(result.stdout, bytes) else result.stdout
+        detail = stderr.strip() or stdout.strip() or "no diagnostic"
+        raise SurveyError(
+            f"git {' '.join(git_args)} failed ({result.returncode}): {detail}")
     return result
 
 
@@ -104,19 +224,282 @@ def _nul_paths(text):
     return tuple(sorted(path for path in text.split("\0") if path))
 
 
-def _hash_untracked(root, paths, digest):
-    for rel in paths:
-        path = root / rel
-        digest.update(b"untracked\0" + rel.encode("utf-8") + b"\0")
+def _nul_path_bytes(content):
+    if not isinstance(content, bytes):
+        raise SurveyError("binary Git path query did not return bytes")
+    return tuple(sorted(path for path in content.split(b"\0") if path))
+
+
+def _display_git_path(path):
+    return path.decode("utf-8", errors="backslashreplace")
+
+
+def _is_excluded(rel, excluded):
+    candidate = os.path.normcase(rel) if os.name == "nt" else rel
+    return any(
+        candidate == (os.path.normcase(prefix) if os.name == "nt" else prefix)
+        or candidate.startswith(
+            (os.path.normcase(prefix) if os.name == "nt" else prefix) + "/")
+        for prefix in excluded)
+
+
+def _windows_named_stream_count(path):
+    """Count non-default NTFS streams without reading or exposing their names."""
+    if os.name != "nt":
+        return 0
+    import ctypes
+    from ctypes import wintypes
+
+    class StreamData(ctypes.Structure):
+        _fields_ = [
+            ("size", ctypes.c_longlong),
+            ("name", wintypes.WCHAR * 296),
+        ]
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    first_stream = kernel.FindFirstStreamW
+    first_stream.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD,
+        ctypes.POINTER(StreamData), wintypes.DWORD,
+    ]
+    first_stream.restype = wintypes.HANDLE
+    next_stream = kernel.FindNextStreamW
+    next_stream.argtypes = [wintypes.HANDLE, ctypes.POINTER(StreamData)]
+    next_stream.restype = wintypes.BOOL
+    close = kernel.FindClose
+    close.argtypes = [wintypes.HANDLE]
+    close.restype = wintypes.BOOL
+
+    data = StreamData()
+    handle = first_stream(str(path), 0, ctypes.byref(data), 0)
+    invalid = ctypes.c_void_p(-1).value
+    if handle == invalid:
+        error = ctypes.get_last_error()
+        if error in {1, 2, 3, 38}:  # unsupported/no streams/path disappeared
+            if error in {2, 3} and Path(path).exists():
+                raise SurveyError("cannot enumerate Windows alternate data streams")
+            return 0
+        raise SurveyError(
+            f"cannot enumerate Windows alternate data streams (error {error})")
+    count = 0
+    try:
+        while True:
+            if data.name != "::$DATA":
+                count += 1
+            if not next_stream(handle, ctypes.byref(data)):
+                error = ctypes.get_last_error()
+                if error != 38:
+                    raise SurveyError(
+                        "Windows alternate data stream enumeration changed or failed "
+                        f"(error {error})")
+                break
+    finally:
+        close(handle)
+    return count
+
+
+def _workspace_census(root, excluded):
+    """Enumerate every target entry without following links; reject unknown types."""
+    entries, stack = [], [Path(root)]
+    while stack:
+        directory = stack.pop()
         try:
-            if path.is_symlink():
-                digest.update(str(path.readlink()).encode("utf-8"))
-            else:
-                with path.open("rb") as stream:
-                    for chunk in iter(lambda: stream.read(1024 * 1024), b""):
-                        digest.update(chunk)
+            children = sorted(os.scandir(directory), key=lambda item: os.fsencode(item.name))
         except OSError as exc:
-            raise SurveyError(f"cannot hash untracked file {rel}: {exc}") from exc
+            raise SurveyError(f"cannot enumerate workspace state: {exc}") from exc
+        for child in children:
+            path = Path(child.path)
+            try:
+                rel_path = path.relative_to(root)
+            except ValueError as exc:
+                raise SurveyError("workspace enumeration escaped its root") from exc
+            if ".git" in rel_path.parts:
+                continue
+            rel = rel_path.as_posix()
+            if _is_excluded(rel, excluded):
+                continue
+            try:
+                # pathlib.lstat supplies the stable volume/file identity that
+                # DirEntry.stat reports as (0, 0) on supported Windows Python.
+                info = path.lstat()
+                is_link = child.is_symlink()
+            except OSError as exc:
+                raise SurveyError(f"cannot inspect workspace entry {rel}: {exc}") from exc
+            attributes = getattr(info, "st_file_attributes", 0)
+            reparse = bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+            if reparse and not is_link:
+                raise SurveyError(
+                    f"workspace contains unsupported junction/reparse entry: {rel}")
+            if is_link or stat.S_ISLNK(info.st_mode):
+                kind = "symlink"
+            elif stat.S_ISDIR(info.st_mode):
+                kind = "directory"
+                stack.append(path)
+            elif stat.S_ISREG(info.st_mode):
+                kind = "file"
+            else:
+                raise SurveyError(f"workspace contains unsupported special entry: {rel}")
+            if kind in {"file", "directory"}:
+                stream_count = _windows_named_stream_count(path)
+                if stream_count:
+                    raise SurveyError(
+                        "workspace contains an unsupported alternate data stream "
+                        f"on {rel}; complete state is indeterminate")
+            entries.append(_WorkspaceEntry(
+                rel, path, kind, info.st_dev, info.st_ino,
+                stat.S_IMODE(info.st_mode), info.st_size,
+                getattr(info, "st_mtime_ns", int(info.st_mtime * 1_000_000_000)),
+                getattr(info, "st_uid", 0), getattr(info, "st_gid", 0),
+                getattr(info, "st_flags", 0), attributes))
+            if len(entries) > STATE_FILE_CAP:
+                raise SurveyError(
+                    f"workspace state contains more than {STATE_FILE_CAP} visible entries; "
+                    "no partial state hash was produced")
+    total_bytes = 0
+    for entry in entries:
+        if entry.kind != "file":
+            continue
+        if entry.size > MAX_STATE_FILE_BYTES:
+            raise SurveyError(
+                f"workspace file {entry.rel} exceeds the complete-snapshot per-file bound "
+                f"of {MAX_STATE_FILE_BYTES} bytes")
+        total_bytes += entry.size
+        if total_bytes > MAX_STATE_TOTAL_BYTES:
+            raise SurveyError(
+                "workspace file bytes exceed the complete-snapshot aggregate bound of "
+                f"{MAX_STATE_TOTAL_BYTES}; no partial state hash was produced")
+    return tuple(sorted(entries, key=lambda item: os.fsencode(item.rel)))
+
+
+def _hash_field(digest, label, value):
+    """Add one unambiguous binary field to a digest."""
+    label = bytes(label)
+    value = bytes(value)
+    digest.update(len(label).to_bytes(2, "big"))
+    digest.update(label)
+    digest.update(len(value).to_bytes(8, "big"))
+    digest.update(value)
+
+
+def _hash_stream_header(digest, label, size):
+    label = bytes(label)
+    digest.update(len(label).to_bytes(2, "big"))
+    digest.update(label)
+    digest.update(int(size).to_bytes(8, "big"))
+
+
+def _read_posix_xattrs(path):
+    if not hasattr(os, "listxattr") or not hasattr(os, "getxattr"):
+        return ()
+    try:
+        names = os.listxattr(path, follow_symlinks=False)
+    except OSError as exc:
+        if exc.errno in {errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}:
+            return ()
+        raise SurveyError(f"cannot enumerate extended attributes: {exc}") from exc
+    if len(names) > MAX_XATTRS_PER_ENTRY:
+        raise SurveyError("workspace extended-attribute count exceeds its safety bound")
+    values = []
+    for name in sorted(names, key=os.fsencode):
+        try:
+            value = os.getxattr(path, name, follow_symlinks=False)
+        except OSError as exc:
+            raise SurveyError(f"cannot read workspace extended attribute: {exc}") from exc
+        if len(value) > MAX_XATTR_VALUE_BYTES:
+            raise SurveyError("workspace extended attribute exceeds its safety bound")
+        values.append((os.fsencode(name), value))
+    return tuple(values)
+
+
+def _hash_workspace(entries):
+    """Hash every entry with length-delimited fields and fixed-size entry digests."""
+    digest = hashlib.sha256(b"complete-workspace-v3\0")
+    digest.update(len(entries).to_bytes(8, "big"))
+    deadline = time.monotonic() + STATE_HASH_DEADLINE_SECONDS
+    total_read = 0
+    total_xattr = 0
+    for entry in entries:
+        if time.monotonic() > deadline:
+            raise SurveyError(
+                "complete workspace hash exceeded its time bound; no partial state hash "
+                "was produced")
+        entry_digest = hashlib.sha256(b"workspace-entry-v1\0")
+        _hash_field(entry_digest, b"path", os.fsencode(entry.rel))
+        _hash_field(entry_digest, b"kind", entry.kind.encode("ascii"))
+        _hash_field(entry_digest, b"mode", f"{entry.mode:o}".encode("ascii"))
+        _hash_field(entry_digest, b"uid", str(entry.uid).encode("ascii"))
+        _hash_field(entry_digest, b"gid", str(entry.gid).encode("ascii"))
+        _hash_field(entry_digest, b"flags", str(entry.flags).encode("ascii"))
+        _hash_field(
+            entry_digest, b"attributes", str(entry.attributes).encode("ascii"))
+        xattrs = _read_posix_xattrs(entry.path)
+        if xattrs != _read_posix_xattrs(entry.path):
+            raise SurveyError(
+                f"workspace extended attributes changed during survey: {entry.rel}")
+        _hash_stream_header(entry_digest, b"xattr-count", len(xattrs))
+        for name, value in xattrs:
+            total_xattr += len(name) + len(value)
+            if total_xattr > MAX_XATTR_TOTAL_BYTES:
+                raise SurveyError(
+                    "workspace extended attributes exceed the aggregate safety bound")
+            _hash_field(entry_digest, b"xattr-name", name)
+            _hash_field(entry_digest, b"xattr-value", value)
+        if entry.kind == "directory":
+            digest.update(entry_digest.digest())
+            continue
+        if entry.kind == "symlink":
+            try:
+                target = os.readlink(entry.path)
+                after = entry.path.lstat()
+            except OSError as exc:
+                raise SurveyError(f"cannot hash workspace symlink {entry.rel}: {exc}") from exc
+            if (after.st_dev, after.st_ino) != (entry.device, entry.inode) \
+                    or not stat.S_ISLNK(after.st_mode):
+                raise SurveyError(f"workspace symlink changed during survey: {entry.rel}")
+            _hash_field(entry_digest, b"target", os.fsencode(target))
+            digest.update(entry_digest.digest())
+            continue
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(entry.path, flags)
+            with os.fdopen(descriptor, "rb") as stream:
+                before = os.fstat(stream.fileno())
+                if not stat.S_ISREG(before.st_mode) \
+                        or (before.st_dev, before.st_ino) != (entry.device, entry.inode):
+                    raise SurveyError(
+                        f"workspace file identity changed during survey: {entry.rel}")
+                entry_read = 0
+                _hash_stream_header(entry_digest, b"content", entry.size)
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    entry_read += len(chunk)
+                    total_read += len(chunk)
+                    if entry_read > entry.size or entry_read > MAX_STATE_FILE_BYTES \
+                            or total_read > MAX_STATE_TOTAL_BYTES:
+                        raise SurveyError(
+                            f"workspace file grew or exceeded a hash bound: {entry.rel}")
+                    if time.monotonic() > deadline:
+                        raise SurveyError(
+                            "complete workspace hash exceeded its time bound; no partial "
+                            "state hash was produced")
+                    entry_digest.update(chunk)
+                after = os.fstat(stream.fileno())
+        except SurveyError:
+            raise
+        except OSError as exc:
+            raise SurveyError(f"cannot hash workspace file {entry.rel}: {exc}") from exc
+        after_mtime = getattr(
+            after, "st_mtime_ns", int(after.st_mtime * 1_000_000_000))
+        if (after.st_dev, after.st_ino, after.st_size, after_mtime,
+                stat.S_IMODE(after.st_mode), getattr(after, "st_uid", 0),
+                getattr(after, "st_gid", 0), getattr(after, "st_flags", 0),
+                getattr(after, "st_file_attributes", 0)) != (
+                    entry.device, entry.inode, entry.size, entry.mtime_ns, entry.mode,
+                    entry.uid, entry.gid, entry.flags, entry.attributes):
+            raise SurveyError(f"workspace file changed during survey: {entry.rel}")
+        if entry_read != entry.size:
+            raise SurveyError(f"workspace file size changed during survey: {entry.rel}")
+        digest.update(entry_digest.digest())
+    return digest.hexdigest()
 
 
 def _enforce_state_file_cap(*path_sets):
@@ -127,82 +510,101 @@ def _enforce_state_file_cap(*path_sets):
             f"safety limit of {STATE_FILE_CAP}; no partial state hash was produced")
 
 
-def _filesystem_state(root, excluded):
-    files = []
-    try:
-        for path in root.rglob("*"):
-            if not path.is_file() or ".git" in path.relative_to(root).parts:
-                continue
-            rel = path.relative_to(root).as_posix()
-            if any(rel == prefix or rel.startswith(prefix + "/")
-                   for prefix in excluded):
-                continue
-            files.append(rel)
-            if len(files) > STATE_FILE_CAP:
-                _enforce_state_file_cap(files)
-    except OSError as exc:
-        raise SurveyError(f"cannot enumerate workspace state: {exc}") from exc
-    digest = hashlib.sha256(b"filesystem\0")
-    _hash_untracked(root, tuple(sorted(files)), digest)
+def _filesystem_state(root, excluded, entries=None, workspace_hash=None):
+    entries = entries if entries is not None else _workspace_census(root, excluded)
+    files = tuple(item.rel for item in entries if item.kind != "directory")
+    digest = hashlib.sha256(b"filesystem-v2\0")
+    digest.update(bytes.fromhex(workspace_hash or _hash_workspace(entries)))
     return RepoState(
-        is_git=False, mode="filesystem", untracked=tuple(sorted(files)),
+        is_git=False, mode="filesystem", untracked=files,
         state_hash=digest.hexdigest(), excluded=excluded)
 
 
 def _state_pathspec(excluded):
-    return ("--", ".", *(f":(exclude){path.rstrip('/')}/**" for path in excluded))
+    magic = "exclude,icase" if os.name == "nt" else "exclude"
+    return ("--", ".", *(f":({magic}){path.rstrip('/')}/**" for path in excluded))
 
 
 def repo_state(root_path, exclude_prefixes=None):
     """Return a content-sensitive snapshot of committed and local Git state."""
-    root = Path(root_path).resolve()
+    root = Path(root_path)
+    # Runtime callers have already supplied and validated an absolute root.
+    # Do not call resolve() on that path: on Windows it can consult ambient cwd.
+    if not root.is_absolute():
+        root = Path(os.path.abspath(root))
     if exclude_prefixes is None:
         exclude_prefixes = ("plans",) if (root / "plans" / "MANIFEST.md").is_file() else ()
     excluded = tuple(sorted(str(path).replace("\\", "/").strip("/")
                             for path in exclude_prefixes if str(path).strip("/\\")))
+    entries = _workspace_census(root, excluded)
+    workspace_hash = _hash_workspace(entries)
     pathspec = _state_pathspec(excluded)
     try:
         probe = run_git(root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
     except SurveyError:
         if (root / ".git").exists():
             raise
-        return _filesystem_state(root, excluded)
+        return _filesystem_state(root, excluded, entries, workspace_hash)
     if probe.returncode != 0:
         diagnostic = (probe.stderr or probe.stdout).lower()
         if "not a git repository" in diagnostic or "not a git directory" in diagnostic:
-            return _filesystem_state(root, excluded)
+            return _filesystem_state(root, excluded, entries, workspace_hash)
         raise SurveyError(
             "cannot determine Git state: " + (probe.stderr.strip() or "unknown error"))
     if probe.stdout.strip() != "true":
-        return _filesystem_state(root, excluded)
+        return _filesystem_state(root, excluded, entries, workspace_hash)
     head_result = run_git(
         root, "rev-parse", "--verify", "HEAD", allowed=(0, 1, 128))
     if head_result.returncode == 0:
         head = head_result.stdout.strip()
-        branch = run_git(root, "branch", "--show-current").stdout.strip() or "(detached)"
+        branch_raw = run_git(
+            root, "branch", "--show-current", binary=True).stdout.strip() or b"(detached)"
+        branch = _display_git_path(branch_raw)
     else:
-        symbolic = run_git(root, "symbolic-ref", "-q", "HEAD", allowed=(0, 1))
-        if symbolic.returncode != 0 or not symbolic.stdout.strip().startswith("refs/heads/"):
+        symbolic = run_git(
+            root, "symbolic-ref", "-q", "HEAD", allowed=(0, 1), binary=True)
+        symbolic_raw = symbolic.stdout.strip()
+        if symbolic.returncode != 0 or not symbolic_raw.startswith(b"refs/heads/"):
             detail = head_result.stderr.strip() or head_result.stdout.strip() or "invalid HEAD"
             raise SurveyError(f"Git HEAD is indeterminate: {detail}")
         head = ""
-        branch = symbolic.stdout.strip()[len("refs/heads/"):]
-    staged = _nul_paths(run_git(
-        root, "diff", "--cached", "--name-only", "-z", *pathspec).stdout)
-    unstaged = _nul_paths(run_git(
-        root, "diff", "--name-only", "-z", *pathspec).stdout)
-    untracked = _nul_paths(run_git(
-        root, "ls-files", "--others", "--exclude-standard", "-z", *pathspec).stdout)
+        branch_raw = symbolic_raw[len(b"refs/heads/"):]
+        branch = _display_git_path(branch_raw)
+    filter_drivers = _configured_filter_drivers(root)
+    staged_raw = _nul_path_bytes(run_git(
+        root, "diff", "--cached", "--name-only", "-z", *pathspec,
+        filter_drivers=filter_drivers, binary=True).stdout)
+    unstaged_raw = _nul_path_bytes(run_git(
+        root, "diff", "--name-only", "-z", *pathspec,
+        filter_drivers=filter_drivers, binary=True).stdout)
+    staged = tuple(_display_git_path(path) for path in staged_raw)
+    unstaged = tuple(_display_git_path(path) for path in unstaged_raw)
+    untracked_raw = _nul_path_bytes(run_git(
+        root, "ls-files", "--others", "--exclude-standard", "-z",
+        *pathspec, binary=True).stdout)
+    untracked = tuple(_display_git_path(path) for path in untracked_raw)
+    index_state = run_git(
+        root, "ls-files", "--stage", "-v", "-z", *pathspec, binary=True).stdout
+    unsafe_index = []
+    for record in (item for item in index_state.split(b"\0") if item):
+        tag = record[0]
+        if chr(tag).islower() or tag == ord("S"):
+            unsafe_index.append(_display_git_path(record.split(b"\t", 1)[-1]))
+    if unsafe_index:
+        raise SurveyError(
+            "Git index contains assume-unchanged/skip-worktree paths; complete "
+            f"freshness is indeterminate: {unsafe_index[:10]}")
     _enforce_state_file_cap(staged, unstaged, untracked)
     digest = hashlib.sha256()
     digest.update(b"head\0" + head.encode("ascii") + b"\0")
-    for label, args in (
-        (b"staged", ("diff", "--cached", "--binary")),
-        (b"unstaged", ("diff", "--binary")),
-    ):
+    digest.update(b"branch\0" + branch_raw + b"\0")
+    digest.update(b"index\0" + index_state + b"\0")
+    digest.update(b"workspace\0" + bytes.fromhex(workspace_hash) + b"\0")
+    for label, paths in ((b"staged", staged_raw), (b"unstaged", unstaged_raw),
+                         (b"untracked", untracked_raw)):
         digest.update(label + b"\0")
-        digest.update(run_git(root, *args, *pathspec).stdout.encode("utf-8"))
-    _hash_untracked(root, untracked, digest)
+        for path in paths:
+            digest.update(path + b"\0")
     return RepoState(
         is_git=True, mode="git", head=head, branch=branch, staged=staged,
         unstaged=unstaged, untracked=untracked, state_hash=digest.hexdigest(),
@@ -455,7 +857,7 @@ def main(argv=None):
         print(f"loom_survey: INDETERMINATE — {exc}", file=sys.stderr)
         return 2
     if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
+        loom_reliability.atomic_write_text(Path(args.out), text)
         print(f"written: {args.out}")
     else:
         if hasattr(sys.stdout, "reconfigure"):
