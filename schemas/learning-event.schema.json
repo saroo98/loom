@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/learning-event.schema.json",
+  "title": "Typed private Loom learning event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["kind", "scope", "signal", "decision_target", "evidence_ids",
+               "domain", "project_id", "predicted", "actual", "polarity",
+               "schema_version", "id", "instance_id", "recorded_at"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "id": {"type": "string", "format": "uuid"},
+    "instance_id": {"type": "string", "format": "uuid"},
+    "kind": {"enum": ["prediction-outcome", "effort-outcome", "rework",
+      "verification-escape", "routing-outcome", "assumption-outcome",
+      "unpredicted-failure", "artifact-utility", "question-response",
+      "decision-delegation", "verification-catch", "guidance-waste",
+      "lifecycle-outcome"]},
+    "scope": {"enum": ["global", "domain", "project"]},
+    "signal": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "decision_target": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "evidence_ids": {"type": "array", "minItems": 1, "maxItems": 32,
+      "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}},
+    "domain": {"type": ["string", "null"]},
+    "project_id": {"type": ["string", "null"], "pattern": "^p-[0-9a-f]{32}$"},
+    "predicted": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "actual": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+    "polarity": {"enum": ["supports", "contradicts"]},
+    "recorded_at": {"type": "string", "format": "date-time"}
+  }
+}

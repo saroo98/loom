@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/artifact-utility.schema.json",
+  "title": "Bounded domain-scoped artifact utility store",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instance_id", "total_observations", "records"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "instance_id": {"type": "string", "format": "uuid"},
+    "total_observations": {"type": "integer", "minimum": 0},
+    "records": {"type": "array", "maxItems": 256, "items": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "domain", "artifact_id", "observation_count", "opened_count",
+        "cited_count", "work_order_used_count", "prevented_defect_count", "unused_count", "projects"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+        "artifact_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+        "observation_count": {"type": "integer", "minimum": 1},
+        "opened_count": {"type": "integer", "minimum": 0},
+        "cited_count": {"type": "integer", "minimum": 0},
+        "work_order_used_count": {"type": "integer", "minimum": 0},
+        "prevented_defect_count": {"type": "integer", "minimum": 0},
+        "unused_count": {"type": "integer", "minimum": 0},
+        "projects": {"type": "array", "maxItems": 16, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^p-[0-9a-f]{32}$"}}
+      }
+    }}
+  }
+}

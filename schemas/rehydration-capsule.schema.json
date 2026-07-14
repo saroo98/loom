@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/rehydration-capsule.schema.json",
+  "title": "Bounded exact-domain Loom rehydration result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["domain", "project_id", "capsule", "reactivated_ids",
+    "verification_required_ids", "dormant_review_ids", "record_count",
+    "character_count", "archive_records_scanned"],
+  "properties": {
+    "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "project_id": {"type": ["string", "null"], "pattern": "^p-[0-9a-f]{32}$"},
+    "capsule": {"type": "array", "maxItems": 4,
+      "items": {"$ref": "memory-record.schema.json"}},
+    "reactivated_ids": {"type": "array", "items": {"type": "string", "format": "uuid"}},
+    "verification_required_ids": {"type": "array", "maxItems": 4,
+      "items": {"type": "string", "format": "uuid"}},
+    "dormant_review_ids": {"type": "array", "maxItems": 4,
+      "items": {"type": "string", "format": "uuid"}},
+    "record_count": {"type": "integer", "minimum": 0, "maximum": 4},
+    "character_count": {"type": "integer", "minimum": 0, "maximum": 4000},
+    "archive_records_scanned": {"const": 0}
+  }
+}

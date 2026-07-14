@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/preference-evolution.schema.json",
+  "title": "Bounded scoped owner preference evolution store",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "instance_id", "total_observations", "preferences"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "instance_id": {"type": "string", "format": "uuid"},
+    "total_observations": {"type": "integer", "minimum": 0},
+    "preferences": {"type": "array", "maxItems": 128, "items": {"$ref": "#/$defs/preference"}}
+  },
+  "$defs": {
+    "preference": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "key", "domain", "task_class", "risk_class", "subject",
+        "stated", "inferred", "effective_value", "effective_source", "pending_value",
+        "status", "observations", "observation_count", "retired_values", "history", "updated_at"],
+      "properties": {
+        "id": {"type": "string", "format": "uuid"},
+        "key": {"enum": ["autonomy", "decision_batch_size", "report_detail",
+          "verification_expectation", "stack", "concern"]},
+        "domain": {"type": ["string", "null"]},
+        "task_class": {"type": ["string", "null"]},
+        "risk_class": {"enum": ["low", "medium", "high", null]},
+        "subject": {"type": ["string", "null"]},
+        "stated": {"type": ["object", "null"]},
+        "inferred": {"type": ["object", "null"]},
+        "effective_value": {"type": ["string", "null"]},
+        "effective_source": {"enum": ["stated", "inferred", "inferred-confirmed", null]},
+        "pending_value": {"type": ["string", "null"]},
+        "status": {"enum": ["active", "pending-confirmation", "retired"]},
+        "observations": {"type": "array", "maxItems": 32},
+        "observation_count": {"type": "integer", "minimum": 0},
+        "retired_values": {"type": "array", "maxItems": 16, "items": {"type": "string"}},
+        "history": {"type": "array", "maxItems": 8},
+        "updated_at": {"type": "string", "format": "date-time"}
+      }
+    }
+  }
+}

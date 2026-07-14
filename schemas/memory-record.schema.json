@@ -7,7 +7,10 @@
   "required": [
     "id", "scope", "category", "statement", "provenance", "evidence_count",
     "confidence", "domain", "project_id", "created_at", "last_confirmed",
-    "expires_at", "status", "supersedes", "preference_key", "preference_value"
+    "expires_at", "status", "supersedes", "preference_key", "preference_value",
+    "last_selected", "last_applied", "last_helped", "last_hurt",
+    "selection_count", "application_count", "helped_count", "hurt_count",
+    "evidence_projects", "utility_score", "verify_by"
   ],
   "properties": {
     "id": { "type": "string", "format": "uuid" },
@@ -22,17 +25,29 @@
     "created_at": { "type": "string", "format": "date-time" },
     "last_confirmed": { "type": "string", "format": "date-time" },
     "expires_at": { "type": ["string", "null"], "format": "date-time" },
-    "status": { "enum": ["active", "retired", "tombstone"] },
+    "status": { "enum": ["active", "dormant", "stale", "archived", "forgotten", "superseded"] },
     "supersedes": { "type": "array", "items": { "type": "string", "format": "uuid" } },
     "preference_key": { "type": ["string", "null"] },
-    "preference_value": { "type": ["string", "null"] }
+    "preference_value": { "type": ["string", "null"] },
+    "last_selected": { "type": ["string", "null"], "format": "date-time" },
+    "last_applied": { "type": ["string", "null"], "format": "date-time" },
+    "last_helped": { "type": ["string", "null"], "format": "date-time" },
+    "last_hurt": { "type": ["string", "null"], "format": "date-time" },
+    "selection_count": { "type": "integer", "minimum": 0 },
+    "application_count": { "type": "integer", "minimum": 0 },
+    "helped_count": { "type": "integer", "minimum": 0 },
+    "hurt_count": { "type": "integer", "minimum": 0 },
+    "evidence_projects": { "type": "array", "maxItems": 64, "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" } },
+    "utility_score": { "type": "number", "minimum": -1, "maximum": 1 },
+    "verify_by": { "type": ["string", "null"], "format": "date-time" }
   },
   "allOf": [
     {
       "if": { "properties": { "scope": { "const": "global" } } },
       "then": {
         "properties": {
-          "category": { "const": "preference" },
+          "category": { "enum": ["preference", "calibration", "process"] },
           "domain": { "type": "null" },
           "project_id": { "type": "null" }
         }
@@ -69,6 +84,20 @@
           "provenance": { "const": "stated" },
           "preference_key": { "type": "string", "minLength": 1 },
           "preference_value": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "category": { "enum": ["calibration", "process", "domain"] }
+        },
+        "required": ["category"]
+      },
+      "then": {
+        "properties": {
+          "preference_key": { "type": "null" },
+          "preference_value": { "type": "null" }
         }
       }
     }
