@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "version": "1.0.0",
+  "capabilities": [
+    {"id":"one-request-routing","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_session.py"],"tests":["tools/test_loom_runtime.py","tools/test_loom_session.py"]},
+    {"id":"complete-world-fingerprint","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_survey.py"],"tests":["tools/test_loom_runtime.py"]},
+    {"id":"plan-before-implementation","kind":"mechanical","enforcement":["tools/loom_gate.py"],"tests":["tools/test_loom_gate.py"]},
+    {"id":"pack-integrity","kind":"mechanical","enforcement":["tools/loom_lint.py"],"tests":["tools/test_loom_lint.py"]},
+    {"id":"domain-discovery","kind":"mechanical","enforcement":["tools/loom_domain.py"],"tests":["tools/test_domain_universality.py"]},
+    {"id":"scoped-memory","kind":"mechanical","enforcement":["tools/loom_memory.py"],"tests":["tools/test_memory_lifecycle.py","tools/test_domain_rehydration.py"]},
+    {"id":"bounded-learning","kind":"mechanical","enforcement":["tools/loom_learning.py","tools/loom_memory.py"],"tests":["tools/test_loom_learning.py","tools/test_memory_lifecycle.py"]},
+    {"id":"preference-evolution","kind":"mechanical","enforcement":["tools/loom_preferences.py"],"tests":["tools/test_preference_evolution.py"]},
+    {"id":"all-file-privacy-scan","kind":"mechanical","enforcement":["tools/loom_privacy.py"],"tests":["tools/test_privacy_excellence.py"]},
+    {"id":"offline-production-runtime","kind":"mechanical","enforcement":["tools/loom_privacy.py"],"tests":["tools/test_privacy_excellence.py"]},
+    {"id":"durable-reversible-state","kind":"mechanical","enforcement":["tools/loom_reliability.py"],"tests":["tools/test_reliability_excellence.py"]},
+    {"id":"honest-usage-accounting","kind":"mechanical","enforcement":["tools/loom_performance.py"],"tests":["tools/test_performance_excellence.py"]},
+    {"id":"owner-transparency","kind":"mechanical","enforcement":["tools/loom_transparency.py","tools/loom_session.py"],"tests":["tools/test_transparency_surface.py"]},
+    {"id":"longitudinal-adaptation-evaluation","kind":"mechanical","enforcement":["tools/loom_adaptation_eval.py"],"tests":["tools/test_adaptation_evaluation.py"]},
+    {"id":"comparative-improvement-proof","kind":"mechanical","enforcement":["tools/loom_improvement.py","tools/loom_improvement_audit.py"],"tests":["tools/test_improvement_proof.py"]},
+    {"id":"receipt-proven-installer","kind":"mechanical","enforcement":["tools/loom_install.py","tools/loom_reliability.py"],"tests":["tools/test_release_standard.py"]},
+    {"id":"evidence-gated-release","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py"]},
+    {"id":"human-judgment-remains-owner-controlled","kind":"advisory","enforcement":[],"tests":[]}
+  ]
+}
