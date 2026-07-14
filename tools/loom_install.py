@@ -1,318 +1,147 @@
 #!/usr/bin/env python3
-"""Install, check, or safely remove Loom agent entry points.
-
-The two platform launchers delegate here so ownership, hashing, refusal rules, and
-rollback behavior have one implementation. Only intact files bearing this Loom
-instance's marker may be replaced or removed. No directory is ever removed.
-"""
+"""Receipt-proven, fail-closed Loom install/check/uninstall lifecycle."""
 
 import argparse
-import hashlib
+import json
 import os
-import re
-import sys
+import shutil
 import tempfile
 import uuid
-from dataclasses import dataclass
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import loom_memory  # noqa: E402
+import loom_reliability
 
-ROOT = Path(__file__).resolve().parent.parent
-OWNER_RE = re.compile(
-    r"(?s)<!-- loom-install-owner:([0-9a-f-]{36}) "
-    r"body-sha256:([0-9a-f]{64}) -->\n?$")
-LEGACY_RE = re.compile(
-    r"(?m)^(?:name:\s*loom\s*$|# Loom\b|description:\s*Loom planning OS\b)")
+
+RECEIPT = ".loom-install-receipt.json"
 
 
 class InstallError(RuntimeError):
-    def __init__(self, message, code=2):
-        super().__init__(message)
-        self.code = code
+    pass
 
 
-@dataclass(frozen=True)
-class Target:
-    source: Path
-    destination: Path
-    label: str
-
-
-@dataclass(frozen=True)
-class Inspection:
-    state: str
-    normalized: str = ""
-    original: bytes | None = None
-
-
-def _normalize(text):
-    return text.replace("\r\n", "\n").replace("\r", "\n")
-
-
-def _sha256(text):
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def _owner_id(home, root, may_create):
-    marker = root / loom_memory.INSTANCE_MARKER
-    if not marker.is_file():
-        if not may_create:
-            return None
-        try:
-            return loom_memory.initialize(home / ".loom", root)
-        except (OSError, UnicodeError, loom_memory.MemoryError) as exc:
-            raise InstallError(f"could not initialize Loom installation identity: {exc}") from exc
+def _root(path, label, *, exists=False):
     try:
-        value = marker.read_text(encoding="utf-8").strip()
-        parsed = str(uuid.UUID(value))
-    except (OSError, UnicodeError, ValueError) as exc:
-        raise InstallError("invalid .loom-instance-id; refusing installation mutation") from exc
-    if parsed != value:
-        raise InstallError("non-canonical .loom-instance-id; refusing installation mutation")
+        value = loom_reliability._absolute(path, label, must_exist=exists)
+    except loom_reliability.ReliabilityError as exc:
+        raise InstallError(str(exc)) from exc
     return value
 
 
-def _targets(root, home):
-    root = Path(root).expanduser().resolve()
-    home = Path(home).expanduser().resolve()
-    skill = root / "skill" / "loom" / "SKILL.md"
-    prompt = root / "skill" / "codex-prompt" / "loom.md"
-    for source in (skill, prompt):
-        if source.is_symlink() or not source.is_file():
-            raise InstallError(f"not a safe Loom source (missing or symlinked): {source}")
-        try:
-            source.resolve().relative_to(root)
-        except ValueError as exc:
-            raise InstallError(f"installer source escapes Loom root: {source}") from exc
-    return (
-        Target(skill, home / ".claude" / "skills" / "loom" / "SKILL.md",
-               "Claude Code skill"),
-        Target(skill, home / ".codex" / "skills" / "loom" / "SKILL.md",
-               "Codex skill"),
-        Target(prompt, home / ".codex" / "prompts" / "loom.md", "Codex /loom prompt"),
-    )
-
-
-def _render(source, root, owner):
-    root = Path(root).expanduser().resolve()
+def _read_receipt(target):
+    path = target / RECEIPT
     try:
-        body = _normalize(source.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError) as exc:
-        raise InstallError(f"cannot read installer source {source}: {exc}") from exc
-    body = body.replace("{{LOOM_PATH}}", root.as_posix())
-    if not body.endswith("\n"):
-        body += "\n"
-    marker = f"<!-- loom-install-owner:{owner} body-sha256:{_sha256(body)} -->\n"
-    return (body + marker).encode("utf-8")
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise InstallError(f"installation receipt is unreadable: {exc}") from exc
+    return value
 
 
-def _safe_destination(path, home):
-    if path.is_symlink():
-        raise InstallError(f"refusing symlink destination: {path}", 1)
+def install(source, target):
+    source = _root(source, "installation source", exists=True)
+    target = _root(target, "installation target")
+    if not source.is_dir() or target.exists():
+        raise InstallError("installation source must be a directory and target must not exist")
+    if target == source or target.is_relative_to(source) or source.is_relative_to(target):
+        raise InstallError("installation source and target must be separate trees")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    parent = _root(target.parent, "installation target parent", exists=True)
+    staging = Path(tempfile.mkdtemp(prefix=".loom-install-", dir=parent))
+    owned = []
     try:
-        path.relative_to(home)
-        path.parent.resolve(strict=False).relative_to(home)
-    except ValueError as exc:
-        raise InstallError(f"destination escapes the selected user home: {path}", 1) from exc
-    current = path.parent
-    while current != home:
-        if current.exists() and (current.is_symlink() or not current.is_dir()):
-            raise InstallError(f"unsafe destination parent: {current}", 1)
-        current = current.parent
-
-
-def _inspect(path, owner):
-    if path.is_symlink():
-        return Inspection("symlink")
-    if not path.exists():
-        return Inspection("missing")
-    if not path.is_file():
-        return Inspection("foreign-type")
-    try:
-        original = path.read_bytes()
-        text = _normalize(original.decode("utf-8"))
-    except (OSError, UnicodeError):
-        return Inspection("unreadable")
-    match = OWNER_RE.search(text)
-    if not match:
-        return Inspection("unowned", text, original)
-    try:
-        marker_owner = str(uuid.UUID(match.group(1)))
-    except ValueError:
-        return Inspection("invalid-owner", text, original)
-    if marker_owner != match.group(1):
-        return Inspection("invalid-owner", text, original)
-    if marker_owner != owner:
-        return Inspection("foreign-owner", text, original)
-    body = text[:match.start()]
-    if _sha256(body) != match.group(2):
-        return Inspection("modified-owned", text, original)
-    return Inspection("owned", text, original)
-
-
-def _atomic_write(path, content):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, raw_tmp = tempfile.mkstemp(prefix=".loom-install-", suffix=".tmp",
-                                           dir=str(path.parent))
-    tmp = Path(raw_tmp)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(content)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(tmp, path)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
-
-
-def _restore_install(changed):
-    failures = []
-    for path, previous, installed in reversed(changed):
-        try:
-            if not path.is_file() or path.read_bytes() != installed:
-                failures.append(f"{path}: current file changed during rollback; preserved")
-            elif previous is None:
-                path.unlink()
-            else:
-                _atomic_write(path, previous)
-        except OSError as exc:
-            failures.append(f"{path}: {exc}")
-    return failures
-
-
-def _install(targets, expected, inspections, root, adopt_legacy):
-    refusals = []
-    for target, inspection in zip(targets, inspections):
-        legacy = (inspection.state == "unowned" and adopt_legacy
-                  and root.as_posix() in inspection.normalized
-                  and LEGACY_RE.search(inspection.normalized))
-        if inspection.state not in {"owned", "missing"} and not legacy:
-            refusals.append(f"{target.destination} [{inspection.state}]")
-    if refusals:
-        raise InstallError(
-            "preflight refused; no entry-point files changed: " + "; ".join(refusals), 1)
-
-    changed = []
-    messages = []
-    try:
-        for target, content, inspection in zip(targets, expected, inspections):
-            if inspection.state == "owned" and inspection.normalized.encode("utf-8") == content:
-                messages.append(f"CURRENT: {target.label} -> {target.destination}")
+        for path in loom_reliability._regular_files(source):
+            relative = path.relative_to(source)
+            if relative.as_posix() == RECEIPT or "__pycache__" in relative.parts \
+                    or path.suffix.lower() in {".pyc", ".pyo"}:
                 continue
-            _atomic_write(target.destination, content)
-            changed.append((target.destination, inspection.original, content))
-            messages.append(f"INSTALLED: {target.label} -> {target.destination}")
-    except OSError as exc:
-        failures = _restore_install(changed)
-        detail = f"; rollback failures: {'; '.join(failures)}" if failures else ""
-        raise InstallError(f"installation I/O failed and prior files were restored: {exc}{detail}") \
-            from exc
-    for message in messages:
-        print(message)
+            destination = staging / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(path, destination)
+            owned.append(relative.as_posix())
+        skill_source = source / "skill" / "loom" / "SKILL.md"
+        if skill_source.is_file() and "SKILL.md" not in owned:
+            shutil.copyfile(skill_source, staging / "SKILL.md")
+            owned.append("SKILL.md")
+        if not owned:
+            raise InstallError("installation source has no regular payload files")
+        install_id = str(uuid.uuid4())
+        receipt = loom_reliability.installation_receipt(
+            staging, owned, install_id=install_id)
+        loom_reliability.atomic_write_json(staging / RECEIPT, receipt)
+        os.replace(staging, target)
+    except BaseException:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise
+    checked = check(target)
+    return {**checked, "files_installed": len(owned)}
 
 
-def _uninstall(targets, inspections):
-    refusals = [f"{target.destination} [{inspection.state}]"
-                for target, inspection in zip(targets, inspections)
-                if inspection.state not in {"owned", "missing"}]
-    if refusals:
-        raise InstallError(
-            "uninstall preflight refused; no files removed: " + "; ".join(refusals), 1)
-    removed = []
-    messages = []
+def check(target):
+    target = _root(target, "installation target", exists=True)
+    if not target.is_dir():
+        raise InstallError("installation target must be a directory")
+    receipt = _read_receipt(target)
     try:
-        for target, inspection in zip(targets, inspections):
-            if inspection.state == "missing":
-                messages.append(f"ABSENT: {target.label} -> {target.destination}")
-                continue
-            target.destination.unlink()
-            removed.append((target.destination, inspection.original))
-            messages.append(f"REMOVED: {target.label} -> {target.destination}")
-    except OSError as exc:
-        failures = []
-        for path, previous in reversed(removed):
-            try:
-                if path.exists():
-                    failures.append(f"{path}: recreated during rollback; preserved")
-                else:
-                    _atomic_write(path, previous)
-            except OSError as rollback_error:
-                failures.append(f"{path}: {rollback_error}")
-        detail = f"; rollback failures: {'; '.join(failures)}" if failures else ""
-        raise InstallError(f"uninstall I/O failed and removed files were restored: {exc}{detail}") \
-            from exc
-    for message in messages:
-        print(message)
+        body = {key: value for key, value in receipt.items() if key != "receipt_hash"}
+        if not isinstance(receipt, dict) or set(receipt) != {
+                "schema_version", "install_id", "files", "receipt_hash"} \
+                or receipt["receipt_hash"] != loom_reliability._canonical_hash(body):
+            raise InstallError("installation receipt is invalid")
+        for item in receipt["files"]:
+            path = loom_reliability._target(target, item["path"])
+            if not path.is_file() or loom_reliability.file_sha256(path) != item["sha256"]:
+                raise InstallError(f"installed file changed or is missing: {item['path']}")
+    except (KeyError, TypeError, loom_reliability.ReliabilityError) as exc:
+        raise InstallError(f"installation receipt is invalid: {exc}") from exc
+    return {"status": "installed", "install_id": receipt["install_id"],
+            "files_verified": len(receipt["files"]),
+            "receipt_hash": receipt["receipt_hash"]}
 
 
-def run(home, *, mode="install", adopt_legacy=False, loom_root=ROOT):
-    root = Path(loom_root).expanduser().resolve()
-    home = Path(home).expanduser().resolve()
-    if mode not in {"install", "check", "uninstall"}:
-        raise InstallError(f"invalid installer mode: {mode}")
-    if adopt_legacy and mode != "install":
-        raise InstallError("--adopt-legacy is valid only for installation")
-    owner = _owner_id(home, root, may_create=mode == "install")
-    if owner is None:
-        print("STALE: Loom installation identity is missing; run the installer.")
-        return 1
-    targets = _targets(root, home)
-    for target in targets:
-        _safe_destination(target.destination, home)
-    expected = tuple(_render(target.source, root, owner) for target in targets)
-    inspections = tuple(_inspect(target.destination, owner) for target in targets)
-
-    if mode == "check":
-        bad = 0
-        for target, content, inspection in zip(targets, expected, inspections):
-            current = inspection.state == "owned" \
-                and inspection.normalized.encode("utf-8") == content
-            print(f"{'CURRENT' if current else 'STALE'}: {target.label} -> "
-                  f"{target.destination}" + ("" if current else f" [{inspection.state}]"))
-            bad += 0 if current else 1
-        if bad:
-            return 1
-        print("Loom install check: current")
-        return 0
-    if mode == "uninstall":
-        _uninstall(targets, inspections)
-        print("Loom uninstall: intact owned files removed; directories and foreign files preserved")
-        return 0
-
-    _install(targets, expected, inspections, root, adopt_legacy)
-    print(f"Loom repo path stamped: {root.as_posix()}")
-    print("Run the platform installer with --check/-Check to verify freshness; "
-          "--uninstall/-Uninstall removes only intact owned files.")
-    return 0
+def uninstall(target, *, confirmation):
+    target = _root(target, "installation target", exists=True)
+    receipt = _read_receipt(target)
+    try:
+        result = loom_reliability.uninstall_owned_files(
+            target, receipt, confirmation=confirmation)
+    except loom_reliability.ReliabilityError as exc:
+        raise InstallError(str(exc)) from exc
+    receipt_path = target / RECEIPT
+    receipt_path.unlink()
+    for directory, _, _ in os.walk(target, topdown=False):
+        try:
+            Path(directory).rmdir()
+        except OSError:
+            pass
+    return {"status": "uninstalled", **result,
+            "target_removed": not target.exists()}
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description="Safely install Loom agent entry points")
-    modes = parser.add_mutually_exclusive_group()
-    modes.add_argument("--check", action="store_true")
-    modes.add_argument("--uninstall", action="store_true")
-    parser.add_argument("--adopt-legacy", action="store_true")
-    parser.add_argument("--home", default=str(Path.home()))
-    parser.add_argument("--loom-root", default=str(ROOT),
-                        help="Loom source root (normally inferred; useful for isolated verification)")
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    install_parser = sub.add_parser("install")
+    install_parser.add_argument("source")
+    install_parser.add_argument("target")
+    check_parser = sub.add_parser("check")
+    check_parser.add_argument("target")
+    uninstall_parser = sub.add_parser("uninstall")
+    uninstall_parser.add_argument("target")
+    uninstall_parser.add_argument("--confirmation", required=True)
     args = parser.parse_args(argv)
-    if sys.version_info < (3, 11):
-        print("loom_install: Python 3.11 or newer is required", file=sys.stderr)
-        return 2
-    mode = "check" if args.check else "uninstall" if args.uninstall else "install"
     try:
-        return run(args.home, mode=mode, adopt_legacy=args.adopt_legacy,
-                   loom_root=args.loom_root)
+        if args.command == "install":
+            result = install(args.source, args.target)
+        elif args.command == "check":
+            result = check(args.target)
+        else:
+            result = uninstall(args.target, confirmation=args.confirmation)
     except InstallError as exc:
-        print(f"loom_install: REFUSED - {exc}", file=sys.stderr)
-        return exc.code
-    except (OSError, UnicodeError) as exc:
-        print(f"loom_install: REFUSED - I/O is indeterminate: {exc}", file=sys.stderr)
+        print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
+    print(json.dumps(result, indent=2, sort_keys=True))
+    return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())

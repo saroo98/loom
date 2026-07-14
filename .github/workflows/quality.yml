@@ -1,0 +1,31 @@
+name: quality
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  stdlib-suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile production modules
+        working-directory: tools
+        run: python -m compileall -q -f .
+      - name: Prove production modules are offline
+        working-directory: tools
+        run: python loom_privacy.py offline-audit .
+      - name: Run full suite
+        working-directory: tools
+        run: python -m unittest discover -p "test_*.py"
