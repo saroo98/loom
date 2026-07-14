@@ -76,12 +76,13 @@ In `plans/MANIFEST.md`:
 
 ```markdown
 ## Artifacts
-| Artifact | Decision | Why (one line) |
-|---|---|---|
-| architecture.md | produce | two new services + a queue; boundaries need deciding |
-| uiux.md | produce | user-facing dashboard |
-| product.md | skip | scope fully specified by requester; nothing to decide |
-| maintenance.md | skip | requester operates it; handoff doc covered by release plan |
+| Artifact | Action | Consumer | Decision | Why (one line) |
+|---|---|---|---|---|
+| architecture.md | produce | implementer | service and queue boundaries | two new services + a queue; boundaries need deciding |
+| uiux.md | produce | product designer | dashboard interaction model | user-facing dashboard |
+| product.md | skip | — | — | scope fully specified by requester; nothing to decide |
+| maintenance.md | skip | — | — | requester operates it; handoff doc covered by release plan |
 ```
 
-A skip line that says "not needed" is not a reason. Say *why* it's not needed.
+A produced row without both a named consumer and a downstream decision is invalid. No consumer
+means skip. A skip line that says "not needed" is not a reason. Say *why* it's not needed.

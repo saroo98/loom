@@ -3,12 +3,16 @@
 
 import argparse
 import json
+import os
 import re
+import stat
 import sys
 from pathlib import Path
 
 SCHEMA_VERSION = 1
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+MAX_PROJECT_FILES = 4096
+MAX_MANIFEST_BYTES = 512 * 1024
 
 # Stable invariants only. Concrete regulations, SDK behavior, limits, and policies must be
 # verified from current authoritative sources during the planning run.
@@ -86,7 +90,7 @@ CATALOG = {
                        "browser scope", "migration rollback", "end-to-end critical flows"],
     },
     "desktop": {
-        "keywords": [r"\bdesktop app(?:lication)?\b", r"\bwindows app\b", r"\blinux desktop\b",
+        "keywords": [r"\bdesktop app(?:lication)?\b", r"\bdesktop\b", r"\bwindows app\b", r"\blinux desktop\b",
                      r"\bwinui\b", r"\bwpf\b", r"\btauri\b"],
         "invariants": ["OS/version matrix", "filesystem/config contract", "clean-machine test",
                        "DPI/input variance", "installer/signing", "update/rollback path"],
@@ -111,28 +115,285 @@ CATALOG = {
         "invariants": ["graded eval set", "prompt/model version", "tool blast radius",
                        "injection/exfiltration controls", "cost budget", "behavioral rollback"],
     },
+    "high-risk": {
+        "keywords": [r"\bsecurity[- ]critical\b", r"\bfinancial workflow\b",
+                     r"\bcredential rotation\b", r"\bproduction access\b",
+                     r"\bhigh[- ]risk\b", r"\bregulated workflow\b"],
+        "invariants": ["explicit authority boundary", "least privilege",
+                       "complete audit trail", "two-person irreversible control",
+                       "fail-closed recovery", "independent real-medium verification"],
+    },
 }
+
+STRUCTURAL_SIGNALS = {
+    "cli": {"files": {"cli.py", "__main__.py"}, "dependencies": {
+        "click", "typer", "argparse", "commander", "clap", "package-bin"},
+        "extensions": set()},
+    "mobile": {"files": {"pubspec.yaml", "app.json"}, "dependencies": {
+        "react-native", "flutter"}, "extensions": set()},
+    "android": {"files": {"androidmanifest.xml", "build.gradle", "build.gradle.kts"},
+                "dependencies": {"com.android.application"}, "extensions": set()},
+    "ios-macos": {"files": {"info.plist", "project.pbxproj"},
+                  "dependencies": {"swiftui"}, "extensions": {".swift"}},
+    "data-etl": {"files": {"dbt_project.yml", "airflow.cfg"}, "dependencies": {
+        "apache-airflow", "dbt-core", "dagster", "pyspark"}, "extensions": set()},
+    "ml": {"files": {"mlflow.yml", "model.onnx"}, "dependencies": {
+        "torch", "tensorflow", "scikit-learn", "mlflow"},
+        "extensions": {".onnx"}},
+    "realtime-3d": {"files": {"project.godot", "defaultengine.ini"}, "dependencies": {
+        "three", "@react-three/fiber", "babylonjs", "unity"},
+        "extensions": {".glb", ".gltf", ".fbx"}},
+    "firmware-hardware": {"files": {"platformio.ini", "west.yml"}, "dependencies": {
+        "zephyr", "esp-idf"}, "extensions": {".ino", ".kicad_pcb"}},
+    "research": {"files": {"references.bib", "citations.cff"}, "dependencies": set(),
+                 "extensions": {".bib", ".tex"}},
+    "desktop": {"files": {"tauri.conf.json", "electron-builder.yml"}, "dependencies": {
+        "electron", "@tauri-apps/api"}, "extensions": {".csproj"}},
+    "website": {"files": {"astro.config.mjs", "sitemap.xml"}, "dependencies": {
+        "astro", "gatsby"}, "extensions": set()},
+    "web-app": {"files": {"next.config.js", "vite.config.ts"}, "dependencies": {
+        "next"}, "extensions": set()},
+    "library-sdk": {"files": {"py.typed"}, "dependencies": set(),
+                    "extensions": {".gemspec"}},
+    "browser-extension": {"files": set(), "dependencies": {
+        "webextension-polyfill", "webextension-manifest"}, "extensions": set()},
+    "llm-agent": {"files": {"promptfoo.yaml"}, "dependencies": {
+        "openai", "anthropic", "langchain"}, "extensions": set()},
+}
+
+GUIDANCE = {
+    "cli": (["ambiguous exit semantics", "shell and encoding variance"],
+            ["clean install succeeds", "help and failure contracts are stable"],
+            ["real process invocation", "stdout/stderr and exit-code assertions"]),
+    "mobile": (["device and lifecycle fragmentation", "permission/offline failure"],
+               ["signed staged build", "supported-device smoke pass"],
+               ["real-device lifecycle test", "offline and permission transitions"]),
+    "data-etl": (["duplicate or late data", "partial replay corruption"],
+                 ["idempotent replay", "lineage and backfill evidence"],
+                 ["production-shaped dataset", "duplicate/late/backfill probes"]),
+    "ml": (["training-serving skew", "evaluation leakage and drift"],
+           ["versioned model and dataset", "predeclared thresholds pass"],
+           ["held-out evaluation", "reproducible train/inference run"]),
+    "accounting": (["unbalanced postings", "rounding, period, or tax-rule error"],
+                   ["balanced ledger and reconciliation", "immutable audit evidence"],
+                   ["double-entry property tests", "dated jurisdiction edge cases"]),
+    "realtime-3d": (["frame-budget regression", "unit/coordinate or asset mismatch"],
+                    ["target-device frame budget", "asset pipeline reproducibility"],
+                    ["real GPU/device profile", "spatial interaction and asset probes"]),
+    "firmware-hardware": (["unsafe state", "brick, timing, power, or revision mismatch"],
+                          ["recoverable flash", "hardware revision and safe-state proof"],
+                          ["hardware-in-loop run", "power-cycle and recovery test"]),
+    "research": (["unsupported claim", "source or method irreproducibility"],
+                 ["claim/evidence review", "limitations and correction route"],
+                 ["source audit", "independent method reproduction"]),
+    "desktop": (["installer/update failure", "OS, DPI, input, or filesystem variance"],
+                ["clean-machine install", "signed update and rollback proof"],
+                ["real packaged application", "clean-machine upgrade/rollback"]),
+    "high-risk": (["unauthorized irreversible effect", "audit or recovery failure"],
+                  ["independent approval", "fail-closed rollback exercised"],
+                  ["isolated real-medium rehearsal", "authority and audit verification"]),
+    "android": (["process-death state loss", "permission or device fragmentation"],
+                ["signed AAB/APK", "supported real-device matrix passes"],
+                ["instrumented real-device run", "process-death and permission probes"]),
+    "ios-macos": (["entitlement or lifecycle failure", "signing/device variance"],
+                  ["signed archive", "supported-device and upgrade pass"],
+                  ["real-device lifecycle run", "provisioning and privacy probes"]),
+    "website": (["inaccessible or slow content", "SEO/hosting regression"],
+                ["real-content acceptance", "hosting and DNS rollback documented"],
+                ["browser accessibility audit", "real network performance measurement"]),
+    "web-app": (["auth/session contract failure", "client/server state divergence"],
+                ["critical flows pass end to end", "migration rollback exercised"],
+                ["real browser/server run", "session, failure, and recovery probes"]),
+    "library-sdk": (["consumer API break", "version or packaging incompatibility"],
+                    ["clean consumer install", "compatibility and deprecation checks pass"],
+                    ["external fixture project", "published-package-shaped API tests"]),
+    "automation": (["unbounded side effect", "duplicate or partial execution"],
+                   ["dry run reviewed", "bounded activation and recovery route"],
+                   ["isolated simulation", "idempotency and partial-failure probes"]),
+    "browser-extension": (["excess permission", "hostile page or store variance"],
+                          ["least-permission package", "store rollback path recorded"],
+                          ["real supported browsers", "hostile-page and migration probes"]),
+    "llm-agent": (["prompt injection or exfiltration", "behavior/cost regression"],
+                  ["graded eval threshold passes", "tool rollback is exercised"],
+                  ["versioned adversarial eval", "real tool sandbox and cost measurement"]),
+}
+
+ADAPTER_FIXTURES = {
+    "accounting": "double-entry accounting ledger",
+    "realtime-3d": "real-time 3D room configurator",
+    "firmware-hardware": "microcontroller firmware",
+    "research": "research literature review",
+    "data-etl": "ETL data pipeline backfill",
+    "ml": "machine-learning model training",
+    "android": "Android application",
+    "ios-macos": "iOS application",
+    "mobile": "cross-platform mobile app",
+    "cli": "command-line developer tool",
+    "website": "marketing website",
+    "web-app": "web application dashboard",
+    "desktop": "desktop application",
+    "library-sdk": "public SDK library",
+    "automation": "scheduled automation job",
+    "browser-extension": "browser extension",
+    "llm-agent": "LLM agent tool pipeline",
+    "high-risk": "security-critical credential rotation",
+}
+
+BENCHMARKS = (
+    ("cli-tool", "command-line developer tool", {"cli"}, "exit"),
+    ("mobile-app", "cross-platform mobile app", {"mobile"}, "device"),
+    ("etl-pipeline", "ETL data pipeline with backfills", {"data-etl"}, "duplicate"),
+    ("ml-system", "machine-learning training and inference", {"ml"}, "leakage"),
+    ("bookkeeping", "double-entry accounting ledger", {"accounting"}, "unbalanced"),
+    ("realtime-3d", "real-time 3D room configurator", {"realtime-3d"}, "frame"),
+    ("firmware", "microcontroller firmware", {"firmware-hardware"}, "unsafe"),
+    ("research", "research literature review", {"research"}, "claim"),
+    ("desktop", "desktop application installer", {"desktop"}, "installer"),
+    ("high-risk", "security-critical credential rotation", {"high-risk"}, "unauthorized"),
+)
 
 
 class DomainError(RuntimeError):
     pass
 
 
-def select_domains(description, explicit=None):
+def _guidance(domain_id):
+    risks, release, verification = GUIDANCE.get(domain_id, (
+        ["domain-specific contract failure", "unsupported environment variance"],
+        ["supported-environment acceptance", "documented rollback route"],
+        ["domain-real-medium execution", "negative and recovery probes"],
+    ))
+    return {
+        "risks": list(risks),
+        "release_criteria": list(release),
+        "verification": list(verification),
+        "current_facts_to_verify": [
+            "current platform/tool versions and limits",
+            "current governing policies, standards, or regulations",
+            "current target environment and release channel",
+        ],
+    }
+
+
+def inspect_project(root_path):
+    """Return bounded structural evidence without treating project prose as domain truth."""
+    root = Path(root_path)
+    if not root.is_absolute():
+        root = Path(os.path.abspath(root))
+    if not root.is_dir() or root.is_symlink():
+        raise DomainError("project root must be a real local directory")
+    names, extensions, dependencies = set(), set(), set()
+    stack, count = [root], 0
+    manifests = {"package.json", "requirements.txt", "pyproject.toml", "cargo.toml",
+                 "manifest.json", "build.gradle", "build.gradle.kts"}
+    while stack:
+        directory = stack.pop()
+        try:
+            entries = sorted(directory.iterdir(), key=lambda item: os.fsencode(item.name))
+        except OSError as exc:
+            raise DomainError(f"cannot inspect project structure: {exc}") from exc
+        for path in entries:
+            count += 1
+            if count > MAX_PROJECT_FILES:
+                raise DomainError("project structure exceeds its inspection bound")
+            try:
+                info = path.lstat()
+            except OSError as exc:
+                raise DomainError(f"cannot inspect project entry: {exc}") from exc
+            if stat.S_ISLNK(info.st_mode):
+                raise DomainError("project structure contains a symlink")
+            if stat.S_ISDIR(info.st_mode):
+                if path.name not in {".git", "node_modules", "vendor", ".venv", "dist"}:
+                    stack.append(path)
+                continue
+            if not stat.S_ISREG(info.st_mode):
+                raise DomainError("project structure contains an unsupported special entry")
+            low_name = path.name.casefold()
+            names.add(low_name)
+            if path.suffix:
+                extensions.add(path.suffix.casefold())
+            if low_name in manifests and info.st_size <= MAX_MANIFEST_BYTES:
+                try:
+                    text = path.read_text(encoding="utf-8").casefold()
+                except (OSError, UnicodeError) as exc:
+                    raise DomainError(f"cannot read dependency manifest: {exc}") from exc
+                if low_name == "package.json":
+                    try:
+                        value = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(value, dict):
+                        for field in ("dependencies", "devdependencies", "peerdependencies"):
+                            if isinstance(value.get(field), dict):
+                                dependencies.update(str(item).casefold()
+                                                    for item in value[field])
+                        if isinstance(value.get("bin"), (dict, str)):
+                            dependencies.add("package-bin")
+                elif low_name == "manifest.json":
+                    try:
+                        value = json.loads(text)
+                    except json.JSONDecodeError:
+                        continue
+                    if isinstance(value, dict) and type(value.get("manifest_version")) is int:
+                        dependencies.add("webextension-manifest")
+                elif low_name in {"build.gradle", "build.gradle.kts"}:
+                    if "com.android.application" in text:
+                        dependencies.add("com.android.application")
+                else:
+                    for token in re.findall(r"(?m)^\s*([a-z0-9_.@/-]+)", text):
+                        dependencies.add(re.split(r"[<>=!~\[]", token)[0])
+    return {"file_names": sorted(names), "extensions": sorted(extensions),
+            "dependencies": sorted(dependencies)}
+
+
+def _validate_facts(project_facts):
+    if project_facts is None:
+        return {"file_names": [], "extensions": [], "dependencies": []}
+    if not isinstance(project_facts, dict) or set(project_facts) != {
+            "file_names", "extensions", "dependencies"}:
+        raise DomainError("project facts fields are unknown or missing")
+    normalized = {}
+    for key in ("file_names", "extensions", "dependencies"):
+        values = project_facts[key]
+        if not isinstance(values, list) or len(values) > MAX_PROJECT_FILES \
+                or not all(isinstance(item, str) and 0 < len(item) <= 200 for item in values):
+            raise DomainError("project facts are invalid or exceed their bound")
+        normalized[key] = sorted(set(item.casefold() for item in values))
+    return normalized
+
+
+def _adapter_result(domain_id, adapter, *, keyword_hits, structural_hits):
+    guidance = _guidance(domain_id)
+    return {
+        "id": domain_id,
+        "coverage": "adapter",
+        "keyword_hits": keyword_hits,
+        "structural_hits": structural_hits,
+        "required_invariants": list(adapter["invariants"]),
+        "durable_invariants": list(adapter["invariants"]),
+        **guidance,
+    }
+
+
+def select_domains(description, explicit=None, project_facts=None):
     description = str(description or "").strip()
     explicit = [str(item).strip().lower() for item in (explicit or []) if str(item).strip()]
     if any(not ID_RE.fullmatch(item) for item in explicit):
         raise DomainError("explicit domain IDs must be safe lower-case local identifiers")
+    facts = _validate_facts(project_facts)
     matches = []
     if explicit:
         for domain_id in dict.fromkeys(explicit):
             adapter = CATALOG.get(domain_id)
-            matches.append({
-                "id": domain_id,
-                "coverage": "adapter" if adapter else "unknown",
-                "keyword_hits": [],
-                "required_invariants": list(adapter["invariants"]) if adapter else [],
-            })
+            if adapter:
+                matches.append(_adapter_result(
+                    domain_id, adapter, keyword_hits=[], structural_hits=[]))
+            else:
+                matches.append({"id": domain_id, "coverage": "unknown",
+                    "keyword_hits": [], "structural_hits": [],
+                    "required_invariants": [], "durable_invariants": [],
+                    "risks": [], "release_criteria": [], "verification": [],
+                    "current_facts_to_verify": []})
         source = "explicit"
     else:
         low = description.casefold()
@@ -140,16 +401,25 @@ def select_domains(description, explicit=None):
         for order, (domain_id, adapter) in enumerate(CATALOG.items()):
             hits = [pattern for pattern in adapter["keywords"]
                     if re.search(pattern, low, flags=re.IGNORECASE)]
-            if hits:
-                scored.append((-len(hits), order, domain_id, hits, adapter))
-        for _, _, domain_id, hits, adapter in sorted(scored):
-            matches.append({
-                "id": domain_id,
-                "coverage": "adapter",
-                "keyword_hits": hits,
-                "required_invariants": list(adapter["invariants"]),
-            })
-        source = "keyword-evidence"
+            structural = STRUCTURAL_SIGNALS.get(domain_id, {})
+            structural_hits = []
+            for key, signal_values in structural.items():
+                fact_key = "file_names" if key == "files" else key
+                for value in sorted(set(facts[fact_key]) & set(signal_values)):
+                    structural_hits.append(f"{key}:{value}")
+            score = len(hits) * 2 + len(structural_hits) * 3
+            if score:
+                scored.append((-score, order, domain_id, hits, structural_hits, adapter))
+        ids = {item[2] for item in scored}
+        if "android" in ids or "ios-macos" in ids:
+            scored = [item for item in scored if item[2] != "mobile"
+                      or not ("android" in ids or "ios-macos" in ids)]
+        for _, _, domain_id, hits, structural_hits, adapter in sorted(scored):
+            matches.append(_adapter_result(
+                domain_id, adapter, keyword_hits=hits,
+                structural_hits=structural_hits))
+        source = "structural-and-language-evidence" if any(
+            item["structural_hits"] for item in matches) else "language-evidence"
 
     unknown = not matches or any(item["coverage"] == "unknown" for item in matches)
     primary = matches[0]["id"] if matches else "unclassified"
@@ -171,20 +441,60 @@ def select_domains(description, explicit=None):
     }
 
 
+def evaluate_benchmarks():
+    results = []
+    for benchmark_id, description, expected, risk_token in BENCHMARKS:
+        selection = select_domains(description)
+        actual = set(selection["memory_domains"])
+        adapters = {item["id"]: item for item in selection["adapters"]}
+        risks = " ".join(risk for domain_id in expected
+                         for risk in adapters.get(domain_id, {}).get("risks", []))
+        passed = expected.issubset(actual) and risk_token in risks \
+            and all(adapters[item]["release_criteria"]
+                    and adapters[item]["verification"]
+                    and adapters[item]["durable_invariants"]
+                    and adapters[item]["current_facts_to_verify"]
+                    for item in expected if item in adapters)
+        results.append({"id": benchmark_id, "expected": sorted(expected),
+                        "actual": sorted(actual), "passed": passed})
+    adapter_results = {}
+    for domain_id, description in ADAPTER_FIXTURES.items():
+        selection = select_domains(description)
+        adapter = next((item for item in selection["adapters"]
+                        if item["id"] == domain_id), None)
+        adapter_results[domain_id] = bool(
+            adapter and adapter["durable_invariants"]
+            and adapter["current_facts_to_verify"] and adapter["risks"]
+            and adapter["release_criteria"] and adapter["verification"])
+    return {"schema_version": SCHEMA_VERSION, "benchmark_count": len(results),
+            "passed": all(item["passed"] for item in results)
+            and set(adapter_results) == set(CATALOG) and all(adapter_results.values()),
+            "benchmarks": results, "adapter_fixtures": adapter_results}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    source = parser.add_mutually_exclusive_group(required=True)
+    source = parser.add_mutually_exclusive_group()
     source.add_argument("--description")
     source.add_argument("--description-file")
+    parser.add_argument("--project-root")
+    parser.add_argument("--evaluate-benchmarks", action="store_true")
     parser.add_argument("--domain", action="append", default=[],
                         help="explicit domain ID; repeat for a composite project")
     args = parser.parse_args(argv)
     try:
+        if args.evaluate_benchmarks:
+            result = evaluate_benchmarks()
+            print(json.dumps({"status": "ok", "result": result}, sort_keys=True))
+            return 0 if result["passed"] else 1
+        if not args.description and not args.description_file:
+            raise DomainError("description or --evaluate-benchmarks is required")
         if args.description_file:
             description = Path(args.description_file).read_text(encoding="utf-8")
         else:
             description = args.description
-        result = select_domains(description, args.domain)
+        facts = inspect_project(args.project_root) if args.project_root else None
+        result = select_domains(description, args.domain, facts)
     except (OSError, UnicodeError, DomainError) as exc:
         print(json.dumps({"status": "error", "error": str(exc)}, ensure_ascii=False))
         return 1
