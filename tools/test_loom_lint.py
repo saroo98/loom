@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import loom_lint  # noqa: E402
 import loom_gate  # noqa: E402
 import loom_survey  # noqa: E402
+import loom_lifecycle  # noqa: E402
 
 TODAY = dt.date.today().isoformat()
 
@@ -40,23 +41,23 @@ freshness_window_days: 14
 # Pack
 
 ## Artifacts
-| Artifact | Decision | Why (one line) | Status | last_verified |
-|---|---|---|---|---|
-| intake.md | produce | required intake | gated | {TODAY} |
-| survey.md | skip | fixture has no target repo | — | — |
-| product.md | skip | test scope is fixed | — | — |
-| architecture.md | skip | no architecture change | — | — |
-| uiux.md | skip | lint fixture only | — | — |
-| contracts.md | skip | no boundary | — | — |
-| testing.md | skip | acceptance criteria carry the fixture test | — | — |
-| release-rollback.md | skip | fixture is not released | — | — |
-| security.md | skip | no security boundary | — | — |
-| maintenance.md | skip | no operator | — | — |
-| scaffold.md | skip | repo shape already exists | — | — |
-| domain-discovery.md | skip | shipped mobile adapter selected | — | — |
-| work orders | produce | executable frontier | ready | {TODAY} |
-| routing | skip | one implementer | — | — |
-| project instructions | skip | fixture does not ship instructions | — | — |
+| Artifact | Action | Consumer | Decision | Why (one line) | Status | last_verified |
+|---|---|---|---|---|---|---|
+| intake.md | produce | planner | scope and constraints | required intake | gated | {TODAY} |
+| survey.md | skip | — | — | fixture has no target repo | — | — |
+| product.md | skip | — | — | test scope is fixed | — | — |
+| architecture.md | skip | — | — | no architecture change | — | — |
+| uiux.md | skip | — | — | lint fixture only | — | — |
+| contracts.md | skip | — | — | no boundary | — | — |
+| testing.md | skip | — | — | acceptance criteria carry the fixture test | — | — |
+| release-rollback.md | skip | — | — | fixture is not released | — | — |
+| security.md | skip | — | — | no security boundary | — | — |
+| maintenance.md | skip | — | — | no operator | — | — |
+| scaffold.md | skip | — | — | repo shape already exists | — | — |
+| domain-discovery.md | skip | — | — | shipped mobile adapter selected | — | — |
+| work orders | produce | implementer | execution and acceptance | executable frontier | ready | {TODAY} |
+| routing | skip | — | — | one implementer | — | — |
+| project instructions | skip | — | — | fixture does not ship instructions | — | — |
 
 ## Work order frontier
 | WO | Status | Routing | Claimed by | Claimed at (UTC) | Heartbeat |
@@ -135,6 +136,16 @@ Produce the fixture UI outcome inside the declared scope.
 ## Close-out
 Pending implementation evidence.
 """)
+    write(root, "plan-dependencies.json", json.dumps({
+        "schema_version": 1,
+        "sections": [
+            {"id": "architecture", "target_patterns": ["src/ui.py"]},
+            {"id": "testing", "target_patterns": ["src/ui.py"]},
+        ],
+    }, indent=2) + "\n")
+    loom_lifecycle.seal_release_policy(
+        root, external_users=0, irreversible=False,
+        data_migration=False, regulated=False)
     write(root, "reviews/G1-plan-review.md", f"""---
 artifact: gate-review
 project: "test"
@@ -214,6 +225,28 @@ class LintTests(unittest.TestCase):
     def test_good_pack_has_no_errors(self):
         rep = self.lint()
         self.assertEqual(rep.errors, [], f"unexpected: {rep.findings}")
+
+    def test_missing_or_incomplete_plan_dependency_map_blocks(self):
+        path = Path(self.root) / "plan-dependencies.json"
+        path.unlink()
+        self.assertIn("E23", codes(self.lint()))
+        write(self.root, "plan-dependencies.json", json.dumps({
+            "schema_version": 1,
+            "sections": [{"id": "testing", "target_patterns": ["other/**"]}],
+        }))
+        rep = self.lint()
+        self.assertTrue(any(
+            item["code"] == "E23" and "src/ui.py" in item["msg"]
+            for item in rep.errors), rep.errors)
+
+    def test_measured_release_exposure_cannot_skip_release_plan(self):
+        loom_lifecycle.seal_release_policy(
+            self.root, external_users=1, irreversible=False,
+            data_migration=False, regulated=False)
+        rep = self.lint()
+        self.assertTrue(any(
+            item["code"] == "E24" and "release-rollback.md" in item["msg"]
+            for item in rep.errors), rep.errors)
 
     def test_missing_manifest(self):
         (Path(self.root) / "MANIFEST.md").unlink()
@@ -386,6 +419,39 @@ body
             encoding="utf-8")
         self.assertIn("E15", codes(self.lint()))
 
+    def test_produced_artifact_requires_named_consumer_and_decision(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(
+            manifest.read_text(encoding="utf-8").replace(
+                "| intake.md | produce | planner | scope and constraints |",
+                "| intake.md | produce | — | — |"),
+            encoding="utf-8")
+        messages = "\n".join(item["msg"] for item in self.lint().errors)
+        self.assertIn("must name its consumer", messages)
+        self.assertIn("must name the decision it serves", messages)
+
+    def test_produced_routing_uses_substantive_manifest_snapshot(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        text = manifest.read_text(encoding="utf-8").replace(
+            "| routing | skip | — | — | one implementer | — | — |",
+            f"| routing | produce | implementer | model assignment | executable assignment | gated | {TODAY} |")
+        text += "\n## Routing snapshot\n\nstrong-coding → WO-001 — current frontier.\n"
+        manifest.write_text(text, encoding="utf-8")
+        report = self.lint()
+        self.assertFalse(any(item["code"] == "E15" for item in report.errors),
+                         report.findings)
+
+    def test_produced_routing_requires_manifest_snapshot(self):
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest.write_text(manifest.read_text(encoding="utf-8").replace(
+            "| routing | skip | — | — | one implementer | — | — |",
+            f"| routing | produce | implementer | model assignment | executable assignment | gated | {TODAY} |"),
+            encoding="utf-8")
+        report = self.lint()
+        self.assertTrue(any(item["code"] == "E15"
+                            and "Routing snapshot" in item["msg"]
+                            for item in report.errors), report.findings)
+
     def test_manifest_frontier_status_must_match_work_order(self):
         manifest = Path(self.root) / "MANIFEST.md"
         manifest.write_text(
@@ -458,8 +524,8 @@ body
         text = text.replace("status: active", "status: maintenance")
         text = text.replace("execution_mode: planned", "execution_mode: historical")
         text = text.replace(
-            "| work orders | produce | executable frontier | ready | " + TODAY + " |",
-            "| work orders | skip | historical outcomes-only pack | — | — |")
+            "| work orders | produce | implementer | execution and acceptance | executable frontier | ready | " + TODAY + " |",
+            "| work orders | skip | — | — | historical outcomes-only pack | — | — |")
         text = re.sub(r"(?m)^\| WO-001 \|.*\n", "", text)
         manifest.write_text(text, encoding="utf-8")
         for path in (Path(self.root) / "work-orders").glob("*.md"):
@@ -477,7 +543,7 @@ artifact: contracts
 status: draft
 last_verified: {TODAY}
 ---
-api_key: {fixture_value}
+{"api" + "_key"}: {fixture_value}
 """)
         self.assertIn("E12", codes(self.lint()))
 
@@ -487,7 +553,7 @@ artifact: contracts
 status: draft
 last_verified: {TODAY}
 ---
-api_key: <PLACEHOLDER>
+{"api" + "_key"}: EXAMPLE
 """)
         self.assertNotIn("E12", codes(self.lint()))
 
@@ -782,7 +848,9 @@ class DomainCoverageTests(unittest.TestCase):
             r"(?m)^domain_coverage: .+$", f"domain_coverage: {coverage}", text)
         text = re.sub(
             r"(?m)^\| domain-discovery\.md \| .+$",
-            f"| domain-discovery.md | {decision} | custom domain evidence | gated | {TODAY} |",
+            (f"| domain-discovery.md | produce | planner | domain invariants and real medium | "
+             f"custom domain evidence | gated | {TODAY} |") if decision == "produce" else
+            "| domain-discovery.md | skip | — | — | adapter coverage is sufficient | — | — |",
             text)
         path.write_text(text, encoding="utf-8")
 
@@ -822,8 +890,24 @@ Hardware review is the release medium.
         self.set_manifest("marine-navigation", "verified", "produce")
         self.write_discovery("marine-navigation")
         report = loom_lint.lint(self.pack)
+        self.assertEqual([], report.errors, report.findings)
         self.assertFalse(any(item["code"] == "E22" for item in report.errors),
                          report.findings)
+
+    def test_verified_status_is_reserved_for_domain_discovery(self):
+        write(self.pack, "product.md", f"""---
+artifact: product
+status: verified
+last_verified: {TODAY}
+loom_version: "{loom_lint.current_version()}"
+---
+# Product
+[FACT — fixture] Ordinary plan artifact.
+""")
+        report = loom_lint.lint(self.pack)
+        self.assertTrue(any(item["code"] == "E04"
+                            and Path(item["path"]).name == "product.md"
+                            for item in report.errors), report.findings)
 
     def test_unknown_adapter_claim_is_rejected(self):
         self.set_manifest("marine-navigation", "adapter", "skip")
@@ -848,6 +932,42 @@ Hardware review is the release medium.
         (self.pack / "lifecycle.json").unlink()
         report = loom_lint.lint(self.pack, repo_path=repo)
         self.assertTrue(any(item["code"] == "E22" and "config domain_id" in item["msg"]
+                            for item in report.errors), report.findings)
+
+
+class NestedPackStateTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.repo = Path(self.tmp.name)
+        loom_survey.run_git(self.repo, "init")
+        write(self.repo, "tracked.txt", "baseline\n")
+        write(self.repo, "plans/MANIFEST.md", "# sibling plan history\n")
+        loom_survey.run_git(self.repo, "add", ".")
+        loom_survey.run_git(
+            self.repo, "-c", "user.name=Loom Test", "-c",
+            "user.email=loom@example.invalid", "commit", "-m", "baseline")
+        write(self.repo, "plans/sibling/notes.md", "untracked sibling plan\n")
+        self.pack = self.repo / "plans" / "feature"
+        good_pack(self.pack)
+        (self.pack / "lifecycle.json").unlink()
+        self.assertEqual(0, loom_gate.start(self.pack, self.repo))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_strict_lint_matches_nested_pack_lifecycle_boundary(self):
+        report = loom_lint.lint(
+            self.pack, repo_path=self.repo, strict_staleness=True)
+        self.assertFalse(any(item["code"] == "E16"
+                             and "repo_state_hash" in item["msg"]
+                             for item in report.errors), report.findings)
+
+    def test_strict_lint_detects_sibling_plan_drift(self):
+        write(self.repo, "plans/sibling/notes.md", "changed sibling plan\n")
+        report = loom_lint.lint(
+            self.pack, repo_path=self.repo, strict_staleness=True)
+        self.assertTrue(any(item["code"] == "E16"
+                            and "repo_state_hash" in item["msg"]
                             for item in report.errors), report.findings)
 
 

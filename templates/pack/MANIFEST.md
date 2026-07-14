@@ -21,13 +21,14 @@ Original request (verbatim, do not paraphrase):
 
 ## Artifacts
 
-| Artifact | Decision | Why (one line) | Status | last_verified |
-|---|---|---|---|---|
-| intake.md | produce | — (always at M+) | | |
-| domain-discovery.md | produce/skip | produce when coverage is unknown/verified custom domain | | |
-| <plan>.md | produce/skip | <reason> | | |
+| Artifact | Action | Consumer | Decision | Why (one line) | Status | last_verified |
+|---|---|---|---|---|---|---|
+| intake.md | produce | planner | scope, risk, and constraints | always at M+ | | |
+| domain-discovery.md | produce/skip | <named role or — when skipped> | <decision served or —> | produce when coverage is unknown/verified custom domain | | |
+| <plan>.md | produce/skip | <named role or — when skipped> | <decision served or —> | <reason> | | |
 
-<!-- Every matrix row accounted for. Merges declared here ("uiux absorbs architecture"). -->
+<!-- Every matrix row accounted for. A produced row without a consumer or decision fails lint. -->
+<!-- No consumer means skip. Merges declared here ("uiux absorbs architecture"). -->
 
 ## Glossary (canonical names)
 

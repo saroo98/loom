@@ -18,6 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_lint  # noqa: E402
+import loom_reliability  # noqa: E402
 
 TEMPLATE = """Execute work order {wid} for project {project}. The work order text follows at the end of
 this prompt; it is your contract.
@@ -99,7 +100,7 @@ def main(argv=None):
     if prompt is None:
         return code
     if args.out:
-        Path(args.out).write_text(prompt, encoding="utf-8")
+        loom_reliability.atomic_write_text(Path(args.out), prompt)
         print(f"written: {args.out}")
     else:
         print(prompt)

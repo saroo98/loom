@@ -11,7 +11,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_gate  # noqa: E402
+import loom_lifecycle  # noqa: E402
 import loom_kickoff  # noqa: E402
+import loom_lint  # noqa: E402
 from test_loom_lint import good_pack  # noqa: E402
 
 
@@ -57,6 +59,15 @@ class LifecycleTests(unittest.TestCase):
         wo.write_text(text, encoding="utf-8")
         return wo
 
+    def capture(self, wo=None):
+        wo = wo or self.pack / "work-orders" / "WO-001-build-ui.md"
+        text = wo.read_text(encoding="utf-8")
+        match = __import__("re").search(r"(?m)^id:\s*(WO-[0-9]+)\s*$", text)
+        self.assertIsNotNone(match)
+        return loom_lifecycle.capture_acceptance(
+            self.pack, self.repo, match.group(1), medium="cli-process",
+            command=[sys.executable, "-c", "print('real-medium acceptance')"])
+
     def add_second_work_order(self):
         first = self.pack / "work-orders" / "WO-001-build-ui.md"
         second = self.pack / "work-orders" / "WO-002-build-api.md"
@@ -72,6 +83,11 @@ class LifecycleTests(unittest.TestCase):
                 "| WO-001 | ready | strong-coding | — | — | — |\n"
                 "| WO-002 | ready | strong-coding | — | — | — |"),
             encoding="utf-8")
+        dependencies = self.pack / "plan-dependencies.json"
+        value = json.loads(dependencies.read_text(encoding="utf-8"))
+        value["sections"].append({
+            "id": "api", "target_patterns": ["src/api.py"]})
+        dependencies.write_text(json.dumps(value), encoding="utf-8")
         return second
 
     def test_valid_chain_reaches_implementation_authorized(self):
@@ -148,6 +164,71 @@ class LifecycleTests(unittest.TestCase):
         findings = loom_gate.verify(self.pack, self.repo)
         self.assertTrue(any("event hash" in finding for finding in findings), findings)
 
+    def test_unknown_lifecycle_top_level_field_is_rejected(self):
+        self.authorize()
+        path = self.pack / "lifecycle.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        data["unknown_private_field"] = "must not be trusted"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        findings = loom_gate.verify(self.pack)
+        self.assertIn("lifecycle top-level fields are unknown or missing", findings)
+
+    def test_re_signed_unknown_nested_event_field_is_rejected(self):
+        self.authorize()
+        path = self.pack / "lifecycle.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        event = data["events"][2]
+        event["unknown_private_field"] = "owner-secret-marker"
+        event["event_hash"] = loom_gate._event_hash(event)
+        path.write_text(json.dumps(data), encoding="utf-8")
+        findings = loom_gate.verify(self.pack)
+        self.assertIn("event 2 fields are unknown or missing", findings)
+
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, path, data, "lifecycle.schema.json")
+        self.assertTrue(
+            any("oneOf" in item["msg"] for item in report.errors),
+            report.errors)
+
+    def test_valid_lifecycle_matches_executable_exact_schema(self):
+        self.authorize()
+        path = self.pack / "lifecycle.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        report = loom_lint.Report()
+
+        loom_lint.validate_schema(
+            report, path, data, "lifecycle.schema.json")
+
+        self.assertEqual(report.errors, [])
+
+    def test_status_only_done_cannot_bypass_completion_and_frontier_evidence(self):
+        """A mutable G1 field must not manufacture terminal lifecycle credit."""
+        self.authorize()
+        wo = self.pack / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(
+            wo.read_text(encoding="utf-8").replace(
+                "status: ready", "status: done"),
+            encoding="utf-8")
+
+        findings = loom_gate.verify(self.pack)
+
+        self.assertTrue(
+            any("done without a sealed completion" in item for item in findings),
+            findings)
+        self.assertTrue(
+            any("frontier status" in item for item in findings), findings)
+
+    def test_authorized_pack_with_deleted_required_artifact_is_invalid(self):
+        self.authorize()
+        (self.pack / "decisions.md").unlink()
+
+        findings = loom_gate.verify(self.pack)
+
+        self.assertTrue(
+            any("pack lint" in item and "decisions" in item for item in findings),
+            findings)
+
     def test_malformed_event_returns_blocking_findings_instead_of_raising(self):
         self.assertEqual(loom_gate.start(self.pack, self.repo, "planned"), 0)
         path = self.pack / "lifecycle.json"
@@ -177,6 +258,7 @@ class LifecycleTests(unittest.TestCase):
         git(self.repo, "commit", "-qm", "preexisting deliverable")
         self.authorize()
         wo = self.mark_done()
+        self.capture(wo)
         self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 1)
         data = json.loads((self.pack / "lifecycle.json").read_text(encoding="utf-8"))
         self.assertEqual(data["work_order_completions"], [])
@@ -186,6 +268,7 @@ class LifecycleTests(unittest.TestCase):
         (self.repo / "src").mkdir()
         (self.repo / "src" / "ui.py").write_text("implemented later\n", encoding="utf-8")
         wo = self.mark_done()
+        self.capture(wo)
         self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 0)
         self.assertEqual(loom_gate.verify(self.pack), [])
         self.assertEqual(loom_gate.verify(self.pack, self.repo), [])
@@ -217,9 +300,11 @@ class LifecycleTests(unittest.TestCase):
         (self.repo / "src").mkdir()
         (self.repo / "src" / "ui.py").write_text("first branch merged\n", encoding="utf-8")
         first = self.mark_done()
+        self.capture(first)
         self.assertEqual(loom_gate.close_wo(self.pack, self.repo, first), 0)
         (self.repo / "src" / "api.py").write_text("second branch merged\n", encoding="utf-8")
         self.mark_done(second)
+        self.capture(second)
         self.assertEqual(loom_gate.close_wo(self.pack, self.repo, second), 0)
         data = json.loads((self.pack / "lifecycle.json").read_text(encoding="utf-8"))
         self.assertEqual(
@@ -233,6 +318,7 @@ class LifecycleTests(unittest.TestCase):
         (self.repo / "src").mkdir()
         (self.repo / "src" / "ui.py").write_text("implemented later\n", encoding="utf-8")
         wo = self.mark_done()
+        self.capture(wo)
         with mock.patch.object(
                 loom_gate, "_atomic_write_text", side_effect=OSError("seeded manifest failure")):
             self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 2)
@@ -246,6 +332,7 @@ class LifecycleTests(unittest.TestCase):
         (self.repo / "src" / "ui.py").write_text("implemented later\n", encoding="utf-8")
         (self.repo / "unrelated.txt").write_text("parallel mutation\n", encoding="utf-8")
         wo = self.mark_done()
+        self.capture(wo)
         self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 1)
         data = json.loads((self.pack / "lifecycle.json").read_text(encoding="utf-8"))
         self.assertEqual(data["work_order_completions"], [])
@@ -267,6 +354,7 @@ class LifecycleTests(unittest.TestCase):
         (self.repo / "src").mkdir()
         (self.repo / "src" / "ui.py").write_text("implemented later\n", encoding="utf-8")
         wo = self.mark_done()
+        self.capture(wo)
         self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 0)
         wo.write_text(wo.read_text(encoding="utf-8") + "\ntampered\n", encoding="utf-8")
         findings = loom_gate.verify(self.pack)
@@ -354,14 +442,31 @@ Stop if another component is required.
         self.assertEqual(loom_gate.small_authorize(
             self.record, self.repo, self.wo), 0)
 
+    def capture(self):
+        return loom_lifecycle.capture_acceptance(
+            self.record.parent, self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('small real-medium acceptance')"])
+
     def test_small_flow_proves_plan_before_change_without_pack(self):
         self.authorize()
         (self.repo / "src").mkdir()
         (self.repo / "src" / "small.py").write_text("VALUE = 1\n", encoding="utf-8")
         self.write_wo("done")
+        self.capture()
         self.assertEqual(loom_gate.small_close(
             self.record, self.repo, self.wo), 0)
         self.assertEqual(loom_gate.verify_small(self.record), [])
+
+    def test_small_flow_refuses_text_only_acceptance_claim(self):
+        self.authorize()
+        (self.repo / "src").mkdir()
+        (self.repo / "src" / "small.py").write_text("VALUE = 1\n", encoding="utf-8")
+        self.write_wo("done")
+        self.assertEqual(loom_gate.small_close(
+            self.record, self.repo, self.wo), 1)
+        self.capture()
+        self.assertEqual(loom_gate.small_close(
+            self.record, self.repo, self.wo), 0)
 
     def test_small_flow_refuses_unchanged_preexisting_deliverable(self):
         (self.repo / "src").mkdir()

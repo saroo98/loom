@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "sections": [
+    {
+      "id": "replace-with-plan-section-id",
+      "target_patterns": [
+        "replace/with/real/target/glob/**"
+      ]
+    }
+  ]
+}

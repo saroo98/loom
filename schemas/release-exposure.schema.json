@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-exposure.schema.json",
+  "title": "Measured release and rollback exposure",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "inputs", "level", "requirements", "policy_hash"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["external_users", "irreversible", "data_migration", "regulated"],
+      "properties": {
+        "external_users": {"type": "integer", "minimum": 0},
+        "irreversible": {"type": "boolean"},
+        "data_migration": {"type": "boolean"},
+        "regulated": {"type": "boolean"}
+      }
+    },
+    "level": {"enum": ["none", "staged", "controlled"]},
+    "requirements": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+    "policy_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

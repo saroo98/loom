@@ -64,11 +64,13 @@ import loom_survey
 import loom_gate
 import loom_memory
 import loom_domain
+import loom_lifecycle
 
 ENUMS = {
     "manifest.status": {"draft", "gated", "active", "stale", "maintenance", "archived"},
     "manifest.tier": {"S", "M", "L", "XL"},
     "artifact.status": {"draft", "gated", "stale", "superseded", "frozen"},
+    "domain-discovery.status": {"draft", "verified"},
     "wo.status": {"draft", "ready", "blocked", "in-progress", "done", "cancelled"},
     "wo.routing": {"frontier-reasoning", "strong-coding", "fast-cheap", "specialist", "human"},
     "wo.size": {"S", "M"},
@@ -236,67 +238,137 @@ def validate_schema(rep, path, value, schema_name):
                 f"cannot load governing schema {schema_name}: {exc}")
         return
 
-    def walk(instance, rule, location):
+    def collect(instance, rule, location):
+        errors = []
+        if not isinstance(rule, dict):
+            return errors if rule is not False else [f"{location} is not allowed"]
+
+        for branch in rule.get("allOf", []):
+            errors.extend(collect(instance, branch, location))
+        if "oneOf" in rule:
+            matches = sum(not collect(instance, branch, location)
+                          for branch in rule["oneOf"])
+            if matches != 1:
+                errors.append(f"{location} must match exactly one oneOf branch")
+        if "anyOf" in rule and not any(
+                not collect(instance, branch, location)
+                for branch in rule["anyOf"]):
+            errors.append(f"{location} must match at least one anyOf branch")
+        if "if" in rule:
+            condition_matches = not collect(instance, rule["if"], location)
+            selected = rule.get("then") if condition_matches else rule.get("else")
+            if selected is not None:
+                errors.extend(collect(instance, selected, location))
+
         expected = rule.get("type")
-        type_ok = {
-            "object": isinstance(instance, dict),
-            "array": isinstance(instance, list),
-            "string": isinstance(instance, str),
-            "integer": isinstance(instance, int) and not isinstance(instance, bool),
-            "number": isinstance(instance, (int, float)) and not isinstance(instance, bool),
-            "boolean": isinstance(instance, bool),
+        expected_types = expected if isinstance(expected, list) else [expected]
+        type_checks = {
+            "object": lambda item: isinstance(item, dict),
+            "array": lambda item: isinstance(item, list),
+            "string": lambda item: isinstance(item, str),
+            "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+            "number": lambda item: isinstance(item, (int, float))
+            and not isinstance(item, bool),
+            "boolean": lambda item: isinstance(item, bool),
+            "null": lambda item: item is None,
         }
-        if expected and not type_ok.get(expected, False):
-            rep.add("ERROR", "E18", path, 1,
-                    f"{schema_name} {location} must be {expected}")
-            return
+        if expected and not any(
+                type_checks.get(kind, lambda _item: False)(instance)
+                for kind in expected_types):
+            errors.append(f"{location} must be {expected}")
+            return errors
         if "const" in rule and instance != rule["const"]:
-            rep.add("ERROR", "E18", path, 1,
-                    f"{schema_name} {location} must equal {rule['const']!r}")
+            errors.append(f"{location} must equal {rule['const']!r}")
         if "enum" in rule and instance not in rule["enum"]:
-            rep.add("ERROR", "E18", path, 1,
-                    f"{schema_name} {location} not in {rule['enum']}")
+            errors.append(f"{location} not in {rule['enum']}")
+
         if isinstance(instance, str):
             if rule.get("pattern") and not re.search(rule["pattern"], instance):
-                rep.add("ERROR", "E18", path, 1,
-                        f"{schema_name} {location} does not match {rule['pattern']}")
+                errors.append(f"{location} does not match {rule['pattern']}")
             if "minLength" in rule and len(instance) < rule["minLength"]:
-                rep.add("ERROR", "E18", path, 1,
-                        f"{schema_name} {location} is too short")
+                errors.append(f"{location} is too short")
             if "maxLength" in rule and len(instance) > rule["maxLength"]:
-                rep.add("ERROR", "E18", path, 1,
-                        f"{schema_name} {location} exceeds {rule['maxLength']} characters")
+                errors.append(
+                    f"{location} exceeds {rule['maxLength']} characters")
             if rule.get("format") == "date":
                 try:
                     dt.date.fromisoformat(instance)
                 except ValueError:
-                    rep.add("ERROR", "E18", path, 1,
-                            f"{schema_name} {location} is not an ISO date")
-        if isinstance(instance, (int, float)) and "minimum" in rule \
-                and instance < rule["minimum"]:
-            rep.add("ERROR", "E18", path, 1,
-                    f"{schema_name} {location} is below {rule['minimum']}")
+                    errors.append(f"{location} is not an ISO date")
+            elif rule.get("format") == "date-time":
+                try:
+                    instant = dt.datetime.fromisoformat(
+                        instance.replace("Z", "+00:00"))
+                except ValueError:
+                    errors.append(f"{location} is not an ISO date-time")
+                else:
+                    if instant.tzinfo is None:
+                        errors.append(f"{location} date-time lacks a timezone")
+            elif rule.get("format") == "uuid" and not re.fullmatch(
+                    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
+                    r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}", instance):
+                errors.append(f"{location} is not a UUID")
+
+        if isinstance(instance, (int, float)) and not isinstance(instance, bool):
+            if "minimum" in rule and instance < rule["minimum"]:
+                errors.append(f"{location} is below {rule['minimum']}")
+            if "maximum" in rule and instance > rule["maximum"]:
+                errors.append(f"{location} exceeds {rule['maximum']}")
+
         if isinstance(instance, list):
             if "minItems" in rule and len(instance) < rule["minItems"]:
-                rep.add("ERROR", "E18", path, 1,
-                        f"{schema_name} {location} has too few items")
-            for index, item in enumerate(instance):
-                walk(item, rule.get("items", {}), f"{location}[{index}]")
+                errors.append(f"{location} has too few items")
+            if "maxItems" in rule and len(instance) > rule["maxItems"]:
+                errors.append(f"{location} has too many items")
+            if rule.get("uniqueItems"):
+                encoded = [json.dumps(item, sort_keys=True, ensure_ascii=False)
+                           for item in instance]
+                if len(encoded) != len(set(encoded)):
+                    errors.append(f"{location} contains duplicate items")
+            prefix = rule.get("prefixItems", [])
+            for index, child in enumerate(prefix[:len(instance)]):
+                errors.extend(collect(instance[index], child, f"{location}[{index}]"))
+            remaining = instance[len(prefix):]
+            item_rule = rule.get("items", {})
+            if item_rule is False and remaining:
+                errors.append(f"{location} has disallowed additional items")
+            elif isinstance(item_rule, dict):
+                for index, item in enumerate(remaining, start=len(prefix)):
+                    errors.extend(collect(item, item_rule, f"{location}[{index}]"))
+
         if isinstance(instance, dict):
+            if "minProperties" in rule and len(instance) < rule["minProperties"]:
+                errors.append(f"{location} has too few properties")
+            if "maxProperties" in rule and len(instance) > rule["maxProperties"]:
+                errors.append(f"{location} has too many properties")
             for required in rule.get("required", []):
                 if required not in instance:
-                    rep.add("ERROR", "E18", path, 1,
-                            f"{schema_name} {location} missing '{required}'")
+                    errors.append(f"{location} missing '{required}'")
             properties = rule.get("properties", {})
-            if rule.get("additionalProperties") is False:
-                for key in set(instance) - set(properties):
-                    rep.add("ERROR", "E18", path, 1,
-                            f"{schema_name} {location} has unknown key '{key}'")
+            pattern_properties = rule.get("patternProperties", {})
+            matched = set(properties) & set(instance)
             for key, child in properties.items():
                 if key in instance:
-                    walk(instance[key], child, f"{location}.{key}")
+                    errors.extend(collect(instance[key], child, f"{location}.{key}"))
+            for pattern, child in pattern_properties.items():
+                for key in instance:
+                    if re.search(pattern, key):
+                        matched.add(key)
+                        errors.extend(collect(
+                            instance[key], child, f"{location}.{key}"))
+            unknown = set(instance) - matched
+            additional = rule.get("additionalProperties", {})
+            if additional is False:
+                for key in sorted(unknown):
+                    errors.append(f"{location} has unknown key '{key}'")
+            elif isinstance(additional, dict):
+                for key in sorted(unknown):
+                    errors.extend(collect(
+                        instance[key], additional, f"{location}.{key}"))
+        return errors
 
-    walk(value, schema, "$")
+    for message in collect(value, schema, "$"):
+        rep.add("ERROR", "E18", path, 1, f"{schema_name} {message}")
 
 
 def parse_markdown_table(text, heading):
@@ -569,7 +641,8 @@ def lint_home(home_path):
 
 
 def lint(pack_path, repo_path=None, strict_staleness=False,
-         enforce_lifecycle=True, check_repo_state=True):
+         enforce_lifecycle=True, check_repo_state=True,
+         check_gate_requirements=True):
     rep = Report()
     pack = Path(pack_path)
     if not pack.is_dir():
@@ -703,7 +776,7 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
     artifact_rows = parse_markdown_table(manifest_text, "Artifacts")
     artifact_decisions = {
         artifact_matrix_key(row.get("artifact", "")):
-        row.get("decision", "").strip().lower()
+        row.get("action", "").strip().lower()
         for row in artifact_rows
     }
     if mfm and not artifact_rows:
@@ -711,7 +784,9 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                 "MANIFEST must contain a parseable ## Artifacts decision table")
     for row in artifact_rows:
         artifact = row.get("artifact", "").strip()
-        decision = row.get("decision", "").strip().lower()
+        decision = row.get("action", "").strip().lower()
+        consumer = row.get("consumer", "").strip()
+        downstream_decision = row.get("decision", "").strip()
         reason = row.get("why (one line)", "").strip()
         if decision not in {"produce", "skip"}:
             rep.add("ERROR", "E15", manifest, 1,
@@ -720,7 +795,17 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
         if not reason or reason.lower() in {"—", "-", "not needed", "n/a"}:
             rep.add("ERROR", "E15", manifest, 1,
                     f"artifact '{artifact}' needs a concrete one-line reason")
-        if decision == "produce" and artifact.lower() != "work orders":
+        if decision == "produce" and (
+                not consumer or consumer.lower() in {"—", "-", "n/a", "none"}):
+            rep.add("ERROR", "E15", manifest, 1,
+                    f"produced artifact '{artifact}' must name its consumer")
+        if decision == "produce" and (
+                not downstream_decision
+                or downstream_decision.lower() in {"—", "-", "n/a", "none"}):
+            rep.add("ERROR", "E15", manifest, 1,
+                    f"produced artifact '{artifact}' must name the decision it serves")
+        if decision == "produce" \
+                and artifact_matrix_key(artifact) not in {"work orders", "routing"}:
             match = re.search(r"[\w./-]+\.md", artifact)
             if not match:
                 rep.add("ERROR", "E15", manifest, 1,
@@ -734,6 +819,35 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
         for missing in sorted(MATRIX_ARTIFACTS - accounted):
             rep.add("ERROR", "E15", manifest, 1,
                     f"artifact matrix row '{missing}' has no produce/skip decision")
+    if artifact_decisions.get("routing") == "produce":
+        routing_match = re.search(
+            r"(?ms)^## Routing snapshot\s*\n(.*?)(?=^##\s|\Z)", manifest_text)
+        routing_body = (routing_match.group(1).strip() if routing_match else "")
+        routing_body = re.sub(r"<!--.*?-->", "", routing_body, flags=re.S).strip()
+        has_route = re.search(
+            r"\b(frontier-reasoning|strong-coding|fast-cheap|specialist|human)\b",
+            routing_body)
+        has_placeholder = re.search(r"<[^>]+>|\b(?:pending|tbd|todo)\b", routing_body, re.I)
+        if not routing_body or not has_route or has_placeholder:
+            rep.add("ERROR", "E15", manifest, 1,
+                    "produced routing requires a substantive ## Routing snapshot")
+
+    if mfm.get("tier") in {"M", "L", "XL"} and execution_mode == "planned" \
+            and not historical:
+        release_path = pack / loom_lifecycle.RELEASE_FILE
+        try:
+            release = loom_lifecycle.validate_release_policy(pack)
+        except loom_lifecycle.LifecycleError as exc:
+            rep.add("ERROR", "E24", release_path, 1, str(exc))
+        else:
+            validate_schema(
+                rep, release_path, release, "release-exposure.schema.json")
+            release_decision = artifact_decisions.get("release-rollback.md")
+            if release["level"] in {"staged", "controlled"} \
+                    and release_decision != "produce":
+                rep.add("ERROR", "E24", manifest, 1,
+                        f"{release['level']} exposure requires produced "
+                        "release-rollback.md")
 
     discovery = pack / "domain-discovery.md"
     discovery_decision = artifact_decisions.get("domain-discovery.md")
@@ -784,6 +898,12 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
 
     repo_state = None
     head = None
+    pack_rel = None
+    if repo_path:
+        try:
+            pack_rel = pack.resolve().relative_to(Path(repo_path).resolve()).as_posix()
+        except ValueError:
+            pack_rel = None  # pack outside the repo — no tolerance possible
     if strict_staleness and not repo_path:
         add_staleness(
             "W15", manifest,
@@ -791,17 +911,12 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
             "untracked, or non-Git filesystem state cannot be established")
     if repo_path and check_repo_state:
         try:
-            repo_state = loom_survey.repo_state(repo_path)
+            repo_state = loom_survey.repo_state(
+                repo_path, exclude_prefixes=((pack_rel,) if pack_rel else ()))
             if repo_state.is_git:
                 head = repo_state.head
         except loom_survey.SurveyError as exc:
             add_staleness("W15", manifest, f"repository state is indeterminate: {exc}")
-    pack_rel = None
-    if repo_path:
-        try:
-            pack_rel = pack.resolve().relative_to(Path(repo_path).resolve()).as_posix()
-        except ValueError:
-            pack_rel = None  # pack outside the repo — no tolerance possible
     _drift_cache = {}
 
     def check_repo_state(path, fm_dict):
@@ -918,7 +1033,10 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
             rep.add("ERROR", "E02", f, 1, "frontmatter missing or unterminated")
         else:
             check_required(rep, f, fm, "artifact")
-            check_enum(rep, f, fm, "status", "artifact.status")
+            status_enum = ("domain-discovery.status"
+                           if f.name == "domain-discovery.md"
+                           else "artifact.status")
+            check_enum(rep, f, fm, "status", status_enum)
             d = check_date(rep, f, fm)
             artifact_status[f.name] = fm.get("status", "")
             st = fm.get("status", "")
@@ -1141,6 +1259,39 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
         rep.add("ERROR", "E13", wo_dir, 1,
                 f"tier {mfm.get('tier')} planned pack requires at least one work order")
 
+    if mfm.get("tier") in {"M", "L", "XL"} and execution_mode == "planned" \
+            and not historical:
+        dependency_path = pack / loom_lifecycle.DEPENDENCY_FILE
+        dependency_map = None
+        try:
+            dependency_map = json.loads(
+                dependency_path.read_text(encoding="utf-8"),
+                object_pairs_hook=loom_lifecycle._strict_object)
+            loom_lifecycle.plan_regate({}, {}, dependency_map)
+        except (OSError, UnicodeError, json.JSONDecodeError,
+                loom_lifecycle.LifecycleError) as exc:
+            rep.add("ERROR", "E23", dependency_path, 1,
+                    f"planned M+ pack requires a valid plan dependency map: {exc}")
+        else:
+            validate_schema(
+                rep, dependency_path, dependency_map,
+                "plan-dependencies.schema.json")
+            section_ids = [item["id"] for item in dependency_map["sections"]]
+            if len(section_ids) != len(set(section_ids)):
+                rep.add("ERROR", "E23", dependency_path, 1,
+                        "plan dependency section ids must be unique")
+            mapped_patterns = {
+                pattern for item in dependency_map["sections"]
+                for pattern in item["target_patterns"]}
+            uncovered = sorted({
+                pattern for work_order in wos.values()
+                for pattern in work_order["touches"]
+                if pattern not in mapped_patterns})
+            if uncovered:
+                rep.add("ERROR", "E23", dependency_path, 1,
+                        "work-order touches missing from plan dependency map: "
+                        + ", ".join(uncovered[:20]))
+
     frontier = {}
     for row in frontier_rows:
         wid = row.get("wo", "").strip()
@@ -1268,7 +1419,7 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                     rep.add("ERROR", "E20", review, 1,
                             f"{gate} review missing required key '{key}'")
 
-    if execution_mode == "planned":
+    if execution_mode == "planned" and check_gate_requirements:
         executable = any(wo["status"] in {"ready", "in-progress", "done"}
                          for wo in wos.values())
         if artifact_decisions.get("scaffold.md") == "produce" and executable:

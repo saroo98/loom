@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/regate-receipt.schema.json",
+  "title": "Selective plan regating receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "prior_state_hash", "current_state_hash",
+    "changed_paths", "affected_plan_sections", "regate_scope", "verification",
+    "sealed_at", "receipt_hash"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "prior_state_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "current_state_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "changed_paths": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "affected_plan_sections": {"type": "array",
+      "items": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}},
+    "regate_scope": {"enum": ["none", "selective", "full"]},
+    "verification": {"type": "array", "items": {"$ref": "#/$defs/verification"}},
+    "sealed_at": {"type": "string", "format": "date-time"},
+    "receipt_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "verification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["passed", "medium", "evidence_id", "section"],
+      "properties": {
+        "passed": {"const": true},
+        "medium": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "evidence_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "section": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"}
+      }
+    }
+  }
+}

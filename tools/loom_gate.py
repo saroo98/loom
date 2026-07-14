@@ -22,10 +22,31 @@ from pathlib import Path, PurePosixPath
 
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_survey  # noqa: E402
+import loom_lifecycle  # noqa: E402
 
 SCHEMA_VERSION = 2
 LIFECYCLE_FILE = "lifecycle.json"
 EVENT_ORDER = ["planning-started", "g1-sealed", "implementation-authorized"]
+LIFECYCLE_FIELDS = {
+    "schema_version", "mode", "baseline_files", "events", "work_order_completions",
+}
+EVENT_BASE_FIELDS = {
+    "event", "at", "repo_state_mode", "repo_state_hash", "repo_head",
+    "previous_event_hash", "event_hash",
+}
+EVENT_FIELDS = {
+    "planning-started": EVENT_BASE_FIELDS | {"baseline_snapshot_sha256"},
+    "g1-sealed": EVENT_BASE_FIELDS | {
+        "review", "review_sha256", "work_order_plans", "work_order_plans_sha256",
+    },
+    "implementation-authorized": EVENT_BASE_FIELDS | {"g1_event_hash"},
+}
+COMPLETION_FIELDS = {
+    "work_order", "work_order_file", "work_order_sha256", "completed_at",
+    "repo_state_mode", "repo_state_hash", "repo_head", "changed_paths",
+    "after_hashes", "acceptance_evidence", "acceptance_evidence_sha256",
+    "previous_completion_hash", "completion_hash",
+}
 SNAPSHOT_FILE_CAP = 100000
 WORK_ORDER_PLAN_CAP = 10000
 SMALL_WO_MAX_CHARS = 6000
@@ -278,12 +299,13 @@ def _completion_hash(event):
     return _mapping_hash(payload)
 
 
-def _standalone_wo_contract(wo, required_status):
+def _work_order_contract(wo, required_status=None, *, compact=False):
     import loom_lint
     text = Path(wo).read_text(encoding="utf-8")
     fm, _ = loom_lint.parse_frontmatter(text)
     errors = []
-    if len(text) > SMALL_WO_MAX_CHARS or len(text.splitlines()) > SMALL_WO_MAX_LINES:
+    if compact and (len(text) > SMALL_WO_MAX_CHARS
+                    or len(text.splitlines()) > SMALL_WO_MAX_LINES):
         errors.append(
             f"Tier-S work order exceeds compact budget ({SMALL_WO_MAX_CHARS} characters/"
             f"{SMALL_WO_MAX_LINES} lines); compress it or promote the task")
@@ -292,10 +314,15 @@ def _standalone_wo_contract(wo, required_status):
     for key in loom_lint.REQUIRED_KEYS["wo"]:
         if key not in fm or fm[key] in (None, ""):
             errors.append(f"work order missing required key {key}")
-    if fm.get("status") != required_status:
+    status = fm.get("status")
+    if required_status is not None and status != required_status:
         errors.append(f"work order status must be {required_status}")
+    if status not in loom_lint.ENUMS["wo.status"]:
+        errors.append("work order status is invalid")
     wid = str(fm.get("id", ""))
-    if not loom_lint.WO_ID_RE.fullmatch(wid) or not Path(wo).name.startswith(wid):
+    filename = Path(wo).name
+    if not loom_lint.WO_ID_RE.fullmatch(wid) or not (
+            filename == f"{wid}.md" or filename.startswith(f"{wid}-")):
         errors.append("work order id/filename is invalid")
     required_sections = {
         "intent", "context", "preconditions", "task", "acceptance criteria",
@@ -303,24 +330,26 @@ def _standalone_wo_contract(wo, required_status):
     }
     headings = {match.group(1).strip().lower() for match in
                 re.finditer(r"(?m)^##\s+(.+?)\s*$", text)}
-    for section in sorted(required_sections - headings):
-        errors.append(f"work order missing section ## {section}")
+    active = status in {"ready", "in-progress", "done"}
+    if active:
+        for section in sorted(required_sections - headings):
+            errors.append(f"work order missing section ## {section}")
     criteria = re.findall(r"(?m)^\s*-\s*\[([ xX])\]\s+(.+)$", text)
-    if not criteria:
+    if active and not criteria:
         errors.append("work order has no acceptance criteria")
-    if required_status == "ready" and any(mark != " " for mark, _ in criteria):
+    if status == "ready" and any(mark != " " for mark, _ in criteria):
         errors.append("ready work order contains pre-checked criteria")
-    if required_status == "done" and any(mark == " " for mark, _ in criteria):
+    if status == "done" and any(mark == " " for mark, _ in criteria):
         errors.append("done work order has unchecked criteria")
-    if not any(re.search(r"(?i)negative:|must not|git diff", body)
-               for _, body in criteria):
+    if active and not any(re.search(r"(?i)negative:|must not|git diff", body)
+                          for _, body in criteria):
         errors.append("work order lacks a negative blast-radius criterion")
     touches = fm.get("touches", [])
     if isinstance(touches, str):
         touches = [touches] if touches else []
-    if not isinstance(touches, list) or not touches:
+    if active and (not isinstance(touches, list) or not touches):
         errors.append("work order touches is empty")
-    if required_status == "done":
+    if status == "done":
         closeout = re.search(
             r"(?ms)^##\s+Close-out\s*$\n(.*?)(?=^##\s|\Z)", text)
         if not closeout or re.search(r"(?i)\bpending\b", closeout.group(1)) \
@@ -329,6 +358,71 @@ def _standalone_wo_contract(wo, required_status):
                     closeout.group(1)):
             errors.append("done work order lacks reproducible close-out evidence")
     return fm, text, errors
+
+
+def _standalone_wo_contract(wo, required_status):
+    return _work_order_contract(
+        wo, required_status=required_status, compact=True)
+
+
+def _pack_work_order_contracts(pack):
+    """Read exact WO contracts and manifest frontier without trusting G1-normalized fields."""
+    import loom_lint
+    pack = Path(pack).resolve()
+    root = pack / "work-orders"
+    findings = []
+    records = {}
+    if root.is_symlink() or not root.is_dir():
+        return {}, {}, ["work-orders directory is missing or unsafe"]
+    try:
+        paths = sorted(root.glob("*.md"), key=lambda item: item.name)
+    except OSError as exc:
+        return {}, {}, [f"work-orders directory is unreadable: {exc}"]
+    for path in paths:
+        rel = path.relative_to(pack).as_posix()
+        if path.is_symlink() or not path.is_file() \
+                or not _safe_relative_path(rel, "work-orders"):
+            findings.append(f"work order is missing or unsafe: {path.name}")
+            continue
+        try:
+            fm, _text, errors = _work_order_contract(path)
+        except (OSError, UnicodeError, ValueError) as exc:
+            findings.append(f"work order {rel} is unreadable: {exc}")
+            continue
+        findings.extend(f"work order {rel}: {error}" for error in errors)
+        wid = str(fm.get("id", ""))
+        if not loom_lint.WO_ID_RE.fullmatch(wid):
+            continue
+        if wid in records:
+            findings.append(f"work order id {wid} is duplicated")
+            continue
+        records[wid] = {
+            "path": path,
+            "relative": rel,
+            "status": fm.get("status"),
+            "routing": str(fm.get("routing", "")),
+        }
+
+    frontier = {}
+    manifest = pack / "MANIFEST.md"
+    try:
+        manifest_text = manifest.read_text(encoding="utf-8")
+        rows = loom_lint.parse_markdown_table(manifest_text, "Work order frontier")
+    except (OSError, UnicodeError, ValueError) as exc:
+        findings.append(f"MANIFEST work-order frontier is unreadable: {exc}")
+        rows = []
+    for row in rows:
+        wid = str(row.get("wo", "")).strip()
+        if not wid:
+            continue
+        if wid in frontier:
+            findings.append(f"MANIFEST frontier duplicates {wid}")
+            continue
+        frontier[wid] = {
+            "status": str(row.get("status", "")).strip(),
+            "routing": str(row.get("routing", "")).strip(),
+        }
+    return records, frontier, findings
 
 
 def _event_hash(event):
@@ -499,13 +593,20 @@ def _load(pack):
         raise ValueError(f"cannot read {LIFECYCLE_FILE}: {exc}") from exc
 
 
-def verify(pack, repo=None, require_authorized=False):
+def _verify(pack, repo=None, require_authorized=False, *, pending_completion=None):
     pack = Path(pack).resolve()
     findings = []
+    if pending_completion is not None \
+            and not _safe_relative_path(pending_completion, "work-orders"):
+        return ["pending work-order completion path is unsafe"]
     try:
         data = _load(pack)
     except ValueError as exc:
         return [str(exc)]
+    if not isinstance(data, dict) or set(data) != LIFECYCLE_FIELDS:
+        findings.append("lifecycle top-level fields are unknown or missing")
+        if not isinstance(data, dict):
+            return findings
     if data.get("schema_version") != SCHEMA_VERSION:
         findings.append(f"schema_version must be {SCHEMA_VERSION}")
     if data.get("mode") not in {"planned", "build-first"}:
@@ -535,6 +636,9 @@ def verify(pack, repo=None, require_authorized=False):
         if not isinstance(event, dict):
             findings.append(f"event {index} must be an object")
             continue
+        expected_fields = EVENT_FIELDS.get(event.get("event"))
+        if expected_fields is None or set(event) != expected_fields:
+            findings.append(f"event {index} fields are unknown or missing")
         if event.get("previous_event_hash") != previous:
             findings.append(f"event {index} previous hash does not link")
         if event.get("event_hash") != _event_hash(event):
@@ -596,12 +700,33 @@ def verify(pack, repo=None, require_authorized=False):
             and events[0].get("baseline_snapshot_sha256") \
             != _mapping_hash(baseline_files):
         findings.append("planning event does not bind the baseline file snapshot")
+    work_orders, frontier, contract_findings = _pack_work_order_contracts(pack)
+    findings.extend(contract_findings)
+    for wid, work_order in work_orders.items():
+        row = frontier.get(wid)
+        if row is None:
+            findings.append(f"MANIFEST frontier is missing work order {wid}")
+            continue
+        transition = (
+            pending_completion == work_order["relative"]
+            and work_order["status"] == "done"
+            and row["status"] in {"ready", "in-progress"}
+        )
+        if row["status"] != work_order["status"] and not transition:
+            findings.append(
+                f"MANIFEST frontier status for {wid} is {row['status']!r}, "
+                f"work-order status is {work_order['status']!r}")
+        if row["routing"] != work_order["routing"]:
+            findings.append(f"MANIFEST frontier routing for {wid} differs")
+    for wid in sorted(set(frontier) - set(work_orders)):
+        findings.append(f"MANIFEST frontier references missing work order {wid}")
     completions = data.get("work_order_completions")
     if not isinstance(completions, list):
         findings.append("work_order_completions must be a list")
         completions = []
     prior_completion = None
     completed_ids = set()
+    completion_counts = {}
     authorization_time = None
     if len(events) == 3 and isinstance(events[2], dict):
         try:
@@ -617,12 +742,15 @@ def verify(pack, repo=None, require_authorized=False):
         if not isinstance(completion, dict):
             findings.append(f"completion {index} must be an object")
             continue
+        if set(completion) != COMPLETION_FIELDS:
+            findings.append(f"completion {index} fields are unknown or missing")
         wid = str(completion.get("work_order", ""))
         if not re.fullmatch(r"WO-\d{3,}", wid):
             findings.append(f"completion {index} work-order id is invalid")
         if wid in completed_ids:
             findings.append(f"work order {wid} has duplicate completion records")
         completed_ids.add(wid)
+        completion_counts[wid] = completion_counts.get(wid, 0) + 1
         if completion.get("previous_completion_hash") != prior_completion:
             findings.append(f"completion {index} previous hash does not link")
         if completion.get("completion_hash") != _completion_hash(completion):
@@ -675,6 +803,41 @@ def verify(pack, repo=None, require_authorized=False):
                 if completion.get("work_order_sha256") != current_wo_hash:
                     findings.append(
                         f"completion {index} work-order evidence hash does not match")
+        record = work_orders.get(wid)
+        if record is None:
+            findings.append(f"completion {index} references missing work order {wid}")
+        else:
+            if wo_rel != record["relative"]:
+                findings.append(
+                    f"completion {index} work-order path does not match {wid}")
+            if record["status"] != "done":
+                findings.append(
+                    f"completion {index} references {wid} with status "
+                    f"{record['status']!r}, not 'done'")
+        evidence_rel = str(completion.get("acceptance_evidence", ""))
+        evidence_path = _pack_file(pack, evidence_rel, "evidence")
+        if evidence_path is None or not evidence_path.is_file() \
+                or completion.get("acceptance_evidence_sha256") != _file_hash(
+                    evidence_path):
+            findings.append(f"completion {index} acceptance evidence is missing or changed")
+        else:
+            try:
+                loom_lifecycle.validate_acceptance_evidence(
+                    pack, wid, expected_state_hash=completion.get("repo_state_hash"))
+            except loom_lifecycle.LifecycleError as exc:
+                findings.append(f"completion {index} acceptance evidence is invalid: {exc}")
+    for wid, work_order in work_orders.items():
+        count = completion_counts.get(wid, 0)
+        transition = (
+            pending_completion == work_order["relative"]
+            and work_order["status"] == "done" and count == 0
+        )
+        if work_order["status"] == "done" and count == 0 and not transition:
+            findings.append(f"work order {wid} is done without a sealed completion")
+        if work_order["status"] != "done" and count:
+            findings.append(
+                f"work order {wid} has completion evidence but status is "
+                f"{work_order['status']!r}")
     if require_authorized and names != EVENT_ORDER:
         findings.append("implementation is not authorized")
     if repo and names:
@@ -690,6 +853,26 @@ def verify(pack, repo=None, require_authorized=False):
             if current.state_hash != checkpoint.get("repo_state_hash"):
                 findings.append(
                     "repository has unrecorded changes since the last lifecycle checkpoint")
+    return findings
+
+
+def verify(pack, repo=None, require_authorized=False):
+    """Verify only stable lifecycle states; transitional exceptions are never public."""
+    findings = _verify(pack, repo, require_authorized)
+    pack_path = Path(pack).resolve()
+    if not pack_path.is_dir():
+        return findings
+    try:
+        import loom_lint
+        report = loom_lint.lint(
+            pack_path, repo_path=None, enforce_lifecycle=False,
+            check_repo_state=False, check_gate_requirements=False)
+    except (OSError, UnicodeError, ValueError, SystemExit) as exc:
+        findings.append(f"pack lint is indeterminate: {exc}")
+    else:
+        findings.extend(
+            f"pack lint {item['code']}: {item['msg']}"
+            for item in report.errors)
     return findings
 
 
@@ -837,7 +1020,7 @@ def close_wo(pack, repo, wo):
         print("loom_gate: REFUSED — work order must exist under work-orders/",
               file=sys.stderr)
         return 1
-    findings = verify(pack)
+    findings = _verify(pack, pending_completion=wo_rel)
     if findings:
         for finding in findings:
             print(f"loom_gate: BLOCKED — {finding}", file=sys.stderr)
@@ -893,6 +1076,14 @@ def close_wo(pack, repo, wo):
     except loom_survey.SurveyError as exc:
         print(f"loom_gate: INDETERMINATE — {exc}", file=sys.stderr)
         return 2
+    try:
+        acceptance = loom_lifecycle.validate_acceptance_evidence(
+            pack, wid, repo, require_current=True)
+    except loom_lifecycle.LifecycleError as exc:
+        print(f"loom_gate: REFUSED — {exc}", file=sys.stderr)
+        return 1
+    evidence_rel = f"evidence/{wid}.json"
+    evidence_path = pack / evidence_rel
     reference = dict(data["baseline_files"])
     for completion in data.get("work_order_completions", []):
         reference.update(completion.get("after_hashes", {}))
@@ -928,6 +1119,8 @@ def close_wo(pack, repo, wo):
         "repo_head": current_state.head or None,
         "changed_paths": changed,
         "after_hashes": {path: current_files.get(path) for path in changed},
+        "acceptance_evidence": evidence_rel,
+        "acceptance_evidence_sha256": _file_hash(evidence_path),
         "previous_completion_hash": (
             previous[0].get("completion_hash") if previous else None),
     }
@@ -1048,6 +1241,25 @@ def verify_small(record):
             wo_hash = None
         if wo_hash is None or final_event.get("work_order_sha256") != wo_hash:
             findings.append("completed small work-order evidence hash does not match")
+        evidence_rel = final_event.get("acceptance_evidence")
+        evidence_hash = final_event.get("acceptance_evidence_sha256")
+        if not _safe_relative_path(evidence_rel) \
+                or not str(evidence_rel).startswith("evidence/") \
+                or not isinstance(evidence_hash, str) \
+                or not DIGEST_RE.fullmatch(evidence_hash):
+            findings.append("small completion acceptance evidence binding is invalid")
+        else:
+            evidence_path = record.parent / evidence_rel
+            try:
+                actual_hash = _file_hash(evidence_path)
+                loom_lifecycle.validate_acceptance_evidence(
+                    record.parent, final_event.get("work_order"),
+                    expected_state_hash=final_event.get("repo_state_hash"))
+                evidence_valid = True
+            except (OSError, RuntimeError, ValueError):
+                actual_hash, evidence_valid = None, False
+            if actual_hash != evidence_hash or not evidence_valid:
+                findings.append("small completion acceptance evidence does not validate")
     return findings
 
 
@@ -1178,10 +1390,19 @@ def small_close(record, repo, wo):
         print("loom_gate: REFUSED — no declared target changed after Tier-S authorization",
               file=sys.stderr)
         return 1
+    try:
+        evidence = loom_lifecycle.validate_acceptance_evidence(
+            record.parent, str(fm["id"]), repo, require_current=True)
+    except loom_lifecycle.LifecycleError as exc:
+        print(f"loom_gate: REFUSED — {exc}", file=sys.stderr)
+        return 1
     previous = data["events"][-1]
     event = make_event(
         "small-completed", state, previous["event_hash"],
         work_order=str(fm["id"]), work_order_sha256=_canonical_wo_hash(wo),
+        acceptance_evidence=f"evidence/{fm['id']}.json",
+        acceptance_evidence_sha256=_file_hash(
+            record.parent / "evidence" / f"{fm['id']}.json"),
         changed_paths=changed,
         after_hashes={path: current.get(path) for path in changed})
     data["events"].append(event)
@@ -1232,20 +1453,74 @@ def main(argv=None):
     check.add_argument("--repo")
     check.add_argument("--require-authorized", action="store_true")
     args = parser.parse_args(argv)
+    finish = lambda result, _signal: result
+    mutating = {
+        "init", "seal-g1", "authorize", "close-wo",
+        "small-init", "small-authorize", "small-close",
+    }
+    if args.command in mutating:
+        import loom_runtime
+        import loom_session
+        import loom_learning
+        journal = os.environ.get("LOOM_SESSION_JOURNAL")
+        session_id = os.environ.get("LOOM_SESSION_ID")
+        operation_id = os.environ.get("LOOM_SESSION_OPERATION_ID")
+        if not journal or not session_id or not operation_id:
+            print("loom_gate: BLOCKED — active Loom session identity is required",
+                  file=sys.stderr)
+            return 2
+        try:
+            identity = loom_session.validate_active_session(
+                journal, session_id, operation_id)
+            resolved = loom_runtime.resolve_project(
+                identity["instance_id"], explicit_target=args.repo, cwd=Path.cwd())
+            if resolved.project_id != identity["project_id"]:
+                raise loom_session.SessionBlocked(
+                    "SESSION_IDENTITY_INVALID", "session belongs to another project")
+        except (loom_session.SessionError, loom_runtime.RuntimeBlocked) as exc:
+            print(f"loom_gate: BLOCKED — {exc}", file=sys.stderr)
+            return 2
+        domain = os.environ.get("LOOM_SESSION_DOMAIN")
+        if not isinstance(domain, str) or not re.fullmatch(
+                r"[a-z0-9][a-z0-9._-]{0,63}", domain):
+            print("loom_gate: BLOCKED — active session domain is invalid", file=sys.stderr)
+            return 2
+
+        def finish(result, signal):
+            if result == 0:
+                owner_home = Path(journal).parents[5]
+                active_memory = (owner_home / "instances" / identity["instance_id"] /
+                                 "active.json")
+                if not active_memory.is_file():
+                    return result
+                evidence = "lifecycle-" + hashlib.sha256(
+                    f"{session_id}:{args.command}".encode("utf-8")).hexdigest()[:24]
+                try:
+                    loom_learning.LearningEngine(
+                        owner_home, identity["instance_id"]).capture(
+                            kind="lifecycle-outcome", scope="project", signal=signal,
+                            decision_target="verification-strategy",
+                            evidence_ids=[evidence], domain=domain,
+                            project_id=identity["project_id"])
+                except loom_learning.LearningError as exc:
+                    print(f"loom_gate: INDETERMINATE — learning capture failed: {exc}",
+                          file=sys.stderr)
+                    return 2
+            return result
     if args.command == "init":
-        return start(args.pack, args.repo, args.mode)
+        return finish(start(args.pack, args.repo, args.mode), "gate-passed")
     if args.command == "seal-g1":
-        return seal_g1(args.pack, args.repo, args.review)
+        return finish(seal_g1(args.pack, args.repo, args.review), "gate-passed")
     if args.command == "authorize":
-        return authorize(args.pack, args.repo)
+        return finish(authorize(args.pack, args.repo), "gate-passed")
     if args.command == "close-wo":
-        return close_wo(args.pack, args.repo, args.wo)
+        return finish(close_wo(args.pack, args.repo, args.wo), "work-order-closed")
     if args.command == "small-init":
-        return small_start(args.record, args.repo, args.wo)
+        return finish(small_start(args.record, args.repo, args.wo), "gate-passed")
     if args.command == "small-authorize":
-        return small_authorize(args.record, args.repo, args.wo)
+        return finish(small_authorize(args.record, args.repo, args.wo), "gate-passed")
     if args.command == "small-close":
-        return small_close(args.record, args.repo, args.wo)
+        return finish(small_close(args.record, args.repo, args.wo), "work-order-closed")
     if args.command == "small-verify":
         findings = verify_small(args.record)
         for finding in findings:
