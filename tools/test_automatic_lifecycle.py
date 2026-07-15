@@ -2,6 +2,7 @@
 
 import json
 import dataclasses
+import hashlib
 import os
 import subprocess
 import sys
@@ -43,6 +44,36 @@ class AutomaticLifecycleTests(unittest.TestCase):
 
         (self.repo / "app.py").write_text("print('drift')\n", encoding="utf-8")
         with self.assertRaisesRegex(loom_lifecycle.LifecycleError, "world changed"):
+            loom_lifecycle.validate_acceptance_evidence(
+                self.pack, "WO-001", self.repo, require_current=True)
+
+    def test_acceptance_evidence_identity_is_content_bound(self):
+        evidence = loom_lifecycle.capture_acceptance(
+            self.pack, self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('content-bound')"])
+
+        self.assertEqual(
+            "sha256-" + evidence["evidence_hash"], evidence["evidence_id"])
+        validated = loom_lifecycle.validate_acceptance_evidence(
+            self.pack, "WO-001", self.repo, require_current=True)
+        self.assertEqual(evidence["evidence_id"], validated["evidence_id"])
+
+    def test_acceptance_evidence_id_cannot_be_reused_after_rehashing_content(self):
+        evidence = loom_lifecycle.capture_acceptance(
+            self.pack, self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('original')"])
+        path = self.pack / "evidence" / "WO-001.json"
+        altered = json.loads(path.read_text(encoding="utf-8"))
+        altered["stdout"] = "fabricated\n"
+        altered["stdout_sha256"] = hashlib.sha256(
+            altered["stdout"].encode("utf-8")).hexdigest()
+        body = {key: value for key, value in altered.items()
+                if key not in {"evidence_id", "evidence_hash"}}
+        altered["evidence_hash"] = loom_lifecycle._digest(body)
+        self.assertEqual(evidence["evidence_id"], altered["evidence_id"])
+        path.write_text(json.dumps(altered), encoding="utf-8")
+
+        with self.assertRaisesRegex(loom_lifecycle.LifecycleError, "contract or hash"):
             loom_lifecycle.validate_acceptance_evidence(
                 self.pack, "WO-001", self.repo, require_current=True)
 

@@ -10,8 +10,8 @@
     "execution_isolation",
     "repo_state_before", "repo_state_after", "evidence_hash"],
   "properties": {
-    "schema_version": {"const": 2},
-    "evidence_id": {"type": "string", "format": "uuid"},
+    "schema_version": {"const": 3},
+    "evidence_id": {"type": "string", "pattern": "^sha256-[0-9a-f]{64}$"},
     "work_order": {"type": "string", "pattern": "^WO-[0-9]{3,}$"},
     "medium": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
       "not": {"enum": ["checklist", "generic", "unknown", "document-review", "self-report"]}},

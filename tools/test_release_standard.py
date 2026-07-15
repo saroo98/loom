@@ -166,7 +166,7 @@ class ReleaseStandardTests(unittest.TestCase):
             key_id = f"key-{index}"
             item = {
                 "schema_version": 1, "check_id": check_id, "status": "passed",
-                "evidence_id": str(uuid.UUID(int=index)), "subject": subject,
+                "evidence_id": "pending", "subject": subject,
                 "issued_at": "2026-07-15T00:00:00Z",
                 "expires_at": "2026-08-15T00:00:00Z",
                 "issuer": {"id": issuer_id, "kind": kind, "independent": True},
@@ -175,6 +175,7 @@ class ReleaseStandardTests(unittest.TestCase):
                 "attestation": {"algorithm": "rsa-pkcs1v15-sha256",
                                 "key_id": key_id, "signature": "pending"},
             }
+            item["evidence_id"] = loom_release._external_evidence_id(item)
             self._sign_item(item)
             evidence[check_id] = item
             issuers.append({
@@ -484,6 +485,25 @@ class ReleaseStandardTests(unittest.TestCase):
                     trust_policy=policy, now=now)
                 self.assertEqual("blocked", report["status"])
                 self.assertFalse(report["claim_100_allowed"])
+
+    def test_external_evidence_id_cannot_be_reused_for_different_signed_content(self):
+        external, trust_policy = self._signed_external_evidence()
+        local = self._sealed_local_evidence(trust_policy["subject"])
+        reused = copy.deepcopy(external)
+        item = reused["unfamiliar-user-usability"]
+        original_id = item["evidence_id"]
+        item["payload"]["study_id"] = "different-study"
+        item["payload_sha256"] = loom_release._canonical_hash(item["payload"])
+        self._sign_item(item)
+
+        self.assertEqual(original_id, item["evidence_id"])
+        report = loom_release.certification_report(
+            local_checks=local, external_evidence=reused,
+            trust_policy=trust_policy,
+            now=dt.datetime(2026, 7, 16, tzinfo=dt.timezone.utc))
+        self.assertEqual("blocked", report["status"])
+        self.assertIn("unfamiliar-user-usability", {
+            value["id"] for value in report["unverified"]})
 
     def test_local_release_evidence_is_commit_and_content_bound(self):
         subject = {"repository": "https://github.com/example/loom",

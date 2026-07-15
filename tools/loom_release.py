@@ -297,6 +297,15 @@ def _signature_valid(evidence, trusted_key):
     return hmac.compare_digest(recovered, expected)
 
 
+def _external_evidence_id(evidence):
+    """Derive an immutable identity from the unsigned external claim content."""
+    if not isinstance(evidence, dict):
+        return None
+    body = {key: evidence.get(key) for key in sorted(
+        EXTERNAL_EVIDENCE_FIELDS - {"evidence_id", "attestation"})}
+    return "sha256-" + _canonical_hash(body)
+
+
 def _sha256(value):
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
 
@@ -473,10 +482,7 @@ def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
             or evidence.get("check_id") != check_id \
             or evidence.get("status") != "passed":
         return False
-    try:
-        if str(uuid.UUID(evidence["evidence_id"])) != evidence["evidence_id"]:
-            return False
-    except (ValueError, TypeError, AttributeError):
+    if evidence.get("evidence_id") != _external_evidence_id(evidence):
         return False
     subject = evidence.get("subject")
     if not _valid_subject(subject):

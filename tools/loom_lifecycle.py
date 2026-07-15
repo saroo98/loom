@@ -22,7 +22,7 @@ import loom_privacy
 
 
 SCHEMA_VERSION = 1
-ACCEPTANCE_SCHEMA_VERSION = 2
+ACCEPTANCE_SCHEMA_VERSION = 3
 EVIDENCE_DIR = "evidence"
 REGATE_FILE = ".loom-regate.json"
 DEPENDENCY_FILE = "plan-dependencies.json"
@@ -250,7 +250,7 @@ def capture_acceptance(pack, repo, work_order, *, medium, command,
     command_minimized = [loom_privacy.minimize_evidence(
         item, roots=roots, max_chars=1000) for item in command]
     evidence = {"schema_version": ACCEPTANCE_SCHEMA_VERSION,
-        "evidence_id": str(uuid.uuid4()), "work_order": str(work_order),
+        "work_order": str(work_order),
         "medium": medium, "command": command_minimized, "started_at": started,
         "completed_at": completed, "exit_code": exit_code,
         "stdout": stdout_minimized, "stderr": stderr_minimized,
@@ -262,7 +262,9 @@ def capture_acceptance(pack, repo, work_order, *, medium, command,
         "execution_isolation": "disposable-target-snapshot",
         "repo_state_before": before.state_hash,
         "repo_state_after": after.state_hash}
-    evidence["evidence_hash"] = _digest(evidence)
+    evidence_hash = _digest(evidence)
+    evidence["evidence_id"] = "sha256-" + evidence_hash
+    evidence["evidence_hash"] = evidence_hash
     _atomic_json(pack / EVIDENCE_DIR / f"{work_order}.json", evidence)
     return json.loads(json.dumps(evidence))
 
@@ -284,12 +286,13 @@ def validate_acceptance_evidence(pack, work_order, repo=None, *,
         "stdout_sha256", "stderr_sha256", "raw_stdout_sha256", "raw_stderr_sha256",
         "transcript_minimized", "execution_isolation", "repo_state_before", "repo_state_after",
         "evidence_hash"}
-    body = {key: item for key, item in value.items() if key != "evidence_hash"} \
+    body = {key: item for key, item in value.items()
+            if key not in {"evidence_id", "evidence_hash"}} \
         if isinstance(value, dict) else {}
     if not isinstance(value, dict) or set(value) != fields \
             or value.get("schema_version") != ACCEPTANCE_SCHEMA_VERSION \
             or value.get("work_order") != work_order \
-            or not isinstance(value.get("evidence_id"), str) \
+            or value.get("evidence_id") != "sha256-" + _digest(body) \
             or value.get("exit_code") != 0 \
             or not isinstance(value.get("stdout"), str) \
             or not isinstance(value.get("stderr"), str) \
@@ -311,7 +314,6 @@ def validate_acceptance_evidence(pack, work_order, repo=None, *,
             != value.get("stderr_sha256"):
         raise LifecycleError("acceptance evidence contract or hash is invalid")
     try:
-        uuid.UUID(value["evidence_id"])
         started = _parse_stamp(value["started_at"])
         completed = _parse_stamp(value["completed_at"])
     except (ValueError, AttributeError) as exc:
