@@ -1340,9 +1340,9 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                 if key not in rfm or rfm[key] in ("", None):
                     rep.add("ERROR", "E15", review, 1,
                             f"G1 review missing required frontmatter key '{key}'")
-            if rfm.get("reviewer_independence") not in {"independent", "author"}:
+            if rfm.get("reviewer_independence") != "independent":
                 rep.add("ERROR", "E15", review, 1,
-                        "reviewer_independence must be independent or author")
+                        "passing G1 reviewer_independence must be independent")
             if str(rfm.get("open_high_findings", "")) != "0":
                 rep.add("ERROR", "E15", review, 1,
                         "passing G1 review must declare open_high_findings: 0")

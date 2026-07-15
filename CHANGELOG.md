@@ -11,6 +11,7 @@
 - Added deterministic adaptation evaluation and a generated-inventory standard-library suite.
 - Made acceptance and signed external evidence identities immutable and content-bound.
 - Separated reproducible local improvement observations from independently attested production claims.
+- Blocked explicitly self-reviewed G1 records from authorizing implementation.
 
 Production certification remains blocked until the external evidence listed in
 [`docs/limitations.md`](docs/limitations.md) exists.

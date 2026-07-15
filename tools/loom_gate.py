@@ -958,8 +958,13 @@ def seal_g1(pack, repo, review):
     import loom_lint
     review_fm, _ = loom_lint.parse_frontmatter(review.read_text(encoding="utf-8"))
     if not review_fm or review_fm.get("gate") != "G1" \
-            or review_fm.get("verdict") not in {"pass", "pass-with-fixes"}:
-        print("loom_gate: REFUSED — review is not a passing G1 record", file=sys.stderr)
+            or review_fm.get("verdict") not in {"pass", "pass-with-fixes"} \
+            or review_fm.get("reviewer_independence") != "independent" \
+            or not isinstance(review_fm.get("reviewer"), str) \
+            or not review_fm["reviewer"].strip() \
+            or review_fm.get("open_high_findings") != 0:
+        print("loom_gate: REFUSED — G1 must be passing, independently reviewed, "
+              "and have zero open High findings", file=sys.stderr)
         return 1
     lint = loom_lint.lint(
         pack, repo_path=repo, enforce_lifecycle=False, check_repo_state=False)

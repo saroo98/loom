@@ -119,6 +119,22 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(loom_gate.start(self.pack, self.repo, "planned"), 0)
         self.assertEqual(loom_gate.authorize(self.pack, self.repo), 1)
 
+    def test_self_reviewed_g1_cannot_authorize_implementation(self):
+        self.assertEqual(loom_gate.start(self.pack, self.repo, "planned"), 0)
+        review = self.pack / "reviews" / "G1-plan-review.md"
+        review.write_text(
+            review.read_text(encoding="utf-8").replace(
+                "reviewer_independence: independent",
+                "reviewer_independence: author"),
+            encoding="utf-8")
+
+        self.assertEqual(loom_gate.seal_g1(self.pack, self.repo, review), 1)
+        self.assertEqual(loom_gate.authorize(self.pack, self.repo), 1)
+        report = loom_lint.lint(self.pack, repo_path=self.repo)
+        self.assertTrue(any(
+            finding["code"] == "E15" and "must be independent" in finding["msg"]
+            for finding in report.findings), report.findings)
+
     def test_build_first_history_can_never_authorize_or_receive_plan_credit(self):
         self.assertEqual(loom_gate.start(self.pack, self.repo, "build-first"), 0)
         review = self.pack / "reviews" / "G1-plan-review.md"

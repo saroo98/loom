@@ -14,7 +14,10 @@ default production handler registry, and binds completion to one target survey. 
 content-hashed action record enforces a 60-to-3600-second deadline, three-attempt retry ceiling,
 terminal cancellation, and safe cleanup only when its newly created draft pack is byte-unchanged.
 `loom_gate`, `loom_lifecycle`, and `loom_lint` provide chronology, freshness, evidence, and pack
-integrity enforcement. Any unknown at a trust boundary is a typed block.
+integrity enforcement. A passing G1 must declare an independent reviewer and zero open High
+findings; an explicitly author-reviewed plan cannot be sealed or authorized. Any unknown at a
+trust boundary is a typed block. Declared independence is mechanically required but remains a
+host assertion until an external reviewer adapter supplies independent identity proof.
 
 Real-medium verification commands run against a link-free disposable snapshot of the target, not
 the owner's working tree. Any mutation of that snapshot invalidates the evidence and the snapshot
