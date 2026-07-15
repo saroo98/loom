@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -166,6 +167,30 @@ class AutomaticLifecycleTests(unittest.TestCase):
                          "from pathlib import Path; Path('../owner-data.txt').unlink()"])
         self.assertEqual("must survive", outside.read_text(encoding="utf-8"))
         self.assertFalse((self.pack / "evidence" / "WO-001.json").exists())
+
+    @unittest.skipUnless(os.name == "nt", "Windows Job Object containment")
+    def test_detached_verifier_descendants_are_dead_before_evidence_is_sealed(self):
+        marker = self.repo / "delayed-verifier-escape.txt"
+        child = (
+            "import pathlib,time; time.sleep(1.0); "
+            f"pathlib.Path({str(marker)!r}).write_text('escaped', encoding='utf-8')"
+        )
+        launcher = (
+            "import subprocess,sys,tempfile; "
+            "subprocess.Popen([sys.executable,'-c'," + repr(child) + "], "
+            "cwd=tempfile.gettempdir(), close_fds=True, "
+            "creationflags=getattr(subprocess,'DETACHED_PROCESS',0) | "
+            "getattr(subprocess,'CREATE_NEW_PROCESS_GROUP',0))"
+        )
+
+        evidence = loom_lifecycle.capture_acceptance(
+            self.pack, self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", launcher], timeout=10)
+        self.assertEqual(0, evidence["exit_code"])
+        time.sleep(1.5)
+        self.assertFalse(
+            marker.exists(),
+            "a verifier descendant changed the original target after evidence was sealed")
 
     def test_selective_regate_maps_only_changed_consumers_and_unmapped_is_full(self):
         baseline = {"src/api.py": "a", "src/ui.py": "b", "README.md": "c"}

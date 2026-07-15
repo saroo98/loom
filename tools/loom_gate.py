@@ -1207,6 +1207,7 @@ def verify_small(record):
             or not isinstance(route.get("domain_ids"), list) \
             or not route["domain_ids"] or len(route["domain_ids"]) > 16 \
             or len(route["domain_ids"]) != len(set(route["domain_ids"])) \
+            or "unclassified" in route["domain_ids"] \
             or not all(isinstance(item, str) and DOMAIN_ID_RE.fullmatch(item)
                        for item in route["domain_ids"]) \
             or type(route.get("freshness_window_days")) is not int \
@@ -1363,6 +1364,13 @@ def small_start(record, repo, wo, domains=None, event_at=None):
             or not all(isinstance(item, str) and DOMAIN_ID_RE.fullmatch(item)
                        for item in domains):
         print("loom_gate: REFUSED — Tier-S domains are invalid", file=sys.stderr)
+        return 1
+    if "unclassified" in domains:
+        print(
+            "loom_gate: REFUSED — Tier-S requires verified domain coverage; "
+            "promote this request to Tier M",
+            file=sys.stderr,
+        )
         return 1
     try:
         record.parent.mkdir(parents=True, exist_ok=True)
@@ -1679,7 +1687,10 @@ def main(argv=None):
     if args.command == "close-wo":
         return finish(close_wo(args.pack, args.repo, args.wo), "work-order-closed")
     if args.command == "small-init":
-        return finish(small_start(args.record, args.repo, args.wo), "gate-passed")
+        return finish(
+            small_start(args.record, args.repo, args.wo, [domain]),
+            "gate-passed",
+        )
     if args.command == "small-authorize":
         return finish(small_authorize(args.record, args.repo, args.wo), "gate-passed")
     if args.command == "small-close":

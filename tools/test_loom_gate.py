@@ -453,7 +453,7 @@ Stop if another component is required.
 
     def authorize(self):
         self.assertEqual(loom_gate.small_start(
-            self.record, self.repo, self.wo), 0)
+            self.record, self.repo, self.wo, ["cli"]), 0)
         self.write_wo("ready")
         self.assertEqual(loom_gate.small_authorize(
             self.record, self.repo, self.wo), 0)
@@ -496,7 +496,7 @@ Stop if another component is required.
 
     def test_small_flow_refuses_target_change_before_authorization(self):
         self.assertEqual(loom_gate.small_start(
-            self.record, self.repo, self.wo), 0)
+            self.record, self.repo, self.wo, ["cli"]), 0)
         self.write_wo("ready")
         (self.repo / "base.txt").write_text("changed early\n", encoding="utf-8")
         self.assertEqual(loom_gate.small_authorize(
@@ -504,7 +504,7 @@ Stop if another component is required.
 
     def test_small_flow_refuses_a_planning_essay(self):
         self.assertEqual(loom_gate.small_start(
-            self.record, self.repo, self.wo), 0)
+            self.record, self.repo, self.wo, ["cli"]), 0)
         self.write_wo("ready")
         self.wo.write_text(
             self.wo.read_text(encoding="utf-8") + "\n" + "x" * 6000,
@@ -523,6 +523,22 @@ Stop if another component is required.
         self.assertIn(
             "small lifecycle route contract is invalid",
             loom_gate.verify_small(self.record))
+
+    def test_small_lifecycle_refuses_unknown_domain_coverage(self):
+        self.assertEqual(loom_gate.small_start(
+            self.record, self.repo, self.wo, ["unclassified"]), 1)
+        self.assertFalse(self.record.exists())
+
+    def test_small_lifecycle_rejects_stored_unknown_domain_coverage(self):
+        self.assertEqual(loom_gate.small_start(
+            self.record, self.repo, self.wo, ["cli"]), 0)
+        data = json.loads(self.record.read_text(encoding="utf-8"))
+        data["route_contract"]["domain_ids"] = ["unclassified"]
+        self.record.write_text(json.dumps(data), encoding="utf-8")
+        self.assertIn(
+            "small lifecycle route contract is invalid",
+            loom_gate.verify_small(self.record),
+        )
 
 
 if __name__ == "__main__":

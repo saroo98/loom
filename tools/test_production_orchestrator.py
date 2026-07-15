@@ -413,6 +413,20 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(1, recorded["application_count"])
         self.assertEqual(1, recorded["helped_count"])
 
+    def test_unknown_domain_is_promoted_out_of_the_small_lifecycle(self):
+        opened = self.cli(
+            "invoke", "--request",
+            "Develop a museum conservation protocol for water-damaged manuscripts",
+            "--cwd", self.repo, "--home", self.home,
+            "--install-root", self.installed)
+
+        self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
+        action = json.loads(opened.stdout)
+        self.assertEqual("M", action["tier"])
+        self.assertEqual(["unclassified"], action["domains"])
+        self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
+        self.assertFalse((self.repo / "plans" / ".loom-small-lifecycle.json").exists())
+
     def test_production_host_outcome_records_controlled_provider_replay_pair(self):
         instance_id = loom_memory.initialize(self.home, self.installed)
         preference = loom_memory.set_preference(

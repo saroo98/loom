@@ -1349,6 +1349,8 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
     domains = domains_result["memory_domains"] or ["unclassified"]
     tier = (pack_route["tier"] if pack_route is not None
             else loom_tier.classify(request)["tier"])
+    if domains_result["requires_domain_discovery"] and tier == "S":
+        tier = "M"
     decision.update({
         "tier": tier,
         "autonomy": config["autonomy"],
