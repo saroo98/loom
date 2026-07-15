@@ -11,7 +11,10 @@ RISK_RE = re.compile(
     r"production|credential|firmware|hardware|medical|safety|financial|trading)\b")
 PROGRAM_RE = re.compile(
     r"(?i)\b(platform|multi[- ]service|multiple apps|migration program|enterprise|"
-    r"full product|multi[- ]subsystem|cross[- ]service)\b")
+    r"full product|multi[- ]subsystem|cross[- ]service|cross[- ]platform|"
+    r"ios\s+(?:and|&)\s+android|android\s+(?:and|&)\s+ios|"
+    r"etl\s+(?:and|&)\s+(?:machine[- ]learning|ml)|"
+    r"(?:machine[- ]learning|ml)\s+(?:and|&)\s+etl)\b")
 PORTFOLIO_RE = re.compile(
     r"(?i)\b(year[- ]long|portfolio|organization[- ]wide|many teams|"
     r"multi[- ]program|multi[- ]product)\b")
@@ -23,6 +26,10 @@ DISCIPLINED_DELIVERABLE_RE = re.compile(
 SMALL_RE = re.compile(
     r"(?i)\b(single[- ]file|one file|small script|bug fix|add a flag|landing page|"
     r"static page|command[- ]line flag|rename|copy change)\b")
+GREENFIELD_RE = re.compile(
+    r"(?i)\b(?:build|create|develop|design|implement)\s+"
+    r"(?:(?:a|an|the|new|offline[- ]first)\s+){0,4}"
+    r"(?:app|application|system|pipeline|service|platform|firmware)\b")
 
 
 def classify(description, *, files=None, days=None, new_components=0,
@@ -36,6 +43,8 @@ def classify(description, *, files=None, days=None, new_components=0,
         match.group(0).lower() for match in PORTFOLIO_RE.finditer(text)))
     disciplined_hits = sorted(set(
         match.group(0).lower() for match in DISCIPLINED_DELIVERABLE_RE.finditer(text)))
+    greenfield_unknown = bool(GREENFIELD_RE.search(text)) \
+        and not disciplined_hits and not SMALL_RE.search(text)
     if portfolio_hits or (days is not None and days > 60) \
             or new_components >= 8 or new_boundaries >= 8 or implementers >= 6:
         tier = "XL"
@@ -46,9 +55,11 @@ def classify(description, *, files=None, days=None, new_components=0,
         reasons.append("product/subsystem or multi-implementer signals require a release pack")
     elif risk_hits or irreversible or (days is not None and days > 1) \
             or new_components > 0 or new_boundaries > 0 \
-            or (files is not None and files > 5) or implementers > 1:
+            or (files is not None and files > 5) or implementers > 1 \
+            or greenfield_unknown:
         tier = "M"
-        reasons.append("observed risk, boundary, duration, or coordination exceeds one low-risk sitting")
+        reasons.append(
+            "observed risk/scope or an unbounded greenfield deliverable exceeds proven small work")
     else:
         reasons.append("one implementer, one sitting, low blast radius; no architecture signal")
         if SMALL_RE.search(text):
@@ -78,7 +89,9 @@ def classify(description, *, files=None, days=None, new_components=0,
         "portfolio_terms": portfolio_hits,
         "disciplined_deliverable_terms": disciplined_hits,
         "promotion_triggers": promotion,
-        "policy": "labels never promote; ties choose the lower tier; only risk or observed scope may promote",
+        "policy": (
+            "labels never promote; ties choose the lower tier; risk, observed scope, or an "
+            "unbounded whole-deliverable request may promote"),
     }
 
 

@@ -105,6 +105,11 @@ class ConsumerPlanningTests(unittest.TestCase):
         self.assertEqual(loom_tier.classify("Build a command-line developer tool")["tier"], "S")
         self.assertEqual(loom_tier.classify("Write a research paper")["tier"], "S")
         self.assertEqual(loom_tier.classify("Make a tiny mobile app copy change")["tier"], "S")
+        self.assertEqual(loom_tier.classify("Build an app")["tier"], "M")
+        self.assertEqual(loom_tier.classify(
+            "Build an offline-first iOS and Android medication reminder app")["tier"], "L")
+        self.assertEqual(loom_tier.classify(
+            "Build an ETL and machine-learning pipeline with reproducible training")["tier"], "L")
         self.assertEqual(loom_tier.classify("Build tax accounting rules")["tier"], "M")
         self.assertEqual(loom_tier.classify(
             "Build an app", days=20, new_components=4, new_boundaries=3,
