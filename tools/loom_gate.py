@@ -1002,7 +1002,16 @@ def authorize(pack, repo):
         "implementation-authorized", state, previous["event_hash"],
         g1_event_hash=previous["event_hash"])
     data["events"].append(event)
-    _atomic_write(pack / LIFECYCLE_FILE, data)
+    try:
+        manifest_path, manifest_text = _render_manifest(
+            pack, state, data["mode"], restamp_date=True)
+        _write_lifecycle_and_manifest(
+            pack, data, manifest_path, manifest_text,
+            {**data, "events": data["events"][:-1]})
+    except (OSError, ValueError) as exc:
+        print(f"loom_gate: INDETERMINATE — cannot record authorization checkpoint: {exc}",
+              file=sys.stderr)
+        return 2
     print("loom_gate: implementation authorized; chronology chain is valid")
     return 0
 

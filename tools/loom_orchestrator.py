@@ -31,7 +31,7 @@ ACTION_FIELDS = {
     "explicit_target", "intent", "tier", "domains", "survey_hash",
     "created_at", "expires_at", "attempts", "max_attempts", "session_id",
     "operation_id", "journal_path", "initial_pack_hash",
-    "remove_pristine_pack", "result", "action_hash",
+    "remove_pristine_pack", "work_order", "prepared", "result", "action_hash",
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
@@ -111,9 +111,30 @@ def _validate_action(value, path):
             or not 0 <= value["attempts"] <= 3 \
             or value["max_attempts"] != 3 \
             or type(value["remove_pristine_pack"]) is not bool \
+            or (value["work_order"] is not None and (
+                not isinstance(value["work_order"], str)
+                or not re.fullmatch(r"(?:work-orders/)?WO-[0-9]{3,}(?:-[A-Za-z0-9._-]+)?\.md",
+                                    value["work_order"]))) \
+            or not isinstance(value["prepared"], dict) \
             or (value["initial_pack_hash"] is not None and not re.fullmatch(
                 r"[0-9a-f]{64}", str(value["initial_pack_hash"]))):
         raise OrchestratorError("ACTION_CORRUPT", "action contract is invalid")
+    try:
+        prepared = loom_runtime.PreparedInvocation.from_dict(value["prepared"])
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError("ACTION_CORRUPT", "sealed preparation is invalid") from exc
+    if prepared.instance_id != value["instance_id"] \
+            or prepared.invocation_id != value["invocation_id"] \
+            or prepared.project_id != value["project_id"] \
+            or prepared.survey_hash != value["survey_hash"] \
+            or prepared.intent != value["intent"] \
+            or prepared.route_contract["tier"] != value["tier"] \
+            or list(prepared.domains) != value["domains"] \
+            or not isinstance(value["request"], str) \
+            or not value["request"].strip() or len(value["request"]) > 20_000 \
+            or prepared.request_hash != loom_runtime._sha(
+                " ".join(value["request"].split())):
+        raise OrchestratorError("ACTION_CORRUPT", "sealed preparation does not match action")
     if created >= expires \
             or any(not isinstance(value[field], str) or not Path(value[field]).is_absolute()
                    for field in ("owner_home", "install_root", "cwd", "journal_path")) \
@@ -207,6 +228,25 @@ def _pack_hash(pack):
     return loom_runtime._hash_frontier(pack)
 
 
+def _active_work_order(pack, tier):
+    pack = Path(pack)
+    candidates = []
+    paths = [pack / "WO-001.md"] if tier == "S" \
+        else sorted((pack / "work-orders").glob("WO-*.md"))
+    for path in paths:
+        if not path.is_file() or path.is_symlink():
+            continue
+        frontmatter, _ = loom_lint.parse_frontmatter(path.read_text(encoding="utf-8"))
+        if frontmatter and frontmatter.get("status") in {"ready", "in-progress"}:
+            candidates.append((str(frontmatter.get("id", "")), path))
+    if len(candidates) != 1 or not re.fullmatch(r"WO-[0-9]{3,}", candidates[0][0]):
+        raise OrchestratorError(
+            "WORK_ORDER_AMBIGUOUS",
+            "execution requires exactly one ready or in-progress work order")
+    work_order, path = candidates[0]
+    return work_order, path.relative_to(pack).as_posix()
+
+
 def _remove_pristine_pack(action):
     """Remove only an untouched pack created entirely by this action."""
     if not action.get("remove_pristine_pack"):
@@ -228,7 +268,7 @@ def _remove_pristine_pack(action):
     return True
 
 
-def _handler_result(context, root, owner_home, usage):
+def _handler_result(context, root, owner_home, usage, work_order=None):
     pack = root / "plans"
     tier = context.prepared.route_contract["tier"]
     intent = context.intent
@@ -286,8 +326,45 @@ def _handler_result(context, root, owner_home, usage):
                 f"Lifecycle evidence: {evidence}."),
         }
 
-    if intent in {"resume", "review", "repair", "execute", "close"}:
-        report = loom_lint.lint(pack, repo_path=root)
+    if intent == "execute":
+        if not work_order:
+            findings = ["execution action is not bound to one work order"]
+        else:
+            work_order_path = pack / work_order
+            if tier == "S":
+                code, output = _capture(
+                    loom_gate.small_close,
+                    pack / ".loom-small-lifecycle.json", root, work_order_path)
+            else:
+                code, output = _capture(
+                    loom_gate.close_wo, pack, root, work_order_path)
+            logs.append(output)
+            findings = (["work-order completion failed: " + output] if code else [])
+        if not findings:
+            findings.extend(
+                loom_gate.verify_small(pack / ".loom-small-lifecycle.json")
+                if tier == "S" else
+                loom_gate.verify(pack, root, require_authorized=True))
+        if findings:
+            return {
+                "status": "blocked", "code": "execute-not-ready", "success": False,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "usage": usage,
+                "user_message": "Execute blocked: " + "; ".join(findings[:8]),
+            }
+        evidence = "execute-" + _pack_hash(pack)[:24]
+        return {
+            "status": "completed", "code": "execute-complete", "success": True,
+            "metrics": {}, "evidence_ids": [evidence],
+            "reversible_action_ids": [], "usage": usage,
+            "user_message": (
+                "Execution completion was causally sealed against the declared "
+                f"work order ({evidence})."),
+        }
+
+    if intent in {"resume", "review", "repair", "close"}:
+        report = loom_lint.lint(
+            pack, repo_path=root, strict_staleness=intent in {"resume", "repair"})
         findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
         findings.extend(loom_gate.verify(
             pack, root, require_authorized=intent in {"resume", "repair", "execute"}))
@@ -340,7 +417,7 @@ def _handler_result(context, root, owner_home, usage):
     }
 
 
-def default_handlers(*, root, owner_home, usage=None):
+def default_handlers(*, root, owner_home, usage=None, work_order=None):
     """Return the complete audited production handler registry."""
     root, owner_home = Path(root), Path(owner_home)
     normalized = loom_performance.normalize_usage(usage)
@@ -349,7 +426,7 @@ def default_handlers(*, root, owner_home, usage=None):
     })
     return {
         intent: (lambda context, _intent=intent: _handler_result(
-            context, root, owner_home, usage_payload))
+            context, root, owner_home, usage_payload, work_order))
         for intent in {
             "plan", "resume", "execute", "review", "repair", "close", "remember"
         }
@@ -361,7 +438,9 @@ def _controller(action, *, usage=None):
     root = Path(action["explicit_target"] or action["cwd"])
     memory = loom_session.LocalMemoryAdapter(
         owner_home=home, instance_id=action["instance_id"])
-    handlers = default_handlers(root=root, owner_home=home, usage=usage)
+    handlers = default_handlers(
+        root=root, owner_home=home, usage=usage,
+        work_order=action.get("work_order"))
     return loom_session.SessionController(
         owner_home=home, instance_id=action["instance_id"],
         handlers=handlers, memory=memory)
@@ -410,6 +489,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "attempts": 0, "max_attempts": 3, "session_id": opened.session_id,
         "operation_id": opened.operation_id, "journal_path": opened.journal_path,
         "initial_pack_hash": None, "remove_pristine_pack": False,
+        "work_order": None, "prepared": prepared.to_dict(),
         "result": None,
     }
     if prepared.route_contract["blocked"]:
@@ -447,12 +527,27 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                     raise OrchestratorError("BASELINE_FAILED", output)
         action["initial_pack_hash"] = _pack_hash(pack)
         action["remove_pristine_pack"] = pack_was_absent
+    elif prepared.intent == "execute":
+        work_order_id, work_order_path = _active_work_order(
+            target / "plans", action["tier"])
+        report = loom_lint.lint(
+            target / "plans", repo_path=target, strict_staleness=True)
+        findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
+        findings.extend(
+            loom_gate.verify_small(target / "plans" / ".loom-small-lifecycle.json")
+            if action["tier"] == "S" else
+            loom_gate.verify(target / "plans", target, require_authorized=True))
+        if findings:
+            raise OrchestratorError(
+                "EXECUTION_NOT_READY", "; ".join(findings[:8]))
+        action["work_order"] = work_order_path
     action = _write_action(path, action)
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
         "action_id": action_id, "action_path": str(path),
         "intent": action["intent"], "tier": action["tier"],
         "domains": action["domains"], "expires_at": expires_at,
+        "work_order": work_order_id if prepared.intent == "execute" else None,
         "attempts_remaining": action["max_attempts"] - action["attempts"],
         "session_environment": opened.environment(),
         "required_outcome": (
@@ -504,22 +599,33 @@ def complete(action_path, usage_path, *, now=None):
         raise OrchestratorError("USAGE_INVALID", str(exc)) from exc
     if normalized["measurement_status"] != "measured":
         raise OrchestratorError("USAGE_REQUIRED", "production completion requires measured usage")
-    prepared = loom_runtime.prepare_invocation(
-        action["request"], instance_id=action["instance_id"],
-        invocation_id=action["invocation_id"], cwd=action["cwd"],
-        explicit_target=action["explicit_target"], owner_home=action["owner_home"],
-        now=instant)
-    if prepared.survey_hash != action["survey_hash"] \
-            or prepared.project_id != action["project_id"] \
-            or prepared.intent != action["intent"]:
-        raise OrchestratorError(
-            "TARGET_DRIFT", "target, project, or routed intent changed during delegated work")
+    sealed = loom_runtime.PreparedInvocation.from_dict(action["prepared"])
+    if action["intent"] == "execute":
+        project = loom_runtime.resolve_project(
+            action["instance_id"], explicit_target=action["explicit_target"],
+            cwd=action["cwd"])
+        if project.project_id != action["project_id"] \
+                or project.canonical_target_identity != sealed.canonical_target_identity:
+            raise OrchestratorError(
+                "TARGET_DRIFT", "delegated target identity changed")
+    else:
+        current = loom_runtime.prepare_invocation(
+            action["request"], instance_id=action["instance_id"],
+            invocation_id=action["invocation_id"], cwd=action["cwd"],
+            explicit_target=action["explicit_target"], owner_home=action["owner_home"],
+            now=instant)
+        if current.survey_hash != action["survey_hash"] \
+                or current.project_id != action["project_id"] \
+                or current.intent != action["intent"]:
+            raise OrchestratorError(
+                "TARGET_DRIFT",
+                "target, project, or routed intent changed during delegated work")
     controller = _controller(action, usage=usage)
     try:
         receipt = controller.run(
             action["request"], invocation_id=action["invocation_id"],
             cwd=action["cwd"], explicit_target=action["explicit_target"],
-            now=instant, continue_open=True)
+            now=instant, continue_open=True, prepared=sealed)
     except loom_session.SessionInterrupted as exc:
         action["attempts"] += 1
         if action["attempts"] >= action["max_attempts"]:

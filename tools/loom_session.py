@@ -1021,18 +1021,31 @@ class SessionController:
                     "session_id": open_session.session_id}
 
     def run(self, request, *, invocation_id, cwd, explicit_target=None,
-            explicit_config=None, now=None, continue_open=False):
+            explicit_config=None, now=None, continue_open=False, prepared=None):
         instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
-        prepared = loom_runtime.prepare_invocation(
-            request,
-            instance_id=self.instance_id,
-            invocation_id=invocation_id,
-            cwd=cwd,
-            explicit_target=explicit_target,
-            explicit_config=explicit_config,
-            owner_home=self.owner_home,
-            now=instant,
-        )
+        if prepared is None:
+            prepared = loom_runtime.prepare_invocation(
+                request,
+                instance_id=self.instance_id,
+                invocation_id=invocation_id,
+                cwd=cwd,
+                explicit_target=explicit_target,
+                explicit_config=explicit_config,
+                owner_home=self.owner_home,
+                now=instant,
+            )
+        else:
+            if not continue_open or not isinstance(
+                    prepared, loom_runtime.PreparedInvocation):
+                raise SessionError(
+                    "sealed preparation may only continue an open session")
+            normalized = " ".join(request.split())
+            if prepared.instance_id != self.instance_id \
+                    or prepared.invocation_id != invocation_id \
+                    or prepared.request_hash != loom_runtime._sha(normalized):
+                raise SessionBlocked(
+                    "SEALED_PREPARATION_MISMATCH",
+                    "sealed preparation does not match this session request")
         path = self._journal_path(prepared.project_id)
         lock_path = path.with_name(".session.lock")
         with _SessionFileLock(lock_path):

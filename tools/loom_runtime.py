@@ -1085,6 +1085,37 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash):
     return result
 
 
+def _pack_route_contract(pack, state):
+    """Read the validated route identity owned by an existing planning pack."""
+    if not state.get("pack_exists") or state.get("state_error"):
+        return None
+    pack = Path(pack)
+    manifest = pack / "MANIFEST.md"
+    if not manifest.is_file() or _path_has_link_or_junction(manifest):
+        return None
+    try:
+        text = _bounded_read(
+            manifest, MAX_CONFIG_BYTES, "planning-pack manifest").decode("utf-8")
+    except UnicodeError as exc:
+        raise RuntimeError(f"planning-pack manifest is not UTF-8: {exc}") from exc
+    frontmatter, _ = loom_lint.parse_frontmatter(text)
+    report = loom_lint.Report()
+    if frontmatter is not None:
+        loom_lint.validate_schema(
+            report, manifest, frontmatter, "manifest.schema.json")
+    tier = (frontmatter or {}).get("tier")
+    domains = (frontmatter or {}).get("domain_ids")
+    if frontmatter is None or report.errors or tier not in {"M", "L"} \
+            or not isinstance(domains, list) or not domains \
+            or len(domains) > MAX_DOMAINS \
+            or len(domains) != len(set(domains)) \
+            or not all(isinstance(item, str) and ID_RE.fullmatch(item)
+                       for item in domains):
+        raise RuntimeError(
+            "authorized planning-pack route identity is missing or invalid")
+    return {"tier": tier, "domains": domains}
+
+
 def _canonical_owner_root(owner_home, invocation_cwd=None):
     if owner_home is None:
         return None
@@ -1184,19 +1215,23 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "PROJECT_INDETERMINATE", f"cannot establish complete project state: {exc}") \
             from exc
     repo_state, state, components = first_repo, dict(first_state), dict(first_components)
+    decision = resolve_intent(request, state)
     try:
-        domains_result = loom_domain.select_domains(
-            request,
+        pack_route = (_pack_route_contract(pack, state)
+                      if decision["intent"] != "plan" else None)
+        explicit_domains = (
+            pack_route["domains"] if pack_route is not None else
             (config["domain_ids"] if config_source != "builtin-safe-default"
-             and config["domain_ids"] != ["unclassified"] else None),
-            loom_domain.inspect_project(project.root))
+             and config["domain_ids"] != ["unclassified"] else None))
+        domains_result = loom_domain.select_domains(
+            request, explicit_domains, loom_domain.inspect_project(project.root))
     except loom_domain.DomainError as exc:
         raise RuntimeBlocked(
             "DOMAIN_INDETERMINATE",
             f"cannot establish trustworthy domain evidence: {exc}") from exc
     domains = domains_result["memory_domains"] or ["unclassified"]
-    decision = resolve_intent(request, state)
-    tier = loom_tier.classify(request)["tier"]
+    tier = (pack_route["tier"] if pack_route is not None
+            else loom_tier.classify(request)["tier"])
     decision.update({
         "tier": tier,
         "autonomy": config["autonomy"],

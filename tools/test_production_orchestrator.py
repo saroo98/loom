@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 import loom_gate  # noqa: E402
 import loom_install  # noqa: E402
 import loom_lifecycle  # noqa: E402
+import loom_lint  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_release  # noqa: E402
 
@@ -226,6 +227,18 @@ Pending implementation evidence.
 """)
 
 
+def _mark_medium_wo_done(pack):
+    work_order = pack / "work-orders" / "WO-001-accounting.md"
+    text = work_order.read_text(encoding="utf-8")
+    text = text.replace("status: ready", "status: done")
+    text = text.replace("- [ ]", "- [x]")
+    text = text.replace(
+        "Pending implementation evidence.",
+        "Evidence: isolated real-process verification exited 0.")
+    work_order.write_text(text, encoding="utf-8")
+    return work_order
+
+
 class ProductionOrchestratorTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -327,6 +340,110 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual([], loom_gate.verify_small(
             self.repo / "plans" / ".loom-small-lifecycle.json"))
         self.assertFalse((self.repo / "plans" / "MANIFEST.md").exists())
+
+    def test_continue_executes_one_declared_work_order_and_seals_completion(self):
+        opened = json.loads(self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        planned = self.cli(
+            "complete", "--action", opened["action_path"], "--usage", usage)
+        self.assertEqual(0, planned.returncode, planned.stderr + planned.stdout)
+
+        execute = json.loads(self.cli(
+            "invoke", "--request", "Continue", "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        self.assertEqual("execute", execute["intent"])
+        self.assertEqual("WO-001", execute["work_order"])
+        (self.repo / "src" / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+        work_order = _mark_medium_wo_done(self.repo / "plans")
+        loom_lifecycle.capture_acceptance(
+            self.repo / "plans", self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('accounting verification passed')"])
+
+        completed = self.cli(
+            "complete", "--action", execute["action_path"], "--usage", usage)
+        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+        receipt = json.loads(completed.stdout)
+        self.assertEqual("completed", receipt["status"], receipt)
+        self.assertEqual("execute-complete", receipt["code"])
+        lifecycle = json.loads(
+            (self.repo / "plans" / "lifecycle.json").read_text(encoding="utf-8"))
+        self.assertEqual("WO-001", lifecycle["work_order_completions"][0]["work_order"])
+        self.assertEqual("done", loom_lint.parse_frontmatter(
+            work_order.read_text(encoding="utf-8"))[0]["status"])
+
+    def test_execute_refuses_noop_completion(self):
+        opened = json.loads(self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        self.assertEqual(0, self.cli(
+            "complete", "--action", opened["action_path"], "--usage", usage).returncode)
+        execute = json.loads(self.cli(
+            "invoke", "--request", "Continue", "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _mark_medium_wo_done(self.repo / "plans")
+        loom_lifecycle.capture_acceptance(
+            self.repo / "plans", self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('no-op probe')"])
+
+        result = self.cli(
+            "complete", "--action", execute["action_path"], "--usage", usage)
+        self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+        receipt = json.loads(result.stdout)
+        self.assertEqual("blocked", receipt["status"])
+        self.assertIn("no declared target changed", receipt["user_message"])
+        lifecycle = json.loads(
+            (self.repo / "plans" / "lifecycle.json").read_text(encoding="utf-8"))
+        self.assertEqual([], lifecycle["work_order_completions"])
+
+    def test_execute_refuses_changes_outside_declared_touches(self):
+        opened = json.loads(self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        self.assertEqual(0, self.cli(
+            "complete", "--action", opened["action_path"], "--usage", usage).returncode)
+        execute = json.loads(self.cli(
+            "invoke", "--request", "Continue", "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _write(self.repo / "undeclared.txt", "not authorized\n")
+        _mark_medium_wo_done(self.repo / "plans")
+        loom_lifecycle.capture_acceptance(
+            self.repo / "plans", self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('scope probe')"])
+
+        result = self.cli(
+            "complete", "--action", execute["action_path"], "--usage", usage)
+        self.assertEqual(0, result.returncode, result.stderr + result.stdout)
+        receipt = json.loads(result.stdout)
+        self.assertEqual("blocked", receipt["status"])
+        self.assertIn("outside this work order's declared touches", receipt["user_message"])
+        lifecycle = json.loads(
+            (self.repo / "plans" / "lifecycle.json").read_text(encoding="utf-8"))
+        self.assertEqual([], lifecycle["work_order_completions"])
 
     def test_cancel_is_terminal_and_content_bound(self):
         opened = self.cli(
