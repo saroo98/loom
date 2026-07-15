@@ -28,6 +28,13 @@ class PackageError(RuntimeError):
     pass
 
 
+def _copy_helper_executable(source, destination):
+    shutil.copyfile(source, destination)
+    if os.name != "nt":
+        mode = stat.S_IMODE(source.stat().st_mode)
+        os.chmod(destination, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+
 def _deterministic_zip(source, output):
     files = list(loom_reliability._regular_files(source))
     if not files:
@@ -123,7 +130,7 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             shutil.copytree(public, runtime)
             binary = runtime / "bin" / binary_name
             binary.parent.mkdir(parents=True)
-            shutil.copyfile(helper, binary)
+            _copy_helper_executable(helper, binary)
             runtime_files = [{"path": path.relative_to(runtime).as_posix(),
                               "bytes": path.stat().st_size,
                               "sha256": loom_reliability.file_sha256(path)}
@@ -136,7 +143,7 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             verified_opaque.add(archive_info["sha256"])
             verifier = output / "crypto" / platform_id / binary_name
             verifier.parent.mkdir(parents=True)
-            shutil.copyfile(helper, verifier)
+            _copy_helper_executable(helper, verifier)
             targets.append({"platform": platform_id, "path": "loom-runtime.zip",
                             "sha256": archive_info["sha256"], "bytes": archive_info["bytes"]})
         manifest = {

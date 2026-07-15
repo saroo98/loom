@@ -1,6 +1,8 @@
 """Deterministic marketplace runtime packaging and opaque-artifact firewall tests."""
 
 import hashlib
+import os
+import stat
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,6 +62,9 @@ class PluginPackageTests(unittest.TestCase):
             for platform in loom_plugin_package.PLATFORMS:
                 self.assertTrue((output / "runtime-payload" / platform /
                                  "loom-runtime.zip").is_file())
+            if os.name != "nt":
+                verifier = output / "crypto" / "linux-x64" / "loom-vault"
+                self.assertTrue(verifier.stat().st_mode & stat.S_IXUSR)
             bad = {key: dict(value) for key, value in receipts.items()}
             bad["windows-x64"]["rebuild_sha256"] = "0" * 64
             with self.assertRaisesRegex(
