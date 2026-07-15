@@ -21,6 +21,7 @@ import loom_domain
 import loom_gate
 import loom_lifecycle
 import loom_lint
+import loom_memory
 import loom_survey
 import loom_tier
 
@@ -369,10 +370,6 @@ def resolve_project(instance_id, *, explicit_target=None, cwd=None,
             source = "git-cwd"
         else:
             root, source = cwd_root, "filesystem-cwd"
-    # `root` is already absolute and link-free. Avoid the legacy helper's
-    # implicit Path.resolve(), which can consult ambient process cwd on Windows.
-    project_id = "p-" + uuid.uuid5(
-        uuid.UUID(instance_id), os.path.normcase(str(root))).hex
     identity = "target-sha256:" + _sha(os.path.normcase(str(root)))
     try:
         git_probe = loom_survey.run_git(
@@ -382,6 +379,13 @@ def resolve_project(instance_id, *, explicit_target=None, cwd=None,
             "PROJECT_INDETERMINATE", f"cannot establish project state mode: {exc}") from exc
     state_mode = "git" if git_probe.returncode == 0 \
         and git_probe.stdout.strip() == "true" else "filesystem"
+    try:
+        project_id = loom_memory.project_identity(
+            instance_id, root, state_mode=state_mode)
+    except (loom_memory.MemoryError, loom_survey.SurveyError) as exc:
+        raise RuntimeBlocked(
+            "PROJECT_INDETERMINATE", f"cannot establish stable project identity: {exc}") \
+            from exc
     return ProjectResolution(root, project_id, identity, source, state_mode)
 
 

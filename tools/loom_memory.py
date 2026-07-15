@@ -16,6 +16,8 @@ import uuid
 from collections import deque
 from pathlib import Path
 
+import loom_survey
+
 SCHEMA_VERSION = 1
 INSTANCE_MARKER = ".loom-instance-id"
 SCOPES = {"global", "domain", "project", "temporary"}
@@ -363,11 +365,51 @@ def _instance_dir(home, instance_id):
     return directory
 
 
-def project_identity(instance_id, project_root):
-    """Return a path-derived identifier namespaced to one Loom installation."""
+def _project_anchor(project_root, state_mode=None):
+    """Return a move-stable, non-secret project anchor without writing to the target."""
+    root = Path(project_root).expanduser().resolve()
+    mode = state_mode
+    if mode is None:
+        probe = loom_survey.run_git(
+            root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
+        mode = "git" if probe.returncode == 0 and probe.stdout.strip() == "true" \
+            else "filesystem"
+    if mode == "git":
+        roots = loom_survey.run_git(
+            root, "rev-list", "--max-parents=0", "HEAD", allowed=(0, 128))
+        root_commits = sorted(set(roots.stdout.split())) if roots.returncode == 0 else []
+        if len(root_commits) > 64 or any(
+                re.fullmatch(r"[0-9a-fA-F]{40,64}", item) is None
+                for item in root_commits):
+            raise MemoryError("Git project lineage is invalid or exceeds its bound")
+        remote = loom_survey.run_git(
+            root, "config", "--local", "--get", "remote.origin.url",
+            allowed=(0, 1))
+        if len(remote.stdout) > 16 * 1024:
+            raise MemoryError("Git project remote exceeds its safety bound")
+        remote_hash = hashlib.sha256(remote.stdout.strip().encode("utf-8")).hexdigest() \
+            if remote.returncode == 0 and remote.stdout.strip() else None
+        if root_commits:
+            return json.dumps({
+                "kind": "git-lineage-v1", "roots": root_commits,
+                "origin_hash": remote_hash,
+            }, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+    try:
+        info = root.stat()
+    except FileNotFoundError:
+        return "path-fallback-v1:" + os.path.normcase(str(root))
+    except OSError as exc:
+        raise MemoryError(f"cannot identify project filesystem object: {exc}") from exc
+    if int(getattr(info, "st_ino", 0)) > 0:
+        return f"filesystem-object-v1:{int(info.st_dev)}:{int(info.st_ino)}"
+    return "path-fallback-v1:" + os.path.normcase(str(root))
+
+
+def project_identity(instance_id, project_root, *, state_mode=None):
+    """Return a move-stable identifier namespaced to one Loom installation."""
     namespace = uuid.UUID(_validate_instance_id(instance_id))
-    root = os.path.normcase(str(Path(project_root).expanduser().resolve()))
-    return "p-" + uuid.uuid5(namespace, root).hex
+    return "p-" + uuid.uuid5(
+        namespace, _project_anchor(project_root, state_mode=state_mode)).hex
 
 
 def initialize(home, loom_root):

@@ -96,6 +96,25 @@ class ProjectResolutionTests(RuntimeFixture):
         self.assertEqual(result.root, plain)
         self.assertEqual(result.source, "filesystem-cwd")
 
+    def test_git_project_identity_survives_a_repository_move(self):
+        before = loom_runtime.resolve_project(self.instance, cwd=self.repo)
+        moved = self.root / "renamed-project"
+        self.repo.rename(moved)
+        self.repo = moved
+        after = loom_runtime.resolve_project(self.instance, cwd=moved)
+        self.assertEqual(before.project_id, after.project_id)
+        self.assertNotEqual(
+            before.canonical_target_identity, after.canonical_target_identity)
+
+    def test_non_git_project_identity_survives_same_filesystem_move(self):
+        plain = self.root / "plain-before"
+        plain.mkdir()
+        before = loom_runtime.resolve_project(self.instance, cwd=plain)
+        moved = self.root / "plain-after"
+        plain.rename(moved)
+        after = loom_runtime.resolve_project(self.instance, cwd=moved)
+        self.assertEqual(before.project_id, after.project_id)
+
     def test_unreadable_target_fails_closed(self):
         with mock.patch.object(loom_runtime.os, "access", return_value=False):
             with self.assertRaisesRegex(

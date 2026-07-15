@@ -9,7 +9,10 @@ to create a permanent dossier.
   repeatedly measured estimation bias.
 - **Domain:** rules that apply only to one exact domain identifier, such as `accounting` or
   `realtime-3d`.
-- **Project:** facts and tactics for one canonical project identity.
+- **Project:** facts and tactics for one canonical project identity. Git projects derive that
+  identity from bounded root lineage plus a hashed origin, while non-Git projects use the local
+  filesystem object identity. Renaming or moving the same object does not strand its memory; the
+  separate target-path hash still changes so the move remains visible.
 - **Install:** operational state for one Loom installation. It never transfers to another install.
 
 Selection uses exact scope matching. A website rule is not loaded for accounting or 3D work.
