@@ -395,6 +395,14 @@ def _validate_handler_result(value):
                 | set(normalized["rejected_memory_ids"])):
         raise SessionBlocked(
             "HANDLER_RESULT_INVALID", "memory result roles must be disjoint")
+    learning_payload = bool(
+        normalized["metrics"] or normalized["applied_memory_ids"]
+        or normalized["verified_memory_ids"] or normalized["rejected_memory_ids"]
+        or normalized["preference_observations"] or normalized["artifact_usage"])
+    if learning_payload and not normalized["evidence_ids"]:
+        raise SessionBlocked(
+            "HANDLER_RESULT_INVALID",
+            "learning-affecting handler claims require evidence identifiers")
     return json.loads(json.dumps(normalized, allow_nan=False))
 
 
@@ -711,31 +719,31 @@ class LocalMemoryAdapter:
             project_id=context.project_id,
             outcome_id=outcome_id,
         )
-        evidence = list(result["evidence_ids"]) or [
-            "session-" + context.operation_id[:16]]
-        self.learning.capture(
-            kind="prediction-outcome", scope="project",
-            signal="confidence-error", decision_target="confidence-calibration",
-            evidence_ids=evidence, domain=context.prepared.domains[0],
-            project_id=context.project_id,
-            predicted=float(context.prepared.route_contract["confidence"]),
-            actual=1.0 if result["success"] else 0.0)
-        self.learning.capture(
-            kind="routing-outcome", scope="project",
-            signal="route-succeeded" if result["success"] else "route-escalated",
-            decision_target="routing-strategy", evidence_ids=evidence,
-            domain=context.prepared.domains[0], project_id=context.project_id,
-            actual=1.0 if result["success"] else 0.0)
+        evidence = list(result["evidence_ids"])
+        if evidence:
+            self.learning.capture(
+                kind="prediction-outcome", scope="project",
+                signal="confidence-error", decision_target="confidence-calibration",
+                evidence_ids=evidence, domain=context.prepared.domains[0],
+                project_id=context.project_id,
+                predicted=float(context.prepared.route_contract["confidence"]),
+                actual=1.0 if result["success"] else 0.0)
+            self.learning.capture(
+                kind="routing-outcome", scope="project",
+                signal="route-succeeded" if result["success"] else "route-escalated",
+                decision_target="routing-strategy", evidence_ids=evidence,
+                domain=context.prepared.domains[0], project_id=context.project_id,
+                actual=1.0 if result["success"] else 0.0)
         outcome_ids = [outcome["id"]]
         metrics = result["metrics"]
         domain = context.prepared.domains[0]
         calibration_error = abs(
             float(context.prepared.route_contract["confidence"])
             - (1.0 if result["success"] else 0.0))
-        measurements = [
+        measurements = ([
             ("prediction-calibration-error", calibration_error, domain),
             ("prediction-calibration-error", calibration_error, "general"),
-        ]
+        ] if evidence else [])
         metric_map = {
             "rework-observed": "rework-rate",
             "verification-escape": "verification-escape-rate",
@@ -820,12 +828,13 @@ class LocalMemoryAdapter:
             "project-completed": (
                 "lifecycle-outcome", "project-completed", "routing-strategy"),
         }
-        project_completed = result["success"] and context.intent == "close"
+        project_completed = bool(evidence) and result["success"] \
+            and context.intent == "close"
         for metric, (kind, signal, target) in automatic_signals.items():
             observed = float(metrics.get(metric, 0)) > 0
             if metric == "project-completed":
                 observed = observed or project_completed
-            if observed:
+            if observed and evidence:
                 self.learning.capture(
                     kind=kind, scope="project", signal=signal,
                     decision_target=target, evidence_ids=evidence,
@@ -877,7 +886,8 @@ class LocalMemoryAdapter:
                 "project_id": context.project_id, "evidence_id": evidence_id,
                 "recorded_at": context.prepared.prepared_at,
             })
-        proof_result = self.improvement.record_observations_batch(proof_batch)
+        proof_result = (self.improvement.record_observations_batch(proof_batch)
+                        if proof_batch else {"added": 0})
         return {"outcome_ids": outcome_ids,
                 "adaptation_receipts": adaptation_receipts,
                 "improvement_evidence_ids": [

@@ -322,9 +322,11 @@ def _handler_result(context, root, owner_home, usage, work_order=None):
                 if not findings:
                     findings = loom_gate.verify(pack, root, require_authorized=True)
         if findings:
+            failure_evidence = "gate-" + _hash(findings)[:24]
             return {
                 "status": "blocked", "code": "plan-not-release-ready",
-                "success": False, "metrics": {}, "evidence_ids": [],
+                "success": False, "metrics": {},
+                "evidence_ids": [failure_evidence],
                 "reversible_action_ids": [], "usage": usage,
                 "user_message": "Plan validation blocked: " + "; ".join(findings[:8]),
             }
@@ -358,9 +360,11 @@ def _handler_result(context, root, owner_home, usage, work_order=None):
                 if tier == "S" else
                 loom_gate.verify(pack, root, require_authorized=True))
         if findings:
+            failure_evidence = "gate-" + _hash(findings)[:24]
             return {
                 "status": "blocked", "code": "execute-not-ready", "success": False,
-                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "metrics": {}, "evidence_ids": [failure_evidence],
+                "reversible_action_ids": [],
                 "usage": usage,
                 "user_message": "Execute blocked: " + "; ".join(findings[:8]),
             }
@@ -387,9 +391,11 @@ def _handler_result(context, root, owner_home, usage, work_order=None):
             if len(lifecycle.get("work_order_completions", [])) != len(work_orders):
                 findings.append("not every work order has a sealed completion")
         if findings:
+            failure_evidence = "gate-" + _hash(findings)[:24]
             return {
                 "status": "blocked", "code": f"{intent}-not-ready", "success": False,
-                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "metrics": {}, "evidence_ids": [failure_evidence],
+                "reversible_action_ids": [],
                 "usage": usage,
                 "user_message": f"{intent.title()} blocked: " + "; ".join(findings[:8]),
             }

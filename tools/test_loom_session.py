@@ -177,6 +177,29 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertTrue(second.repeated)
         self.assertEqual(report["sample_count"], 1)
 
+    def test_unevidenced_handler_result_cannot_become_improvement_proof(self):
+        loom_root = self.root / "loom-install"
+        loom_root.mkdir()
+        instance_id = loom_memory.initialize(self.owner_home, loom_root)
+        controller = loom_session.SessionController(
+            owner_home=self.owner_home, instance_id=instance_id,
+            handlers={"plan": lambda _context: {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+            }}, memory=loom_session.LocalMemoryAdapter(
+                owner_home=self.owner_home, instance_id=instance_id))
+
+        receipt = controller.run(
+            "Plan a command-line developer tool",
+            invocation_id="00000000-0000-4000-8000-000000000188",
+            cwd=self.project, now="2026-07-14T12:00:00Z")
+        report = loom_improvement.ImprovementTracker(
+            self.owner_home, instance_id).report(
+                metric="prediction-calibration-error", domain="cli")
+
+        self.assertEqual([], list(receipt.improvement_evidence_ids))
+        self.assertEqual(0, report["longitudinal"]["sample_count"])
+
     def test_session_automatically_records_domain_and_general_improvement_evidence(self):
         loom_root = self.root / "loom-install"
         loom_root.mkdir()
