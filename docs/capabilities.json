@@ -8,7 +8,7 @@
     {"id":"sealed-plan-contract","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","schemas/plan-contract.schema.json"],"tests":["tools/test_production_orchestrator.py"]},
     {"id":"loom-executed-repair-verification","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_lifecycle.py"],"tests":["tools/test_production_orchestrator.py"]},
     {"id":"pack-integrity","kind":"mechanical","enforcement":["tools/loom_lint.py"],"tests":["tools/test_loom_lint.py"]},
-    {"id":"domain-discovery","kind":"mechanical","enforcement":["tools/loom_domain.py"],"tests":["tools/test_domain_universality.py"]},
+    {"id":"domain-routing-and-discovery-gate","kind":"mechanical","enforcement":["tools/loom_domain.py","tools/loom_runtime.py","tools/loom_lint.py","tools/loom_gate.py"],"tests":["tools/test_domain_universality.py","tools/test_production_orchestrator.py","tools/test_loom_lint.py","tools/test_loom_gate.py"]},
     {"id":"scoped-memory","kind":"mechanical","enforcement":["tools/loom_memory.py"],"tests":["tools/test_memory_lifecycle.py","tools/test_domain_rehydration.py"]},
     {"id":"bounded-learning","kind":"mechanical","enforcement":["tools/loom_learning.py","tools/loom_memory.py"],"tests":["tools/test_loom_learning.py","tools/test_memory_lifecycle.py"]},
     {"id":"preference-evolution","kind":"mechanical","enforcement":["tools/loom_preferences.py"],"tests":["tools/test_preference_evolution.py"]},
