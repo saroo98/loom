@@ -121,7 +121,7 @@ def _iter_regular_files(root):
 def _scan_views(content):
     """Return raw bytes plus normalized text views for supported public encodings."""
     views = [content]
-    decoded = False
+    texts = []
     encodings = ["utf-8-sig"]
     if content.startswith((b"\xff\xfe", b"\xfe\xff")):
         encodings.append("utf-16")
@@ -133,13 +133,15 @@ def _scan_views(content):
             encodings.extend(("utf-16-le", "utf-16-be"))
     for encoding in encodings:
         try:
-            normalized = content.decode(encoding).encode("utf-8")
+            text = content.decode(encoding)
+            normalized = text.encode("utf-8")
         except (UnicodeDecodeError, UnicodeEncodeError):
             continue
-        decoded = True
+        if text not in texts:
+            texts.append(text)
         if normalized not in views:
             views.append(normalized)
-    return tuple(views), decoded
+    return tuple(views), tuple(texts)
 
 
 def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
@@ -154,8 +156,10 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
     if require_owner_tokens and not tokens:
         raise PrivacyError("private/owner publication requires real owner tokens")
     folded_tokens = [
-        (item, tuple(item.casefold().encode(encoding).lower()
-                     for encoding in TOKEN_ENCODINGS))
+        (item, tuple({form for encoding in TOKEN_ENCODINGS for form in (
+            item.encode(encoding), item.encode(encoding).lower(),
+            item.casefold().encode(encoding),
+        )}))
         for item in tokens
     ]
     findings = []
@@ -163,9 +167,8 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
     bytes_scanned = 0
     for path in _iter_regular_files(root):
         relative = path.relative_to(root).as_posix()
-        name_bytes = relative.encode("utf-8").lower()
-        for token, encoded_forms in folded_tokens:
-            if encoded_forms[0] in name_bytes:
+        for token, _encoded_forms in folded_tokens:
+            if token.casefold() in relative.casefold():
                 findings.append({"kind": "forbidden-filename", "path": relative,
                                  "rule": hashlib.sha256(token.encode()).hexdigest()[:12]})
                 break
@@ -187,14 +190,16 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
         files_scanned += 1
         bytes_scanned += len(content)
         folded = content.lower()
+        scan_views, decoded_texts = _scan_views(content)
         token_match = next((
             token for token, encoded_forms in folded_tokens
-            if any(encoded in folded for encoded in encoded_forms)
+            if any(encoded in content or encoded in folded
+                   for encoded in encoded_forms)
+            or any(token.casefold() in text.casefold() for text in decoded_texts)
         ), None)
         if token_match is not None:
             findings.append({"kind": "forbidden-content", "path": relative,
                              "rule": hashlib.sha256(token_match.encode()).hexdigest()[:12]})
-        scan_views, decoded_text = _scan_views(content)
         secret_match = None
         for label, pattern in SECRET_PATTERNS:
             if any(pattern.search(view) for view in scan_views):
@@ -204,7 +209,7 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
                 break
         transparent_name = not path.suffix or path.suffix.lower() in TRANSPARENT_TEXT_SUFFIXES
         if token_match is None and secret_match is None \
-                and (not decoded_text or not transparent_name):
+                and (not decoded_texts or not transparent_name):
             findings.append({"kind": "opaque-content", "path": relative,
                              "rule": "unsupported-binary"})
     return {"clean": not findings, "files_scanned": files_scanned,

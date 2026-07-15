@@ -51,6 +51,18 @@ class PrivacyExcellenceTests(unittest.TestCase):
         self.assertEqual("forbidden-content", result["findings"][0]["kind"])
         self.assertEqual("windows-notes.txt", result["findings"][0]["path"])
 
+    def test_firewall_detects_non_ascii_owner_tokens_exactly_and_casefolded(self):
+        cut = self.root / "cut"
+        cut.mkdir()
+        (cut / "owner.txt").write_text("PRIVATE ÅOWNER", encoding="utf-8")
+
+        result = loom_privacy.scan_publication(
+            cut, forbidden_tokens=["PRIVATE ÅOWNER"],
+            require_owner_tokens=True)
+
+        self.assertFalse(result["clean"])
+        self.assertEqual("forbidden-content", result["findings"][0]["kind"])
+
     def test_firewall_detects_utf16_secret_signatures(self):
         cut = self.root / "cut"
         cut.mkdir()
