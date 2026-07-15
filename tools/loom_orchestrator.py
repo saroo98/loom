@@ -29,7 +29,7 @@ import loom_survey
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 3
+ACTION_SCHEMA_VERSION = 4
 ACTION_FIELDS = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -37,7 +37,7 @@ ACTION_FIELDS = {
     "created_at", "expires_at", "attempts", "max_attempts", "session_id",
     "operation_id", "journal_path", "initial_pack_hash",
     "remove_pristine_pack", "work_order", "prepared", "context", "result",
-    "repair_plan", "host_result", "plan_contract",
+    "repair_plan", "host_result", "plan_contract", "context_manifest",
     "action_hash",
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
@@ -148,6 +148,14 @@ def _validate_action(value, path):
             or context["archived_count"] < 0 \
             or len(_canonical_bytes(context)) > 32 * 1024:
         raise OrchestratorError("ACTION_CORRUPT", "sealed context capsule is invalid")
+    try:
+        expected_manifest = loom_performance.production_context_manifest(
+            value["install_root"])
+    except loom_performance.PerformanceError as exc:
+        raise OrchestratorError("ACTION_CORRUPT", "static context is unavailable") from exc
+    if value["context_manifest"] != expected_manifest:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "sealed static context manifest is invalid or stale")
     try:
         prepared = loom_runtime.PreparedInvocation.from_dict(value["prepared"])
     except loom_runtime.RuntimeError as exc:
@@ -1185,9 +1193,7 @@ def default_handlers(*, root, owner_home, usage=None, work_order=None,
     """Return the complete audited production handler registry."""
     root, owner_home = Path(root), Path(owner_home)
     normalized = loom_performance.normalize_usage(usage)
-    usage_payload = (None if normalized["measurement_status"] == "unreported" else {
-        field: normalized[field] for field in loom_performance.USAGE_FIELDS
-    })
+    usage_payload = loom_performance.measured_usage_payload(normalized)
     return {
         intent: (lambda context, _intent=intent: _merge_host_outcome(
             _handler_result(context, root, owner_home, usage_payload, work_order,
@@ -1259,6 +1265,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "work_order": None, "prepared": prepared.to_dict(),
         "context": context_capsule,
         "repair_plan": None, "host_result": None, "plan_contract": None,
+        "context_manifest": loom_performance.production_context_manifest(install_root),
         "result": None,
     }
     if prepared.route_contract["blocked"]:
@@ -1359,6 +1366,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "work_order": work_order_id if prepared.intent == "execute" else None,
         "repair_plan": action["repair_plan"],
         "plan_contract": action["plan_contract"],
+        "context_manifest": action["context_manifest"],
         "context": {
             "memory": context_capsule["memory"],
             "preferences": context_capsule["preferences"],
@@ -1366,7 +1374,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "attempts_remaining": action["max_attempts"] - action["attempts"],
         "session_environment": opened.environment(),
         "required_outcome": (
-            "For plan, author the exact returned plan_contract; otherwise perform only the "
+            "The sealed plan_contract and bounded context capsule are complete; do not reload "
+            "static Loom guidance. For plan, author the exact plan_contract; otherwise perform only the "
             "routed intent. Do not mutate undeclared target paths. Then call complete with all five "
             "measured token categories. The orchestrator owns validation, gates, learning, "
             "and the final receipt."),

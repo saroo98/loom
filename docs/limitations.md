@@ -16,6 +16,9 @@ Loom fails closed around evidence it does not possess.
 - Production token and latency budgets are **[UNVERIFIED]** until an independent benchmark signs
   provider-attested receipts for at least 20 successful samples across S, M, L, and XL workloads,
   including p50, p95, worst case, and explicit token and wall-time budgets.
+- Normal production sessions can retain the bounded provider/model/response/hash identity behind
+  all five token categories, but that local receipt is still a host-supplied record. Even 20
+  receipts in every tier report `requires-independent-attestation`, never a certified total.
 - Cross-domain improvement is **[UNVERIFIED]** until an independent benchmark signs provider-
   attested production sessions containing at least 16 memory-enabled versus memory-disabled replay
   pairs: at least 8 for one exact domain and 8 for transferable general calibration. Simulations and

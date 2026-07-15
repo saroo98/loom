@@ -92,8 +92,10 @@ contain the exact 3-OS by 4-Python matrix; usability must bind clean-environment
 request receipts; hostile review must bind a complete independently reproduced report. It cannot
 award 100 unless local checks and all 5 signed external evidence contracts pass. The local
 `performance_contracts` check proves only deterministic cache, context, and fixture-budget
-invariants. It never substitutes for the separate provider-attested production-performance or
-production-memory-replay records.
+invariants. Production actions additionally seal the hashes and byte counts of the exact two static
+guidance files, while session receipts can retain provider/model/response/hash provenance for all
+five token categories. Neither a caller total nor a local provider receipt substitutes for the
+separate independently attested production-performance or production-memory-replay records.
 
 ## Truth surfaces
 

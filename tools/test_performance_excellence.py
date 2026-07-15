@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 import uuid
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -62,6 +63,26 @@ class PerformanceExcellenceTests(unittest.TestCase):
                 "output_tokens": 0, "tool_tokens": 0, "retry_tokens": 0,
             })
 
+    def test_provider_receipt_identity_is_retained_without_false_attestation(self):
+        receipt = {
+            "source": "provider-response", "provider": "openai",
+            "model": "gpt-test", "response_id": "resp-001",
+            "captured_at": "2026-07-15T12:00:00Z",
+            "raw_response_sha256": hashlib.sha256(b"raw-response").hexdigest(),
+            "usage": {
+                "input_tokens": 100, "cache_read_tokens": 20,
+                "output_tokens": 30, "tool_tokens": 40, "retry_tokens": 10,
+            },
+        }
+        measured = loom_performance.normalize_usage(receipt)
+        self.assertEqual("provider-receipt", measured["measurement_source"])
+        self.assertEqual("resp-001", measured["receipt"]["response_id"])
+        self.assertEqual("requires-independent-attestation",
+                         measured["receipt"]["attestation_status"])
+        tampered = dict(receipt, response_id="unsafe response id")
+        with self.assertRaises(loom_performance.PerformanceError):
+            loom_performance.normalize_usage(tampered)
+
     def test_production_usage_ledger_is_bounded_and_reports_real_distribution(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -87,13 +108,49 @@ class PerformanceExcellenceTests(unittest.TestCase):
             self.assertEqual(300, report["total_count"])
             self.assertEqual(256, report["retained_sample_count"])
             self.assertEqual("caller-reported", report["measurement_source"])
-            self.assertIn("not provider-attested", report["source_limitation"])
+            self.assertIn("descriptive", report["source_limitation"])
             self.assertLessEqual(
                 report["p50_total_tokens"], report["p95_total_tokens"])
             self.assertLessEqual(
                 report["p95_total_tokens"], report["worst_total_tokens"])
             self.assertEqual(0, report["budget_violation_count"])
-            self.assertEqual("observed-within-budget", report["certification_status"])
+            self.assertEqual("caller-reported-only", report["certification_status"])
+
+    def test_provider_receipts_report_each_tier_but_do_not_self_certify(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, install = root / "home", root / "install"
+            install.mkdir()
+            instance = loom_memory.initialize(home, install)
+            for tier in ("S", "M", "L", "XL"):
+                for index in range(20):
+                    response_id = f"resp-{tier.lower()}-{index:02d}"
+                    usage = {
+                        "input_tokens": 100, "cache_read_tokens": 20,
+                        "output_tokens": 30, "tool_tokens": 10, "retry_tokens": 0,
+                    }
+                    loom_performance.record_usage(
+                        home, instance,
+                        session_id=str(uuid.uuid5(
+                            uuid.UUID(instance), f"provider-{tier}-{index}")),
+                        project_id="p-00000000000000000000000000001201",
+                        intent="plan", tier=tier, domains=["cli"],
+                        usage={
+                            "source": "provider-response", "provider": "openai",
+                            "model": "gpt-test", "response_id": response_id,
+                            "captured_at": "2026-07-15T12:00:00Z",
+                            "raw_response_sha256": hashlib.sha256(
+                                response_id.encode()).hexdigest(),
+                            "usage": usage,
+                        })
+            report = loom_performance.usage_report(home, instance)
+            self.assertEqual("provider-receipt", report["measurement_source"])
+            self.assertEqual(80, report["provider_receipt_count"])
+            self.assertTrue(all(
+                report["tiers"][tier]["provider_receipt_count"] == 20
+                for tier in ("S", "M", "L", "XL")))
+            self.assertEqual(
+                "requires-independent-attestation", report["certification_status"])
 
     def test_performance_benchmarks_cover_all_lifecycle_shapes(self):
         report = loom_performance.evaluate_benchmarks()
@@ -171,6 +228,36 @@ class PerformanceExcellenceTests(unittest.TestCase):
                 cwd=project, now="2026-07-14T12:00:00Z")
             self.assertEqual(receipt.usage["measurement_status"], "measured")
             self.assertEqual(receipt.usage["total_tokens"], 24)
+
+    def test_session_receipt_preserves_provider_receipt_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            project = root / "project"
+            project.mkdir()
+            (project / "README.md").write_text("fixture\n", encoding="utf-8")
+            provider_usage = {
+                "source": "provider-response", "provider": "openai",
+                "model": "gpt-test", "response_id": "resp-session-001",
+                "captured_at": "2026-07-14T12:00:00Z",
+                "raw_response_sha256": hashlib.sha256(b"session-raw").hexdigest(),
+                "usage": {
+                    "input_tokens": 10, "cache_read_tokens": 5,
+                    "output_tokens": 4, "tool_tokens": 3, "retry_tokens": 2,
+                },
+            }
+            controller = loom_session.SessionController(
+                owner_home=root / "home",
+                instance_id="00000000-0000-4000-8000-000000001202",
+                handlers={"plan": lambda _context: {
+                    "status": "completed", "code": "plan-ready", "success": True,
+                    "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                    "usage": provider_usage,
+                }}, memory=loom_session.NoopMemoryAdapter())
+            receipt = controller.run(
+                "Build a command-line tool", invocation_id=str(uuid.uuid4()),
+                cwd=project, now="2026-07-14T12:00:00Z")
+            self.assertEqual("provider-receipt", receipt.usage["measurement_source"])
+            self.assertEqual("resp-session-001", receipt.usage["receipt"]["response_id"])
 
 
 if __name__ == "__main__":

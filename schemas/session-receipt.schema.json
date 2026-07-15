@@ -56,7 +56,21 @@
         "output_tokens", "tool_tokens", "retry_tokens", "total_tokens"],
       "properties": {
         "measurement_status": {"enum": ["measured", "unreported"]},
-        "measurement_source": {"enum": ["caller-reported", null]},
+        "measurement_source": {"enum": ["caller-reported", "provider-receipt", null]},
+        "receipt": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["provider", "model", "response_id", "captured_at",
+            "raw_response_sha256", "attestation_status"],
+          "properties": {
+            "provider": {"type": "string"},
+            "model": {"type": "string"},
+            "response_id": {"type": "string"},
+            "captured_at": {"type": "string", "format": "date-time"},
+            "raw_response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "attestation_status": {"const": "requires-independent-attestation"}
+          }
+        },
         "input_tokens": {"type": ["integer", "null"], "minimum": 0},
         "cache_read_tokens": {"type": ["integer", "null"], "minimum": 0},
         "output_tokens": {"type": ["integer", "null"], "minimum": 0},

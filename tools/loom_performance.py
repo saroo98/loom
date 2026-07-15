@@ -23,7 +23,12 @@ MAX_USAGE_STORE_BYTES = 2 * 1024 * 1024
 USAGE_STORE_FIELDS = {"schema_version", "instance_id", "total_count", "samples"}
 USAGE_SAMPLE_FIELDS = {
     "schema_version", "id", "session_id", "project_id", "intent", "tier",
-    "domains", "recorded_at", "measurement_source", *USAGE_FIELDS, "total_tokens",
+    "domains", "recorded_at", "measurement_source", "provider_receipt",
+    *USAGE_FIELDS, "total_tokens",
+}
+PROVIDER_RECEIPT_FIELDS = {
+    "source", "provider", "model", "response_id", "captured_at",
+    "raw_response_sha256", "usage",
 }
 TIER_BUDGETS = {"S": 2000, "M": 6000, "L": 16000, "XL": 40000}
 
@@ -60,15 +65,7 @@ def adaptive_memory_budget(*, tier, intent, domain_count):
     }
 
 
-def normalize_usage(value):
-    """Accept only a complete five-part token measurement or an honest unknown."""
-    if value is None:
-        return {
-            "measurement_status": "unreported",
-            "measurement_source": None,
-            **{field: None for field in USAGE_FIELDS},
-            "total_tokens": None,
-        }
+def _normalize_counts(value):
     if not isinstance(value, dict) or set(value) != set(USAGE_FIELDS):
         raise PerformanceError(
             "usage measurement must provide all five token categories")
@@ -81,12 +78,78 @@ def normalize_usage(value):
     if normalized["input_tokens"] == 0 or normalized["output_tokens"] == 0:
         raise PerformanceError(
             "measured agent work requires nonzero input and output token counts")
+    return normalized
+
+
+def _provider_receipt(value):
+    if not isinstance(value, dict) or set(value) != PROVIDER_RECEIPT_FIELDS \
+            or value.get("source") != "provider-response":
+        raise PerformanceError("provider receipt fields are invalid")
+    safe = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+    if any(not isinstance(value.get(field), str) or safe.fullmatch(value[field]) is None
+           for field in ("provider", "model", "response_id")) \
+            or not isinstance(value.get("raw_response_sha256"), str) \
+            or re.fullmatch(r"[0-9a-f]{64}", value["raw_response_sha256"]) is None:
+        raise PerformanceError("provider receipt identity is invalid")
+    try:
+        captured = dt.datetime.fromisoformat(value["captured_at"].replace("Z", "+00:00"))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise PerformanceError("provider receipt timestamp is invalid") from exc
+    if captured.tzinfo is None:
+        raise PerformanceError("provider receipt timestamp must be timezone-aware")
+    return {
+        "provider": value["provider"], "model": value["model"],
+        "response_id": value["response_id"],
+        "captured_at": captured.astimezone(dt.timezone.utc).replace(
+            microsecond=0).isoformat().replace("+00:00", "Z"),
+        "raw_response_sha256": value["raw_response_sha256"],
+        "attestation_status": "requires-independent-attestation",
+    }, _normalize_counts(value["usage"])
+
+
+def normalize_usage(value):
+    """Accept only a complete five-part token measurement or an honest unknown."""
+    if value is None:
+        return {
+            "measurement_status": "unreported",
+            "measurement_source": None,
+            "receipt": None,
+            **{field: None for field in USAGE_FIELDS},
+            "total_tokens": None,
+        }
+    if isinstance(value, dict) and set(value) == PROVIDER_RECEIPT_FIELDS:
+        receipt, normalized = _provider_receipt(value)
+        source = "provider-receipt"
+    else:
+        receipt, normalized = None, _normalize_counts(value)
+        source = "caller-reported"
     return {
         "measurement_status": "measured",
-        "measurement_source": "caller-reported",
+        "measurement_source": source,
+        "receipt": receipt,
         **normalized,
         "total_tokens": sum(normalized.values()),
     }
+
+
+def measured_usage_payload(normalized):
+    """Recover the canonical persisted input from a normalized measurement."""
+    if not isinstance(normalized, dict) \
+            or normalized.get("measurement_status") != "measured":
+        return None
+    counts = {field: normalized[field] for field in USAGE_FIELDS}
+    if normalized.get("measurement_source") == "provider-receipt":
+        receipt = normalized.get("receipt")
+        if not isinstance(receipt, dict):
+            raise PerformanceError("normalized provider receipt is missing")
+        return {
+            "source": "provider-response", "provider": receipt["provider"],
+            "model": receipt["model"], "response_id": receipt["response_id"],
+            "captured_at": receipt["captured_at"],
+            "raw_response_sha256": receipt["raw_response_sha256"],
+            "usage": counts,
+        }
+    return counts
 
 
 def _usage_path(owner_home, instance_id):
@@ -101,7 +164,7 @@ def _usage_path(owner_home, instance_id):
 
 
 def _empty_usage_store(instance_id):
-    return {"schema_version": 1, "instance_id": str(instance_id),
+    return {"schema_version": 2, "instance_id": str(instance_id),
             "total_count": 0, "samples": []}
 
 
@@ -116,7 +179,7 @@ def _read_usage_store(path, instance_id):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise PerformanceError(f"usage ledger is unreadable: {exc}") from exc
     if not isinstance(store, dict) or set(store) != USAGE_STORE_FIELDS \
-            or store.get("schema_version") != 1 \
+            or store.get("schema_version") not in {1, 2} \
             or store.get("instance_id") != str(instance_id) \
             or type(store.get("total_count")) is not int \
             or store["total_count"] < 0 \
@@ -124,17 +187,37 @@ def _read_usage_store(path, instance_id):
             or len(store["samples"]) > MAX_USAGE_SAMPLES \
             or store["total_count"] < len(store["samples"]):
         raise PerformanceError("usage ledger shape or bounds are invalid")
+    if store["schema_version"] == 1:
+        legacy_fields = USAGE_SAMPLE_FIELDS - {"provider_receipt"}
+        migrated = []
+        for sample in store["samples"]:
+            if not isinstance(sample, dict) or set(sample) != legacy_fields \
+                    or sample.get("schema_version") != 1:
+                raise PerformanceError("legacy usage ledger sample is invalid")
+            migrated.append({**sample, "schema_version": 2, "provider_receipt": None})
+        store = {**store, "schema_version": 2, "samples": migrated}
     for sample in store["samples"]:
         if not isinstance(sample, dict) or set(sample) != USAGE_SAMPLE_FIELDS \
-                or sample.get("schema_version") != 1 \
+                or sample.get("schema_version") != 2 \
                 or sample.get("tier") not in TIER_BUDGETS \
-                or sample.get("measurement_source") != "caller-reported" \
+                or sample.get("measurement_source") not in {
+                    "caller-reported", "provider-receipt"} \
                 or not isinstance(sample.get("domains"), list) \
                 or not sample["domains"] \
                 or any(type(sample.get(field)) is not int or sample[field] < 0
                        for field in (*USAGE_FIELDS, "total_tokens")) \
-                or sample["total_tokens"] != sum(sample[field] for field in USAGE_FIELDS):
+                or sample["total_tokens"] != sum(sample[field] for field in USAGE_FIELDS) \
+                or ((sample["measurement_source"] == "provider-receipt")
+                    != isinstance(sample.get("provider_receipt"), dict)):
             raise PerformanceError("usage ledger sample is invalid")
+        if sample["provider_receipt"] is not None:
+            receipt = sample["provider_receipt"]
+            if set(receipt) != {
+                    "provider", "model", "response_id", "captured_at",
+                    "raw_response_sha256", "attestation_status"} \
+                    or receipt.get("attestation_status") != \
+                    "requires-independent-attestation":
+                raise PerformanceError("usage ledger provider receipt is invalid")
     return store
 
 
@@ -169,12 +252,13 @@ def record_usage(owner_home, instance_id, *, session_id, project_id, intent, tie
     stamp_text = stamp.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat() \
         .replace("+00:00", "Z")
     sample = {
-        "schema_version": 1,
+        "schema_version": 2,
         "id": str(uuid.uuid5(uuid.UUID(str(instance_id)), f"usage:{session_id}")),
         "session_id": str(session_id), "project_id": project_id,
         "intent": intent, "tier": tier, "domains": list(domains),
         "recorded_at": stamp_text,
         "measurement_source": normalized["measurement_source"],
+        "provider_receipt": normalized["receipt"],
         **{field: normalized[field] for field in USAGE_FIELDS},
         "total_tokens": normalized["total_tokens"],
     }
@@ -189,6 +273,11 @@ def record_usage(owner_home, instance_id, *, session_id, project_id, intent, tie
                 raise PerformanceError(
                     "usage sample identity is already bound to different counts")
             return json.loads(json.dumps(existing))
+        if normalized["receipt"] is not None and any(
+                item.get("provider_receipt", {}).get("response_id")
+                == normalized["receipt"]["response_id"]
+                for item in store["samples"] if item.get("provider_receipt") is not None):
+            raise PerformanceError("provider response identity is already recorded")
         store["samples"] = (store["samples"] + [sample])[-MAX_USAGE_SAMPLES:]
         store["total_count"] += 1
         encoded = (json.dumps(
@@ -212,23 +301,47 @@ def usage_report(owner_home, instance_id):
     totals = [sample["total_tokens"] for sample in store["samples"]]
     violations = [sample for sample in store["samples"]
                   if sample["total_tokens"] > TIER_BUDGETS[sample["tier"]]]
+    provider = [sample for sample in store["samples"]
+                if sample["measurement_source"] == "provider-receipt"]
+    caller = [sample for sample in store["samples"]
+              if sample["measurement_source"] == "caller-reported"]
+    tiers = {}
+    for tier, budget in TIER_BUDGETS.items():
+        samples = [sample for sample in provider if sample["tier"] == tier]
+        tier_totals = [sample["total_tokens"] for sample in samples]
+        tiers[tier] = {
+            "provider_receipt_count": len(samples),
+            "p50_total_tokens": _percentile(tier_totals, 0.50),
+            "p95_total_tokens": _percentile(tier_totals, 0.95),
+            "worst_total_tokens": max(tier_totals) if tier_totals else None,
+            "token_budget": budget,
+            "budget_violation_count": sum(value > budget for value in tier_totals),
+        }
+    source = ("mixed" if provider and caller else "provider-receipt" if provider
+              else "caller-reported" if caller else None)
     return {
         "schema_version": 1,
-        "measurement_source": "caller-reported",
+        "measurement_source": source,
         "source_limitation": (
-            "counts are supplied by the host; they are not provider-attested"),
+            "caller counts are descriptive; provider receipts retain response identity but "
+            "still require independent attestation"),
         "total_count": store["total_count"],
         "retained_sample_count": len(totals),
+        "caller_reported_count": len(caller),
+        "provider_receipt_count": len(provider),
         "retained_sample_bound": MAX_USAGE_SAMPLES,
         "p50_total_tokens": _percentile(totals, 0.50),
         "p95_total_tokens": _percentile(totals, 0.95),
         "worst_total_tokens": max(totals) if totals else None,
         "budget_violation_count": len(violations),
         "budgets": dict(TIER_BUDGETS),
+        "tiers": tiers,
         "certification_status": (
-            "failed" if violations else
-            "observed-within-budget" if len(totals) >= 20 else
-            "insufficient-evidence"),
+            "failed" if any(item["budget_violation_count"] for item in tiers.values()) else
+            "requires-independent-attestation" if all(
+                item["provider_receipt_count"] >= 20 for item in tiers.values()) else
+            "caller-reported-only" if caller and not provider else
+            "insufficient-provider-evidence"),
     }
 
 
@@ -381,6 +494,29 @@ class ContextCache:
         self.load_text(path)
         key = os.path.normcase(os.path.abspath(Path(path)))
         return self._entries[key]["sha256"]
+
+
+def production_context_manifest(install_root):
+    """Hash the complete static host guidance used by the one-surface bridge."""
+    root = Path(install_root)
+    paths = ("skill/loom/SKILL.md", "START-HERE.md")
+    cache = ContextCache()
+    entries = []
+    for relative in paths:
+        path = root / relative
+        text = cache.load_text(path, max_bytes=256 * 1024)
+        entries.append({
+            "path": relative,
+            "sha256": cache.content_hash(path),
+            "bytes": len(text.encode("utf-8")),
+        })
+    body = {"schema_version": 1, "entries": entries,
+            "total_bytes": sum(item["bytes"] for item in entries)}
+    body["context_hash"] = hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")).hexdigest()
+    body["load_metrics"] = cache.metrics()
+    return body
 
 
 def _metric_delta(before, after):

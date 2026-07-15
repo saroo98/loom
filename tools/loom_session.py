@@ -741,9 +741,7 @@ class LocalMemoryAdapter:
             intent=context.intent,
             tier=context.prepared.route_contract["tier"],
             domains=context.prepared.domains,
-            usage=(
-                {field: measured_usage[field] for field in loom_performance.USAGE_FIELDS}
-                if measured_usage.get("measurement_status") == "measured" else None),
+            usage=loom_performance.measured_usage_payload(measured_usage),
             recorded_at=context.prepared.prepared_at)
         outcome_ids = []
         for domain in domains:
@@ -976,9 +974,15 @@ class LocalMemoryAdapter:
             self.owner_home, self.instance_id, max_chars=1200)
 
     def performance_summary(self):
-        return json.dumps(
-            loom_performance.usage_report(self.owner_home, self.instance_id),
-            sort_keys=True, separators=(",", ":"))
+        report = loom_performance.usage_report(self.owner_home, self.instance_id)
+        summary = {key: report[key] for key in (
+            "measurement_source", "total_count", "retained_sample_count",
+            "caller_reported_count", "provider_receipt_count",
+            "p50_total_tokens", "p95_total_tokens", "worst_total_tokens",
+            "budget_violation_count", "certification_status")}
+        if report["provider_receipt_count"]:
+            summary["tiers"] = report["tiers"]
+        return json.dumps(summary, sort_keys=True, separators=(",", ":"))
 
     def forget(self, text, selected):
         return loom_transparency.forget_memory(

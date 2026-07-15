@@ -5,12 +5,16 @@ failure-injection suite.
 
 ## Context and token accounting
 
-- `tools/loom_performance.py` caches unchanged context by file identity and content hash for one
-  session. It emits bounded memory capsules selected by tier, intent, and active domain.
+- The production orchestrator uses `tools/loom_performance.py` to read and content-hash the exact
+  `SKILL.md` and `START-HERE.md` guidance set into every sealed action. The returned manifest is a
+  stable provider-cache key; changed guidance invalidates the action. The sealed plan contract and
+  bounded capsule are complete, so the host is instructed not to reload other Loom guidance.
 - Execution capsules exclude project history. Dormant domains are not selected. Tier S receives a
   sub-512-character memory budget unless a smaller caller ceiling applies.
 - Usage is either all five categories (`input`, `cache-read`, `output`, `tool`, `retry`) plus their
-  exact sum, or explicitly `unreported` with no claimed total.
+  exact sum, or explicitly `unreported` with no claimed total. A provider receipt retains bounded
+  provider/model/response/hash provenance; it remains `requires-independent-attestation`. Plain
+  caller totals are descriptive only and can never produce a certified budget claim.
 - The deterministic benchmark covers cold start, warm session, project switch, resume, year-long
   state, and a tiny-task overhead ceiling.
 

@@ -383,12 +383,15 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(1, performance["retained_sample_count"])
         self.assertEqual(900, performance["p95_total_tokens"])
         self.assertEqual("caller-reported", performance["measurement_source"])
-        status = json.loads(self.cli(
+        status_result = self.cli(
             "invoke", "--request", "Show my token usage", "--cwd", self.repo,
-            "--home", self.home, "--install-root", self.installed).stdout)
+            "--home", self.home, "--install-root", self.installed)
+        self.assertEqual(0, status_result.returncode,
+                         status_result.stderr + status_result.stdout)
+        status = json.loads(status_result.stdout)
         visible = json.loads(status["user_message"])
         self.assertEqual(900, visible["p95_total_tokens"])
-        self.assertEqual("insufficient-evidence", visible["certification_status"])
+        self.assertEqual("caller-reported-only", visible["certification_status"])
         cycle_install = self.root / "cycle-install"
         loom_install.install(self.public, cycle_install)
         self.assertEqual("installed", loom_install.check(cycle_install)["status"])
@@ -418,6 +421,12 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(result["context"]["memory"], action["context"]["memory"])
         self.assertEqual(
             result["context"]["preferences"], action["context"]["preferences"])
+        self.assertEqual(result["context_manifest"], action["context_manifest"])
+        self.assertEqual(
+            {"skill/loom/SKILL.md", "START-HERE.md"},
+            {item["path"] for item in action["context_manifest"]["entries"]})
+        self.assertEqual(2, action["context_manifest"]["load_metrics"]["disk_reads"])
+        self.assertEqual(2, action["context_manifest"]["load_metrics"]["cache_hits"])
 
         _author_medium_pack(
             self.repo / "plans",
@@ -602,6 +611,19 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
                 loom_orchestrator.OrchestratorError, "sealed plan contract"):
+            loom_orchestrator._read_action(path)
+
+    def test_rehashed_static_context_manifest_cannot_hide_guidance_drift(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        action = json.loads(path.read_text(encoding="utf-8"))
+        action["context_manifest"]["entries"][0]["sha256"] = "0" * 64
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "static context manifest"):
             loom_orchestrator._read_action(path)
 
     def test_production_host_outcome_records_controlled_provider_replay_pair(self):
