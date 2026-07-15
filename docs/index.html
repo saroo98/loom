@@ -1,285 +1,327 @@
 <!doctype html>
-<html lang="en" data-theme="light">
+<html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#f3efe5">
+  <meta name="theme-color" content="#111210">
+  <meta name="color-scheme" content="dark">
   <meta name="loom-version" content="1.0.0">
-  <meta name="description" content="Loom is private, evidence-driven planning intelligence for AI coding agents.">
-  <title>Loom 1.0.0 · Planning That Earns Trust</title>
-  <style>
-    :root {
-      color-scheme: light;
-      --paper: #f3efe5;
-      --paper-raised: #fbf8f1;
-      --ink: #161a18;
-      --muted: #626962;
-      --line: #c7c9bd;
-      --accent: #0b6b58;
-      --accent-ink: #f5fff9;
-      --warning: #9c4d1b;
-      --shadow: 0 24px 70px rgba(28, 35, 30, .09);
-      --display: "Avenir Next", "Segoe UI Variable Display", "SF Pro Display", sans-serif;
-      --body: "Iowan Old Style", "Palatino Linotype", Palatino, serif;
-      --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
-    }
-    [data-theme="dark"] {
-      color-scheme: dark;
-      --paper: #111512;
-      --paper-raised: #181d19;
-      --ink: #edf0e9;
-      --muted: #aab1aa;
-      --line: #414940;
-      --accent: #70d6b2;
-      --accent-ink: #082018;
-      --warning: #f2a36f;
-      --shadow: 0 24px 70px rgba(0, 0, 0, .24);
-    }
-    * { box-sizing: border-box; }
-    html { scroll-behavior: smooth; background: var(--paper); }
-    body {
-      margin: 0;
-      overflow-x: hidden;
-      background: var(--paper);
-      color: var(--ink);
-      font-family: var(--body);
-      font-size: 17px;
-      line-height: 1.65;
-      text-rendering: optimizeLegibility;
-    }
-    a, button { touch-action: manipulation; -webkit-tap-highlight-color: rgba(11, 107, 88, .18); }
-    a { color: inherit; text-decoration-color: var(--accent); text-underline-offset: .24em; }
-    a:hover { color: var(--accent); }
-    a:focus-visible, button:focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
-    .skip-link {
-      position: fixed; left: 1rem; top: 1rem; z-index: 10; padding: .65rem 1rem;
-      background: var(--ink); color: var(--paper); transform: translateY(-180%);
-    }
-    .skip-link:focus { transform: translateY(0); }
-    .shell { width: min(1180px, calc(100% - 2rem)); margin-inline: auto; }
-    .topbar {
-      position: sticky; top: 0; z-index: 5; border-bottom: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-      background: color-mix(in srgb, var(--paper) 92%, transparent);
-    }
-    .topbar-inner { min-height: 68px; display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-    .wordmark { font: 700 1.05rem/1 var(--display); letter-spacing: -.02em; text-decoration: none; }
-    .wordmark span { color: var(--accent); }
-    .top-actions { display: flex; align-items: center; gap: .45rem; }
-    .nav-link, .theme-toggle {
-      border: 0; background: transparent; color: var(--ink); padding: .58rem .72rem;
-      font: 650 .78rem/1 var(--display); letter-spacing: .08em; text-transform: uppercase;
-    }
-    .theme-toggle { cursor: pointer; border: 1px solid var(--line); border-radius: 999px; }
-    .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
-    main { display: block; }
-    section { scroll-margin-top: 90px; }
-    .hero {
-      min-height: calc(100vh - 68px); display: grid; align-items: center; padding: clamp(4rem, 10vw, 9rem) 0;
-      border-bottom: 1px solid var(--line);
-    }
-    .eyebrow { margin: 0 0 1.2rem; color: var(--accent); font: 700 .75rem/1.2 var(--display); letter-spacing: .16em; text-transform: uppercase; }
-    h1, h2, h3 { font-family: var(--display); text-wrap: balance; }
-    h1 { max-width: 980px; margin: 0; font-size: clamp(3.5rem, 10vw, 8.6rem); line-height: .88; letter-spacing: -.075em; }
-    h1 em { color: var(--accent); font-style: normal; }
-    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(270px, .7fr); gap: clamp(2rem, 7vw, 7rem); align-items: end; }
-    .hero-copy { max-width: 580px; margin: 2.2rem 0 0; color: var(--muted); font-size: clamp(1.1rem, 2vw, 1.35rem); text-wrap: pretty; }
-    .command {
-      position: relative; padding: 1.15rem; background: var(--ink); color: var(--paper);
-      border: 1px solid var(--ink); box-shadow: 8px 8px 0 var(--accent); min-width: 0;
-    }
-    .command-label { display: block; margin-bottom: .7rem; color: color-mix(in srgb, var(--paper) 68%, transparent); font: 700 .7rem/1 var(--display); letter-spacing: .12em; text-transform: uppercase; }
-    .command-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; min-width: 0; }
-    .command code { overflow-wrap: anywhere; font: 600 clamp(.9rem, 2vw, 1.1rem)/1.4 var(--mono); }
-    .copy-button { flex: 0 0 auto; border: 1px solid color-mix(in srgb, var(--paper) 35%, transparent); background: transparent; color: var(--paper); padding: .55rem .72rem; cursor: pointer; font: 650 .72rem/1 var(--display); }
-    .copy-button:hover { border-color: var(--accent); color: var(--accent); }
-    .copy-status { min-height: 1.2rem; margin: .75rem 0 0; color: var(--accent); font: .75rem/1.2 var(--display); }
-    .section { padding: clamp(5rem, 10vw, 9rem) 0; border-bottom: 1px solid var(--line); }
-    .section-head { display: grid; grid-template-columns: .7fr 1.3fr; gap: 2rem; margin-bottom: 3rem; }
-    h2 { margin: 0; font-size: clamp(2.5rem, 5vw, 5rem); line-height: .96; letter-spacing: -.055em; }
-    .section-intro { max-width: 610px; margin: .35rem 0 0; color: var(--muted); font-size: 1.15rem; text-wrap: pretty; }
-    .proof-grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 1rem; }
-    .card {
-      min-width: 0; padding: clamp(1.35rem, 3vw, 2.2rem); background: var(--paper-raised);
-      border: 1px solid var(--line); box-shadow: inset 0 0 0 5px var(--paper-raised), inset 0 0 0 6px color-mix(in srgb, var(--line) 55%, transparent);
-    }
-    .card:nth-child(1) { grid-column: span 7; }
-    .card:nth-child(2) { grid-column: span 5; }
-    .card:nth-child(3) { grid-column: span 4; }
-    .card:nth-child(4) { grid-column: span 8; }
-    .card-index { color: var(--accent); font: 700 .72rem/1 var(--mono); font-variant-numeric: tabular-nums; }
-    .card h3 { margin: 2.5rem 0 .7rem; font-size: 1.45rem; letter-spacing: -.025em; }
-    .card p { margin: 0; color: var(--muted); text-wrap: pretty; }
-    .flow { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid var(--line); }
-    .flow-item { padding: 1.5rem; border-right: 1px solid var(--line); }
-    .flow-item:last-child { border-right: 0; }
-    .flow b { display: block; margin: .75rem 0 .4rem; font-family: var(--display); }
-    .flow p { margin: 0; color: var(--muted); font-size: .95rem; }
-    .number { font: 700 2.2rem/1 var(--mono); color: var(--accent); font-variant-numeric: tabular-nums; }
-    .evidence-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    .evidence-box { padding: 2rem; border: 1px solid var(--line); }
-    .evidence-box h3 { margin: 0 0 1rem; font-size: 1.35rem; }
-    .evidence-box ul { margin: 0; padding-left: 1.15rem; color: var(--muted); }
-    .evidence-box li + li { margin-top: .6rem; }
-    .status-line { display: inline-flex; align-items: center; gap: .55rem; margin-bottom: 1.2rem; font: 700 .72rem/1 var(--display); letter-spacing: .08em; text-transform: uppercase; }
-    .status-line::before { content: ""; width: .62rem; height: .62rem; border-radius: 50%; background: var(--warning); box-shadow: 0 0 0 4px color-mix(in srgb, var(--warning) 18%, transparent); }
-    .cta { display: grid; grid-template-columns: 1.1fr .9fr; gap: 2rem; align-items: end; }
-    .cta-links { display: grid; gap: .6rem; }
-    .cta-link { display: flex; justify-content: space-between; gap: 1rem; padding: 1rem 0; border-bottom: 1px solid var(--line); font: 650 .95rem/1.3 var(--display); text-decoration: none; }
-    .cta-link:hover { padding-left: .5rem; color: var(--accent); }
-    footer { padding: 2rem 0 max(2rem, env(safe-area-inset-bottom)); color: var(--muted); font: .85rem/1.5 var(--display); }
-    .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s cubic-bezier(.22, 1, .36, 1), transform .6s cubic-bezier(.22, 1, .36, 1); }
-    .reveal.visible { opacity: 1; transform: translateY(0); }
-    @media (max-width: 760px) {
-      .shell { width: min(100% - 1.25rem, 1180px); }
-      .nav-link { display: none; }
-      .hero { min-height: auto; }
-      .hero-grid, .section-head, .cta, .evidence-panel { grid-template-columns: 1fr; }
-      .command { margin-top: 1rem; }
-      .card:nth-child(n) { grid-column: 1 / -1; }
-      .flow { grid-template-columns: 1fr; }
-      .flow-item { border-right: 0; border-bottom: 1px solid var(--line); }
-      .flow-item:last-child { border-bottom: 0; }
-    }
-    @media (prefers-reduced-motion: reduce) {
-      html { scroll-behavior: auto; }
-      .reveal { opacity: 1; transform: none; transition: none; }
-      .cta-link:hover { padding-left: 0; }
-    }
-  </style>
+  <meta name="description" content="Loom turns one request into an evidence-backed execution plan for an AI coding agent, then learns locally without mixing projects or leaking owner data.">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <link rel="canonical" href="https://saroo98.github.io/loom/">
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="site.css">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="Loom">
+  <meta property="og:title" content="Loom — evidence before execution">
+  <meta property="og:description" content="One request becomes a release-ready plan that has earned the right to execute.">
+  <meta property="og:url" content="https://saroo98.github.io/loom/">
+  <meta property="og:image" content="https://saroo98.github.io/loom/social-card.svg">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Loom: one request, evidence before execution">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Loom — evidence before execution">
+  <meta name="twitter:description" content="Planning intelligence for AI coding agents. One request in. A plan that has earned execution out.">
+  <meta name="twitter:image" content="https://saroo98.github.io/loom/social-card.svg">
+  <title>Loom — Evidence Before Execution</title>
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "SoftwareSourceCode",
+    "name": "Loom",
+    "version": "1.0.0",
+    "description": "Local-first planning intelligence for AI coding agents.",
+    "codeRepository": "https://github.com/saroo98/loom",
+    "license": "https://www.apache.org/licenses/LICENSE-2.0",
+    "programmingLanguage": "Python"
+  }
+  </script>
+  <script src="site.js" defer></script>
 </head>
 <body>
-  <a class="skip-link" href="#main">Skip to Main Content</a>
-  <header class="topbar">
-    <div class="shell topbar-inner">
-      <a class="wordmark" href="#top" aria-label="Loom home">Loom<span>.</span></a>
-      <nav class="top-actions" aria-label="Primary navigation">
-        <a class="nav-link" href="#method">Method</a>
-        <a class="nav-link" href="#proof">Proof</a>
-        <a class="nav-link" href="#release">Release</a>
-        <button class="theme-toggle" type="button" aria-label="Switch color theme" aria-pressed="false">Theme</button>
+  <!-- Public command contract required by the documentation audit: /loom <request> -->
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="site-header">
+    <div class="frame header-inner">
+      <a class="brand" href="#top">
+        <svg class="brand-mark" viewBox="0 0 36 36" aria-hidden="true">
+          <path d="M6 4v28M15 4v28M24 4v28M33 4v28" class="warp"></path>
+          <path d="M3 10h30M3 18h30M3 26h30" class="weft"></path>
+        </svg>
+        <span>Loom</span>
+        <span class="version">1.0</span>
+      </a>
+      <nav class="desktop-nav" aria-label="Primary navigation">
+        <a href="#difference">Difference</a>
+        <a href="#method">Method</a>
+        <a href="#memory">Memory</a>
+        <a href="#proof">Proof</a>
       </nav>
+      <a class="header-link" href="https://github.com/saroo98/loom" rel="noopener">View source</a>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="top">
-      <div class="shell">
-        <p class="eyebrow">Local-First Planning Intelligence · 1.0.0</p>
-        <h1>Plans That <em>Earn</em> Execution.</h1>
-        <div class="hero-grid">
-          <p class="hero-copy">Loom turns a plain-language request into a release-ready plan, scales the work to its real risk, and stops when evidence is missing. It learns for one owner without exporting their work.</p>
-          <div class="command" aria-label="Loom command">
-            <span class="command-label">The Entire Interface</span>
-            <div class="command-row">
-              <code translate="no">/loom &lt;request&gt;</code>
-              <button class="copy-button" type="button" data-copy="/loom &lt;request&gt;">Copy</button>
+      <div class="hero-thread" aria-hidden="true"></div>
+      <div class="frame hero-layout">
+        <div class="hero-copy reveal">
+          <p class="kicker"><span class="signal"></span> Planning intelligence for AI coding agents</p>
+          <h1>One request.<br><span>A plan that has earned the right to execute.</span></h1>
+          <p class="hero-lede">Loom turns what a person wants into a release-ready plan an agent can execute safely. It reads the real project, adapts to the domain, proves the plan before implementation, and learns locally without carrying the wrong project into the next one.</p>
+          <div class="hero-actions">
+            <a class="primary-action" href="#install">Install Loom</a>
+            <a class="text-action" href="#difference">See why it is different</a>
+          </div>
+          <dl class="hero-facts" aria-label="Loom fundamentals">
+            <div><dt>Surface</dt><dd>one command</dd></div>
+            <div><dt>Memory</dt><dd>local + scoped</dd></div>
+            <div><dt>Failure mode</dt><dd>fail closed</dd></div>
+          </dl>
+        </div>
+
+        <div class="instrument reveal" aria-label="Loom execution contract preview">
+          <div class="instrument-topline">
+            <span>LIVE CONTRACT</span>
+            <span class="instrument-state"><i></i> READY FOR A REQUEST</span>
+          </div>
+          <div class="command-block">
+            <span class="command-prompt" aria-hidden="true">$</span>
+            <code>/loom &lt;request&gt;</code>
+            <button class="copy-control" type="button" data-copy="/loom &lt;request&gt;" aria-describedby="copy-feedback">Copy</button>
+          </div>
+          <p class="copy-feedback" id="copy-feedback" aria-live="polite">The entire owner-facing interface.</p>
+          <div class="contract-weave" aria-hidden="true">
+            <svg viewBox="0 0 520 220" preserveAspectRatio="none">
+              <path class="thread thread-a" d="M0 22 C118 22 94 66 205 66 S350 22 520 22"></path>
+              <path class="thread thread-b" d="M0 72 C122 72 108 118 226 118 S364 72 520 72"></path>
+              <path class="thread thread-c" d="M0 122 C120 122 98 170 218 170 S372 122 520 122"></path>
+              <path class="thread thread-d" d="M0 172 C130 172 111 207 243 207 S383 172 520 172"></path>
+              <path class="cross" d="M92 0v220M198 0v220M304 0v220M410 0v220"></path>
+            </svg>
+            <span class="weave-label label-request">REQUEST</span>
+            <span class="weave-label label-world">WORLD</span>
+            <span class="weave-label label-domain">DOMAIN</span>
+            <span class="weave-label label-plan">PLAN</span>
+            <span class="weave-label label-proof">PROOF</span>
+          </div>
+          <div class="contract-output">
+            <div><span>ROUTE</span><strong>S / M / L / XL</strong></div>
+            <div><span>OUTPUT</span><strong>SEALED PLAN</strong></div>
+            <div><span>NEXT</span><strong>EVIDENCE</strong></div>
+          </div>
+        </div>
+      </div>
+      <div class="frame trust-ribbon" aria-label="Loom trust properties">
+        <span>No telemetry</span><span>Consumer-driven artifacts</span><span>Real-medium verification</span><span>Reversible local learning</span>
+      </div>
+    </section>
+
+    <section class="section difference" id="difference">
+      <div class="frame">
+        <div class="section-heading reveal">
+          <p class="section-number">01 / THE DIFFERENCE</p>
+          <h2>Not another agent.<br><span>The intelligence between intent and execution.</span></h2>
+        </div>
+        <div class="comparison reveal">
+          <div class="comparison-head" aria-hidden="true">
+            <span></span><span>Prompt</span><span>Task runner</span><span>Loom</span>
+          </div>
+          <div class="comparison-row">
+            <strong>Reads the real project state</strong><span>sometimes</span><span>partly</span><span class="loom-answer">fingerprinted</span>
+          </div>
+          <div class="comparison-row">
+            <strong>Adapts depth to consequence</strong><span>prompted</span><span>fixed</span><span class="loom-answer">automatic</span>
+          </div>
+          <div class="comparison-row">
+            <strong>Changes with the domain</strong><span>fragile</span><span>no</span><span class="loom-answer">invariant-led</span>
+          </div>
+          <div class="comparison-row">
+            <strong>Blocks stale execution</strong><span>rarely</span><span>partly</span><span class="loom-answer">fail closed</span>
+          </div>
+          <div class="comparison-row">
+            <strong>Learns without cross-project leakage</strong><span>no</span><span>no</span><span class="loom-answer">scoped + bounded</span>
+          </div>
+        </div>
+        <aside class="difference-note reveal">
+          <p>Loom does not make an agent more confident. It makes confidence answer to state, scope, domain truth, and evidence.</p>
+        </aside>
+      </div>
+    </section>
+
+    <section class="section method" id="method">
+      <div class="frame method-layout">
+        <div class="method-sticky reveal">
+          <p class="section-number">02 / ONE REQUEST, FULL SYSTEM</p>
+          <h2>The surface stays small.<br><span>The reasoning does not.</span></h2>
+          <p>Every stage is internal. The owner asks once. Loom decides what rigor the work deserves and exposes only consequential uncertainty.</p>
+          <a class="text-action" href="https://github.com/saroo98/loom/blob/main/START-HERE.md" rel="noopener">Read the agent kernel</a>
+        </div>
+        <ol class="method-track">
+          <li class="method-step reveal">
+            <span class="step-index">01</span>
+            <div><p class="step-label">RESOLVE</p><h3>Find the actual target.</h3><p>Project identity, configuration, installation, lifecycle, and authority are established before planning begins.</p></div>
+          </li>
+          <li class="method-step reveal">
+            <span class="step-index">02</span>
+            <div><p class="step-label">SURVEY</p><h3>Bind the plan to the present.</h3><p>Committed, staged, unstaged, untracked, ignored runtime, and time-drifted state become one sealed input.</p></div>
+          </li>
+          <li class="method-step reveal">
+            <span class="step-index">03</span>
+            <div><p class="step-label">ROUTE</p><h3>Spend rigor where consequence lives.</h3><p>Tier S stays compact. Larger work receives only the plans, work orders, and gates its consumers need.</p></div>
+          </li>
+          <li class="method-step reveal">
+            <span class="step-index">04</span>
+            <div><p class="step-label">DISCOVER</p><h3>Use the domain's invariants.</h3><p>Loom never substitutes web conventions for accounting, 3D, firmware, research, data, mobile, or an unknown field.</p></div>
+          </li>
+          <li class="method-step reveal">
+            <span class="step-index">05</span>
+            <div><p class="step-label">SEAL</p><h3>Make planning precede building.</h3><p>The exact artifact set, work-order topology, G1 review, touches, and acceptance evidence become tamper-evident.</p></div>
+          </li>
+          <li class="method-step reveal">
+            <span class="step-index">06</span>
+            <div><p class="step-label">VERIFY</p><h3>Close the loop in reality.</h3><p>Real-medium evidence, drift detection, bounded retries, and compact receipts replace “looks good” completion.</p></div>
+          </li>
+        </ol>
+      </div>
+    </section>
+
+    <section class="section domains" id="domains">
+      <div class="frame">
+        <div class="section-heading reveal">
+          <p class="section-number">03 / DOMAIN REALITY</p>
+          <h2>Any request does not mean<br><span>one template for everything.</span></h2>
+          <p class="section-intro">Choose a domain. The plan changes because the failures, invariants, and proof media change.</p>
+        </div>
+        <div class="domain-explorer reveal">
+          <div class="domain-tabs" role="tablist" aria-label="Example Loom domains">
+            <button role="tab" aria-selected="true" aria-controls="domain-panel" id="tab-accounting" data-domain="accounting">Accounting</button>
+            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-three-d" data-domain="three-d" tabindex="-1">Real-time 3D</button>
+            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-firmware" data-domain="firmware" tabindex="-1">Firmware</button>
+            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-research" data-domain="research" tabindex="-1">Research</button>
+            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-unknown" data-domain="unknown" tabindex="-1">Unknown domain</button>
+          </div>
+          <div class="domain-panel" id="domain-panel" role="tabpanel" aria-labelledby="tab-accounting" tabindex="0">
+            <div class="domain-titleline"><span id="domain-code">DOMAIN / ACCOUNTING</span><span id="domain-status">COVERAGE KNOWN</span></div>
+            <h3 id="domain-title">Correct books before convenient screens.</h3>
+            <div class="domain-grid">
+              <div><span>INVARIANTS</span><p id="domain-invariants">Balanced postings · currency precision · immutable audit trail · reconciliation · period close</p></div>
+              <div><span>REAL PROOF</span><p id="domain-medium">Double-entry property tests · migration rehearsal · ledger reconciliation</p></div>
             </div>
-            <p class="copy-status" aria-live="polite"></p>
+            <p class="domain-rule" id="domain-rule">A responsive dashboard cannot compensate for an unbalanced ledger.</p>
           </div>
         </div>
       </div>
     </section>
 
-    <section class="section" id="method">
-      <div class="shell">
-        <div class="section-head reveal">
-          <div><p class="eyebrow">Trust Pipeline</p><h2>Small on Top. Exact Underneath.</h2></div>
-          <p class="section-intro">One request triggers project resolution, a complete world survey, consequence-based depth, domain discovery, bounded memory selection, execution evidence, and a sealed receipt. Internal machinery never becomes command sprawl.</p>
+    <section class="section memory" id="memory">
+      <div class="frame memory-layout">
+        <div class="memory-copy reveal">
+          <p class="section-number">04 / MEMORY WITH BOUNDARIES</p>
+          <h2>It learns what matters.<br><span>It also learns what to leave behind.</span></h2>
+          <p>Loom's adaptation is not one growing prompt. General judgment, domain rules, project state, and installation state live in separate partitions with exact loading rules and hard caps.</p>
+          <ul class="memory-principles">
+            <li><span>TRANSFER</span> calibration and decision economics that survive a domain switch</li>
+            <li><span>PARK</span> domain knowledge when that work stops</li>
+            <li><span>ISOLATE</span> project facts and preferences to their exact owner</li>
+            <li><span>FORGET</span> with a durable content-erased tombstone</li>
+          </ul>
         </div>
-        <div class="proof-grid">
-          <article class="card reveal"><span class="card-index">01 / WORLD</span><h3>Prove the Present</h3><p>Committed, staged, unstaged, untracked, lifecycle, identity, and time-drifted state enter one fingerprint. Unknown freshness blocks action.</p></article>
-          <article class="card reveal"><span class="card-index">02 / SCALE</span><h3>Spend in Proportion</h3><p>Consequence and uncertainty determine planning depth. Every artifact needs a consumer and a decision.</p></article>
-          <article class="card reveal"><span class="card-index">03 / DOMAIN</span><h3>Discover Before Assuming</h3><p>Accounting is not a website. Firmware is not research. Unknown domains must establish invariants before gating.</p></article>
-          <article class="card reveal"><span class="card-index">04 / EVIDENCE</span><h3>Authorize Only What Can Be Verified</h3><p>Plans precede implementation, work orders stay atomic, real-medium verification closes the loop, and stale plans are re-gated rather than trusted.</p></article>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" id="proof">
-      <div class="shell">
-        <div class="section-head reveal">
-          <div><p class="eyebrow">Comparative Learning</p><h2>Better Is a Claim to Prove.</h2></div>
-          <p class="section-intro">Loom never treats a growing log as improvement. It compares early and recent work inside one exact domain, keeps general calibration separate, and requires controlled memory-on versus memory-off replay.</p>
-        </div>
-        <div class="flow reveal" aria-label="Improvement proof thresholds">
-          <div class="flow-item"><span class="number">16</span><b>Longitudinal Samples</b><p>8 early and 8 recent measurements before a trend exists.</p></div>
-          <div class="flow-item"><span class="number">8</span><b>Paired Replays</b><p>The same work with memory enabled and disabled.</p></div>
-          <div class="flow-item"><span class="number">12</span><b>Tracked Metrics</b><p>Calibration, rework, escapes, overhead, drift, rollback, and utility.</p></div>
-          <div class="flow-item"><span class="number">1</span><b>Exact Domain</b><p>No averaging that lets one domain hide another domain’s regression.</p></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="section" id="release">
-      <div class="shell">
-        <div class="section-head reveal">
-          <div><p class="eyebrow">Release Standard</p><h2>Clean Is Mechanical. 100 Is Earned.</h2></div>
-          <p class="section-intro">The public builder starts from an allowlist, scans every byte and filename, emits a reproducible hash, and installs with a receipt-proven reversible lifecycle. Missing external proof remains visible.</p>
-        </div>
-        <div class="evidence-panel">
-          <article class="evidence-box reveal"><h3>Locally Enforced</h3><ul><li>Whole-artifact privacy firewall with explicit owner tokens</li><li>Reproducible public build manifests</li><li>Install, check, and all-or-nothing uninstall</li><li>Bounded 20-project adaptation simulation</li></ul></article>
-          <article class="evidence-box reveal"><div class="status-line">Certification Blocked Pending External Proof</div><h3>Explicitly Unverified</h3><ul><li>Current cross-platform CI result</li><li>Fresh install by an unfamiliar person</li><li>Independent hostile review with 0 Critical or High findings</li></ul></article>
+        <div class="memory-map reveal" aria-label="How Loom memory changes over time">
+          <div class="memory-axis"><span>WEEK 1</span><span>PROJECT CLOSED</span><span>MONTH 6</span></div>
+          <div class="memory-lane transferable">
+            <span class="lane-name">GENERAL JUDGMENT</span>
+            <div class="lane-line"><i></i><i></i><i></i></div>
+            <strong>retained when evidence says it transfers</strong>
+          </div>
+          <div class="memory-lane domain-lane">
+            <span class="lane-name">3D DOMAIN</span>
+            <div class="lane-line"><i></i><i class="dormant"></i><i class="return"></i></div>
+            <strong>active → dormant → exact-domain return</strong>
+          </div>
+          <div class="memory-lane project-lane">
+            <span class="lane-name">PROJECT FACTS</span>
+            <div class="lane-line"><i></i><i class="archived"></i></div>
+            <strong>archived when the project closes</strong>
+          </div>
+          <div class="memory-bound">ACTIVE CONTEXT NEVER GROWS WITHOUT BOUND</div>
         </div>
       </div>
     </section>
 
-    <section class="section">
-      <div class="shell cta reveal">
-        <div><p class="eyebrow">Inspect the Evidence</p><h2>Nothing Important Is Hidden Behind Copy.</h2></div>
-        <nav class="cta-links" aria-label="Evidence documents">
-          <a class="cta-link" href="../README.md"><span>Start With Loom</span><span aria-hidden="true">↗</span></a>
-          <a class="cta-link" href="architecture.md"><span>Read the Architecture</span><span aria-hidden="true">↗</span></a>
-          <a class="cta-link" href="capabilities.json"><span>Inspect Mechanical Claims</span><span aria-hidden="true">↗</span></a>
-          <a class="cta-link" href="generated-evidence.json"><span>Open Generated Inventory</span><span aria-hidden="true">↗</span></a>
-          <a class="cta-link" href="limitations.md"><span>Review Current Limitations</span><span aria-hidden="true">↗</span></a>
-        </nav>
+    <section class="section proof" id="proof">
+      <div class="frame">
+        <div class="proof-header reveal">
+          <div>
+            <p class="section-number">05 / CLAIMS WITH TEETH</p>
+            <h2>“Trust me” is not<br><span>a verification strategy.</span></h2>
+          </div>
+          <p>Loom keeps mechanical claims tied to code and tests, privacy tied to every shipped byte, and the 100 label blocked until independent evidence exists.</p>
+        </div>
+        <div class="evidence-ledger reveal">
+          <div class="ledger-row ledger-header"><span>MECHANISM</span><span>WHAT IT REFUSES</span><span>STATE</span></div>
+          <div class="ledger-row"><strong>Plan-before-build chain</strong><span>pre-existing work receiving plan credit</span><b>MECHANICAL</b></div>
+          <div class="ledger-row"><strong>All-file privacy firewall</strong><span>owner tokens, secrets, opaque containers</span><b>MECHANICAL</b></div>
+          <div class="ledger-row"><strong>Five-category usage ledger</strong><span>partial token counts posing as totals</span><b>MECHANICAL</b></div>
+          <div class="ledger-row"><strong>Evidence-gated release</strong><span>self-attested or wrong-build certification</span><b>MECHANICAL</b></div>
+          <div class="ledger-row"><strong>Production 100 label</strong><span>local proof replacing independent proof</span><b class="blocked">BLOCKED BY DESIGN</b></div>
+        </div>
+        <div class="inventory reveal" aria-label="Generated repository inventory, not a test result">
+          <div><strong>21</strong><span>capability claims</span></div>
+          <div><strong>25</strong><span>production tool modules</span></div>
+          <div><strong>27</strong><span>schema documents</span></div>
+          <div><strong>380</strong><span>discovered test methods</span></div>
+          <p>Generated repository inventory. This does not claim the tests passed.</p>
+        </div>
+        <div class="proof-links reveal">
+          <a href="capabilities.json">Inspect the capability registry</a>
+          <a href="generated-evidence.json">Open generated inventory</a>
+          <a href="limitations.md">Read what remains unverified</a>
+        </div>
+      </div>
+    </section>
+
+    <section class="section install" id="install">
+      <div class="frame install-layout">
+        <div class="install-copy reveal">
+          <p class="section-number">06 / INSTALL ONCE</p>
+          <h2>Give your agent<br><span>a planning conscience.</span></h2>
+          <p>Install Loom as a Codex skill. After that, every project uses the same one-request surface while the internal plan adapts to the work.</p>
+          <a class="primary-action light" href="https://github.com/saroo98/loom" rel="noopener">Open the repository</a>
+        </div>
+        <div class="install-terminal reveal">
+          <div class="terminal-bar"><span>INSTALL / POWERSHELL</span><span>PYTHON 3.10+</span></div>
+          <pre><code>git clone https://github.com/saroo98/loom.git
+cd loom
+python tools/loom_install.py install . "$HOME/.codex/skills/loom"</code></pre>
+          <button class="copy-control light-copy" type="button" data-copy="git clone https://github.com/saroo98/loom.git&#10;cd loom&#10;python tools/loom_install.py install . &quot;$HOME/.codex/skills/loom&quot;" aria-describedby="install-feedback">Copy install</button>
+          <p class="copy-feedback" id="install-feedback" aria-live="polite">Receipt-proven install. All-or-nothing uninstall.</p>
+        </div>
       </div>
     </section>
   </main>
 
-  <footer><div class="shell">Loom 1.0.0 · Local-first · Standard-library tooling · No telemetry</div></footer>
-  <script>
-    (() => {
-      const root = document.documentElement;
-      const themeButton = document.querySelector('.theme-toggle');
-      const savedTheme = localStorage.getItem('loom-theme');
-      const preferredDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      const setTheme = (theme) => {
-        root.dataset.theme = theme;
-        themeButton.setAttribute('aria-pressed', String(theme === 'dark'));
-        document.querySelector('meta[name="theme-color"]').content = theme === 'dark' ? '#111512' : '#f3efe5';
-      };
-      setTheme(savedTheme || (preferredDark ? 'dark' : 'light'));
-      themeButton.addEventListener('click', () => {
-        const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
-        setTheme(next);
-        localStorage.setItem('loom-theme', next);
-      });
-      const copyButton = document.querySelector('.copy-button');
-      const copyStatus = document.querySelector('.copy-status');
-      copyButton.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText('/loom <request>');
-          copyStatus.textContent = 'Copied.';
-        } catch {
-          copyStatus.textContent = 'Copy unavailable. Select the command manually.';
-        }
-      });
-      const items = document.querySelectorAll('.reveal');
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
-        items.forEach((item) => item.classList.add('visible'));
-      } else {
-        const observer = new IntersectionObserver((entries) => {
-          entries.forEach((entry) => {
-            if (entry.isIntersecting) {
-              entry.target.classList.add('visible');
-              observer.unobserve(entry.target);
-            }
-          });
-        }, { threshold: 0.12 });
-        items.forEach((item) => observer.observe(item));
-      }
-    })();
-  </script>
+  <footer class="site-footer">
+    <div class="frame footer-layout">
+      <div>
+        <a class="brand footer-brand" href="#top">
+          <svg class="brand-mark" viewBox="0 0 36 36" aria-hidden="true"><path d="M6 4v28M15 4v28M24 4v28M33 4v28" class="warp"></path><path d="M3 10h30M3 18h30M3 26h30" class="weft"></path></svg>
+          <span>Loom</span>
+        </a>
+        <p>One request. The right plan. Evidence before execution.</p>
+      </div>
+      <nav aria-label="Repository links">
+        <a href="https://github.com/saroo98/loom/blob/main/README.md">Readme</a>
+        <a href="https://github.com/saroo98/loom/blob/main/docs/architecture.md">Architecture</a>
+        <a href="https://github.com/saroo98/loom/blob/main/PRIVACY.md">Privacy</a>
+        <a href="https://github.com/saroo98/loom/blob/main/CONTRIBUTING.md">Contribute</a>
+        <a href="https://github.com/saroo98/loom/blob/main/LICENSE">Apache-2.0</a>
+      </nav>
+      <p class="footer-meta">Local-first · Standard-library tooling · No telemetry</p>
+    </div>
+  </footer>
 </body>
 </html>

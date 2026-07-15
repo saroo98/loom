@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">Loom — evidence before execution</title>
+  <desc id="desc">Planning intelligence for AI coding agents.</desc>
+  <defs>
+    <pattern id="grid" width="74" height="74" patternUnits="userSpaceOnUse"><path d="M74 0H0V74" fill="none" stroke="#eee9dc" stroke-opacity=".07"/></pattern>
+    <radialGradient id="heat" cx="88%" cy="6%" r="65%"><stop stop-color="#d86b45" stop-opacity=".18"/><stop offset="1" stop-color="#111210" stop-opacity="0"/></radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="#111210"/>
+  <rect width="1200" height="630" fill="url(#grid)"/>
+  <rect width="1200" height="630" fill="url(#heat)"/>
+  <g transform="translate(74 70)">
+    <g fill="none" stroke-linecap="square" stroke-width="3"><path d="M7 0v40M20 0v40M33 0v40M46 0v40" stroke="#eee9dc"/><path d="M0 10h53M0 21h53M0 32h53" stroke="#d86b45"/></g>
+    <text x="72" y="32" fill="#eee9dc" font-family="Segoe UI Variable, Arial, sans-serif" font-size="32" font-weight="700" letter-spacing="-1">Loom</text>
+  </g>
+  <text x="74" y="228" fill="#d86b45" font-family="Cascadia Code, monospace" font-size="14" font-weight="700" letter-spacing="2.6">PLANNING INTELLIGENCE FOR AI CODING AGENTS</text>
+  <text x="74" y="306" fill="#eee9dc" font-family="Segoe UI Variable, Arial, sans-serif" font-size="68" font-weight="680" letter-spacing="-4">One request.</text>
+  <text x="74" y="382" fill="#9f9d94" font-family="Segoe UI Variable, Arial, sans-serif" font-size="68" font-weight="520" letter-spacing="-4">Evidence before execution.</text>
+  <g transform="translate(74 466)"><rect width="278" height="52" fill="#d86b45"/><text x="20" y="33" fill="#111210" font-family="Cascadia Code, monospace" font-size="15" font-weight="700">/loom &lt;request&gt;</text></g>
+  <g transform="translate(716 112)" fill="none">
+    <path d="M0 30C96 30 76 102 184 102s128-72 250-72" stroke="#eee9dc" stroke-opacity=".58" stroke-width="2" stroke-dasharray="11 8"/>
+    <path d="M0 124c105 0 90 72 205 72s126-72 229-72" stroke="#d86b45" stroke-width="2" stroke-dasharray="11 8"/>
+    <path d="M0 218c98 0 78 72 194 72s132-72 240-72" stroke="#eee9dc" stroke-opacity=".58" stroke-width="2" stroke-dasharray="11 8"/>
+    <path d="M0 312c104 0 88 66 214 66s128-66 220-66" stroke="#d86b45" stroke-width="2" stroke-dasharray="11 8"/>
+    <path d="M78 0v420M188 0v420M298 0v420M408 0v420" stroke="#eee9dc" stroke-opacity=".13"/>
+  </g>
+  <text x="74" y="573" fill="#9f9d94" font-family="Cascadia Code, monospace" font-size="12" letter-spacing="1.8">LOCAL-FIRST · SCOPED MEMORY · REAL-MEDIUM PROOF · NO TELEMETRY</text>
+</svg>

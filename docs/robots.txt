@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://saroo98.github.io/loom/sitemap.xml
