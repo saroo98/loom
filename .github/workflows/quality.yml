@@ -7,8 +7,40 @@ on:
 permissions:
   contents: read
 
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
 jobs:
-  stdlib-suite:
+  fast-pr-gate:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Compile production modules without bytecode
+        working-directory: tools
+        run: >-
+          python -B -c "from pathlib import Path;
+          files=sorted(Path('.').glob('loom_*.py'));
+          [compile(path.read_text(encoding='utf-8'), str(path), 'exec') for path in files];
+          print(f'compiled {len(files)} production modules in memory')"
+      - name: Run bounded trust-critical gate
+        working-directory: tools
+        run: python -B loom_test.py fast --max-seconds 30 --output fast-test-timings.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: fast-test-timings-${{ matrix.os }}-py${{ matrix.python }}
+          path: tools/fast-test-timings.json
+
+  full-release-suite:
+    if: github.event_name == 'push'
     strategy:
       fail-fast: false
       matrix:
@@ -20,9 +52,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
-      - name: Compile production modules
+      - name: Compile production modules without bytecode
         working-directory: tools
-        run: python -m compileall -q -f .
+        run: >-
+          python -B -c "from pathlib import Path;
+          files=sorted(Path('.').glob('loom_*.py'));
+          [compile(path.read_text(encoding='utf-8'), str(path), 'exec') for path in files];
+          print(f'compiled {len(files)} production modules in memory')"
       - name: Audit network imports and literal subprocesses
         working-directory: tools
         run: python loom_privacy.py offline-audit .
@@ -36,5 +72,12 @@ jobs:
           source_classification='public-release');
           verified = loom_release.verify_cut(cut,
           forbidden_tokens=['__ci_public_scan_sentinel_9f4c2d__']);
+          Path('full-test-timings.json').write_text(json.dumps(verified['suite'],
+          indent=2, sort_keys=True) + '\n', encoding='utf-8');
           print(json.dumps({'build': build['root_sha256'],
           'verified': verified['root_sha256'], 'status': verified['status']}, sort_keys=True))"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-test-timings-${{ matrix.os }}-py${{ matrix.python }}
+          path: tools/full-test-timings.json

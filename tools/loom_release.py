@@ -734,11 +734,23 @@ def certification_report(*, local_checks, external_evidence, trust_policy=None, 
 
 def _suite(root):
     result = subprocess.run(
-        [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"],
+        [sys.executable, "-B", "loom_test.py", "full", "--max-seconds", "600",
+         "--quiet"],
         cwd=root / "tools", capture_output=True, text=True, timeout=900, check=False,
         env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
-    return {"passed": result.returncode == 0, "returncode": result.returncode,
-            "output": (result.stdout + result.stderr)[-4000:]}
+    try:
+        timing = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        timing = None
+    return {
+        "passed": result.returncode == 0 and isinstance(timing, dict)
+        and timing.get("successful") is True,
+        "returncode": result.returncode,
+        "output": result.stderr[-4000:],
+        "elapsed_seconds": timing.get("elapsed_seconds") if timing else None,
+        "tests_run": timing.get("tests_run") if timing else None,
+        "timings": timing.get("timings", []) if timing else [],
+    }
 
 
 def _performance_contracts():

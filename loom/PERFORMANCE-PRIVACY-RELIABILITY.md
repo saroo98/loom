@@ -47,6 +47,8 @@ failure-injection suite.
   never recursively deletes an arbitrary root.
 - Reproducible manifests contain sorted relative paths, sizes, hashes, and a deterministic root
   hash. They contain no timestamps or machine-local absolute paths.
-- `.github/workflows/quality.yml` defines the full suite on Windows, macOS, and Linux with Python
-  3.10 through 3.13. Local results prove the current host only; remote matrix status must never be
-  claimed before CI actually runs.
+- `.github/workflows/quality.yml` runs a 10-test trust-critical PR gate on Windows, macOS, and Linux
+  with Python 3.10 and 3.13 under a 30-second budget. Pushes run the complete suite on all three OSes
+  with Python 3.10 through 3.13. `tools/loom_test.py` emits per-test timings for both lanes, and the
+  workflow uploads them. Local results prove the current host only; remote matrix status must never
+  be claimed before CI actually runs.

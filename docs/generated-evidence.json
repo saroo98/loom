@@ -1,10 +1,10 @@
 {
   "capability_claims": 21,
-  "discovered_test_methods": 374,
-  "discovered_test_modules": 21,
+  "discovered_test_methods": 377,
+  "discovered_test_modules": 22,
   "loom_version": "1.0.0",
   "measurement": "repository inventory; this does not claim tests passed",
-  "production_tool_modules": 24,
+  "production_tool_modules": 25,
   "schema_documents": 27,
   "schema_version": 1
 }
