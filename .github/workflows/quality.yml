@@ -68,10 +68,10 @@ jobs:
           python -B -c "import json, os; from pathlib import Path; import loom_release;
           cut = Path(os.environ['RUNNER_TEMP']) / 'loom-public-cut';
           build = loom_release.build_public(Path('..').resolve(), cut,
-          forbidden_tokens=['__ci_public_scan_sentinel_9f4c2d__'],
+          forbidden_tokens=['__ci_public_scan_' + 'sentinel_9f4c2d__'],
           source_classification='public-release');
           verified = loom_release.verify_cut(cut,
-          forbidden_tokens=['__ci_public_scan_sentinel_9f4c2d__']);
+          forbidden_tokens=['__ci_public_scan_' + 'sentinel_9f4c2d__']);
           Path('full-test-timings.json').write_text(json.dumps(verified['suite'],
           indent=2, sort_keys=True) + '\n', encoding='utf-8');
           print(json.dumps({'build': build['root_sha256'],
