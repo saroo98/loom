@@ -13,14 +13,19 @@ import loom_memory
 
 
 SCHEMA_VERSION = 1
+STORE_SCHEMA_VERSION = 2
 WINDOW = 8
 MIN_LONGITUDINAL_SAMPLES = WINDOW * 2
 MIN_REPLAY_PAIRS = 8
 REGRESSION_DELTA = 0.05
 MAX_ACTIVE_RECORDS = 512
 MAX_BATCH_RECORDS = 2048
+MAX_PARTITIONS = 128
+MAX_EVIDENCE_IDS = 8192
+MAX_STORE_BYTES = 4 * 1024 * 1024
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 EVIDENCE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 METRICS = {
     "prediction-calibration-error": "lower",
     "rework-rate": "lower",
@@ -79,6 +84,15 @@ def _sample(record):
             "recorded_at": record["recorded_at"]}
 
 
+def _evidence_key(record):
+    return hashlib.sha256(record["evidence_id"].encode("utf-8")).hexdigest()
+
+
+def _measurement_hash(record):
+    return _digest({key: value for key, value in record.items()
+                    if key not in {"id", "recorded_at"}})
+
+
 def _valid_value(metric, value):
     return not isinstance(value, bool) and isinstance(value, (int, float)) \
         and math.isfinite(float(value)) and float(value) >= 0 \
@@ -104,29 +118,60 @@ class ImprovementTracker:
         self.lock = self.directory / ".improvement.lock"
 
     def _empty(self):
-        return {"schema_version": SCHEMA_VERSION, "instance_id": self.instance_id,
-                "total_count": 0, "records": [], "partitions": {}}
+        return {"schema_version": STORE_SCHEMA_VERSION,
+                "instance_id": self.instance_id, "total_count": 0,
+                "records": [], "partitions": {}, "evidence_index": {},
+                "evicted_partition_count": 0, "legacy_reset_count": 0}
 
     def _read(self):
         if not self.path.is_file():
             return self._empty()
         try:
-            value = json.loads(self.path.read_text(encoding="utf-8"))
+            raw = self.path.read_bytes()
+            if len(raw) > MAX_STORE_BYTES:
+                raise ImprovementError("improvement evidence exceeds its byte capacity")
+            value = json.loads(raw.decode("utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ImprovementError(f"improvement evidence is unreadable: {exc}") from exc
+        legacy_fields = {
+            "schema_version", "instance_id", "total_count", "records", "partitions"}
+        if isinstance(value, dict) and set(value) == legacy_fields \
+                and value.get("schema_version") == SCHEMA_VERSION \
+                and value.get("instance_id") == self.instance_id \
+                and type(value.get("total_count")) is int \
+                and value["total_count"] >= 0:
+            reset = self._empty()
+            reset["legacy_reset_count"] = value["total_count"]
+            return reset
         if not isinstance(value, dict) or set(value) != {
-                "schema_version", "instance_id", "total_count", "records", "partitions"} \
-                or value["schema_version"] != SCHEMA_VERSION \
+                "schema_version", "instance_id", "total_count", "records", "partitions",
+                "evidence_index", "evicted_partition_count", "legacy_reset_count"} \
+                or value["schema_version"] != STORE_SCHEMA_VERSION \
                 or value["instance_id"] != self.instance_id \
                 or isinstance(value["total_count"], bool) \
                 or not isinstance(value["total_count"], int) \
                 or not isinstance(value["records"], list) \
                 or len(value["records"]) > MAX_ACTIVE_RECORDS \
                 or not isinstance(value["partitions"], dict) \
-                or value["total_count"] < len(value["records"]):
+                or len(value["partitions"]) > MAX_PARTITIONS \
+                or not isinstance(value["evidence_index"], dict) \
+                or len(value["evidence_index"]) > MAX_EVIDENCE_IDS \
+                or value["total_count"] != len(value["evidence_index"]) \
+                or value["total_count"] < len(value["records"]) \
+                or type(value["evicted_partition_count"]) is not int \
+                or value["evicted_partition_count"] < 0 \
+                or type(value["legacy_reset_count"]) is not int \
+                or value["legacy_reset_count"] < 0:
             raise ImprovementError("improvement evidence contract is invalid")
+        if any(not isinstance(key, str) or not DIGEST_RE.fullmatch(key)
+               or not isinstance(digest, str) or not DIGEST_RE.fullmatch(digest)
+               for key, digest in value["evidence_index"].items()):
+            raise ImprovementError("improvement evidence identity index is invalid")
         for record in value["records"]:
             self._validate_record(record)
+            if value["evidence_index"].get(_evidence_key(record)) \
+                    != _measurement_hash(record):
+                raise ImprovementError("improvement evidence identity index is inconsistent")
         for key, partition in value["partitions"].items():
             self._validate_partition(key, partition)
         return value
@@ -141,7 +186,7 @@ class ImprovementTracker:
             raise ImprovementError("improvement partition is invalid")
         if partition["kind"] == "observation":
             if set(partition) != {"kind", "metric", "domain", "sample_count",
-                                  "first_samples", "recent_samples"} \
+                                  "first_samples", "recent_samples", "last_recorded_at"} \
                     or not isinstance(partition["sample_count"], int) \
                     or partition["sample_count"] < 1 \
                     or not isinstance(partition["first_samples"], list) \
@@ -149,6 +194,7 @@ class ImprovementTracker:
                     or len(partition["first_samples"]) > WINDOW \
                     or len(partition["recent_samples"]) > WINDOW:
                 raise ImprovementError("observation partition is invalid")
+            _stamp(partition["last_recorded_at"])
             samples = partition["first_samples"] + partition["recent_samples"]
             for sample in samples:
                 if not isinstance(sample, dict) or set(sample) != {
@@ -160,12 +206,13 @@ class ImprovementTracker:
                 _stamp(sample["recorded_at"])
         else:
             if set(partition) != {"kind", "metric", "domain", "pair_count",
-                                  "recent_pairs"} \
+                                  "recent_pairs", "last_recorded_at"} \
                     or not isinstance(partition["pair_count"], int) \
                     or partition["pair_count"] < 1 \
                     or not isinstance(partition["recent_pairs"], list) \
                     or len(partition["recent_pairs"]) > MIN_REPLAY_PAIRS:
                 raise ImprovementError("replay partition is invalid")
+            _stamp(partition["last_recorded_at"])
             seen = set()
             for pair in partition["recent_pairs"]:
                 if not isinstance(pair, dict) or set(pair) != {
@@ -181,13 +228,27 @@ class ImprovementTracker:
                         raise ImprovementError("replay partition value is invalid")
 
     @staticmethod
-    def _update_observation_partition(store, record):
+    def _ensure_partition_capacity(store, key):
+        if key in store["partitions"] or len(store["partitions"]) < MAX_PARTITIONS:
+            return
+        victim = min(
+            store["partitions"],
+            key=lambda item: (
+                1 if store["partitions"][item]["domain"] == "general" else 0,
+                store["partitions"][item]["last_recorded_at"], item))
+        del store["partitions"][victim]
+        store["evicted_partition_count"] += 1
+
+    @classmethod
+    def _update_observation_partition(cls, store, record):
         key = _partition_key("observation", record["metric"], record["domain"])
         partition = store["partitions"].get(key)
         if partition is None:
+            cls._ensure_partition_capacity(store, key)
             partition = {"kind": "observation", "metric": record["metric"],
                          "domain": record["domain"], "sample_count": 0,
-                         "first_samples": [], "recent_samples": []}
+                         "first_samples": [], "recent_samples": [],
+                         "last_recorded_at": record["recorded_at"]}
             store["partitions"][key] = partition
         sample = _sample(record)
         partition["sample_count"] += 1
@@ -195,17 +256,20 @@ class ImprovementTracker:
             partition["first_samples"].append(sample)
         partition["recent_samples"] = (
             partition["recent_samples"] + [sample])[-WINDOW:]
+        partition["last_recorded_at"] = record["recorded_at"]
 
-    @staticmethod
-    def _update_replay_partition(store, records):
+    @classmethod
+    def _update_replay_partition(cls, store, records):
         enabled = next(item for item in records if item["cohort"] == "enabled")
         disabled = next(item for item in records if item["cohort"] == "disabled")
         key = _partition_key("replay", enabled["metric"], enabled["domain"])
         partition = store["partitions"].get(key)
         if partition is None:
+            cls._ensure_partition_capacity(store, key)
             partition = {"kind": "replay", "metric": enabled["metric"],
                          "domain": enabled["domain"], "pair_count": 0,
-                         "recent_pairs": []}
+                         "recent_pairs": [],
+                         "last_recorded_at": enabled["recorded_at"]}
             store["partitions"][key] = partition
         pair = {"replay_id": enabled["replay_id"],
                 "enabled": {"value": enabled["value"],
@@ -215,10 +279,37 @@ class ImprovementTracker:
         partition["pair_count"] += 1
         partition["recent_pairs"] = (
             partition["recent_pairs"] + [pair])[-MIN_REPLAY_PAIRS:]
+        partition["last_recorded_at"] = enabled["recorded_at"]
 
     def _write(self, store):
         store["records"] = store["records"][-MAX_ACTIVE_RECORDS:]
+        raw = (json.dumps(store, indent=2, sort_keys=True, ensure_ascii=False)
+               + "\n").encode("utf-8")
+        if len(raw) > MAX_STORE_BYTES:
+            raise ImprovementError("improvement evidence exceeds its byte capacity")
         loom_memory._atomic_json(self.path, store)
+
+    @staticmethod
+    def _identity_additions(store, records):
+        additions, pending = [], {}
+        for record in records:
+            key, digest = _evidence_key(record), _measurement_hash(record)
+            prior = store["evidence_index"].get(key)
+            if prior is not None:
+                if prior != digest:
+                    raise ImprovementError(
+                        "evidence identity is bound to another measurement")
+                continue
+            if key in pending:
+                if pending[key] != digest:
+                    raise ImprovementError(
+                        "evidence identity is bound to another measurement")
+                continue
+            pending[key] = digest
+            additions.append(record)
+        if len(store["evidence_index"]) + len(pending) > MAX_EVIDENCE_IDS:
+            raise ImprovementError("improvement evidence identity capacity is exhausted")
+        return additions, pending
 
     def _validate_record(self, record):
         if not isinstance(record, dict) or set(record) != RECORD_FIELDS \
@@ -277,15 +368,11 @@ class ImprovementTracker:
         self._validate_record(record)
         with loom_memory.FileLock(self.lock):
             store = self._read()
-            existing = next((item for item in store["records"]
-                             if item["id"] == record["id"]), None)
-            if existing is not None:
-                comparable = {key: value for key, value in record.items()
-                              if key != "recorded_at"}
-                if any(existing[key] != value for key, value in comparable.items()):
-                    raise ImprovementError("evidence identity is bound to another measurement")
-                return json.loads(json.dumps(existing))
-            store["records"].append(record)
+            additions, pending = self._identity_additions(store, [record])
+            if not additions:
+                return json.loads(json.dumps(record))
+            store["records"].extend(additions)
+            store["evidence_index"].update(pending)
             store["total_count"] += 1
             self._update_observation_partition(store, record)
             self._write(store)
@@ -323,22 +410,12 @@ class ImprovementTracker:
             records.append(record)
         with loom_memory.FileLock(self.lock):
             store = self._read()
-            active = {item["id"]: item for item in store["records"]}
-            additions = []
-            for record in records:
-                existing = active.get(record["id"])
-                if existing is not None:
-                    comparable = {key: value for key, value in record.items()
-                                  if key != "recorded_at"}
-                    if any(existing[key] != value for key, value in comparable.items()):
-                        raise ImprovementError(
-                            "evidence identity is bound to another measurement")
-                    continue
-                additions.append(record)
+            additions, pending = self._identity_additions(store, records)
             for record in additions:
                 store["records"].append(record)
                 store["total_count"] += 1
                 self._update_observation_partition(store, record)
+            store["evidence_index"].update(pending)
             self._write(store)
         return {"added": len(additions), "total_count": store["total_count"]}
 
@@ -351,7 +428,8 @@ class ImprovementTracker:
         if not isinstance(replay_id, str) or not EVIDENCE_RE.fullmatch(replay_id) \
                 or not isinstance(evidence_ids, list) or len(evidence_ids) != 2 \
                 or not all(isinstance(item, str) and EVIDENCE_RE.fullmatch(item)
-                           for item in evidence_ids):
+                           for item in evidence_ids) \
+                or len(set(evidence_ids)) != 2:
             raise ImprovementError("replay pair requires exact controlled evidence")
         stamp = _stamp(recorded_at)
         records = []
@@ -378,21 +456,13 @@ class ImprovementTracker:
             records.append(record)
         with loom_memory.FileLock(self.lock):
             store = self._read()
-            existing = [item for item in store["records"]
-                        if item["id"] in {record["id"] for record in records}]
-            if existing:
-                if len(existing) != 2:
-                    raise ImprovementError("replay pair is incomplete; evidence is corrupt")
-                by_id = {item["id"]: item for item in existing}
-                for record in records:
-                    comparable = {key: value for key, value in record.items()
-                                  if key != "recorded_at"}
-                    if any(by_id[record["id"]][key] != value
-                           for key, value in comparable.items()):
-                        raise ImprovementError(
-                            "replay identity is bound to another measurement")
-                return json.loads(json.dumps(existing))
-            store["records"].extend(records)
+            additions, pending = self._identity_additions(store, records)
+            if not additions:
+                return json.loads(json.dumps(records))
+            if len(additions) != 2:
+                raise ImprovementError("replay pair is incomplete; evidence is corrupt")
+            store["records"].extend(additions)
+            store["evidence_index"].update(pending)
             store["total_count"] += 2
             self._update_replay_partition(store, records)
             self._write(store)
@@ -404,7 +474,14 @@ class ImprovementTracker:
                 "active_record_count": len(store["records"]),
                 "active_record_bound": MAX_ACTIVE_RECORDS,
                 "compacted_record_count": store["total_count"] - len(store["records"]),
-                "partition_count": len(store["partitions"])}
+                "partition_count": len(store["partitions"]),
+                "partition_bound": MAX_PARTITIONS,
+                "evicted_partition_count": store["evicted_partition_count"],
+                "evidence_identity_count": len(store["evidence_index"]),
+                "evidence_identity_bound": MAX_EVIDENCE_IDS,
+                "byte_size": self.path.stat().st_size if self.path.is_file() else 0,
+                "byte_bound": MAX_STORE_BYTES,
+                "legacy_reset_count": store["legacy_reset_count"]}
 
     def report(self, *, metric, domain):
         if metric not in METRICS:

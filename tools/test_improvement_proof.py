@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_improvement
 import loom_improvement_audit
@@ -155,6 +156,62 @@ class ImprovementProofTests(unittest.TestCase):
         self.assertEqual(0.9, report["longitudinal"]["early_mean"])
         self.assertEqual(0.1, report["longitudinal"]["recent_mean"])
         self.assertGreater(status["compacted_record_count"], 0)
+
+    def test_many_domains_evict_partitions_but_old_evidence_identity_never_reopens(self):
+        observations = [{
+            "metric": "rework-rate", "value": 0.5,
+            "domain": f"domain-{index}",
+            "project_id": f"p-{index + 2901:032x}",
+            "evidence_id": f"bounded-domain-{index}",
+            "recorded_at": f"2029-{index // 50 + 1:02d}-{index % 28 + 1:02d}T12:00:00Z",
+        } for index in range(600)]
+        self.tracker.record_observations_batch(observations)
+        status = self.tracker.status()
+        self.assertLessEqual(status["partition_count"],
+                             loom_improvement.MAX_PARTITIONS)
+        self.assertEqual(600, status["evidence_identity_count"])
+        self.assertLessEqual(self.tracker.path.stat().st_size,
+                             loom_improvement.MAX_STORE_BYTES)
+
+        exact = dict(observations[0])
+        exact["recorded_at"] = "2030-01-01T00:00:00Z"
+        repeated = self.tracker.record_observations_batch([exact])
+        self.assertEqual(0, repeated["added"])
+        self.assertEqual(600, repeated["total_count"])
+
+        changed = dict(exact, value=0.9)
+        with self.assertRaisesRegex(
+                loom_improvement.ImprovementError,
+                "identity is bound to another measurement"):
+            self.tracker.record_observations_batch([changed])
+        self.assertEqual(600, self.tracker.status()["total_count"])
+
+    def test_identity_and_byte_capacity_fail_without_partial_mutation(self):
+        first = {
+            "metric": "rework-rate", "value": 0.5, "domain": "cli",
+            "project_id": f"p-{3901:032x}", "evidence_id": "capacity-1",
+            "recorded_at": "2030-02-01T00:00:00Z",
+        }
+        with mock.patch.object(loom_improvement, "MAX_EVIDENCE_IDS", 1):
+            self.tracker.record_observations_batch([first])
+            with self.assertRaisesRegex(
+                    loom_improvement.ImprovementError, "identity capacity"):
+                self.tracker.record_observations_batch([{
+                    **first, "evidence_id": "capacity-2",
+                    "recorded_at": "2030-02-02T00:00:00Z",
+                }])
+        self.assertEqual(1, self.tracker.status()["total_count"])
+
+        before = self.tracker.path.read_bytes()
+        with mock.patch.object(
+                loom_improvement, "MAX_STORE_BYTES", len(before) + 1):
+            with self.assertRaisesRegex(
+                    loom_improvement.ImprovementError, "byte capacity"):
+                self.tracker.record_observations_batch([{
+                    **first, "evidence_id": "capacity-byte",
+                    "recorded_at": "2030-02-03T00:00:00Z",
+                }])
+        self.assertEqual(before, self.tracker.path.read_bytes())
 
     def test_metric_registry_and_general_calibration_are_explicitly_separate(self):
         self.assertEqual({

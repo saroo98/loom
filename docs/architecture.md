@@ -37,11 +37,15 @@ network contribution mechanism.
 ## Comparative Improvement Proof
 
 `loom_improvement` records controlled measurements automatically from sealed sessions. It keeps
-8 early and 8 recent samples per exact metric/domain partition, caps the active record window, and
-never combines domains. A claim needs 16 longitudinal samples plus 8 paired memory-enabled and
-memory-disabled replays. `loom_improvement_audit` independently reimplements the calculation,
-checks the evidence hash, and rejects altered claims. Regressions raise an alarm; accumulation alone
-never qualifies as improvement.
+8 early and 8 recent samples per exact metric/domain partition, caps active records, partitions,
+evidence identities, and serialized bytes, and never combines domains. Evidence identifiers are
+bound permanently to a canonical measurement hash even after the active record is compacted.
+Legacy stores whose compacted identities cannot be reconstructed are reset as untrusted proof and
+their discarded count is retained; old evidence is never silently credited. A claim needs 16
+longitudinal samples plus 8 paired memory-enabled and memory-disabled replays.
+`loom_improvement_audit` independently reimplements the calculation, checks the evidence hash, and
+rejects altered claims. Regressions raise an alarm; accumulation alone never qualifies as
+improvement.
 
 ## Release Boundary
 
