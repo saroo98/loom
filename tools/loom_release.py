@@ -43,6 +43,7 @@ EXTERNAL_CHECKS = (
     "cross-platform-ci", "unfamiliar-user-usability", "independent-hostile-review",
     "production-performance", "production-memory-replay",
 )
+FULL_SUITE_MAX_SECONDS = 900
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",
@@ -739,12 +740,14 @@ def certification_report(*, local_checks, external_evidence, trust_policy=None, 
 
 def _suite(root):
     runner = root / "tools" / "loom_test.py"
-    command = ([sys.executable, "-B", "loom_test.py", "full", "--max-seconds", "600",
+    command = ([sys.executable, "-B", "loom_test.py", "full", "--max-seconds",
+                str(FULL_SUITE_MAX_SECONDS),
                 "--quiet"] if runner.is_file() else
                [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
     result = subprocess.run(
         command,
-        cwd=root / "tools", capture_output=True, text=True, timeout=900, check=False,
+        cwd=root / "tools", capture_output=True, text=True,
+        timeout=FULL_SUITE_MAX_SECONDS + 300, check=False,
         env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
     try:
         timing = json.loads(result.stdout) if runner.is_file() else None
