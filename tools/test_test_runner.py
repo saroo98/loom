@@ -13,6 +13,7 @@ class TestRunnerTests(unittest.TestCase):
         self.assertTrue(report["within_budget"], report)
         self.assertTrue(report["successful"], report)
         self.assertEqual(report["tests_run"], len(report["timings"]))
+        self.assertGreater(report["suppressed_stdout_chars"], 0)
 
 
 if __name__ == "__main__":

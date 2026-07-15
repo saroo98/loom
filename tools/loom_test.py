@@ -2,6 +2,8 @@
 """Deterministic fast PR gate and complete release test runner."""
 
 import argparse
+import contextlib
+import io
 import json
 import sys
 import time
@@ -73,14 +75,17 @@ def run(mode, *, max_seconds=None, verbosity=1):
     else:
         raise ValueError("mode must be fast or full")
     started = time.perf_counter()
-    result = unittest.TextTestRunner(
-        stream=sys.stderr, verbosity=verbosity, resultclass=TimingResult).run(suite)
+    captured_stdout = io.StringIO()
+    with contextlib.redirect_stdout(captured_stdout):
+        result = unittest.TextTestRunner(
+            stream=sys.stderr, verbosity=verbosity, resultclass=TimingResult).run(suite)
     elapsed = time.perf_counter() - started
     within_budget = budget is None or elapsed <= budget
     report = {
         "schema_version": 1, "mode": mode, "tests_run": result.testsRun,
         "failures": len(result.failures), "errors": len(result.errors),
         "skipped": len(result.skipped), "elapsed_seconds": round(elapsed, 6),
+        "suppressed_stdout_chars": len(captured_stdout.getvalue()),
         "max_seconds": budget, "within_budget": within_budget,
         "successful": result.wasSuccessful() and within_budget,
         "timings": sorted(
