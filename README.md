@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Loom 1.0.0 · Planning intelligence for AI coding agents.</strong><br>
+  <strong>Loom 1.1.0 · Planning intelligence for AI coding agents.</strong><br>
   One request in. A release-ready, evidence-backed execution plan out.
 </p>
 

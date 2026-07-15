@@ -1,4 +1,4 @@
-# Loom 1.0.0 advanced architecture
+# Loom 1.1.0 advanced architecture
 
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.
@@ -96,6 +96,29 @@ invariants. Production actions additionally seal the hashes and byte counts of t
 guidance files, while session receipts can retain provider/model/response/hash provenance for all
 five token categories. Neither a caller total nor a local provider receipt substitutes for the
 separate independently attested production-performance or production-memory-replay records.
+
+## Loom 1.1 runtime and owner vault
+
+The stable launcher under `~/.loom/bin` verifies one immutable runtime manifest and pins a session
+to that runtime generation. Marketplace payloads stage beside the active runtime; threshold-signed
+metadata, exact hashes, semantic inventory comparison, and a disposable request must all pass
+before the pointer changes. A failed or repeatedly unhealthy runtime rolls back to the prior
+receipt-owned version.
+
+Mutable owner intelligence lives in an encrypted SQLite vault outside the plugin cache. Owner,
+device, runtime, and project identities are separate. Memory bodies, preferences, outcomes,
+receipts, private adaptations, transfer payloads, and session-journal details are authenticated
+ciphertext. Clear database fields are bounded operational indexes and opaque identifiers. A stable
+blind-index key keeps scope and permanent-forgetting commitments comparable when the data key is
+rotated. Device revocation stages a complete re-encrypted vault generation, commits the discarded
+event history, changes secure-key slots, and activates atomically; an old data key cannot decrypt
+the new generation.
+
+Pairing and recovery transfer encrypted checkpoints in bounded authenticated chunks. The recovery
+phrase only unlocks an external backup. Signed device deltas merge under entity-specific rules;
+forgetting dominates old copies, contradictory stated preferences quarantine, unknown schemas stay
+inactive, and materialized state remains bounded. Receipt-owned adapters for supported Agent Skills
+locations call the same stable launcher and roll back completely if any adapter write fails.
 
 ## Truth surfaces
 

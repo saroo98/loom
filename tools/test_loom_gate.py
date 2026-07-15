@@ -59,6 +59,13 @@ class LifecycleTests(unittest.TestCase):
         wo.write_text(text, encoding="utf-8")
         return wo
 
+    def test_manifest_restamp_uses_the_utc_calendar_date(self):
+        state = loom_gate._stable_state(self.repo, self.pack)
+        with mock.patch.object(loom_gate, "_utc_date", return_value="2030-01-02"):
+            _, rendered = loom_gate._render_manifest(
+                self.pack, state, "planned", restamp_date=True)
+        self.assertIn("last_verified: 2030-01-02", rendered)
+
     def capture(self, wo=None):
         wo = wo or self.pack / "work-orders" / "WO-001-build-ui.md"
         text = wo.read_text(encoding="utf-8")

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/event-envelope.schema.json",
+  "title": "Signed encrypted Loom vault event",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["event_id", "owner_vault_id", "device_id", "device_counter", "causal_parents", "payload_schema_version", "scope", "domain", "project_id", "ciphertext", "prior_event_hash", "signature", "event_hash"],
+  "properties": {
+    "event_id": {"type": "string", "format": "uuid"},
+    "owner_vault_id": {"type": "string", "format": "uuid"},
+    "device_id": {"type": "string", "format": "uuid"},
+    "device_counter": {"type": "integer", "minimum": 1},
+    "causal_parents": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "payload_schema_version": {"type": "integer", "minimum": 1},
+    "scope": {"enum": ["global", "domain", "project", "device", "vault"]},
+    "domain": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "project_id": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "ciphertext": {"type": "string", "minLength": 24, "maxLength": 2097152, "contentEncoding": "base64"},
+    "prior_event_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "signature": {"type": "string", "minLength": 64, "maxLength": 256, "contentEncoding": "base64"},
+    "event_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

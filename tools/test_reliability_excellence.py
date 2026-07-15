@@ -138,6 +138,18 @@ class ReliabilityExcellenceTests(unittest.TestCase):
             with self.assertRaisesRegex(loom_privacy.PrivacyError, "symlink|reparse"):
                 loom_privacy.scan_publication(cut, forbidden_tokens=[])
 
+    def test_macos_system_alias_is_allowed_only_for_its_canonical_target(self):
+        with mock.patch.object(loom_reliability.sys, "platform", "darwin"), \
+                mock.patch.object(
+                    loom_reliability.Path, "resolve", return_value=Path("/private/var")):
+            self.assertTrue(loom_reliability._is_trusted_os_alias(Path("/var")))
+            self.assertFalse(loom_reliability._is_trusted_os_alias(Path("/home")))
+
+        with mock.patch.object(loom_reliability.sys, "platform", "darwin"), \
+                mock.patch.object(
+                    loom_reliability.Path, "resolve", return_value=Path("/attacker/var")):
+            self.assertFalse(loom_reliability._is_trusted_os_alias(Path("/var")))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -20,9 +20,10 @@ import loom_memory  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_performance  # noqa: E402
 import loom_release  # noqa: E402
+from test_loom_vault_v11 import TestCrypto  # noqa: E402
 
 
-TODAY = dt.date.today().isoformat()
+TODAY = dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 
 def _write(path, text):
@@ -412,6 +413,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         result = json.loads(opened.stdout)
         memory_ids = [item["id"] for item in result["context"]["memory"]]
         self.assertIn(preference["id"], memory_ids)
+
         selected = [item for item in result["context"]["preferences"]
                     if item["key"] == "report_detail"]
         self.assertEqual("concise", selected[0]["effective_value"])
@@ -462,6 +464,38 @@ class ProductionOrchestratorTests(unittest.TestCase):
             self.home, instance_id, preference["id"])
         self.assertEqual(1, recorded["application_count"])
         self.assertEqual(1, recorded["helped_count"])
+
+    def test_v11_action_envelope_hides_request_and_authenticates_owner_runtime(self):
+        opened = self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed)
+        self.assertEqual(0, opened.returncode, opened.stdout + opened.stderr)
+        result = json.loads(opened.stdout)
+        path = Path(result["action_path"])
+        action = json.loads(path.read_text(encoding="utf-8"))
+        crypto = TestCrypto()
+        owner = action["instance_id"]
+        loom_orchestrator._write_action(path, action, (crypto, owner))
+        raw = path.read_bytes()
+        self.assertNotIn(self.request.encode("utf-8"), raw)
+
+        class FakeVault:
+            def identity(self):
+                return {"owner_vault_id": owner}
+
+        with mock.patch.object(loom_orchestrator, "_vault_helper", return_value=Path("helper")), \
+                mock.patch.object(
+                    loom_orchestrator.loom_owner, "open_owner_vault",
+                    return_value=(FakeVault(), crypto)):
+            _path, restored, security = loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+            self.assertEqual(self.request, restored["request"])
+            self.assertIsNotNone(security)
+            with self.assertRaisesRegex(
+                    loom_orchestrator.OrchestratorError, "home and runtime"):
+                loom_orchestrator._read_action(
+                    path, owner_home=self.root / "wrong-home",
+                    install_root=self.installed)
 
     def test_unknown_domain_is_promoted_out_of_the_small_lifecycle(self):
         opened = self.cli(

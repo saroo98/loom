@@ -1,0 +1,156 @@
+# Loom 1.1 security definitions
+
+This document freezes Loom's security boundary before the owner-vault runtime is activated. It is
+a living engineering artifact, not a certification. A fully compromised operating-system account
+or an unrestricted hostile agent already authorized to execute arbitrary host commands is outside
+Loom's enforceable boundary. Loom still minimizes persistence and blast radius in that condition,
+but it does not claim confidentiality from the account that is actively decrypting the vault.
+
+## Trust boundaries and data flow
+
+```mermaid
+flowchart LR
+  Owner[Owner] -->|one authorization| Pair[Pairing or recovery]
+  Marketplace[Codex marketplace cache] -->|signed immutable payload| Launcher[Stable launcher]
+  Agents[Local agent adapters] -->|local invocation| Launcher
+  Launcher -->|pinned runtime and generation| Runtime[Verified Loom runtime]
+  Runtime -->|stdin/stdout only| Crypto[Rust loom-vault helper]
+  Crypto -->|OS secure-store handle| Keys[OS secure key store]
+  Runtime -->|encrypted rows and signed events| Vault[(owner.sqlite3)]
+  Pair -->|receiver-bound encrypted bundle| Crypto
+  Runtime -->|bounded encrypted snapshot| Backup[Owner-selected backup target]
+```
+
+Marketplace delivery crosses a distribution trust boundary. Agent adapters cross an execution
+boundary. The Rust helper is the only component permitted to receive unwrapped cryptographic key
+material. Backup media and paired-device transport are untrusted storage and transport.
+
+## SD1: hostile or stale update replaces the runtime
+
+**Criticality:** Critical
+
+### Threat Model
+
+- An attacker can control a mirror, replay old metadata, copy a plugin-cache directory, substitute
+  same-named files, or interrupt staging and activation.
+- The attacker cannot produce threshold-authorized root metadata or a valid target hash under a
+  non-compromised release root.
+
+### Security Goal
+
+- No unlisted, expired, lower-sequence, wrong-platform, mixed-version, or hash-mismatched payload
+  can become active. Activation is atomic and never changes an active session.
+- **Rationale:** Enforces P05 and P06; protects the runtime and owner vault; violation could execute
+  attacker code with the owner's agent authority or corrupt learned state.
+
+### Accepted Goal Status
+
+- Goal is **not met** until the staged updater, threshold metadata verifier, crash probes, and
+  copied-cache regression tests pass against the release artifact.
+
+## SD2: migration loses, widens, or resurrects owner learning
+
+**Criticality:** Critical
+
+### Threat Model
+
+- Legacy state may be corrupted, oversized, interrupted, duplicated, installation-scoped, or
+  contain an earlier copy of information the owner later forgot.
+- The attacker cannot alter the read-only source after its source hashes and stable read are
+  completed without detection.
+
+### Security Goal
+
+- Migration cannot delete a semantic record, widen scope, activate ambiguous text, lose
+  provenance, or resurrect a tombstoned statement without a receipt that blocks activation.
+- **Rationale:** Enforces P05 and P06; protects preferences, calibration, project isolation, and
+  forgetting; violation could mislead future plans or restore information the owner removed.
+
+### Accepted Goal Status
+
+- Goal is **not met** until sanitized 0.8 and 1.0 fixtures migrate idempotently, reconcile exactly,
+  and survive rollback and interruption tests.
+
+## SD3: another device replays or contaminates learning
+
+**Criticality:** High
+
+### Threat Model
+
+- A previously paired or revoked device can replay a signed old bundle, reorder events, duplicate
+  operations, send an unknown schema, or submit concurrent contradictory preferences.
+- It cannot sign as a different non-compromised device or decrypt a rotated future vault key.
+
+### Security Goal
+
+- Counters, signature chains, membership, release sequence, forgetting epochs, project lineage,
+  and entity-specific merge rules prevent replay and cross-scope activation; ambiguity is
+  quarantined rather than selected.
+- **Rationale:** Enforces P05 and P06; protects owner intent and scoped learning; violation could
+  silently apply stale or wrong-domain guidance.
+
+### Accepted Goal Status
+
+- Goal is **not met** until delivery-order, duplicate, replay, stale-device, and revoked-device
+  simulations converge or fail closed deterministically.
+
+## SD4: passive visibility leaks owner data
+
+**Criticality:** High
+
+### Threat Model
+
+- A **Passive Observer** can read plugin packages, marketplace metadata, backup media, transfer
+  media, logs, process arguments, and normal agent output without acting maliciously.
+- The observer does not control the unlocked Loom process or OS secure key store.
+
+### Security Goal
+
+- Owner statements, preferences, project metadata, evidence metadata, private rules, and event
+  payloads remain encrypted at rest and never enter plugin assets, logs, argv, environment
+  variables, or default health output.
+- **Rationale:** Enforces P01 and P05; protects private owner learning; violation could disclose
+  personal or project information through normal distribution or support workflows.
+
+### Accepted Goal Status
+
+- Goal is **partially met**: the 1.0 public firewall and no-telemetry audit are mechanical. Full
+  vault encryption, stdin-only helper handoff, binary-package scanning, and recovery probes remain
+  required before 1.1 activation.
+
+## SD5: hostile adapter causes split-brain execution
+
+**Criticality:** High
+
+### Threat Model
+
+- An unowned repo-local or user-local adapter can shadow the global Loom name, invoke a stale
+  engine, or point at a version-specific plugin cache.
+- It cannot forge Loom's ownership receipt for an unchanged adapter file.
+
+### Security Goal
+
+- Every supported adapter invokes the stable launcher; unowned conflicts block with a split-brain
+  receipt; uninstall or upgrade changes only receipt-proven Loom-owned files.
+- **Rationale:** Enforces P05; protects runtime coherence and project isolation; violation could run
+  stale logic against current state or expose one project to another instance.
+
+### Accepted Goal Status
+
+- Goal is **not met** until adapter installation, conflict, backup, uninstall, and disposable real
+  invocation tests pass for every claimed host.
+
+## STRIDE threat catalog
+
+| Threat | STRIDE | Required mitigation | Activation evidence |
+|---|---|---|---|
+| Forged or rolled-back runtime | Spoofing, Tampering | threshold metadata, sequence floor, target hashes | hostile updater tests |
+| Interrupted migration | Tampering, Denial of Service | online snapshot, idempotent ledger, atomic pointers | crash-injection matrix |
+| Replayed device history | Spoofing, Repudiation | device signatures, counters, prior hashes, revocation epoch | convergence simulations |
+| Owner data in package or logs | Information Disclosure | encryption, stdin handoff, all-file firewall | exact-artifact privacy scan |
+| Adapter shadowing | Elevation of Privilege | ownership receipts and split-brain refusal | multi-agent adapter suite |
+
+## Accepted Goal Status policy
+
+No status becomes "met" from source inspection. It requires the named behavior test against the
+exact artifact. Independent cryptographic review and hostile systems review remain external gates.

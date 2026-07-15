@@ -1,0 +1,29 @@
+[package]
+name = "loom-vault"
+version = "1.1.0"
+edition = "2021"
+license = "Apache-2.0"
+description = "Narrow cryptographic helper for the Loom owner vault"
+
+[dependencies]
+argon2 = "0.5.3"
+base64 = "0.22.1"
+bip39 = { version = "2.2.0", features = ["rand"] }
+chacha20poly1305 = "0.10.1"
+ed25519-dalek = { version = "2.2.0", features = ["rand_core", "zeroize"] }
+hex = "0.4.3"
+hkdf = "0.12.4"
+hmac = "0.12.1"
+keyring = "4.1.5"
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+sha2 = "0.10.9"
+x25519-dalek = { version = "2.0.1", features = ["static_secrets", "zeroize"] }
+zeroize = "1.8.1"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = true

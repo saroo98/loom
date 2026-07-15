@@ -127,6 +127,10 @@ def _utc_now():
         .replace("+00:00", "Z")
 
 
+def _utc_date():
+    return dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+
 def _utc_stamp(value=None):
     if value is None:
         return _utc_now()
@@ -548,7 +552,7 @@ def _render_manifest(pack, state, mode, *, completed_wo=None, restamp_date=False
         "repo_state_mode": f'"{state.mode}"',
     }
     if restamp_date:
-        values["last_verified"] = dt.date.today().isoformat()
+        values["last_verified"] = _utc_date()
     if state.head:
         values["repo_head"] = f'"{state.head}"'
     for key, value in values.items():

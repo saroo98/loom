@@ -27,9 +27,12 @@ import loom_performance
 
 ROOT_FILES = {
     ".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "PRIVACY.md",
-    "README.md", "START-HERE.md", "VERSION",
+    "README.md", "START-HERE.md", "TERMS.md", "VERSION",
 }
-ROOT_DIRECTORIES = {".github", "docs", "loom", "schemas", "skill", "templates", "tools"}
+ROOT_DIRECTORIES = {
+    ".codex-plugin", ".github", "docs", "hooks", "loom", "schemas", "scripts",
+    "skill", "skills", "templates", "tools", "vault-helper",
+}
 MANIFEST = "BUILD-MANIFEST.json"
 LOCAL_CHECKS = (
     "suite", "adaptation", "privacy", "failure_injection",
@@ -40,6 +43,7 @@ EXTERNAL_CHECKS = (
     "cross-platform-ci", "unfamiliar-user-usability", "independent-hostile-review",
     "production-performance", "production-memory-replay",
 )
+FULL_SUITE_MAX_SECONDS = 900
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",
@@ -119,6 +123,7 @@ def _eligible(relative):
         return relative.name in ROOT_FILES
     return relative.parts[0] in ROOT_DIRECTORIES \
         and "__pycache__" not in relative.parts \
+        and not (relative.parts[0] == "vault-helper" and "target" in relative.parts) \
         and relative.suffix.lower() not in {".pyc", ".pyo"}
 
 
@@ -308,7 +313,14 @@ def verify_cut(root, *, forbidden_tokens):
     suite = _suite(root)
     if not suite["passed"] or loom_docs.generate_evidence(root)[
             "discovered_test_methods"] < 1:
-        raise ReleaseError("public cut test suite failed")
+        diagnostic = loom_privacy.minimize_evidence(
+            json.dumps({
+                "returncode": suite.get("returncode"),
+                "elapsed_seconds": suite.get("elapsed_seconds"),
+                "tests_run": suite.get("tests_run"),
+                "output": suite.get("output", ""),
+            }, sort_keys=True), roots=(root,), max_chars=2400)
+        raise ReleaseError("public cut test suite failed: " + diagnostic)
     manifest_after = _verify_cut_manifest(root)
     firewall_after = loom_privacy.scan_publication(
         root, forbidden_tokens=forbidden_tokens,
@@ -735,12 +747,14 @@ def certification_report(*, local_checks, external_evidence, trust_policy=None, 
 
 def _suite(root):
     runner = root / "tools" / "loom_test.py"
-    command = ([sys.executable, "-B", "loom_test.py", "full", "--max-seconds", "600",
+    command = ([sys.executable, "-B", "loom_test.py", "full", "--max-seconds",
+                str(FULL_SUITE_MAX_SECONDS),
                 "--quiet"] if runner.is_file() else
                [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
     result = subprocess.run(
         command,
-        cwd=root / "tools", capture_output=True, text=True, timeout=900, check=False,
+        cwd=root / "tools", capture_output=True, text=True,
+        timeout=FULL_SUITE_MAX_SECONDS + 300, check=False,
         env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
     try:
         timing = json.loads(result.stdout) if runner.is_file() else None

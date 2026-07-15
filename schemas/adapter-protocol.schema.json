@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/adapter-protocol.schema.json",
+  "title": "Loom global agent-adapter ownership contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["adapter_version", "agent", "launcher", "owner_receipt"],
+  "properties": {
+    "adapter_version": {"type": "integer", "const": 1},
+    "agent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "version", "config_root"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+        "version": {"type": ["string", "null"], "maxLength": 128},
+        "config_root": {"type": "string", "maxLength": 1024}
+      }
+    },
+    "launcher": {"const": "~/.loom/bin/loom"},
+    "owner_receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["relative_path", "sha256", "backup_sha256"],
+      "properties": {
+        "relative_path": {"type": "string", "minLength": 1, "maxLength": 512},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "backup_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

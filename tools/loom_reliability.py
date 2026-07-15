@@ -7,6 +7,7 @@ import json
 import os
 import re
 import stat
+import sys
 import tempfile
 from pathlib import Path, PurePosixPath
 
@@ -37,6 +38,28 @@ def _is_redirect(path):
         raise ReliabilityError(f"cannot inspect path: {path}: {exc}") from exc
 
 
+def _is_trusted_os_alias(path):
+    """Allow only Apple's documented root aliases while retaining redirect checks.
+
+    macOS exposes ``/var`` and ``/tmp`` as symlinks into ``/private``.  They are
+    OS-owned aliases, not user-controlled project redirects, and hosted runners
+    routinely place temporary directories beneath them.  We still verify the
+    exact target so a modified alias fails closed.
+    """
+    if sys.platform != "darwin":
+        return False
+    expected = {
+        Path("/var"): Path("/private/var"),
+        Path("/tmp"): Path("/private/tmp"),
+    }.get(Path(path))
+    if expected is None:
+        return False
+    try:
+        return Path(path).resolve(strict=False) == expected
+    except OSError as exc:
+        raise ReliabilityError(f"cannot resolve operating-system alias: {path}: {exc}") from exc
+
+
 def _absolute(path, label, *, must_exist=False):
     try:
         value = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
@@ -45,7 +68,7 @@ def _absolute(path, label, *, must_exist=False):
     if must_exist and not value.exists():
         raise ReliabilityError(f"{label} does not exist: {value}")
     for component in [*reversed(value.parents), value]:
-        if _is_redirect(component):
+        if _is_redirect(component) and not _is_trusted_os_alias(component):
             raise ReliabilityError(f"{label} traverses a symlink or reparse point: {component}")
     return value
 
