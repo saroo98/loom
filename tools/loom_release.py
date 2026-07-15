@@ -313,7 +313,14 @@ def verify_cut(root, *, forbidden_tokens):
     suite = _suite(root)
     if not suite["passed"] or loom_docs.generate_evidence(root)[
             "discovered_test_methods"] < 1:
-        raise ReleaseError("public cut test suite failed")
+        diagnostic = loom_privacy.minimize_evidence(
+            json.dumps({
+                "returncode": suite.get("returncode"),
+                "elapsed_seconds": suite.get("elapsed_seconds"),
+                "tests_run": suite.get("tests_run"),
+                "output": suite.get("output", ""),
+            }, sort_keys=True), roots=(root,), max_chars=2400)
+        raise ReleaseError("public cut test suite failed: " + diagnostic)
     manifest_after = _verify_cut_manifest(root)
     firewall_after = loom_privacy.scan_publication(
         root, forbidden_tokens=forbidden_tokens,
