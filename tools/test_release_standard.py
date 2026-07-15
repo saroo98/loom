@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import loom_install
+import loom_docs
 import loom_release
 import loom_reliability
 
@@ -48,17 +49,37 @@ class ReleaseStandardTests(unittest.TestCase):
         (source / "tools").mkdir(parents=True)
         (source / "docs").mkdir()
         (source / "skill" / "loom").mkdir(parents=True)
-        (source / "README.md").write_text("/loom <request>\n", encoding="utf-8")
-        (source / "START-HERE.md").write_text("/loom <request>\n", encoding="utf-8")
+        (source / "README.md").write_text(
+            "Loom 1.0.0 /loom <request>\n", encoding="utf-8")
+        (source / "START-HERE.md").write_text(
+            "Loom 1.0.0 /loom <request>\n", encoding="utf-8")
         (source / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+        (source / ".gitignore").write_text("__pycache__/\n*.py[cod]\n", encoding="utf-8")
         (source / "LICENSE").write_text("fixture license\n", encoding="utf-8")
         (source / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
         (source / "CONTRIBUTING.md").write_text("# Contributing\n", encoding="utf-8")
         (source / "PRIVACY.md").write_text("# Privacy\n", encoding="utf-8")
         (source / "tools" / "loom_example.py").write_text("VALUE = 1\n", encoding="utf-8")
-        (source / "docs" / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
+        (source / "tools" / "test_smoke.py").write_text(
+            "import unittest\n\n"
+            "class SmokeTest(unittest.TestCase):\n"
+            "    def test_public_cut_runs(self):\n"
+            "        self.assertTrue(True)\n",
+            encoding="utf-8")
+        (source / "docs" / "index.html").write_text(
+            "<!doctype html><title>Loom 1.0.0 /loom &lt;request&gt;</title>\n",
+            encoding="utf-8")
+        (source / "docs" / "architecture.md").write_text(
+            "# Loom 1.0.0 architecture\n", encoding="utf-8")
+        (source / "docs" / "capabilities.json").write_text(json.dumps({
+            "schema_version": 1, "version": "1.0.0", "capabilities": [],
+        }), encoding="utf-8")
         (source / "skill" / "loom" / "SKILL.md").write_text(
-            "---\nname: loom\n---\n", encoding="utf-8")
+            "---\nname: loom\ndescription: Loom 1.0.0 /loom <request>\n---\n",
+            encoding="utf-8")
+        (source / "docs" / "generated-evidence.json").write_text(
+            json.dumps(loom_docs.generate_evidence(source), indent=2, sort_keys=True) + "\n",
+            encoding="utf-8")
         (source / "private").mkdir()
         (source / "private" / "owner-grounding.txt").write_text(
             "real-owner-token\nowner-token\n", encoding="utf-8")
@@ -219,6 +240,9 @@ class ReleaseStandardTests(unittest.TestCase):
             "grounding_status": "grounded-private-source",
             "protection_claimed": True,
         }, first["owner_token_policy"])
+        self.assertEqual(
+            "__pycache__/\n*.py[cod]\n",
+            (self.root / "first" / ".gitignore").read_text(encoding="utf-8"))
 
         (source / "docs" / "private.bin").write_bytes(b"prefix REAL-OWNER-TOKEN suffix")
         refused = self.root / "refused"
@@ -251,6 +275,36 @@ class ReleaseStandardTests(unittest.TestCase):
             "grounding_status": "not-applicable-public-source",
             "protection_claimed": False,
         }, result["owner_token_policy"])
+
+    def test_pristine_public_cut_is_independently_verifiable_without_git(self):
+        source = self._source()
+        built = self.root / "verified-cut"
+        build = loom_release.build_public(
+            source, built, forbidden_tokens=["scan-only-token"],
+            source_classification="public-release")
+
+        result = loom_release.verify_cut(
+            built, forbidden_tokens=["scan-only-token"])
+
+        self.assertEqual("verified", result["status"])
+        self.assertEqual(build["root_sha256"], result["root_sha256"])
+        self.assertTrue(result["firewall"]["clean"])
+        self.assertEqual("passed", result["docs"]["status"])
+        self.assertTrue(result["offline"]["offline"])
+
+    def test_public_cut_verifier_rejects_undeclared_post_build_bytecode(self):
+        source = self._source()
+        built = self.root / "contaminated-cut"
+        loom_release.build_public(
+            source, built, forbidden_tokens=["scan-only-token"],
+            source_classification="public-release")
+        bytecode = built / "tools" / "__pycache__" / "host-path.pyc"
+        bytecode.parent.mkdir()
+        bytecode.write_bytes(b"C:\\Users\\Owner\\private-host-path")
+
+        with self.assertRaisesRegex(loom_release.ReleaseError, "sealed manifest"):
+            loom_release.verify_cut(
+                built, forbidden_tokens=["private-host-path"])
 
     def test_private_owner_grounding_translates_unsafe_tree_to_release_refusal(self):
         source = self._source()

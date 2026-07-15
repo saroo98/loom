@@ -20,6 +20,7 @@
     {"id":"comparative-improvement-proof","kind":"mechanical","enforcement":["tools/loom_improvement.py","tools/loom_improvement_audit.py","tools/loom_orchestrator.py"],"tests":["tools/test_improvement_proof.py","tools/test_production_orchestrator.py"]},
     {"id":"receipt-proven-installer","kind":"mechanical","enforcement":["tools/loom_install.py","tools/loom_reliability.py"],"tests":["tools/test_release_standard.py"]},
     {"id":"evidence-gated-release","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py"]},
+    {"id":"artifact-self-verification","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_docs.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py","tools/test_documentation_coherence.py"]},
     {"id":"human-judgment-remains-owner-controlled","kind":"advisory","enforcement":[],"tests":[]}
   ]
 }

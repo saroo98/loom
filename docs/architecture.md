@@ -42,7 +42,8 @@ cross-checkout plan semantics and cannot create false drift after an otherwise i
 
 `loom_memory` separates install, global, domain, and project partitions. Selection has a hard byte
 budget and exact domain/project filters. Lifecycle maintenance archives closed project material,
-makes unused domain material dormant, and admits it again only through bounded rehydration.
+makes domain material dormant on utility-sensitive 7/14/30/90/365-day inactivity bands, reports
+the next automatic review, and admits it again only through bounded exact-domain rehydration.
 Content-erased tombstones prevent forgotten semantics from silent readmission.
 
 `loom_preferences` separates transferable preferences from domain stacks and task/risk autonomy.
@@ -71,7 +72,9 @@ entries, scans every output byte and filename through UTF-8/UTF-16 views, refuse
 binary/container formats, and emits a deterministic manifest. Private-owner mode requires at least
 one configured token to occur in source material excluded by the positive allowlist, so a dummy-only
 policy fails instead of claiming protection. Public-release scan mode explicitly reports that it
-does not attest private-source grounding. `loom_install` installs only into a new directory,
+does not attest private-source grounding. `verify-cut` independently validates the exported
+manifest, rejects undeclared files, runs the cut's suite with bytecode disabled, and repeats the
+firewall after validation without requiring Git metadata. `loom_install` installs only into a new directory,
 checks receipt-proven hashes, and uninstalls only an unchanged owned set. `loom_release certify`
 accepts only fresh, content-bound local evidence for one clean GitHub commit plus fresh external
 evidence signed by independently provisioned RSA trust roots. External evidence IDs are derived

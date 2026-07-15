@@ -52,6 +52,36 @@ class DocumentationCoherenceTests(unittest.TestCase):
             evidence["schema_documents"])
         self.assertNotIn("passing_tests", evidence)
 
+    def test_docs_audit_rejects_stale_generated_inventory(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+            for relative in loom_docs.PUBLIC_SURFACE + ("docs/architecture.md",):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Loom 1.0.0 /loom <request>\n", encoding="utf-8")
+            capabilities = {
+                "schema_version": 1, "version": "1.0.0", "capabilities": [],
+            }
+            (root / "docs" / "capabilities.json").write_text(
+                json.dumps(capabilities), encoding="utf-8")
+            (root / "tools").mkdir(exist_ok=True)
+            (root / "tools" / "loom_sample.py").write_text(
+                "VALUE = 1\n", encoding="utf-8")
+            (root / "tools" / "test_sample.py").write_text(
+                "def test_live_inventory():\n    pass\n", encoding="utf-8")
+            (root / "schemas").mkdir()
+            (root / "schemas" / "sample.schema.json").write_text(
+                "{}\n", encoding="utf-8")
+            (root / "docs" / "generated-evidence.json").write_text(
+                json.dumps({"schema_version": 1, "discovered_test_methods": 0}),
+                encoding="utf-8")
+
+            report = loom_docs.audit_docs(root)
+
+            self.assertIn("GENERATED_EVIDENCE_STALE", {
+                item["code"] for item in report["findings"]})
+
     def test_non_link_repository_document_reference_must_exist(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -63,6 +93,19 @@ class DocumentationCoherenceTests(unittest.TestCase):
                 "path": "note.md",
                 "target": "loom/execution/missing.md",
             }], loom_docs._repo_reference_findings(root))
+
+    def test_nested_skill_path_is_not_misread_as_a_missing_loom_document(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            skill = root / "skill" / "loom" / "SKILL.md"
+            skill.parent.mkdir(parents=True)
+            skill.write_text("# Loom skill\n", encoding="utf-8")
+            (root / "BUILD-MANIFEST.json").write_text(json.dumps({
+                "schema_version": 1,
+                "files": [{"path": "skill/loom/SKILL.md"}],
+            }), encoding="utf-8")
+
+            self.assertEqual([], loom_docs._repo_reference_findings(root))
 
     def test_version_is_single_source_and_all_entry_points_match(self):
         version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()

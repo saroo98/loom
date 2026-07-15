@@ -26,7 +26,7 @@ LEGACY_PATTERNS = (
         r"(?:run|invoke)\s+(?:an?\s+)?(?:auto[- ]?close|retro)\s+(?:command|step)", re.I)),
 )
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
-REPO_DOC_RE = re.compile(r"(?<![A-Za-z0-9_.-])(loom/[A-Za-z0-9_./-]+\.md)\b")
+REPO_DOC_RE = re.compile(r"(?<![A-Za-z0-9_./-])(loom/[A-Za-z0-9_./-]+\.md)\b")
 
 
 class DocsError(RuntimeError):
@@ -180,6 +180,23 @@ def audit_docs(root):
                                      "path": relative})
     except DocsError as exc:
         findings.append({"code": "CAPABILITY_REGISTRY_INVALID", "detail": str(exc)})
+    evidence_path = root / "docs" / "generated-evidence.json"
+    try:
+        observed_evidence = json.loads(
+            evidence_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_strict_object)
+        expected_evidence = generate_evidence(root)
+        if observed_evidence != expected_evidence:
+            findings.append({
+                "code": "GENERATED_EVIDENCE_STALE",
+                "path": "docs/generated-evidence.json",
+            })
+    except (OSError, UnicodeError, json.JSONDecodeError, DocsError, SyntaxError) as exc:
+        findings.append({
+            "code": "GENERATED_EVIDENCE_INVALID",
+            "path": "docs/generated-evidence.json",
+            "detail": str(exc),
+        })
     return {"status": "passed" if not findings else "failed", "version": version,
             "findings": findings}
 

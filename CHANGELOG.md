@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0 trust remediation
+
+- Verify exported public cuts independently of Git, reject undeclared post-build files, and rerun
+  the firewall after a bytecode-free artifact suite.
+- Make documentation inventory drift blocking and correct nested repository-path parsing.
+- Retire domain memory automatically according to observed harm, use, help, and recurrence while
+  preserving bounded exact-domain rehydration and mandatory safety rules.
+
 ## 1.0.0
 
 - Replaced the multi-command method surface with one natural `/loom <request>` entry point.

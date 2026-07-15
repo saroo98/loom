@@ -26,7 +26,7 @@ import loom_performance
 
 
 ROOT_FILES = {
-    "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "PRIVACY.md",
+    ".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "PRIVACY.md",
     "README.md", "START-HERE.md", "VERSION",
 }
 ROOT_DIRECTORIES = {".github", "docs", "loom", "schemas", "skill", "templates", "tools"}
@@ -101,6 +101,15 @@ HOSTILE_REVIEW_FIELDS = {
 
 class ReleaseError(RuntimeError):
     pass
+
+
+def _strict_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ReleaseError(f"duplicate JSON key: {key}")
+        value[key] = item
+    return value
 
 
 def _eligible(relative):
@@ -224,6 +233,93 @@ def build_public(source, destination, *, forbidden_tokens,
             "root_sha256": payload_manifest["root_sha256"],
             "files": payload_manifest["files"], "firewall": firewall,
             "owner_token_policy": owner_token_policy}
+
+
+def _verify_cut_manifest(root):
+    manifest_path = root / MANIFEST
+    try:
+        manifest = json.loads(
+            manifest_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_strict_object)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise ReleaseError(f"public cut manifest is unreadable: {exc}") from exc
+    if not isinstance(manifest, dict) or set(manifest) != {
+            "schema_version", "files", "root_sha256"} \
+            or manifest.get("schema_version") != 1 \
+            or not isinstance(manifest.get("files"), list) \
+            or not isinstance(manifest.get("root_sha256"), str):
+        raise ReleaseError("public cut manifest shape is invalid")
+    observed_files = []
+    try:
+        for path in loom_reliability._regular_files(root):
+            relative = path.relative_to(root).as_posix()
+            if relative == MANIFEST:
+                continue
+            raw = path.read_bytes()
+            observed_files.append({
+                "path": relative, "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            })
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise ReleaseError(f"public cut traversal failed: {exc}") from exc
+    observed_files.sort(key=lambda item: item["path"])
+    for item in manifest["files"]:
+        if not isinstance(item, dict) or set(item) != {"path", "bytes", "sha256"} \
+                or not isinstance(item["path"], str) \
+                or not isinstance(item["bytes"], int) or item["bytes"] < 0 \
+                or not isinstance(item["sha256"], str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", item["sha256"]):
+            raise ReleaseError("public cut manifest file entry is invalid")
+        try:
+            target = loom_reliability._target(root, item["path"])
+        except loom_reliability.ReliabilityError as exc:
+            raise ReleaseError(f"public cut manifest path is invalid: {exc}") from exc
+        if target.relative_to(root).as_posix() != item["path"]:
+            raise ReleaseError("public cut manifest path is not canonical")
+    if manifest["files"] != observed_files:
+        raise ReleaseError("public cut files do not exactly match the sealed manifest")
+    body = {"schema_version": 1, "files": manifest["files"]}
+    if manifest["root_sha256"] != _canonical_hash(body):
+        raise ReleaseError("public cut manifest root hash is invalid")
+    return manifest
+
+
+def verify_cut(root, *, forbidden_tokens):
+    """Verify the exported artifact itself without trusting source Git metadata."""
+    try:
+        root = loom_reliability._absolute(root, "public cut", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise ReleaseError(str(exc)) from exc
+    if not root.is_dir():
+        raise ReleaseError("public cut must be a directory")
+    if not forbidden_tokens:
+        raise ReleaseError("public cut verification requires private/owner scan tokens")
+    manifest = _verify_cut_manifest(root)
+    firewall_before = loom_privacy.scan_publication(
+        root, forbidden_tokens=forbidden_tokens, require_owner_tokens=True)
+    if not firewall_before["clean"]:
+        raise ReleaseError("public cut firewall failed")
+    docs = loom_docs.audit_docs(root)
+    if docs["status"] != "passed":
+        raise ReleaseError("public cut documentation audit failed")
+    offline = loom_privacy.audit_offline_modules(root / "tools")
+    if not offline["offline"]:
+        raise ReleaseError("public cut offline audit failed")
+    suite = _suite(root)
+    if not suite["passed"] or loom_docs.generate_evidence(root)[
+            "discovered_test_methods"] < 1:
+        raise ReleaseError("public cut test suite failed")
+    manifest_after = _verify_cut_manifest(root)
+    firewall_after = loom_privacy.scan_publication(
+        root, forbidden_tokens=forbidden_tokens, require_owner_tokens=True)
+    if manifest_after != manifest or not firewall_after["clean"]:
+        raise ReleaseError("public cut changed or failed privacy after verification")
+    return {
+        "status": "verified", "root_sha256": manifest["root_sha256"],
+        "files_verified": len(manifest["files"]) + 1,
+        "firewall": firewall_after, "docs": docs, "offline": offline,
+        "suite": suite,
+    }
 
 
 def _canonical_hash(value):
@@ -706,10 +802,8 @@ def verify_local(root, *, forbidden_tokens):
     if not forbidden_tokens:
         raise ReleaseError("local verification requires real private/owner tokens")
     identity_before = _git_release_identity(root)
-    suite = sanitize_suite_evidence(_suite(root), root=root, home=Path.home())
     performance_contracts = _performance_contracts()
-    docs = loom_docs.audit_docs(root)
-    offline = loom_privacy.audit_offline_modules(root / "tools")
+    source_docs = loom_docs.audit_docs(root)
     with tempfile.TemporaryDirectory(prefix="loom-release-proof-") as temporary:
         workspace = Path(temporary)
         adaptation = loom_adaptation_eval.run_suite(workspace / "adaptation")
@@ -719,6 +813,17 @@ def verify_local(root, *, forbidden_tokens):
         second = build_public(
             root, workspace / "public-two", forbidden_tokens=forbidden_tokens,
             source_classification="public-release")
+        cut_verification = verify_cut(
+            workspace / "public-one", forbidden_tokens=forbidden_tokens)
+        suite = sanitize_suite_evidence(
+            cut_verification["suite"], root=workspace, home=Path.home())
+        docs = {
+            "status": ("passed" if source_docs["status"] == "passed"
+                       and cut_verification["docs"]["status"] == "passed" else "failed"),
+            "source": source_docs,
+            "public_cut": cut_verification["docs"],
+        }
+        offline = cut_verification["offline"]
         reproducible = first["root_sha256"] == second["root_sha256"]
         installed = loom_install.install(workspace / "public-one", workspace / "installed")
         checked = loom_install.check(workspace / "installed")
@@ -726,7 +831,7 @@ def verify_local(root, *, forbidden_tokens):
             workspace / "installed", confirmation=installed["install_id"])
         installer_cycle = checked["status"] == "installed" \
             and removed["status"] == "uninstalled" and removed["target_removed"]
-        privacy = {**first["firewall"],
+        privacy = {**cut_verification["firewall"],
                    "owner_token_policy": first["owner_token_policy"]}
     scenario = next((item for item in adaptation["scenarios"]
                      if item["id"] == "twenty-project-year"), None)
@@ -780,6 +885,10 @@ def main(argv=None):
     verify.add_argument("root")
     verify.add_argument("--forbid", action="append", default=[])
     verify.add_argument("--output")
+    verify_cut_parser = sub.add_parser("verify-cut")
+    verify_cut_parser.add_argument("root")
+    verify_cut_parser.add_argument("--forbid", action="append", default=[])
+    verify_cut_parser.add_argument("--output")
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
@@ -793,15 +902,19 @@ def main(argv=None):
             result = certification_report(
                 local_checks=local, external_evidence=external,
                 trust_policy=trust_policy)
-        else:
+        elif args.command == "verify":
             result = verify_local(args.root, forbidden_tokens=args.forbid)
+            if args.output:
+                loom_reliability.atomic_write_json(Path(args.output).resolve(), result)
+        else:
+            result = verify_cut(args.root, forbidden_tokens=args.forbid)
             if args.output:
                 loom_reliability.atomic_write_json(Path(args.output).resolve(), result)
     except (ReleaseError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
     print(json.dumps(result, indent=2, sort_keys=True))
-    return 0 if result["status"] in {"built", "certified", "passed"} else 1
+    return 0 if result["status"] in {"built", "certified", "passed", "verified"} else 1
 
 
 if __name__ == "__main__":

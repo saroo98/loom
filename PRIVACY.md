@@ -21,6 +21,8 @@ formats and extensionless decoded text may ship; unsupported opaque binary or co
 rejected instead of being declared clean. Symlinks, reparse points, non-regular entries, oversized
 files, changed-during-scan files, and a private build whose token policy would protect nothing also
 fail closed.
+Artifact verification rejects every undeclared post-build file, runs tests with Python bytecode
+disabled, and repeats the firewall after tests so validation cannot silently contaminate a clean cut.
 
 These guarantees cover shipped Loom source and Loom-managed state. They do not claim control over
 the host agent provider, editor, operating system, plugins, Git server, or commands a person runs

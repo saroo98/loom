@@ -26,6 +26,15 @@ jobs:
       - name: Audit network imports and literal subprocesses
         working-directory: tools
         run: python loom_privacy.py offline-audit .
-      - name: Run full suite
+      - name: Build and verify the exact public cut
         working-directory: tools
-        run: python -m unittest discover -p "test_*.py"
+        run: >-
+          python -B -c "import json, os; from pathlib import Path; import loom_release;
+          cut = Path(os.environ['RUNNER_TEMP']) / 'loom-public-cut';
+          build = loom_release.build_public(Path('..').resolve(), cut,
+          forbidden_tokens=['__ci_public_scan_sentinel_9f4c2d__'],
+          source_classification='public-release');
+          verified = loom_release.verify_cut(cut,
+          forbidden_tokens=['__ci_public_scan_sentinel_9f4c2d__']);
+          print(json.dumps({'build': build['root_sha256'],
+          'verified': verified['root_sha256'], 'status': verified['status']}, sort_keys=True))"
