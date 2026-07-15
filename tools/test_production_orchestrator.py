@@ -253,19 +253,29 @@ def _mark_small_wo_done(pack):
 
 
 class ProductionOrchestratorTests(unittest.TestCase):
-    def setUp(self):
-        self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
-        self.source = Path(__file__).resolve().parents[1]
-        self.public = self.root / "public"
-        self.installed = self.root / "installed"
+    @classmethod
+    def setUpClass(cls):
+        cls.fixture_temp = tempfile.TemporaryDirectory()
+        cls.fixture_root = Path(cls.fixture_temp.name)
+        cls.source = Path(__file__).resolve().parents[1]
+        cls.public = cls.fixture_root / "public"
+        cls.installed_fixture = cls.fixture_root / "installed"
         loom_release.build_public(
-            self.source, self.public,
+            cls.source, cls.public,
             forbidden_tokens=[
                 "-".join(("private", "fixture", "token")),
                 "-".join(("owner", "fixture", "token")),
             ])
-        loom_install.install(self.public, self.installed)
+        loom_install.install(cls.public, cls.installed_fixture)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.fixture_temp.cleanup()
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.installed = self.installed_fixture
         self.home = self.root / "home"
         self.repo = self.root / "target"
         (self.repo / "src").mkdir(parents=True)
@@ -323,10 +333,12 @@ class ProductionOrchestratorTests(unittest.TestCase):
             self.repo / "plans", self.repo, require_authorized=True))
         self.assertTrue(result["outcome_ids"])
         self.assertTrue(result["improvement_evidence_ids"])
-        self.assertEqual("installed", loom_install.check(self.installed)["status"])
-        receipt = loom_install.check(self.installed)
+        cycle_install = self.root / "cycle-install"
+        loom_install.install(self.public, cycle_install)
+        self.assertEqual("installed", loom_install.check(cycle_install)["status"])
+        receipt = loom_install.check(cycle_install)
         removed = loom_install.uninstall(
-            self.installed, confirmation=receipt["install_id"])
+            cycle_install, confirmation=receipt["install_id"])
         self.assertTrue(removed["target_removed"])
 
     def test_invoke_supplies_bounded_owner_context_before_host_work(self):
