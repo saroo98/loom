@@ -18,6 +18,8 @@ import stat
 import uuid
 from pathlib import Path
 
+from loom_reliability import _is_trusted_os_alias
+
 
 VAULT_SCHEMA_VERSION = 1
 PAYLOAD_SCHEMA_VERSION = 1
@@ -91,7 +93,7 @@ def _safe_path(path, label):
     except (TypeError, ValueError, OSError) as exc:
         raise VaultError(f"{label} is invalid: {exc}") from exc
     for component in [*reversed(absolute.parents), absolute]:
-        if _is_redirect(component):
+        if _is_redirect(component) and not _is_trusted_os_alias(component):
             raise VaultError(f"{label} must not traverse a symlink or junction: {component}")
     return absolute
 

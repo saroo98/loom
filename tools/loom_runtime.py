@@ -24,6 +24,7 @@ import loom_lint
 import loom_memory
 import loom_survey
 import loom_tier
+from loom_reliability import _is_trusted_os_alias
 
 
 SCHEMA_VERSION = 1
@@ -185,16 +186,17 @@ def _path_has_link_or_junction(path):
     absolute = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
     for component in [*reversed(absolute.parents), absolute]:
         try:
-            if component.is_symlink():
+            if component.is_symlink() and not _is_trusted_os_alias(component):
                 return True
             is_junction = getattr(component, "is_junction", None)
-            if is_junction and is_junction():
+            if is_junction and is_junction() and not _is_trusted_os_alias(component):
                 return True
             try:
                 attributes = component.lstat().st_file_attributes
             except (FileNotFoundError, AttributeError):
                 continue
-            if attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT:
+            if attributes & stat.FILE_ATTRIBUTE_REPARSE_POINT \
+                    and not _is_trusted_os_alias(component):
                 return True
         except OSError as exc:
             raise RuntimeBlocked(
