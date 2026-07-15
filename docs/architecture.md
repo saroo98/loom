@@ -13,6 +13,10 @@ new action, opens an authenticated session, records the baseline before authorin
 default production handler registry, and binds completion to one target survey. Its private,
 content-hashed action record enforces a 60-to-3600-second deadline, three-attempt retry ceiling,
 terminal cancellation, and safe cleanup only when its newly created draft pack is byte-unchanged.
+Planning actions also seal a deterministic plan contract: every artifact decision, required domain
+invariant/current fact/real medium, an explicitly defined `loom-lexical-v1` token and character
+ceiling, work-order topology, allowed host write scope, and the pre-authoring pack identity.
+Completion rejects omitted, extra, or changed rows and missing contract evidence before G1.
 `loom_gate`, `loom_lifecycle`, and `loom_lint` provide chronology, freshness, evidence, and pack
 integrity enforcement. A passing G1 must declare an independent reviewer and zero open High
 findings; an explicitly author-reviewed plan cannot be sealed or authorized. Any unknown at a

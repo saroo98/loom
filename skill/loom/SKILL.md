@@ -19,8 +19,12 @@ invisible to the owner:
    --cwd <absolute project root> --home <absolute user home>/.loom --install-root LOOM_ROOT`.
 3. If the JSON is a terminal receipt, return its compact owner message. If it says
    `action-required`, honor its exact tier, domains, deadline, and session identity. The
-   orchestrator has already recorded the planning baseline. Author only the consumer-selected
-   plan, use a genuinely independent reviewer for G1, and do not mutate implementation targets.
+   orchestrator has already recorded the planning baseline. For `plan`, use the returned
+   content-hashed `plan_contract` directly; do not reload the artifact matrix or guess a plan.
+   Match all 15 produce/skip rows exactly, verify every required domain invariant/current fact,
+   plan the named real media, stay within its lexical-token/character budget and work-order
+   topology, use a genuinely independent reviewer for G1, and do not mutate implementation
+   targets. Completion rejects any omitted, extra, or changed contract row.
    For `repair`, write the private schema-v2 verification plan defined by
    `schemas/repair-result.schema.json`, covering exactly
    `repair_plan.affected_plan_sections`. Supply one bounded real-medium command and timeout per

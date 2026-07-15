@@ -263,7 +263,8 @@ class AutomaticLifecycleTests(unittest.TestCase):
         for name in (
                 "acceptance-evidence.schema.json", "plan-dependencies.schema.json",
                 "regate-receipt.schema.json", "release-exposure.schema.json",
-                "repair-result.schema.json", "host-outcome.schema.json"):
+                "repair-result.schema.json", "host-outcome.schema.json",
+                "plan-contract.schema.json"):
             with self.subTest(name=name):
                 schema = json.loads((root / name).read_text(encoding="utf-8"))
                 self.assertEqual(schema["$schema"],

@@ -54,20 +54,20 @@ Original request (verbatim, do not paraphrase):
 | Artifact | Action | Consumer | Decision | Why (one line) | Status | last_verified |
 |---|---|---|---|---|---|---|
 | intake.md | produce | planner | scope and constraints | establishes the contract | gated | {TODAY} |
-| survey.md | skip | — | — | target file is explicit | — | — |
-| product.md | skip | — | — | no product-policy change | — | — |
-| architecture.md | skip | — | — | one existing component | — | — |
-| uiux.md | skip | — | — | no interface change | — | — |
-| contracts.md | skip | — | — | no external boundary | — | — |
+| survey.md | skip | — | — | the sealed machine survey supplies current world state | — | — |
+| product.md | skip | — | — | no independent product-policy consumer was selected | — | — |
+| architecture.md | skip | — | — | no multi-component architecture decision was observed | — | — |
+| uiux.md | skip | — | — | no interface-state consumer was selected | — | — |
+| contracts.md | skip | — | — | no durable external boundary was observed | — | — |
 | testing.md | produce | verifier | acceptance evidence | invariants need tests | gated | {TODAY} |
-| release-rollback.md | skip | — | — | plan only | — | — |
-| security.md | skip | — | — | no security boundary | — | — |
-| maintenance.md | skip | — | — | no operator change | — | — |
-| scaffold.md | skip | — | — | repository exists | — | — |
-| domain-discovery.md | skip | — | — | shipped accounting adapter selected | — | — |
+| release-rollback.md | skip | — | — | release exposure does not require a separate artifact | — | — |
+| security.md | skip | — | — | no independent security-boundary consumer was selected | — | — |
+| maintenance.md | skip | — | — | no separate operator decision was observed | — | — |
+| scaffold.md | skip | — | — | scaffolding belongs in atomic work orders, not a planning essay | — | — |
+| domain-discovery.md | skip | — | — | shipped domain adapters cover the selected invariants | — | — |
 | work orders | produce | implementer | execution and acceptance | executable frontier | ready | {TODAY} |
-| routing | skip | — | — | one implementer | — | — |
-| project instructions | skip | — | — | no new instructions | — | — |
+| routing | skip | — | — | one ordered implementer frontier is sufficient | — | — |
+| project instructions | skip | — | — | no new repository instruction consumer was observed | — | — |
 
 ## Work order frontier
 | WO | Status | Routing | Claimed by | Claimed at (UTC) | Heartbeat |
@@ -107,6 +107,23 @@ Change only `src/app.py`; verify A-001 before implementation and preserve D-001.
 ## Domain adaptation
 Accounting requires balanced postings, exact currency precision, audit history, reconciliation,
 period-close behavior, and dated jurisdiction rules.
+
+## Domain invariant contract
+| Domain | Invariant | Evidence target | Required real medium | Status |
+|---|---|---|---|---|
+| accounting | balanced postings | testing.md and WO-001 | double-entry property tests | verified |
+| accounting | currency precision | testing.md and WO-001 | dated jurisdiction edge cases | verified |
+| accounting | immutable audit trail | decisions.md and WO-001 | double-entry property tests | verified |
+| accounting | reconciliation | testing.md and WO-001 | dated jurisdiction edge cases | verified |
+| accounting | period close | testing.md and WO-001 | double-entry property tests | verified |
+| accounting | jurisdiction/effective-date rules | testing.md and WO-001 | dated jurisdiction edge cases | verified |
+
+## Current facts to verify
+| Domain | Fact | Source | Status |
+|---|---|---|---|
+| accounting | current platform/tool versions and limits | repository and runtime inventory | verified |
+| accounting | current governing policies, standards, or regulations | request excludes policy changes | verified |
+| accounting | current target environment and release channel | local non-release target | verified |
 """)
     _write(pack / "testing.md", f"""---
 artifact: testing-plan
@@ -116,6 +133,12 @@ last_verified: {TODAY}
 # Testing
 Use property tests for balanced postings and explicit rounding, reversal, and period-close cases.
 The work order names the real process evidence required for acceptance.
+
+## Verification media contract
+| Domain | Medium | Target | Status |
+|---|---|---|---|
+| accounting | double-entry property tests | prove a release-relevant domain invariant | planned |
+| accounting | dated jurisdiction edge cases | prove a release-relevant domain invariant | planned |
 """)
     _write(pack / "work-orders" / "WO-001-accounting.md", f"""---
 id: WO-001
@@ -314,6 +337,24 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("plan", action["intent"])
         self.assertEqual("M", action["tier"])
         self.assertEqual(["accounting"], action["domains"])
+        contract = action["plan_contract"]
+        self.assertEqual(1, contract["schema_version"])
+        self.assertEqual(15, len(contract["artifact_matrix"]))
+        self.assertEqual(
+            contract["contract_hash"],
+            loom_orchestrator._hash({
+                key: value for key, value in contract.items()
+                if key != "contract_hash"
+            }),
+        )
+        self.assertEqual(
+            {"balanced postings", "currency precision", "immutable audit trail",
+             "reconciliation", "period close", "jurisdiction/effective-date rules"},
+            {item["invariant"] for item in contract["required_domain_invariants"]},
+        )
+        sealed_action = json.loads(
+            Path(action["action_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(contract, sealed_action["plan_contract"])
         self.assertTrue((self.repo / "plans" / "lifecycle.json").is_file())
 
         _author_medium_pack(
@@ -464,6 +505,104 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 self.assertEqual(expected_tier, action["tier"])
                 self.assertIn(domain, action["domains"])
                 self.assertTrue((target / "plans" / "MANIFEST.md").is_file())
+
+    def test_plan_completion_rejects_artifact_rows_outside_the_sealed_contract(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        manifest = self.repo / "plans" / "MANIFEST.md"
+        text = manifest.read_text(encoding="utf-8")
+        text = text.replace(
+            "\n## Work order frontier",
+            "\n| extra.md | skip | — | — | outside sealed selection | — | — |\n"
+            "\n## Work order frontier",
+        )
+        manifest.write_text(text, encoding="utf-8")
+        usage = self.root / "contract-usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "PLAN_CONTRACT_MISMATCH"):
+            loom_orchestrator.complete(opened["action_path"], usage)
+
+    def test_plan_contract_requires_invariants_current_facts_and_real_media(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
+        loom_orchestrator._validate_authored_plan(action)
+        cases = (
+            (self.repo / "plans" / "intake.md", "| accounting | balanced postings |",
+             "required domain invariants"),
+            (self.repo / "plans" / "intake.md",
+             "| accounting | current platform/tool versions and limits |",
+             "required current facts"),
+            (self.repo / "plans" / "testing.md",
+             "| accounting | double-entry property tests |",
+             "required verification media"),
+        )
+        for path, marker, error in cases:
+            original = path.read_text(encoding="utf-8")
+            altered = "\n".join(
+                line for line in original.splitlines() if marker not in line) + "\n"
+            path.write_text(altered, encoding="utf-8")
+            try:
+                with self.assertRaisesRegex(
+                        loom_orchestrator.OrchestratorError, error):
+                    loom_orchestrator._validate_authored_plan(action)
+            finally:
+                path.write_text(original, encoding="utf-8")
+
+    def test_plan_contract_enforces_budget_and_work_order_topology(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
+        decisions = self.repo / "plans" / "decisions.md"
+        original = decisions.read_text(encoding="utf-8")
+        decisions.write_text(original + ("x" * 30000), encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "sealed planning budget"):
+            loom_orchestrator._validate_authored_plan(action)
+        decisions.write_text(original, encoding="utf-8")
+
+        template = self.repo / "plans" / "work-orders" / "WO-001-accounting.md"
+        for index in range(2, 10):
+            (template.parent / f"WO-{index:03d}-extra.md").write_text(
+                template.read_text(encoding="utf-8"), encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "sealed topology"):
+            loom_orchestrator._validate_authored_plan(action)
+
+    def test_rehashed_plan_contract_cannot_change_the_sealed_selection(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        action = json.loads(path.read_text(encoding="utf-8"))
+        contract = action["plan_contract"]
+        contract["artifact_matrix"][0]["action"] = "skip"
+        contract["contract_hash"] = loom_orchestrator._hash({
+            key: value for key, value in contract.items() if key != "contract_hash"
+        })
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "sealed plan contract"):
+            loom_orchestrator._read_action(path)
 
     def test_production_host_outcome_records_controlled_provider_replay_pair(self):
         instance_id = loom_memory.initialize(self.home, self.installed)

@@ -16,6 +16,7 @@ import uuid
 from pathlib import Path
 
 import loom_gate
+import loom_domain
 import loom_install
 import loom_improvement
 import loom_lifecycle
@@ -28,7 +29,7 @@ import loom_survey
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 2
+ACTION_SCHEMA_VERSION = 3
 ACTION_FIELDS = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -36,11 +37,18 @@ ACTION_FIELDS = {
     "created_at", "expires_at", "attempts", "max_attempts", "session_id",
     "operation_id", "journal_path", "initial_pack_hash",
     "remove_pristine_pack", "work_order", "prepared", "context", "result",
-    "repair_plan", "host_result",
+    "repair_plan", "host_result", "plan_contract",
     "action_hash",
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
+PLAN_CONTRACT_SCHEMA_VERSION = 1
+ARTIFACT_ORDER = (
+    "intake.md", "survey.md", "product.md", "architecture.md", "uiux.md",
+    "contracts.md", "testing.md", "release-rollback.md", "security.md",
+    "maintenance.md", "scaffold.md", "domain-discovery.md", "work orders",
+    "routing", "project instructions",
+)
 
 
 class OrchestratorError(RuntimeError):
@@ -156,6 +164,20 @@ def _validate_action(value, path):
             or prepared.request_hash != loom_runtime._sha(
                 " ".join(value["request"].split())):
         raise OrchestratorError("ACTION_CORRUPT", "sealed preparation does not match action")
+    contract_expected = value["intent"] == "plan" \
+        and not prepared.route_contract["blocked"] \
+        and value["initial_pack_hash"] is not None
+    if contract_expected:
+        schema_report = loom_lint.Report()
+        loom_lint.validate_schema(
+            schema_report, path, value["plan_contract"], "plan-contract.schema.json")
+        if schema_report.errors \
+                or value["plan_contract"] != _make_plan_contract(value, prepared):
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "sealed plan contract is invalid or does not match action")
+    elif value["plan_contract"] is not None:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "non-planning action carries a plan contract")
     repair_plan = value["repair_plan"]
     if value["intent"] == "repair":
         repair_fields = {
@@ -267,6 +289,283 @@ Original request (verbatim, do not paraphrase):
 """
     pack.mkdir(parents=True, exist_ok=True)
     loom_gate._atomic_write_text(pack / "MANIFEST.md", text)
+
+
+def _artifact_contract(tier, domains, request, requires_discovery):
+    domains = set(domains)
+    whole = bool(re.search(
+        r"(?i)\b(?:build|create|develop|design|implement|produce|write)\b", request))
+    ui_domains = {
+        "android", "desktop", "ios-macos", "mobile", "realtime-3d",
+        "web-app", "website",
+    }
+    product_domains = ui_domains | {"accounting", "browser-extension", "cli", "llm-agent"}
+    boundary_domains = {
+        "accounting", "android", "cli", "data-etl", "desktop",
+        "firmware-hardware", "ios-macos", "library-sdk", "ml", "mobile",
+        "realtime-3d", "web-app",
+    }
+    sensitive_domains = {
+        "accounting", "android", "automation", "browser-extension",
+        "firmware-hardware", "high-risk", "ios-macos", "llm-agent", "mobile",
+        "web-app",
+    }
+    produced = {"work orders"}
+    if tier != "S":
+        produced.update({"intake.md", "testing.md"})
+    if requires_discovery:
+        produced.add("domain-discovery.md")
+    if tier in {"L", "XL"} or (tier == "M" and whole):
+        if "research" not in domains:
+            produced.add("architecture.md")
+        if domains & product_domains:
+            produced.add("product.md")
+        if domains & boundary_domains:
+            produced.add("contracts.md")
+    if tier in {"L", "XL"}:
+        produced.update({"release-rollback.md", "routing"})
+        if "research" not in domains:
+            produced.add("maintenance.md")
+    if domains & ui_domains and tier != "S":
+        produced.add("uiux.md")
+    if domains & sensitive_domains and tier in {"L", "XL"}:
+        produced.add("security.md")
+
+    produced_cells = {
+        "intake.md": ("planner", "scope and constraints", "establishes the contract"),
+        "product.md": ("product owner", "outcomes and release scope",
+                       "whole product decisions need an explicit consumer contract"),
+        "architecture.md": ("implementer", "components and boundaries",
+                            "whole-deliverable topology cannot remain implicit"),
+        "uiux.md": ("interface implementer", "states, interaction, and accessibility",
+                    "the selected domain has user-interface invariants"),
+        "contracts.md": ("implementer", "boundary and compatibility contracts",
+                         "the selected domain crosses durable interfaces"),
+        "testing.md": ("verifier", "acceptance evidence", "invariants need tests"),
+        "release-rollback.md": ("release owner", "release and rollback controls",
+                                "release-pack depth requires an executable recovery route"),
+        "security.md": ("security reviewer", "authority and abuse boundaries",
+                        "the selected domain carries security-sensitive consequences"),
+        "maintenance.md": ("operator", "ownership, observability, and upkeep",
+                           "multi-subsystem work needs an operating contract"),
+        "domain-discovery.md": ("G1 reviewer", "verified domain invariants",
+                                "no shipped adapter covers this domain"),
+        "work orders": ("implementer", "execution and acceptance", "executable frontier"),
+        "routing": ("coordinator", "ordered ownership and integration",
+                    "release-pack work has multiple atomic outcomes"),
+    }
+    skip_cells = {
+        "intake.md": "Tier S carries scope in its compact work order",
+        "survey.md": "the sealed machine survey supplies current world state",
+        "product.md": "no independent product-policy consumer was selected",
+        "architecture.md": "no multi-component architecture decision was observed",
+        "uiux.md": "no interface-state consumer was selected",
+        "contracts.md": "no durable external boundary was observed",
+        "testing.md": "Tier S carries acceptance in its compact work order",
+        "release-rollback.md": "release exposure does not require a separate artifact",
+        "security.md": "no independent security-boundary consumer was selected",
+        "maintenance.md": "no separate operator decision was observed",
+        "scaffold.md": "scaffolding belongs in atomic work orders, not a planning essay",
+        "domain-discovery.md": "shipped domain adapters cover the selected invariants",
+        "work orders": "unreachable: every plan requires an executable frontier",
+        "routing": "one ordered implementer frontier is sufficient",
+        "project instructions": "no new repository instruction consumer was observed",
+    }
+    rows = []
+    for artifact in ARTIFACT_ORDER:
+        if artifact in produced:
+            consumer, decision, reason = produced_cells[artifact]
+            rows.append({"artifact": artifact, "action": "produce",
+                         "consumer": consumer, "decision": decision, "reason": reason})
+        else:
+            rows.append({"artifact": artifact, "action": "skip", "consumer": "—",
+                         "decision": "—", "reason": skip_cells[artifact]})
+    return rows
+
+
+def _make_plan_contract(action, prepared):
+    tier = action["tier"]
+    domains = list(action["domains"])
+    required_invariants = []
+    current_facts = []
+    verification_media = []
+    for domain_id in domains:
+        adapter = loom_domain.CATALOG.get(domain_id)
+        if adapter is None:
+            continue
+        guidance = loom_domain.GUIDANCE.get(domain_id, (
+            ["domain-specific contract failure"],
+            ["supported-environment acceptance"],
+            ["domain-real-medium execution"],
+        ))
+        media = list(guidance[2])
+        for index, invariant in enumerate(adapter["invariants"]):
+            required_invariants.append({
+                "domain": domain_id,
+                "invariant": invariant,
+                "evidence_target": "intake.md#domain-invariant-contract",
+                "required_real_medium": media[index % len(media)],
+            })
+        for fact in (
+                "current platform/tool versions and limits",
+                "current governing policies, standards, or regulations",
+                "current target environment and release channel"):
+            current_facts.append({
+                "domain": domain_id, "fact": fact,
+                "evidence_target": "intake.md#current-facts-to-verify",
+            })
+        for medium in media:
+            verification_media.append({
+                "domain": domain_id, "medium": medium,
+                "decision": "prove a release-relevant domain invariant",
+            })
+    ceilings = {
+        "S": (6000, 1800), "M": (30000, 9000),
+        "L": (75000, 22000), "XL": (150000, 45000),
+    }
+    topology = {
+        "S": (1, 1), "M": (1, 8), "L": (2, 24), "XL": (3, 64),
+    }
+    body = {
+        "schema_version": PLAN_CONTRACT_SCHEMA_VERSION,
+        "request_hash": prepared.request_hash,
+        "survey_hash": action["survey_hash"],
+        "tier": tier,
+        "domains": domains,
+        "pack_baseline_hash": action["initial_pack_hash"],
+        "pack_root": "plans",
+        "allowed_host_write_paths": ["plans/**"],
+        "artifact_matrix": _artifact_contract(
+            tier, domains, action["request"],
+            prepared.route_contract["requires_domain_discovery"]),
+        "required_domain_invariants": required_invariants,
+        "current_facts_to_verify": current_facts,
+        "verification_media": verification_media,
+        "budget": {
+            "character_ceiling": ceilings[tier][0],
+            "token_ceiling": ceilings[tier][1],
+            "token_metric": "loom-lexical-v1",
+        },
+        "work_order_topology": {
+            "minimum": topology[tier][0], "maximum": topology[tier][1],
+            "dag_required": True, "atomic_outcomes_required": True,
+            "acceptance_evidence_required": True,
+        },
+        "completion_gates": [
+            "exact-artifact-matrix", "domain-invariant-contract",
+            "current-fact-contract", "verification-media-contract",
+            "budget", "work-order-topology", "lint", "g1", "lifecycle",
+        ],
+    }
+    return {**body, "contract_hash": _hash(body)}
+
+
+def _validate_authored_plan(action):
+    contract = action["plan_contract"]
+    root = Path(action["explicit_target"] or action["cwd"])
+    pack = root / contract["pack_root"]
+    if not pack.is_dir() or pack.is_symlink():
+        raise OrchestratorError("PLAN_CONTRACT_MISMATCH", "planning pack is missing or unsafe")
+    text_files = []
+    for path in sorted(pack.rglob("*"), key=lambda item: item.as_posix()):
+        if path.is_symlink() or (not path.is_file() and not path.is_dir()):
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", "planning pack contains an unsafe entry")
+        if path.is_file():
+            try:
+                text_files.append(path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError) as exc:
+                raise OrchestratorError(
+                    "PLAN_CONTRACT_MISMATCH", f"planning artifact is not UTF-8 text: {exc}") \
+                    from exc
+    combined = "\n".join(text_files)
+    lexical_tokens = len(re.findall(r"\w+|[^\s\w]", combined, re.UNICODE))
+    if len(combined) > contract["budget"]["character_ceiling"] \
+            or lexical_tokens > contract["budget"]["token_ceiling"]:
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH", "authored plan exceeds its sealed planning budget")
+
+    work_orders = ([pack / "WO-001.md"] if action["tier"] == "S" else
+                   sorted((pack / "work-orders").glob("WO-*.md")))
+    minimum = contract["work_order_topology"]["minimum"]
+    maximum = contract["work_order_topology"]["maximum"]
+    if not minimum <= len([item for item in work_orders if item.is_file()]) <= maximum:
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH", "work-order count is outside the sealed topology")
+    if action["tier"] == "S":
+        return
+
+    manifest = pack / "MANIFEST.md"
+    try:
+        manifest_text = manifest.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH", f"manifest cannot be read: {exc}") from exc
+    actual_rows = loom_lint.parse_markdown_table(manifest_text, "Artifacts")
+    actual = {}
+    for row in actual_rows:
+        key = loom_lint.artifact_matrix_key(row.get("artifact", ""))
+        if key in actual:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", f"duplicate artifact row: {key}")
+        actual[key] = {
+            "artifact": key,
+            "action": row.get("action", "").strip().lower(),
+            "consumer": row.get("consumer", "").strip(),
+            "decision": row.get("decision", "").strip(),
+            "reason": row.get("why (one line)", "").strip(),
+        }
+    expected = {item["artifact"]: item for item in contract["artifact_matrix"]}
+    if actual != expected:
+        missing = sorted(set(expected) - set(actual))
+        extra = sorted(set(actual) - set(expected))
+        detail = f"missing={missing}; extra={extra}"
+        if not missing and not extra:
+            detail = "one or more artifact decisions differ from the sealed contract"
+        raise OrchestratorError("PLAN_CONTRACT_MISMATCH", detail)
+
+    def table(path, heading):
+        try:
+            return loom_lint.parse_markdown_table(
+                path.read_text(encoding="utf-8"), heading)
+        except (OSError, UnicodeError) as exc:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", f"{path.name} cannot be read: {exc}") from exc
+
+    if contract["required_domain_invariants"]:
+        rows = table(pack / "intake.md", "Domain invariant contract")
+        observed = {(row.get("domain", "").strip(), row.get("invariant", "").strip())
+                    for row in rows
+                    if row.get("evidence target", "").strip()
+                    and row.get("required real medium", "").strip()
+                    and row.get("status", "").strip().lower() == "verified"}
+        required = {(item["domain"], item["invariant"])
+                    for item in contract["required_domain_invariants"]}
+        if not required.issubset(observed):
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", "required domain invariants are not verified")
+
+    if contract["current_facts_to_verify"]:
+        rows = table(pack / "intake.md", "Current facts to verify")
+        observed = {(row.get("domain", "").strip(), row.get("fact", "").strip())
+                    for row in rows if row.get("source", "").strip()
+                    and row.get("status", "").strip().lower() == "verified"}
+        required = {(item["domain"], item["fact"])
+                    for item in contract["current_facts_to_verify"]}
+        if not required.issubset(observed):
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", "required current facts are not verified")
+
+    if contract["verification_media"]:
+        rows = table(pack / "testing.md", "Verification media contract")
+        observed = {(row.get("domain", "").strip(), row.get("medium", "").strip())
+                    for row in rows if row.get("target", "").strip()
+                    and row.get("status", "").strip().lower() == "planned"}
+        required = {(item["domain"], item["medium"])
+                    for item in contract["verification_media"]}
+        if not required.issubset(observed):
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", "required verification media are not planned")
 
 
 def _pack_hash(pack):
@@ -948,7 +1247,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "initial_pack_hash": None, "remove_pristine_pack": False,
         "work_order": None, "prepared": prepared.to_dict(),
         "context": context_capsule,
-        "repair_plan": None, "host_result": None,
+        "repair_plan": None, "host_result": None, "plan_contract": None,
         "result": None,
     }
     if prepared.route_contract["blocked"]:
@@ -990,6 +1289,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                     raise OrchestratorError("BASELINE_FAILED", output)
         action["initial_pack_hash"] = _pack_hash(pack)
         action["remove_pristine_pack"] = pack_was_absent
+        action["plan_contract"] = _make_plan_contract(action, prepared)
     elif prepared.intent == "execute":
         work_order_id, work_order_path = _active_work_order(
             target / "plans", action["tier"])
@@ -1047,6 +1347,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "domains": action["domains"], "expires_at": expires_at,
         "work_order": work_order_id if prepared.intent == "execute" else None,
         "repair_plan": action["repair_plan"],
+        "plan_contract": action["plan_contract"],
         "context": {
             "memory": context_capsule["memory"],
             "preferences": context_capsule["preferences"],
@@ -1054,8 +1355,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "attempts_remaining": action["max_attempts"] - action["attempts"],
         "session_environment": opened.environment(),
         "required_outcome": (
-            "Author only the selected tier/domain plan or perform the routed intent; "
-            "do not mutate undeclared target paths. Then call complete with all five "
+            "For plan, author the exact returned plan_contract; otherwise perform only the "
+            "routed intent. Do not mutate undeclared target paths. Then call complete with all five "
             "measured token categories. The orchestrator owns validation, gates, learning, "
             "and the final receipt."),
     }
@@ -1153,6 +1454,8 @@ def complete(action_path, usage_path, *, result_path=None, now=None):
             raise OrchestratorError(
                 "TARGET_DRIFT",
                 "target, project, or routed intent changed during delegated work")
+    if action["intent"] == "plan":
+        _validate_authored_plan(action)
     controller = _controller(action, usage=usage)
     try:
         receipt = controller.run(

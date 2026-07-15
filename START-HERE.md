@@ -18,9 +18,10 @@ runtime below. Never read every Loom file into context.
    lifecycle, and owner state, and produces a sealed route contract. Unknown or invalid state
    blocks.
 2. Accept the inferred tier unless consequence or uncertainty requires promotion. Tier S uses one
-   work order. Larger work uses only artifact rows selected by the consumer-driven matrix in
-   `loom/intake/artifact-matrix.md`.
-3. Use `tools/loom_domain.py` to select every applicable domain adapter. Unknown coverage requires
+   work order. For planning, author from the returned content-hashed `plan_contract`; it already
+   contains every consumer-driven produce/skip decision, domain invariant, current fact, real
+   verification medium, budget, work-order topology, and pack baseline. Do not reload the matrix.
+3. The runtime has already selected every applicable domain adapter. Unknown coverage requires
    invariant discovery and evidence before authorization. Never substitute web rules for an
    unfamiliar domain.
 4. For planned implementation, record the target baseline with `tools/loom_gate.py` before plan
@@ -28,7 +29,8 @@ runtime below. Never read every Loom file into context.
    ledgers, work-order invariants, and status parity.
 5. Finish through `tools/loom_orchestrator.py complete`. Its registered production handlers drive
    plan, resume, execute, review, repair, close, and remember; the session controller owns status,
-   why, undo, and forget. The bridge validates the unchanged target, gates the authored pack,
+   why, undo, and forget. The bridge validates the unchanged target, enforces the exact sealed plan
+   contract, gates the authored pack,
    enforces deadline/retry/cancellation state, captures real-medium evidence, seals the receipt,
    records outcomes, and runs bounded compaction. Do not estimate missing usage or claim a subset
    as total.

@@ -1,0 +1,106 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/plan-contract.schema.json",
+  "title": "Content-bound host planning contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "request_hash", "survey_hash", "tier", "domains",
+    "pack_baseline_hash", "pack_root", "allowed_host_write_paths",
+    "artifact_matrix", "required_domain_invariants", "current_facts_to_verify",
+    "verification_media", "budget", "work_order_topology", "completion_gates",
+    "contract_hash"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "request_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "survey_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "tier": {"enum": ["S", "M", "L", "XL"]},
+    "domains": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}
+    },
+    "pack_baseline_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "pack_root": {"const": "plans"},
+    "allowed_host_write_paths": {
+      "type": "array", "const": ["plans/**"]
+    },
+    "artifact_matrix": {
+      "type": "array", "minItems": 15, "maxItems": 15,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["artifact", "action", "consumer", "decision", "reason"],
+        "properties": {
+          "artifact": {"type": "string", "minLength": 1, "maxLength": 64},
+          "action": {"enum": ["produce", "skip"]},
+          "consumer": {"type": "string", "minLength": 1, "maxLength": 128},
+          "decision": {"type": "string", "minLength": 1, "maxLength": 160},
+          "reason": {"type": "string", "minLength": 1, "maxLength": 240}
+        }
+      }
+    },
+    "required_domain_invariants": {
+      "type": "array", "maxItems": 128,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["domain", "invariant", "evidence_target", "required_real_medium"],
+        "properties": {
+          "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+          "invariant": {"type": "string", "minLength": 1, "maxLength": 240},
+          "evidence_target": {"type": "string", "minLength": 1, "maxLength": 240},
+          "required_real_medium": {"type": "string", "minLength": 1, "maxLength": 240}
+        }
+      }
+    },
+    "current_facts_to_verify": {
+      "type": "array", "maxItems": 64,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["domain", "fact", "evidence_target"],
+        "properties": {
+          "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+          "fact": {"type": "string", "minLength": 1, "maxLength": 240},
+          "evidence_target": {"type": "string", "minLength": 1, "maxLength": 240}
+        }
+      }
+    },
+    "verification_media": {
+      "type": "array", "maxItems": 64,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["domain", "medium", "decision"],
+        "properties": {
+          "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+          "medium": {"type": "string", "minLength": 1, "maxLength": 240},
+          "decision": {"type": "string", "minLength": 1, "maxLength": 240}
+        }
+      }
+    },
+    "budget": {
+      "type": "object", "additionalProperties": false,
+      "required": ["character_ceiling", "token_ceiling", "token_metric"],
+      "properties": {
+        "character_ceiling": {"type": "integer", "minimum": 1},
+        "token_ceiling": {"type": "integer", "minimum": 1},
+        "token_metric": {"const": "loom-lexical-v1"}
+      }
+    },
+    "work_order_topology": {
+      "type": "object", "additionalProperties": false,
+      "required": ["minimum", "maximum", "dag_required",
+        "atomic_outcomes_required", "acceptance_evidence_required"],
+      "properties": {
+        "minimum": {"type": "integer", "minimum": 1},
+        "maximum": {"type": "integer", "minimum": 1, "maximum": 64},
+        "dag_required": {"const": true},
+        "atomic_outcomes_required": {"const": true},
+        "acceptance_evidence_required": {"const": true}
+      }
+    },
+    "completion_gates": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"}
+    },
+    "contract_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
