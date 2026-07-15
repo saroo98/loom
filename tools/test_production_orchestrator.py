@@ -472,6 +472,83 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual([], loom_gate.verify_small(
             self.repo / "plans" / ".loom-small-lifecycle.json"))
 
+    def test_tier_s_elapsed_staleness_rebaselines_and_reauthorizes_compact_plan(self):
+        request = "Plan a single-file CLI flag in src/app.py"
+        started = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        opened = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed, now=started)
+        _author_small_wo(self.repo / "plans")
+        usage = self.root / "small-stale-usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 300, "cache_read_tokens": 50,
+            "output_tokens": 150, "tool_tokens": 50, "retry_tokens": 0,
+        }), encoding="utf-8")
+        planned = loom_orchestrator.complete(
+            opened["action_path"], usage, now=started)
+        self.assertEqual("plan-complete", planned["code"])
+
+        future = started + dt.timedelta(days=16)
+        repair = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed, now=future)
+        self.assertEqual("action-required", repair["status"])
+        self.assertEqual("repair", repair["intent"])
+        self.assertEqual("S", repair["tier"])
+        self.assertEqual("compact", repair["repair_plan"]["regate_scope"])
+        self.assertEqual(
+            ["compact-plan"], repair["repair_plan"]["affected_plan_sections"])
+
+        record = self.repo / "plans" / ".loom-small-lifecycle.json"
+        lifecycle = json.loads(record.read_text(encoding="utf-8"))
+        self.assertEqual(["small-planning-started"], [
+            event["event"] for event in lifecycle["events"]])
+        history = self.repo / "plans" / lifecycle["events"][0]["rebaseline_record"]
+        self.assertTrue(history.is_file())
+        self.assertEqual(
+            lifecycle["events"][0]["rebaseline_record_sha256"],
+            hashlib.sha256(history.read_bytes()).hexdigest())
+
+        evidence = self.repo / "plans" / "evidence" / "small-replan-review.txt"
+        _write(evidence, "Revalidated the compact CLI plan against the current target.\n")
+        result = self.root / "small-repair-result.json"
+        result.write_text(json.dumps({
+            "schema_version": 1,
+            "repair_verification": [{
+                "section": "compact-plan", "passed": True,
+                "medium": "review-log",
+                "evidence_path": "evidence/small-replan-review.txt",
+                "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            }],
+        }), encoding="utf-8")
+        source = self.repo / "src" / "app.py"
+        original_source = source.read_bytes()
+        source.write_text("VALUE = 99\n", encoding="utf-8")
+        with self.assertRaisesRegex(loom_orchestrator.OrchestratorError, "TARGET_DRIFT"):
+            loom_orchestrator.complete(
+                repair["action_path"], usage, result_path=result, now=future)
+        source.write_bytes(original_source)
+        original_lifecycle = record.read_bytes()
+        record.write_text(
+            record.read_text(encoding="utf-8").replace(
+                '"freshness_window_days": 14', '"freshness_window_days": 15'),
+            encoding="utf-8")
+        with self.assertRaisesRegex(loom_orchestrator.OrchestratorError, "TARGET_DRIFT"):
+            loom_orchestrator.complete(
+                repair["action_path"], usage, result_path=result, now=future)
+        record.write_bytes(original_lifecycle)
+        repaired = loom_orchestrator.complete(
+            repair["action_path"], usage, result_path=result, now=future)
+        self.assertEqual("repair-complete", repaired["code"])
+        self.assertEqual([], loom_gate.verify_small(record))
+
+        continued = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed, now=future)
+        self.assertEqual("execute", continued["intent"])
+        self.assertEqual("S", continued["tier"])
+        self.assertEqual("WO-001", continued["work_order"])
+
     def test_continue_executes_one_declared_work_order_and_seals_completion(self):
         opened = json.loads(self.cli(
             "invoke", "--request", self.request, "--cwd", self.repo,

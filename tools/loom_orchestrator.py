@@ -23,6 +23,7 @@ import loom_memory
 import loom_performance
 import loom_runtime
 import loom_session
+import loom_survey
 
 
 SCHEMA_VERSION = 1
@@ -156,10 +157,14 @@ def _validate_action(value, path):
         raise OrchestratorError("ACTION_CORRUPT", "sealed preparation does not match action")
     repair_plan = value["repair_plan"]
     if value["intent"] == "repair":
-        if not isinstance(repair_plan, dict) or set(repair_plan) != {
-                "changed_paths", "affected_plan_sections", "regate_scope",
-                "prior_state_hash", "current_state_hash", "force_full"} \
-                or repair_plan["regate_scope"] not in {"selective", "full"} \
+        repair_fields = {
+            "changed_paths", "affected_plan_sections", "regate_scope",
+            "prior_state_hash", "current_state_hash", "force_full"}
+        if value["tier"] == "S":
+            repair_fields.add("lifecycle_sha256")
+        if not isinstance(repair_plan, dict) or set(repair_plan) != repair_fields \
+                or repair_plan["regate_scope"] not in {"selective", "full", "compact"} \
+                or (repair_plan["regate_scope"] == "compact") != (value["tier"] == "S") \
                 or type(repair_plan["force_full"]) is not bool \
                 or not all(re.fullmatch(r"[0-9a-f]{64}", str(repair_plan[name]))
                            for name in ("prior_state_hash", "current_state_hash")) \
@@ -167,6 +172,9 @@ def _validate_action(value, path):
                 or not isinstance(repair_plan["affected_plan_sections"], list) \
                 or not repair_plan["affected_plan_sections"]:
             raise OrchestratorError("ACTION_CORRUPT", "sealed repair plan is invalid")
+        if value["tier"] == "S" and not re.fullmatch(
+                r"[0-9a-f]{64}", str(repair_plan["lifecycle_sha256"])):
+            raise OrchestratorError("ACTION_CORRUPT", "compact lifecycle binding is invalid")
     elif repair_plan is not None:
         raise OrchestratorError("ACTION_CORRUPT", "non-repair action carries repair scope")
     if value["host_result"] is not None and not isinstance(value["host_result"], dict):
@@ -213,10 +221,10 @@ def _write_action(path, value):
     return value
 
 
-def _capture(function, *args):
+def _capture(function, *args, **kwargs):
     stdout, stderr = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
-        code = function(*args)
+        code = function(*args, **kwargs)
     return code, (stdout.getvalue() + stderr.getvalue()).strip()
 
 
@@ -478,7 +486,8 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
             if not findings and [event.get("event") for event in data.get("events", [])] \
                     == ["small-planning-started"]:
                 code, output = _capture(
-                    loom_gate.small_authorize, record, root, work_order)
+                    loom_gate.small_authorize, record, root, work_order,
+                    context.prepared.prepared_at)
                 logs.append(output)
                 if code:
                     findings = ["Tier-S authorization failed: " + output]
@@ -530,7 +539,8 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
             if tier == "S":
                 code, output = _capture(
                     loom_gate.small_close,
-                    pack / ".loom-small-lifecycle.json", root, work_order_path)
+                    pack / ".loom-small-lifecycle.json", root, work_order_path,
+                    context.prepared.prepared_at)
             else:
                 code, output = _capture(
                     loom_gate.close_wo, pack, root, work_order_path)
@@ -562,11 +572,39 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
 
     if intent == "repair":
         if tier == "S":
+            record, compact_wo = (
+                pack / ".loom-small-lifecycle.json", pack / "WO-001.md")
+            if repair_plan is None or host_result is None:
+                raise OrchestratorError(
+                    "REPAIR_EVIDENCE_REQUIRED", "sealed compact-plan evidence is missing")
+            code, output = _capture(
+                loom_gate.small_authorize, record, root, compact_wo,
+                context.prepared.prepared_at)
+            findings = (["Tier-S reauthorization failed: " + output] if code else [])
+            if not findings:
+                findings = loom_gate.verify_small(record)
+            if findings:
+                failure_evidence = "gate-" + _hash(findings)[:24]
+                return {
+                    "status": "blocked", "code": "small-repair-not-ready",
+                    "success": False, "metrics": {},
+                    "evidence_ids": [failure_evidence],
+                    "reversible_action_ids": [], "usage": usage,
+                    "user_message": "Compact-plan repair blocked: "
+                    + "; ".join(findings[:8]),
+                }
+            evidence = "repair-" + _hash({
+                "pack": _pack_hash(pack),
+                "verification": host_result["repair_verification"],
+            })[:24]
             return {
-                "status": "blocked", "code": "small-replan-required", "success": False,
-                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "status": "completed", "code": "repair-complete", "success": True,
+                "metrics": {"drift-caught-before-execution": 1},
+                "evidence_ids": [evidence], "reversible_action_ids": [],
                 "usage": usage,
-                "user_message": "Expired Tier-S work must be re-baselined as a new compact plan.",
+                "user_message": (
+                    "Compact plan revalidated and reauthorized against the current target "
+                    f"({evidence})."),
             }
         if repair_plan is None or host_result is None:
             raise OrchestratorError(
@@ -778,7 +816,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             if not record.exists() and not work_order.exists():
                 code, output = _capture(
                     loom_gate.small_start, record, target, work_order,
-                    list(prepared.domains))
+                    list(prepared.domains), prepared.prepared_at)
                 if code:
                     raise OrchestratorError("BASELINE_FAILED", output)
         else:
@@ -811,16 +849,37 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         action["work_order"] = work_order_path
     elif prepared.intent == "repair":
         if action["tier"] == "S":
-            raise OrchestratorError(
-                "SMALL_REPLAN_REQUIRED",
-                "expired or drifted Tier-S work must be re-baselined before execution")
-        force_full = _repair_force_full(target / "plans", loom_runtime._parse_time(created_at))
-        preview = loom_lifecycle.preview_regate(
-            target / "plans", target, force_full=force_full)
-        if preview["regate_scope"] == "none":
-            raise OrchestratorError(
-                "REPAIR_SCOPE_INDETERMINATE", "repair route has no verifiable affected scope")
-        action["repair_plan"] = {**preview, "force_full": force_full}
+            record = target / "plans" / ".loom-small-lifecycle.json"
+            work_order = target / "plans" / "WO-001.md"
+            before = json.loads(record.read_text(encoding="utf-8"))
+            reason = ("freshness-expired"
+                      if "elapsed-time-drift" in prepared.route_contract["evidence"]
+                      else "target-drifted")
+            code, output = _capture(
+                loom_gate.small_rebaseline, record, target, work_order,
+                reason=reason, event_at=prepared.prepared_at)
+            if code:
+                raise OrchestratorError("SMALL_REBASELINE_FAILED", output)
+            after = json.loads(record.read_text(encoding="utf-8"))
+            action["repair_plan"] = {
+                "force_full": True,
+                "changed_paths": [],
+                "affected_plan_sections": ["compact-plan"],
+                "regate_scope": "compact",
+                "prior_state_hash": before["events"][-1]["repo_state_hash"],
+                "current_state_hash": after["events"][0]["repo_state_hash"],
+                "lifecycle_sha256": hashlib.sha256(record.read_bytes()).hexdigest(),
+            }
+        else:
+            force_full = _repair_force_full(
+                target / "plans", loom_runtime._parse_time(created_at))
+            preview = loom_lifecycle.preview_regate(
+                target / "plans", target, force_full=force_full)
+            if preview["regate_scope"] == "none":
+                raise OrchestratorError(
+                    "REPAIR_SCOPE_INDETERMINATE",
+                    "repair route has no verifiable affected scope")
+            action["repair_plan"] = {**preview, "force_full": force_full}
     action = _write_action(path, action)
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
@@ -889,7 +948,33 @@ def complete(action_path, usage_path, *, result_path=None, now=None):
     elif result_path is not None:
         action["host_result"] = _read_host_outcome(result_path, action)
     sealed = loom_runtime.PreparedInvocation.from_dict(action["prepared"])
-    if action["intent"] == "execute":
+    if action["intent"] == "repair" and action["tier"] == "S":
+        project = loom_runtime.resolve_project(
+            action["instance_id"], explicit_target=action["explicit_target"],
+            cwd=action["cwd"])
+        root = Path(action["explicit_target"] or action["cwd"])
+        pack = root / "plans"
+        record = pack / ".loom-small-lifecycle.json"
+        try:
+            state = loom_gate._stable_state(root, pack)
+            lifecycle_hash = hashlib.sha256(record.read_bytes()).hexdigest()
+            lifecycle_findings = loom_gate.verify_small(record)
+            lifecycle = json.loads(record.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError,
+                loom_survey.SurveyError) as exc:
+            raise OrchestratorError(
+                "TARGET_DRIFT", f"compact rebaseline cannot be verified: {exc}") from exc
+        if project.project_id != action["project_id"] \
+                or project.canonical_target_identity != sealed.canonical_target_identity \
+                or state.state_hash != action["repair_plan"]["current_state_hash"] \
+                or lifecycle_hash != action["repair_plan"]["lifecycle_sha256"] \
+                or lifecycle_findings \
+                or [event.get("event") for event in lifecycle.get("events", [])] != \
+                ["small-planning-started"]:
+            raise OrchestratorError(
+                "TARGET_DRIFT",
+                "target or compact rebaseline changed during delegated review")
+    elif action["intent"] == "execute":
         project = loom_runtime.resolve_project(
             action["instance_id"], explicit_target=action["explicit_target"],
             cwd=action["cwd"])

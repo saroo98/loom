@@ -23,6 +23,7 @@ from pathlib import Path, PurePosixPath
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_survey  # noqa: E402
 import loom_lifecycle  # noqa: E402
+import loom_reliability  # noqa: E402
 
 SCHEMA_VERSION = 2
 LIFECYCLE_FILE = "lifecycle.json"
@@ -123,6 +124,20 @@ def _locked(small=False):
 
 def _utc_now():
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat() \
+        .replace("+00:00", "Z")
+
+
+def _utc_stamp(value=None):
+    if value is None:
+        return _utc_now()
+    try:
+        parsed = (value if isinstance(value, dt.datetime) else
+                  dt.datetime.fromisoformat(str(value).replace("Z", "+00:00")))
+    except ValueError as exc:
+        raise ValueError("lifecycle event time must be ISO-8601") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("lifecycle event time must be timezone-aware")
+    return parsed.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat() \
         .replace("+00:00", "Z")
 
 
@@ -440,10 +455,10 @@ def _event_hash(event):
     return hashlib.sha256(encoded).hexdigest()
 
 
-def make_event(name, state, previous_hash=None, **extra):
+def make_event(name, state, previous_hash=None, event_at=None, **extra):
     event = {
         "event": name,
-        "at": _utc_now(),
+        "at": _utc_stamp(event_at),
         "repo_state_mode": state.mode,
         "repo_state_hash": state.state_hash,
         "repo_head": state.head or None,
@@ -1246,6 +1261,31 @@ def verify_small(record):
     if isinstance(events[0], dict) \
             and events[0].get("baseline_snapshot_sha256") != _mapping_hash(baseline):
         findings.append("small planning event does not bind its file baseline")
+    rebaseline_fields = {
+        "rebaseline_record", "rebaseline_record_sha256",
+        "prior_authorized_plan_sha256", "rebaseline_reason",
+    }
+    first_event = events[0] if events and isinstance(events[0], dict) else {}
+    present_rebaseline = rebaseline_fields.intersection(first_event)
+    if present_rebaseline:
+        history_rel = first_event.get("rebaseline_record")
+        history = (record.parent.joinpath(*PurePosixPath(history_rel).parts)
+                   if _safe_relative_path(history_rel, ".loom-small-history") else None)
+        try:
+            if history is not None:
+                history = loom_reliability._absolute(
+                    history, "Tier-S rebaseline history", must_exist=True)
+            history_hash = (_file_hash(history) if history is not None
+                            and history.is_file() else None)
+        except (OSError, loom_reliability.ReliabilityError):
+            history_hash = None
+        if present_rebaseline != rebaseline_fields \
+                or history_hash != first_event.get("rebaseline_record_sha256") \
+                or not isinstance(first_event.get("prior_authorized_plan_sha256"), str) \
+                or not DIGEST_RE.fullmatch(first_event["prior_authorized_plan_sha256"]) \
+                or first_event.get("rebaseline_reason") not in {
+                    "freshness-expired", "target-drifted"}:
+            findings.append("small rebaseline history binding is invalid")
     wo_rel = data.get("work_order_file")
     wo = None
     if _safe_relative_path(wo_rel) \
@@ -1302,7 +1342,7 @@ def verify_small(record):
 
 
 @_locked(small=True)
-def small_start(record, repo, wo, domains=None):
+def small_start(record, repo, wo, domains=None, event_at=None):
     record, wo = Path(record).resolve(), Path(wo).resolve()
     if record.suffix.lower() != ".json" or wo.suffix.lower() != ".md" \
             or record.parent != wo.parent:
@@ -1324,14 +1364,16 @@ def small_start(record, repo, wo, domains=None):
         state, baseline = _stable_snapshot(repo, record.parent)
         event = make_event(
             "small-planning-started", state,
+            event_at=event_at,
             baseline_snapshot_sha256=_mapping_hash(baseline))
+        verified_at = dt.date.fromisoformat(_utc_stamp(event_at)[:10])
         _atomic_write(record, {
             "schema_version": SCHEMA_VERSION,
             "mode": "small",
             "work_order_file": wo.name,
             "route_contract": {
                 "tier": "S", "domain_ids": domains,
-                "last_verified": dt.datetime.now(dt.timezone.utc).date().isoformat(),
+                "last_verified": verified_at.isoformat(),
                 "freshness_window_days": 14,
             },
             "baseline_files": baseline,
@@ -1345,7 +1387,7 @@ def small_start(record, repo, wo, domains=None):
 
 
 @_locked(small=True)
-def small_authorize(record, repo, wo):
+def small_authorize(record, repo, wo, event_at=None):
     record, wo = Path(record).resolve(), Path(wo).resolve()
     findings = verify_small(record)
     if findings:
@@ -1380,6 +1422,7 @@ def small_authorize(record, repo, wo):
         return 1
     event = make_event(
         "small-authorized", state, first["event_hash"],
+        event_at=event_at,
         work_order=str(fm["id"]), work_order_plan_sha256=_wo_plan_hash(wo))
     data["events"].append(event)
     _atomic_write(record, data)
@@ -1388,7 +1431,7 @@ def small_authorize(record, repo, wo):
 
 
 @_locked(small=True)
-def small_close(record, repo, wo):
+def small_close(record, repo, wo, event_at=None):
     record, wo = Path(record).resolve(), Path(wo).resolve()
     findings = verify_small(record)
     if findings:
@@ -1448,6 +1491,7 @@ def small_close(record, repo, wo):
     previous = data["events"][-1]
     event = make_event(
         "small-completed", state, previous["event_hash"],
+        event_at=event_at,
         work_order=str(fm["id"]), work_order_sha256=_canonical_wo_hash(wo),
         acceptance_evidence=f"evidence/{fm['id']}.json",
         acceptance_evidence_sha256=_file_hash(
@@ -1457,6 +1501,71 @@ def small_close(record, repo, wo):
     data["events"].append(event)
     _atomic_write(record, data)
     print(f"loom_gate: Tier-S completion sealed ({len(changed)} changed path(s))")
+    return 0
+
+
+@_locked(small=True)
+def small_rebaseline(record, repo, wo, *, reason, event_at=None):
+    """Invalidate stale Tier-S authorization and bind a fresh compact-plan baseline."""
+    record, wo = Path(record).resolve(), Path(wo).resolve()
+    if reason not in {"freshness-expired", "target-drifted"}:
+        print("loom_gate: REFUSED — Tier-S rebaseline reason is invalid", file=sys.stderr)
+        return 1
+    findings = verify_small(record)
+    if findings:
+        for finding in findings:
+            print(f"loom_gate: BLOCKED — {finding}", file=sys.stderr)
+        return 1
+    data = _load_small(record)
+    names = [event["event"] for event in data["events"]]
+    if names != ["small-planning-started", "small-authorized"] \
+            or wo.parent != record.parent or wo.name != data.get("work_order_file"):
+        print("loom_gate: REFUSED — only authorized incomplete Tier-S work can rebaseline",
+              file=sys.stderr)
+        return 1
+    try:
+        prior_raw = record.read_bytes()
+        prior_hash = hashlib.sha256(prior_raw).hexdigest()
+        prior_plan_hash = data["events"][1]["work_order_plan_sha256"]
+        instant = _utc_stamp(event_at)
+        state, baseline = _stable_snapshot(repo, record.parent)
+        history_rel = (
+            f".loom-small-history/{instant.replace(':', '').replace('-', '')}-"
+            f"{prior_hash[:12]}.json")
+        history = loom_reliability._absolute(
+            record.parent.joinpath(*PurePosixPath(history_rel).parts),
+            "Tier-S rebaseline history")
+        if history.exists() or history.is_symlink():
+            print("loom_gate: REFUSED — Tier-S history identity already exists",
+                  file=sys.stderr)
+            return 1
+        history.parent.mkdir(parents=True, exist_ok=True)
+        _atomic_write_text(history, prior_raw.decode("utf-8"))
+        history_hash = _file_hash(history)
+        event = make_event(
+            "small-planning-started", state, event_at=instant,
+            baseline_snapshot_sha256=_mapping_hash(baseline),
+            rebaseline_record=history_rel,
+            rebaseline_record_sha256=history_hash,
+            prior_authorized_plan_sha256=prior_plan_hash,
+            rebaseline_reason=reason)
+        _atomic_write(record, {
+            "schema_version": SCHEMA_VERSION,
+            "mode": "small",
+            "work_order_file": wo.name,
+            "route_contract": {
+                "tier": "S", "domain_ids": data["route_contract"]["domain_ids"],
+                "last_verified": instant[:10],
+                "freshness_window_days": data["route_contract"]["freshness_window_days"],
+            },
+            "baseline_files": baseline,
+            "events": [event],
+        })
+    except (OSError, UnicodeError, loom_survey.SurveyError,
+            loom_reliability.ReliabilityError, ValueError) as exc:
+        print(f"loom_gate: INDETERMINATE — {exc}", file=sys.stderr)
+        return 2
+    print(f"loom_gate: Tier-S authorization invalidated and rebaselined ({state.state_hash})")
     return 0
 
 

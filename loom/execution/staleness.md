@@ -16,6 +16,11 @@ Target drift routes to selective repair using `plan-dependencies.json`; elapsed-
 to repair even when the repository bytes are unchanged. Repair verifies only affected sections
 when dependency evidence proves that scope. Unknown scope requires a full recheck.
 
+Tier S has no dependency map, so repair uses one `compact-plan` scope. The orchestrator archives
+the previously authorized lifecycle by SHA-256, records a fresh repository baseline, invalidates
+the old authorization, and requires content-bound real-medium review evidence before it reauthorizes
+the standalone work order. Target or lifecycle drift during that review blocks completion.
+
 Execution remains blocked until repair produces current real-medium evidence and a new checkpoint.
 Changing a date without rerunning the verification is not a refresh.
 The production orchestrator seals the affected-section list before delegated work, accepts exactly
