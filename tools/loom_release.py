@@ -77,6 +77,25 @@ REPLAY_CLAIM_FIELDS = {
     "metric", "domain", "scope", "longitudinal_sample_count", "replay_pair_count",
     "longitudinal_status", "replay_status", "regression_alarm",
 }
+CROSS_PLATFORM_CI_FIELDS = {
+    "run_id", "run_url", "total_jobs", "passed_jobs", "conclusion", "jobs",
+}
+CI_JOB_FIELDS = {"id", "os", "python", "conclusion", "url"}
+REQUIRED_CI_OSES = {"ubuntu-latest", "macos-latest", "windows-latest"}
+REQUIRED_CI_PYTHONS = {"3.10", "3.11", "3.12", "3.13"}
+USABILITY_FIELDS = {
+    "study_id", "study_bundle_sha256", "public_build_sha256",
+    "participant_count", "unfamiliar_participant_count",
+    "clean_environment_count", "fresh_install_count",
+    "real_request_completion_count", "completed_without_maintainer_count",
+    "coaching_event_count", "install_receipt_bundle_sha256",
+    "request_receipt_bundle_sha256",
+}
+HOSTILE_REVIEW_FIELDS = {
+    "report_sha256", "review_bundle_sha256", "reproduced_build_sha256",
+    "critical_findings", "high_findings", "scope_complete",
+    "reviewer_independent",
+}
 
 
 class ReleaseError(RuntimeError):
@@ -378,6 +397,76 @@ def _production_replay_passed(payload):
         and pair_total == payload["pair_count"]
 
 
+def _cross_platform_ci_passed(payload, subject):
+    if set(payload) != CROSS_PLATFORM_CI_FIELDS \
+            or type(payload.get("run_id")) is not int or payload["run_id"] <= 0 \
+            or payload.get("total_jobs") != 12 \
+            or payload.get("passed_jobs") != 12 \
+            or payload.get("conclusion") != "success" \
+            or not isinstance(payload.get("jobs"), list) \
+            or len(payload["jobs"]) != 12:
+        return False
+    run_url = f"{subject['repository']}/actions/runs/{payload['run_id']}"
+    if payload.get("run_url") != run_url:
+        return False
+    combinations = set()
+    identifiers = set()
+    urls = set()
+    for job in payload["jobs"]:
+        if not isinstance(job, dict) or set(job) != CI_JOB_FIELDS \
+                or type(job.get("id")) is not int or job["id"] <= 0 \
+                or job.get("os") not in REQUIRED_CI_OSES \
+                or job.get("python") not in REQUIRED_CI_PYTHONS \
+                or job.get("conclusion") != "success" \
+                or job.get("url") != f"{run_url}/job/{job.get('id')}" \
+                or job["id"] in identifiers or job["url"] in urls:
+            return False
+        identifiers.add(job["id"])
+        urls.add(job["url"])
+        combinations.add((job["os"], job["python"]))
+    expected = {(os_name, python) for os_name in REQUIRED_CI_OSES
+                for python in REQUIRED_CI_PYTHONS}
+    return combinations == expected
+
+
+def _unfamiliar_user_usability_passed(payload, subject):
+    if set(payload) != USABILITY_FIELDS \
+            or not isinstance(payload.get("study_id"), str) \
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+                            payload["study_id"]) is None \
+            or payload.get("public_build_sha256") != subject["root_sha256"]:
+        return False
+    hashes = [payload.get(field) for field in (
+        "study_bundle_sha256", "install_receipt_bundle_sha256",
+        "request_receipt_bundle_sha256")]
+    if not all(_sha256(value) for value in hashes) or len(set(hashes)) != len(hashes):
+        return False
+    count = payload.get("participant_count")
+    if type(count) is not int or count < 1:
+        return False
+    complete_counts = (
+        "unfamiliar_participant_count", "clean_environment_count",
+        "fresh_install_count", "real_request_completion_count",
+        "completed_without_maintainer_count",
+    )
+    return all(payload.get(field) == count for field in complete_counts) \
+        and payload.get("coaching_event_count") == 0
+
+
+def _independent_hostile_review_passed(payload, subject):
+    if set(payload) != HOSTILE_REVIEW_FIELDS \
+            or payload.get("reproduced_build_sha256") != subject["root_sha256"] \
+            or payload.get("scope_complete") is not True \
+            or payload.get("reviewer_independent") is not True \
+            or payload.get("critical_findings") != 0 \
+            or payload.get("high_findings") != 0:
+        return False
+    report_hash = payload.get("report_sha256")
+    bundle_hash = payload.get("review_bundle_sha256")
+    return _sha256(report_hash) and _sha256(bundle_hash) \
+        and report_hash != bundle_hash
+
+
 def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
     if not isinstance(evidence, dict) or set(evidence) != EXTERNAL_EVIDENCE_FIELDS \
             or evidence.get("schema_version") != 1 \
@@ -420,20 +509,14 @@ def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
     if trusted_key is None or not _signature_valid(evidence, trusted_key):
         return False
     if check_id == "unfamiliar-user-usability":
-        return type(payload.get("participant_count")) is int \
-            and payload["participant_count"] >= 1 \
-            and payload.get("completed_without_maintainer") is True
+        return _unfamiliar_user_usability_passed(payload, subject)
     if check_id == "independent-hostile-review":
-        return payload.get("critical_findings") == 0 \
-            and payload.get("high_findings") == 0
+        return _independent_hostile_review_passed(payload, subject)
     if check_id == "production-performance":
         return _production_performance_passed(payload)
     if check_id == "production-memory-replay":
         return _production_replay_passed(payload)
-    return type(payload.get("total_jobs")) is int \
-        and payload["total_jobs"] >= 3 \
-        and payload.get("passed_jobs") == payload["total_jobs"] \
-        and payload.get("conclusion") == "success"
+    return _cross_platform_ci_passed(payload, subject)
 
 
 def certification_report(*, local_checks, external_evidence, trust_policy=None, now=None):

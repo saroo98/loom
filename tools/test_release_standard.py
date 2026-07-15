@@ -84,13 +84,36 @@ class ReleaseStandardTests(unittest.TestCase):
         specifications = {
             "cross-platform-ci": ("github-actions", {
                 "run_id": 42, "run_url": "https://github.com/example/loom/actions/runs/42",
-                "total_jobs": 12, "passed_jobs": 12, "conclusion": "success"}),
+                "total_jobs": 12, "passed_jobs": 12, "conclusion": "success",
+                "jobs": [
+                    {"id": 100 + os_index * 4 + python_index,
+                     "os": os_name, "python": version, "conclusion": "success",
+                     "url": ("https://github.com/example/loom/actions/runs/42/job/"
+                             f"{100 + os_index * 4 + python_index}")}
+                    for os_index, os_name in enumerate(
+                        ("ubuntu-latest", "macos-latest", "windows-latest"))
+                    for python_index, version in enumerate(
+                        ("3.10", "3.11", "3.12", "3.13"))
+                ]}),
             "unfamiliar-user-usability": ("independent-participant", {
-                "study_id": "study-7", "participant_count": 1,
-                "completed_without_maintainer": True}),
+                "study_id": "study-7",
+                "study_bundle_sha256": "2" * 64,
+                "public_build_sha256": "b" * 64,
+                "participant_count": 1,
+                "unfamiliar_participant_count": 1,
+                "clean_environment_count": 1,
+                "fresh_install_count": 1,
+                "real_request_completion_count": 1,
+                "completed_without_maintainer_count": 1,
+                "coaching_event_count": 0,
+                "install_receipt_bundle_sha256": "3" * 64,
+                "request_receipt_bundle_sha256": "4" * 64}),
             "independent-hostile-review": ("independent-reviewer", {
-                "report_sha256": "c" * 64, "critical_findings": 0,
-                "high_findings": 0}),
+                "report_sha256": "c" * 64,
+                "review_bundle_sha256": "5" * 64,
+                "reproduced_build_sha256": "b" * 64,
+                "critical_findings": 0, "high_findings": 0,
+                "scope_complete": True, "reviewer_independent": True}),
             "production-performance": ("independent-benchmark", {
                 "provider_attested": True,
                 "receipt_bundle_sha256": "d" * 64,
@@ -253,6 +276,75 @@ class ReleaseStandardTests(unittest.TestCase):
             local_checks=local, external_evidence=external,
             trust_policy=trust_policy, now=instant)
         self.assertEqual("blocked", blocked["status"])
+
+    def test_cross_platform_evidence_requires_exact_os_python_matrix(self):
+        external, trust_policy = self._signed_external_evidence()
+        ci = external["cross-platform-ci"]
+        ci["payload"] = {
+            "run_id": 42,
+            "run_url": "https://github.com/example/loom/actions/runs/42",
+            "total_jobs": 3,
+            "passed_jobs": 3,
+            "conclusion": "success",
+            "jobs": [
+                {"id": index, "os": "ubuntu-latest", "python": version,
+                 "conclusion": "success",
+                 "url": f"https://github.com/example/loom/actions/runs/42/job/{index}"}
+                for index, version in enumerate(("3.10", "3.11", "3.12"), 1)
+            ],
+        }
+        ci["payload_sha256"] = loom_release._canonical_hash(ci["payload"])
+        self._sign_item(ci)
+        local = self._sealed_local_evidence(trust_policy["subject"])
+
+        report = loom_release.certification_report(
+            local_checks=local, external_evidence=external,
+            trust_policy=trust_policy,
+            now=dt.datetime(2026, 7, 16, tzinfo=dt.timezone.utc))
+
+        self.assertEqual("blocked", report["status"])
+        self.assertIn(
+            "cross-platform-ci", {item["id"] for item in report["unverified"]})
+
+    def test_usability_evidence_requires_fresh_install_and_real_request_receipts(self):
+        external, trust_policy = self._signed_external_evidence()
+        usability = external["unfamiliar-user-usability"]
+        usability["payload"] = {
+            "participant_count": 1,
+            "completed_without_maintainer": True,
+        }
+        usability["payload_sha256"] = loom_release._canonical_hash(
+            usability["payload"])
+        self._sign_item(usability)
+        local = self._sealed_local_evidence(trust_policy["subject"])
+
+        report = loom_release.certification_report(
+            local_checks=local, external_evidence=external,
+            trust_policy=trust_policy,
+            now=dt.datetime(2026, 7, 16, tzinfo=dt.timezone.utc))
+
+        self.assertEqual("blocked", report["status"])
+        self.assertIn(
+            "unfamiliar-user-usability",
+            {item["id"] for item in report["unverified"]})
+
+    def test_hostile_review_requires_bound_report_bundle_and_complete_scope(self):
+        external, trust_policy = self._signed_external_evidence()
+        review = external["independent-hostile-review"]
+        review["payload"] = {"critical_findings": 0, "high_findings": 0}
+        review["payload_sha256"] = loom_release._canonical_hash(review["payload"])
+        self._sign_item(review)
+        local = self._sealed_local_evidence(trust_policy["subject"])
+
+        report = loom_release.certification_report(
+            local_checks=local, external_evidence=external,
+            trust_policy=trust_policy,
+            now=dt.datetime(2026, 7, 16, tzinfo=dt.timezone.utc))
+
+        self.assertEqual("blocked", report["status"])
+        self.assertIn(
+            "independent-hostile-review",
+            {item["id"] for item in report["unverified"]})
 
     def test_certification_rejects_self_asserted_unbound_evidence(self):
         subject = {"repository": "https://github.com/example/loom",
