@@ -1,5 +1,6 @@
 """Behavioral tests for Loom memory lifecycle and utility tracking."""
 
+import datetime as dt
 import tempfile
 import unittest
 import json
@@ -64,6 +65,59 @@ class MemoryLifecycleTests(unittest.TestCase):
         selected = loom_memory.select(self.home, self.instance, domain="three-d")
         self.assertEqual([item["id"] for item in selected], [hard_stop["id"]])
 
+    def test_unused_domain_memory_retires_after_two_weeks_without_manual_cleanup(self):
+        record = loom_memory.admit_learning(
+            self.home, self.instance, scope="domain", category="domain",
+            signal="artifact-unused", future_decision="artifact-selection",
+            evidence_count=3, confidence=0.5, domain="three-d")
+        created = dt.datetime.fromisoformat(record["last_confirmed"].replace("Z", "+00:00"))
+        result = loom_memory.maintain_lifecycle(
+            self.home, self.instance,
+            now=(created + dt.timedelta(days=15)).isoformat())
+
+        self.assertEqual("dormant", loom_memory.inspect_record(
+            self.home, self.instance, record["id"])["status"])
+        self.assertEqual("adaptive-utility-v1", result["policy"])
+        self.assertEqual("unused", result["dormancy_decisions"][0]["reason"])
+        self.assertEqual(14, result["dormancy_decisions"][0]["inactive_days"])
+
+    def test_adaptive_cleanup_reports_the_next_automatic_review(self):
+        record = loom_memory.admit_learning(
+            self.home, self.instance, scope="domain", category="domain",
+            signal="artifact-unused", future_decision="artifact-selection",
+            evidence_count=3, confidence=0.5, domain="three-d")
+        created = dt.datetime.fromisoformat(record["last_confirmed"].replace("Z", "+00:00"))
+        result = loom_memory.maintain_lifecycle(
+            self.home, self.instance,
+            now=(created + dt.timedelta(days=5)).isoformat())
+
+        self.assertEqual(0, result["dormant"])
+        self.assertEqual([], result["dormancy_decisions"])
+        self.assertEqual(
+            (created + dt.timedelta(days=14)).replace(microsecond=0).isoformat()
+            .replace("+00:00", "Z"), result["next_review_at"])
+
+    def test_single_harm_retires_domain_memory_after_seven_inactive_days(self):
+        record = loom_memory.admit_learning(
+            self.home, self.instance, scope="domain", category="domain",
+            signal="guidance-wasted-work", future_decision="guidance-selection",
+            evidence_count=3, confidence=0.8, domain="three-d")
+        created = dt.datetime.fromisoformat(record["last_confirmed"].replace("Z", "+00:00"))
+        loom_memory.select(
+            self.home, self.instance, domain="three-d", now=created.isoformat())
+        loom_memory.record_application(
+            self.home, self.instance, record["id"], outcome="hurt",
+            now=created.isoformat())
+
+        result = loom_memory.maintain_lifecycle(
+            self.home, self.instance,
+            now=(created + dt.timedelta(days=8)).isoformat())
+
+        self.assertEqual("dormant", loom_memory.inspect_record(
+            self.home, self.instance, record["id"])["status"])
+        self.assertEqual("harmful", result["dormancy_decisions"][0]["reason"])
+        self.assertEqual(7, result["dormancy_decisions"][0]["inactive_days"])
+
     def test_verified_memory_becomes_stale_at_deadline_not_deleted(self):
         record = loom_memory.admit_learning(
             self.home, self.instance, scope="domain", category="domain",
@@ -111,7 +165,7 @@ class MemoryLifecycleTests(unittest.TestCase):
                 "scope", "confidence", "provenance"):
             self.assertIn(field, applied)
 
-    def test_repeated_harm_demotes_quickly_while_helped_memory_survives_age(self):
+    def test_repeated_harm_demotes_quickly_and_old_helpful_memory_leaves_active_context(self):
         harmful = loom_memory.admit_learning(
             self.home, self.instance, scope="domain", category="domain",
             signal="guidance-wasted-work", future_decision="guidance-selection",
@@ -138,13 +192,21 @@ class MemoryLifecycleTests(unittest.TestCase):
         loom_memory.record_application(
             self.home, self.instance, helpful["id"], outcome="helped",
             now="2026-07-14T12:23:00Z")
-        loom_memory.maintain_lifecycle(
+        result = loom_memory.maintain_lifecycle(
             self.home, self.instance, now="2028-07-14T12:00:00Z")
 
         self.assertEqual(loom_memory.inspect_record(
             self.home, self.instance, harmful["id"])["status"], "dormant")
         self.assertEqual(loom_memory.inspect_record(
-            self.home, self.instance, helpful["id"])["status"], "active")
+            self.home, self.instance, helpful["id"])["status"], "dormant")
+        helpful_decision = next(item for item in result["dormancy_decisions"]
+                               if item["record_id"] == helpful["id"])
+        self.assertEqual("proven-recurring", helpful_decision["reason"])
+        self.assertEqual(365, helpful_decision["inactive_days"])
+        returned = loom_memory.rehydrate_domain(
+            self.home, self.instance, domain="cli", max_records=1, max_chars=1000,
+            now="2028-07-15T12:00:00Z")
+        self.assertEqual([helpful["id"]], returned["reactivated_ids"])
 
     def test_changed_preference_is_superseded_and_forget_is_preserved(self):
         first = loom_memory.set_preference(

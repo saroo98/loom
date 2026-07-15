@@ -26,6 +26,12 @@ Project memory is not loaded for another project. General memory must be genuine
 6. `Forget ...` writes a reversible local action receipt and removes the record from selection.
 7. `use_profile: false` means no owner-profile selection or learning for that project.
 
+Default domain retirement is automatic and utility-sensitive. A harmful rule is reviewed after
+7 inactive days, an unused rule after 14, an applied but unproven rule after 30, a rule helped once
+after 90, and a repeatedly helpful rule after 365. Session housekeeping reports the next review
+time. Retirement makes a record dormant rather than destroying it, and only bounded exact-domain
+rehydration can return it. Mandatory safety hard stops are never retired by inactivity.
+
 Memory never enters the public build, planning pack, git history, telemetry, or another install.
 Loom has no network transport for owner memory. Local files may still be exposed by the host OS,
 backup software, or an agent with filesystem access; those boundaries are documented rather than

@@ -341,6 +341,11 @@ def _timestamp_value(value):
         .astimezone(dt.timezone.utc)
 
 
+def _format_timestamp(value):
+    return value.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat() \
+        .replace("+00:00", "Z")
+
+
 def _instance_dir(home, instance_id):
     base = _reject_link_ancestors(home, "Loom home")
     instances = base / "instances"
@@ -921,21 +926,49 @@ def admit_learning(home, instance_id, *, scope, category, signal, future_decisio
     return record
 
 
+def _domain_inactivity_policy(record, fallback_days):
+    helped = int(record.get("helped_count", 0))
+    hurt = int(record.get("hurt_count", 0))
+    applications = int(record.get("application_count", 0))
+    utility = float(record.get("utility_score", 0))
+    if hurt > helped or utility < 0:
+        return min(fallback_days, 7), "harmful"
+    if applications == 0:
+        return min(fallback_days, 14), "unused"
+    if helped == 0:
+        return min(fallback_days, 30), "unproven"
+    if helped == 1:
+        return min(fallback_days, 90), "single-help"
+    return min(3650, max(365, fallback_days)), "proven-recurring"
+
+
+def _latest_domain_use(record):
+    values = [record.get(field) for field in (
+        "last_selected", "last_applied", "last_helped", "last_hurt",
+        "last_confirmed") if record.get(field)]
+    return max(_timestamp_value(value) for value in values)
+
+
 def maintain_lifecycle(home, instance_id, *, now=None, inactive_days=90):
     """Lazily remove obsolete context while preserving all evidence reversibly."""
     if type(inactive_days) is not int or not 7 <= inactive_days <= 3650:
         raise MemoryError("inactive_days must be between 7 and 3650")
     instant_text = _now_at(now)
     instant = _timestamp_value(instant_text)
-    cutoff = instant - dt.timedelta(days=inactive_days)
     instance_id = _validate_instance_id(instance_id)
     directory = _instance_dir(home, instance_id)
-    result = {"dormant": 0, "stale": 0, "archived": 0}
+    result = {
+        "dormant": 0, "stale": 0, "archived": 0,
+        "policy": "adaptive-utility-v1", "dormancy_decisions": [],
+        "next_review_at": None,
+    }
+    next_review = None
     archived = []
     with FileLock(directory / ".lock"):
         store = _read_store_locked(directory, instance_id)
         kept = []
         for record in store["records"]:
+            record_review_at = None
             if _is_mandatory_hard_stop(record):
                 kept.append(record)
                 continue
@@ -943,12 +976,20 @@ def maintain_lifecycle(home, instance_id, *, now=None, inactive_days=90):
                     and _timestamp_value(record["verify_by"]) < instant:
                 record["status"] = "stale"
                 result["stale"] += 1
-            elif record.get("status") == "active" and record.get("scope") == "domain" \
-                    and record.get("helped_count", 0) < 2:
-                last_use = record.get("last_selected") or record.get("last_confirmed")
-                if _timestamp_value(last_use) < cutoff:
+            elif record.get("status") == "active" and record.get("scope") == "domain":
+                retirement_days, reason = _domain_inactivity_policy(record, inactive_days)
+                last_use = _latest_domain_use(record)
+                review_at = last_use + dt.timedelta(days=retirement_days)
+                if review_at < instant:
                     record["status"] = "dormant"
                     result["dormant"] += 1
+                    result["dormancy_decisions"].append({
+                        "record_id": record["id"], "domain": record["domain"],
+                        "reason": reason, "inactive_days": retirement_days,
+                        "last_used_at": _format_timestamp(last_use),
+                    })
+                else:
+                    record_review_at = review_at
             if record.get("expires_at") \
                     and _timestamp_value(record["expires_at"]) < instant \
                     and record.get("status") not in {"forgotten", "superseded"}:
@@ -957,10 +998,15 @@ def maintain_lifecycle(home, instance_id, *, now=None, inactive_days=90):
                 result["archived"] += 1
             else:
                 kept.append(record)
+                if record_review_at is not None \
+                        and (next_review is None or record_review_at < next_review):
+                    next_review = record_review_at
         store["records"] = kept
         _append_archive(
             directory, archived, {item["id"]: "expired" for item in archived})
         _atomic_store(directory / "active.json", store)
+    result["next_review_at"] = (
+        _format_timestamp(next_review) if next_review is not None else None)
     return result
 
 

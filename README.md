@@ -32,6 +32,8 @@ and reversible. Normal use still has one surface: `/loom <request>`.
 Each completed run may update bounded owner memory when there is evidence. General judgment,
 domain knowledge, project state, and installation state remain separate. Dormant project and
 domain material leaves active context automatically; useful material can return when relevant.
+Default domain retirement accelerates for harmful or unused rules and retains repeatedly helpful
+rules longer; session housekeeping performs it without another owner command.
 Forgetting is durable, and the latest reversible adaptation can be undone. Learning stays on the
 owner's machine and is never a contribution or publication. Improvement is not inferred from
 record count: Loom requires an exact-domain early/recent comparison, 8 paired memory-on/off replays,
