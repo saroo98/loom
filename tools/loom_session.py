@@ -22,6 +22,7 @@ import loom_performance
 import loom_transparency
 import loom_improvement
 import loom_vault_adapter
+from loom_reliability import _is_trusted_os_alias
 
 
 SCHEMA_VERSION = 1
@@ -159,7 +160,8 @@ def _ensure_private_directory(path):
     current = Path(path.anchor)
     for part in path.parts[1:]:
         current = current / part
-        if current.exists() and current.is_symlink():
+        if current.exists() and current.is_symlink() \
+                and not _is_trusted_os_alias(current):
             raise SessionBlocked("SESSION_PATH_UNSAFE", "session path traverses a link")
     path.mkdir(parents=True, exist_ok=True)
     if path.is_symlink() or not path.is_dir():
