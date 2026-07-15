@@ -114,7 +114,12 @@ class PreferenceEvolutionTests(unittest.TestCase):
         def plan(context):
             selected.append(list(context.selected_preferences))
             return {"status": "completed", "code": "plan-ready", "success": True,
-                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "metrics": {},
+                "evidence_ids": [
+                    "pref-report-detail-concise-"
+                    "8e42455ca927f83814566fb897985642997e3516a5695a6c0bc88d90e61627db"
+                ],
+                "reversible_action_ids": [],
                 "preference_observations": [
                     {"key": "report_detail", "value": "concise"}],
                 "artifact_usage": [{"artifact_id": "journey-map", "opened": False,
