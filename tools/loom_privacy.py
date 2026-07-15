@@ -13,6 +13,7 @@ import tempfile
 from pathlib import Path
 
 import loom_memory
+from loom_reliability import _is_trusted_os_alias
 
 
 MAX_SCAN_FILE_BYTES = 64 * 1024 * 1024
@@ -91,7 +92,7 @@ def _safe_absolute(path, label, *, must_exist=False):
     if must_exist and not value.exists():
         raise PrivacyError(f"{label} does not exist: {value}")
     for component in [*reversed(value.parents), value]:
-        if _is_redirect(component):
+        if _is_redirect(component) and not _is_trusted_os_alias(component):
             raise PrivacyError(f"{label} must not traverse a symlink or reparse point: {component}")
     return value
 
