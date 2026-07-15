@@ -17,6 +17,7 @@ from collections import deque
 from pathlib import Path
 
 import loom_survey
+from loom_reliability import _is_trusted_os_alias
 
 SCHEMA_VERSION = 1
 INSTANCE_MARKER = ".loom-instance-id"
@@ -141,7 +142,7 @@ def _reject_link_ancestors(path, label):
     except (TypeError, ValueError, OSError) as exc:
         raise MemoryError(f"{label} is not a valid local path: {exc}") from exc
     for component in [*reversed(absolute.parents), absolute]:
-        if _is_link_or_junction(component):
+        if _is_link_or_junction(component) and not _is_trusted_os_alias(component):
             raise MemoryError(
                 f"{label} must not traverse a symlink or junction: {component}")
     return absolute
