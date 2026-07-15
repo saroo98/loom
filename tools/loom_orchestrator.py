@@ -17,6 +17,7 @@ from pathlib import Path
 
 import loom_gate
 import loom_install
+import loom_lifecycle
 import loom_lint
 import loom_memory
 import loom_performance
@@ -25,6 +26,7 @@ import loom_session
 
 
 SCHEMA_VERSION = 1
+ACTION_SCHEMA_VERSION = 2
 ACTION_FIELDS = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -32,6 +34,7 @@ ACTION_FIELDS = {
     "created_at", "expires_at", "attempts", "max_attempts", "session_id",
     "operation_id", "journal_path", "initial_pack_hash",
     "remove_pristine_pack", "work_order", "prepared", "context", "result",
+    "repair_plan", "host_result",
     "action_hash",
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
@@ -83,8 +86,12 @@ def _action_path(owner_home, instance_id, project_id, action_id):
 
 
 def _validate_action(value, path):
-    if not isinstance(value, dict) or set(value) != ACTION_FIELDS \
-            or value.get("schema_version") != SCHEMA_VERSION \
+    if not isinstance(value, dict):
+        raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
+    if value.get("schema_version") != ACTION_SCHEMA_VERSION:
+        raise OrchestratorError(
+            "ACTION_VERSION_UNSUPPORTED", "action schema version is not supported")
+    if set(value) != ACTION_FIELDS \
             or value.get("status") not in ACTION_STATUSES \
             or value.get("action_hash") != _action_hash(value):
         raise OrchestratorError("ACTION_CORRUPT", "action fields or hash are invalid")
@@ -147,6 +154,23 @@ def _validate_action(value, path):
             or prepared.request_hash != loom_runtime._sha(
                 " ".join(value["request"].split())):
         raise OrchestratorError("ACTION_CORRUPT", "sealed preparation does not match action")
+    repair_plan = value["repair_plan"]
+    if value["intent"] == "repair":
+        if not isinstance(repair_plan, dict) or set(repair_plan) != {
+                "changed_paths", "affected_plan_sections", "regate_scope",
+                "prior_state_hash", "current_state_hash", "force_full"} \
+                or repair_plan["regate_scope"] not in {"selective", "full"} \
+                or type(repair_plan["force_full"]) is not bool \
+                or not all(re.fullmatch(r"[0-9a-f]{64}", str(repair_plan[name]))
+                           for name in ("prior_state_hash", "current_state_hash")) \
+                or not isinstance(repair_plan["changed_paths"], list) \
+                or not isinstance(repair_plan["affected_plan_sections"], list) \
+                or not repair_plan["affected_plan_sections"]:
+            raise OrchestratorError("ACTION_CORRUPT", "sealed repair plan is invalid")
+    elif repair_plan is not None:
+        raise OrchestratorError("ACTION_CORRUPT", "non-repair action carries repair scope")
+    if value["host_result"] is not None and not isinstance(value["host_result"], dict):
+        raise OrchestratorError("ACTION_CORRUPT", "host result is invalid")
     if created >= expires \
             or any(not isinstance(value[field], str) or not Path(value[field]).is_absolute()
                    for field in ("owner_home", "install_root", "cwd", "journal_path")) \
@@ -240,6 +264,100 @@ def _pack_hash(pack):
     return loom_runtime._hash_frontier(pack)
 
 
+def _repair_force_full(pack, instant):
+    try:
+        frontmatter, _ = loom_lint.parse_frontmatter(
+            (Path(pack) / "MANIFEST.md").read_text(encoding="utf-8"))
+        verified = dt.date.fromisoformat(str(frontmatter["last_verified"]))
+        window = int(frontmatter["freshness_window_days"])
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError) as exc:
+        raise OrchestratorError(
+            "REPAIR_SCOPE_INDETERMINATE", f"cannot establish freshness scope: {exc}") from exc
+    return (instant.date() - verified).days > window
+
+
+def _read_repair_result(result_path, action):
+    if result_path is None:
+        raise OrchestratorError(
+            "REPAIR_EVIDENCE_REQUIRED",
+            "repair completion requires content-bound real-medium evidence")
+    path = _absolute(result_path, "repair result")
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+        raise OrchestratorError("REPAIR_EVIDENCE_INVALID", "repair result is not a bounded file")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise OrchestratorError("REPAIR_EVIDENCE_INVALID", str(exc)) from exc
+    if not isinstance(value, dict) or set(value) != {"schema_version", "repair_verification"} \
+            or value["schema_version"] != 1 \
+            or not isinstance(value["repair_verification"], list):
+        raise OrchestratorError("REPAIR_EVIDENCE_INVALID", "repair result fields are invalid")
+    expected = action["repair_plan"]["affected_plan_sections"]
+    entries, seen = [], set()
+    pack = Path(action["explicit_target"] or action["cwd"]) / "plans"
+    for item in value["repair_verification"]:
+        if not isinstance(item, dict) or set(item) != {
+                "section", "passed", "medium", "evidence_path", "evidence_sha256"} \
+                or item["section"] not in expected or item["section"] in seen \
+                or item["passed"] is not True \
+                or not isinstance(item["medium"], str) \
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", item["medium"]) \
+                or not isinstance(item["evidence_path"], str) \
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}", item["evidence_path"]) \
+                or ".." in item["evidence_path"].split("/") \
+                or not re.fullmatch(r"[0-9a-f]{64}", str(item["evidence_sha256"])):
+            raise OrchestratorError("REPAIR_EVIDENCE_INVALID", "repair evidence entry is invalid")
+        evidence = pack / Path(*item["evidence_path"].split("/"))
+        try:
+            loom_memory._reject_link_ancestors(evidence, "repair evidence")
+            if evidence.is_symlink() or not evidence.is_file() \
+                    or evidence.stat().st_size > 8 * 1024 * 1024:
+                raise OrchestratorError(
+                    "REPAIR_EVIDENCE_INVALID", "repair evidence is not a bounded regular file")
+            raw = evidence.read_bytes()
+        except (OSError, loom_memory.MemoryError) as exc:
+            raise OrchestratorError("REPAIR_EVIDENCE_INVALID", str(exc)) from exc
+        if hashlib.sha256(raw).hexdigest() != item["evidence_sha256"]:
+            raise OrchestratorError(
+                "REPAIR_EVIDENCE_INVALID", "repair evidence content does not match its digest")
+        seen.add(item["section"])
+        entries.append({**item, "evidence_id": "sha256-" + item["evidence_sha256"]})
+    if sorted(seen) != sorted(expected):
+        raise OrchestratorError(
+            "REPAIR_EVIDENCE_INVALID", "repair evidence does not cover the sealed scope exactly")
+    return {"schema_version": 1, "repair_verification": entries}
+
+
+def _restamp_verified_pack(pack, repo, verified_at, *, full):
+    """Update only verification stamps after a successful sealed regate."""
+    pack = Path(pack)
+    state = loom_gate._state(repo, pack)
+    manifest, rendered = loom_gate._render_manifest(pack, state, "planned")
+    stamp = loom_runtime._parse_time(verified_at).date().isoformat()
+    rendered = re.sub(
+        r"(?m)^last_verified\s*:.*$", f"last_verified: {stamp}", rendered, count=1)
+    updates = {manifest: rendered}
+    if full:
+        for path in pack.rglob("*.md"):
+            if path == manifest or path.is_symlink() or not path.is_file():
+                continue
+            text = path.read_text(encoding="utf-8")
+            close = text.find("\n---", 4) if text.startswith("---\n") else -1
+            if close < 0 or not re.search(r"(?m)^last_verified\s*:.*$", text[:close]):
+                continue
+            updates[path] = re.sub(
+                r"(?m)^last_verified\s*:.*$", f"last_verified: {stamp}", text, count=1)
+    originals = {path: path.read_text(encoding="utf-8") for path in updates}
+    try:
+        for path, text in updates.items():
+            loom_gate._atomic_write_text(path, text)
+    except BaseException:
+        for path, text in originals.items():
+            loom_gate._atomic_write_text(path, text)
+        raise
+    return originals
+
+
 def _active_work_order(pack, tier):
     pack = Path(pack)
     candidates = []
@@ -280,7 +398,8 @@ def _remove_pristine_pack(action):
     return True
 
 
-def _handler_result(context, root, owner_home, usage, work_order=None):
+def _handler_result(context, root, owner_home, usage, work_order=None,
+                    repair_plan=None, host_result=None):
     pack = root / "plans"
     tier = context.prepared.route_contract["tier"]
     intent = context.intent
@@ -378,7 +497,63 @@ def _handler_result(context, root, owner_home, usage, work_order=None):
                 f"work order ({evidence})."),
         }
 
-    if intent in {"resume", "review", "repair", "close"}:
+    if intent == "repair":
+        if tier == "S":
+            return {
+                "status": "blocked", "code": "small-replan-required", "success": False,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "usage": usage,
+                "user_message": "Expired Tier-S work must be re-baselined as a new compact plan.",
+            }
+        if repair_plan is None or host_result is None:
+            raise OrchestratorError(
+                "REPAIR_EVIDENCE_REQUIRED", "sealed repair evidence is missing")
+        by_section = {
+            item["section"]: item for item in host_result["repair_verification"]}
+
+        def verifier(section, _changed_paths):
+            item = by_section[section]
+            return {"passed": True, "medium": item["medium"],
+                    "evidence_id": item["evidence_id"]}
+
+        regate = pack / loom_lifecycle.REGATE_FILE
+        regate_before = regate.read_bytes() if regate.is_file() else None
+        originals = {}
+        try:
+            outcome = loom_lifecycle.reconcile(
+                pack, root, verifier,
+                now=loom_runtime._parse_time(context.prepared.prepared_at),
+                force_full=repair_plan["force_full"],
+                expected_plan={key: repair_plan[key] for key in (
+                    "changed_paths", "affected_plan_sections", "regate_scope",
+                    "prior_state_hash", "current_state_hash")})
+            originals = _restamp_verified_pack(
+                pack, root, context.prepared.prepared_at,
+                full=repair_plan["force_full"])
+            report = loom_lint.lint(pack, repo_path=root, strict_staleness=True)
+            findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
+            findings.extend(loom_gate.verify(pack, root, require_authorized=True))
+            if findings:
+                raise OrchestratorError("REPAIR_POSTCHECK_FAILED", "; ".join(findings[:8]))
+        except BaseException:
+            for path, text in originals.items():
+                loom_gate._atomic_write_text(path, text)
+            if regate_before is None:
+                if regate.exists() and not regate.is_symlink():
+                    regate.unlink()
+            else:
+                loom_lifecycle._atomic_json(regate, json.loads(regate_before))
+            raise
+        evidence = "repair-" + outcome["receipt_hash"][:24]
+        return {
+            "status": "completed", "code": "repair-complete", "success": True,
+            "metrics": {"drift-caught-before-execution": 1},
+            "evidence_ids": [evidence], "reversible_action_ids": [], "usage": usage,
+            "user_message": (
+                f"Repair sealed for {outcome['regate_scope']} scope ({evidence})."),
+        }
+
+    if intent in {"resume", "review", "close"}:
         report = loom_lint.lint(
             pack, repo_path=root, strict_staleness=intent in {"resume", "repair"})
         findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
@@ -435,7 +610,8 @@ def _handler_result(context, root, owner_home, usage, work_order=None):
     }
 
 
-def default_handlers(*, root, owner_home, usage=None, work_order=None):
+def default_handlers(*, root, owner_home, usage=None, work_order=None,
+                     repair_plan=None, host_result=None):
     """Return the complete audited production handler registry."""
     root, owner_home = Path(root), Path(owner_home)
     normalized = loom_performance.normalize_usage(usage)
@@ -444,7 +620,8 @@ def default_handlers(*, root, owner_home, usage=None, work_order=None):
     })
     return {
         intent: (lambda context, _intent=intent: _handler_result(
-            context, root, owner_home, usage_payload, work_order))
+            context, root, owner_home, usage_payload, work_order,
+            repair_plan, host_result))
         for intent in {
             "plan", "resume", "execute", "review", "repair", "close", "remember"
         }
@@ -458,7 +635,8 @@ def _controller(action, *, usage=None):
         owner_home=home, instance_id=action["instance_id"])
     handlers = default_handlers(
         root=root, owner_home=home, usage=usage,
-        work_order=action.get("work_order"))
+        work_order=action.get("work_order"),
+        repair_plan=action.get("repair_plan"), host_result=action.get("host_result"))
     return loom_session.SessionController(
         owner_home=home, instance_id=action["instance_id"],
         handlers=handlers, memory=memory)
@@ -496,7 +674,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     action_id = invocation_id
     path = _action_path(home, instance_id, prepared.project_id, action_id)
     action = {
-        "schema_version": SCHEMA_VERSION, "action_id": action_id,
+        "schema_version": ACTION_SCHEMA_VERSION, "action_id": action_id,
         "status": "pending", "instance_id": instance_id,
         "project_id": prepared.project_id, "request": request,
         "invocation_id": invocation_id, "owner_home": str(home),
@@ -510,6 +688,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "initial_pack_hash": None, "remove_pristine_pack": False,
         "work_order": None, "prepared": prepared.to_dict(),
         "context": context_capsule,
+        "repair_plan": None, "host_result": None,
         "result": None,
     }
     if prepared.route_contract["blocked"]:
@@ -567,6 +746,18 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             raise OrchestratorError(
                 "EXECUTION_NOT_READY", "; ".join(findings[:8]))
         action["work_order"] = work_order_path
+    elif prepared.intent == "repair":
+        if action["tier"] == "S":
+            raise OrchestratorError(
+                "SMALL_REPLAN_REQUIRED",
+                "expired or drifted Tier-S work must be re-baselined before execution")
+        force_full = _repair_force_full(target / "plans", loom_runtime._parse_time(created_at))
+        preview = loom_lifecycle.preview_regate(
+            target / "plans", target, force_full=force_full)
+        if preview["regate_scope"] == "none":
+            raise OrchestratorError(
+                "REPAIR_SCOPE_INDETERMINATE", "repair route has no verifiable affected scope")
+        action["repair_plan"] = {**preview, "force_full": force_full}
     action = _write_action(path, action)
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
@@ -574,6 +765,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "intent": action["intent"], "tier": action["tier"],
         "domains": action["domains"], "expires_at": expires_at,
         "work_order": work_order_id if prepared.intent == "execute" else None,
+        "repair_plan": action["repair_plan"],
         "context": {
             "memory": context_capsule["memory"],
             "preferences": context_capsule["preferences"],
@@ -599,7 +791,7 @@ def _reopen(action):
     return controller, opened
 
 
-def complete(action_path, usage_path, *, now=None):
+def complete(action_path, usage_path, *, result_path=None, now=None):
     path, action = _read_action(action_path)
     try:
         checked = loom_install.check(action["install_root"])
@@ -629,6 +821,8 @@ def complete(action_path, usage_path, *, now=None):
         raise OrchestratorError("USAGE_INVALID", str(exc)) from exc
     if normalized["measurement_status"] != "measured":
         raise OrchestratorError("USAGE_REQUIRED", "production completion requires measured usage")
+    if action["intent"] == "repair":
+        action["host_result"] = _read_repair_result(result_path, action)
     sealed = loom_runtime.PreparedInvocation.from_dict(action["prepared"])
     if action["intent"] == "execute":
         project = loom_runtime.resolve_project(
@@ -701,6 +895,7 @@ def main(argv=None):
     complete_parser = commands.add_parser("complete")
     complete_parser.add_argument("--action", required=True)
     complete_parser.add_argument("--usage", required=True)
+    complete_parser.add_argument("--result")
     cancel_parser = commands.add_parser("cancel")
     cancel_parser.add_argument("--action", required=True)
     args = parser.parse_args(argv)
@@ -711,7 +906,7 @@ def main(argv=None):
                 install_root=args.install_root, explicit_target=args.target,
                 timeout_seconds=args.timeout_seconds)
         elif args.command == "complete":
-            result = complete(args.action, args.usage)
+            result = complete(args.action, args.usage, result_path=args.result)
         else:
             result = cancel(args.action)
     except OrchestratorError as exc:

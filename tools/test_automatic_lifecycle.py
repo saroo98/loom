@@ -183,7 +183,8 @@ class AutomaticLifecycleTests(unittest.TestCase):
         root = Path(loom_lifecycle.__file__).parent.parent / "schemas"
         for name in (
                 "acceptance-evidence.schema.json", "plan-dependencies.schema.json",
-                "regate-receipt.schema.json", "release-exposure.schema.json"):
+                "regate-receipt.schema.json", "release-exposure.schema.json",
+                "repair-result.schema.json"):
             with self.subTest(name=name):
                 schema = json.loads((root / name).read_text(encoding="utf-8"))
                 self.assertEqual(schema["$schema"],

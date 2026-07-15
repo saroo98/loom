@@ -18,3 +18,7 @@ when dependency evidence proves that scope. Unknown scope requires a full rechec
 
 Execution remains blocked until repair produces current real-medium evidence and a new checkpoint.
 Changing a date without rerunning the verification is not a refresh.
+The production orchestrator seals the affected-section list before delegated work, accepts exactly
+one content-hashed evidence record per affected section, rejects scope or digest drift, writes the
+regate receipt, and rolls the receipt and stamps back on a failed postcheck. Elapsed-time expiry
+forces a full-pack revalidation even when target bytes did not move.

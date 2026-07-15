@@ -21,11 +21,15 @@ invisible to the owner:
    `action-required`, honor its exact tier, domains, deadline, and session identity. The
    orchestrator has already recorded the planning baseline. Author only the consumer-selected
    plan, use a genuinely independent reviewer for G1, and do not mutate implementation targets.
+   For `repair`, revalidate exactly `repair_plan.affected_plan_sections` using a real medium and
+   write the private repair-result JSON defined by `schemas/repair-result.schema.json`. Every
+   evidence path is relative to the private pack and its SHA-256 must match the observed file.
 4. Write the harness's complete five-category token measurement to a private temporary JSON file:
    `input_tokens`, `cache_read_tokens`, `output_tokens`, `tool_tokens`, and `retry_tokens`. Never
    estimate a missing category or label a subset as total.
 5. Run `python -B LOOM_ROOT/tools/loom_orchestrator.py complete --action <action_path>
-   --usage <private usage JSON>`. Return the sealed receipt. On owner cancellation, run the same
+   --usage <private usage JSON> [--result <private repair-result JSON>]`. `--result` is required
+   only for repair. Return the sealed receipt. On owner cancellation, run the same
    tool's `cancel --action <action_path>` operation. Retry only a structured transient interruption;
    the orchestrator caps retries at three and enforces the deadline.
 

@@ -859,8 +859,11 @@ def _verify(pack, repo=None, require_authorized=False, *, pending_completion=Non
             if valid_completions:
                 checkpoint = valid_completions[-1]
             if current.state_hash != checkpoint.get("repo_state_hash"):
-                findings.append(
-                    "repository has unrecorded changes since the last lifecycle checkpoint")
+                receipt = loom_lifecycle.validate_regate_receipt(
+                    pack, current.state_hash, checkpoint.get("repo_state_hash"))
+                if receipt is None:
+                    findings.append(
+                        "repository has unrecorded changes since the last lifecycle checkpoint")
     return findings
 
 

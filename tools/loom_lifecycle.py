@@ -431,10 +431,10 @@ def validate_regate_receipt(pack, current_state_hash, prior_state_hash):
     return value
 
 
-def reconcile(pack, repo, verifier, *, now=None):
-    """Regate exactly the affected sections through a trusted real-medium callback."""
-    if not callable(verifier):
-        raise LifecycleError("regate verifier must be callable")
+def preview_regate(pack, repo, *, force_full=False):
+    """Return the exact world-bound repair scope without mutating the pack."""
+    if type(force_full) is not bool:
+        raise LifecycleError("force_full must be boolean")
     pack, repo = Path(pack).absolute(), Path(repo).absolute()
     try:
         lifecycle = json.loads((pack / "lifecycle.json").read_text(encoding="utf-8"),
@@ -455,6 +455,22 @@ def reconcile(pack, repo, verifier, *, now=None):
     import loom_gate
     current_state, current_files = loom_gate._stable_snapshot(repo, pack)
     plan = plan_regate(reference, current_files, dependencies)
+    if force_full:
+        plan = dict(plan, affected_plan_sections=["full-pack"], regate_scope="full")
+    return {
+        **plan, "prior_state_hash": prior_hash,
+        "current_state_hash": current_state.state_hash,
+    }
+
+
+def reconcile(pack, repo, verifier, *, now=None, force_full=False, expected_plan=None):
+    """Regate exactly the affected sections through a trusted real-medium callback."""
+    if not callable(verifier):
+        raise LifecycleError("regate verifier must be callable")
+    pack, repo = Path(pack).absolute(), Path(repo).absolute()
+    plan = preview_regate(pack, repo, force_full=force_full)
+    if expected_plan is not None and plan != expected_plan:
+        raise LifecycleError("repair scope changed after it was sealed")
     verification = []
     for section in plan["affected_plan_sections"]:
         result = verifier(section, tuple(plan["changed_paths"]))
@@ -469,7 +485,8 @@ def reconcile(pack, repo, verifier, *, now=None):
                     "needs_owner": False, **plan}
         verification.append(dict(result, section=section))
     receipt = {"schema_version": SCHEMA_VERSION,
-        "prior_state_hash": prior_hash, "current_state_hash": current_state.state_hash,
+        "prior_state_hash": plan["prior_state_hash"],
+        "current_state_hash": plan["current_state_hash"],
         "changed_paths": plan["changed_paths"],
         "affected_plan_sections": plan["affected_plan_sections"],
         "regate_scope": plan["regate_scope"], "verification": verification,

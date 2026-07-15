@@ -1,6 +1,7 @@
 """Black-box coverage for the installed one-surface production orchestrator."""
 
 import datetime as dt
+import hashlib
 import json
 import subprocess
 import sys
@@ -564,6 +565,84 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("M", resumed["tier"])
         self.assertEqual(["accounting"], resumed["domains"])
         self.assertIsNone(resumed["work_order"])
+        self.assertEqual("full", resumed["repair_plan"]["regate_scope"])
+        self.assertEqual(["full-pack"], resumed["repair_plan"]["affected_plan_sections"])
+
+        evidence = self.repo / "plans" / "evidence" / "freshness-review.txt"
+        _write(evidence, "Revalidated accounting invariants and executable acceptance media.\n")
+        repair_result = self.root / "repair-result.json"
+        repair_result.write_text(json.dumps({
+            "schema_version": 1,
+            "repair_verification": [{
+                "section": "full-pack", "passed": True,
+                "medium": "review-log",
+                "evidence_path": "evidence/freshness-review.txt",
+                "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+            }],
+        }), encoding="utf-8")
+        repaired = loom_orchestrator.complete(
+            resumed["action_path"], usage, result_path=repair_result, now=future)
+        self.assertEqual("completed", repaired["status"])
+        self.assertEqual("repair-complete", repaired["code"])
+
+        continued = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed, now=future)
+        self.assertEqual("execute", continued["intent"])
+
+    def test_repair_requires_exact_content_bound_evidence(self):
+        opened = json.loads(self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        self.assertEqual(0, self.cli(
+            "complete", "--action", opened["action_path"], "--usage", usage).returncode)
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        repair = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual("selective", repair["repair_plan"]["regate_scope"])
+        self.assertEqual(["accounting", "testing"],
+                         repair["repair_plan"]["affected_plan_sections"])
+        with self.assertRaisesRegex(loom_orchestrator.OrchestratorError,
+                                    "REPAIR_EVIDENCE_REQUIRED"):
+            loom_orchestrator.complete(repair["action_path"], usage)
+
+        evidence = self.repo / "plans" / "evidence" / "regate.txt"
+        _write(evidence, "Observed balanced posting tests in a real process.\n")
+        result_path = self.root / "repair.json"
+        result_path.write_text(json.dumps({
+            "schema_version": 1,
+            "repair_verification": [
+                {"section": section, "passed": True, "medium": "cli-process",
+                 "evidence_path": "evidence/regate.txt",
+                 "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest()}
+                for section in ["accounting", "testing"]
+            ],
+        }), encoding="utf-8")
+        evidence.write_text("tampered\n", encoding="utf-8")
+        with self.assertRaisesRegex(loom_orchestrator.OrchestratorError,
+                                    "REPAIR_EVIDENCE_INVALID"):
+            loom_orchestrator.complete(
+                repair["action_path"], usage, result_path=result_path)
+        _write(evidence, "Observed balanced posting tests in a real process.\n")
+        completed = self.cli(
+            "complete", "--action", repair["action_path"], "--usage", usage,
+            "--result", result_path)
+        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+        repaired = json.loads(completed.stdout)
+        self.assertEqual("repair-complete", repaired["code"])
+        continued = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual("execute", continued["intent"])
 
     def test_cancel_is_terminal_and_content_bound(self):
         opened = self.cli(
@@ -588,6 +667,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "complete", "--action", action_file, "--usage", usage)
         self.assertEqual(2, corrupt.returncode)
         self.assertEqual("ACTION_CORRUPT", json.loads(corrupt.stdout)["code"])
+
+        legacy = json.loads(action_file.read_text(encoding="utf-8"))
+        legacy["schema_version"] = 1
+        legacy["action_hash"] = loom_orchestrator._action_hash(legacy)
+        action_file.write_text(json.dumps(legacy), encoding="utf-8")
+        unsupported = self.cli(
+            "complete", "--action", action_file, "--usage", usage)
+        self.assertEqual(2, unsupported.returncode)
+        self.assertEqual(
+            "ACTION_VERSION_UNSUPPORTED", json.loads(unsupported.stdout)["code"])
 
     def test_timeout_and_retry_ceiling_close_the_action(self):
         opened = self.cli(
