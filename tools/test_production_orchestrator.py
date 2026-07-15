@@ -14,6 +14,7 @@ import loom_gate  # noqa: E402
 import loom_install  # noqa: E402
 import loom_lifecycle  # noqa: E402
 import loom_lint  # noqa: E402
+import loom_memory  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_release  # noqa: E402
 
@@ -316,6 +317,28 @@ class ProductionOrchestratorTests(unittest.TestCase):
             self.installed, confirmation=receipt["install_id"])
         self.assertTrue(removed["target_removed"])
 
+    def test_invoke_supplies_bounded_owner_context_before_host_work(self):
+        instance_id = loom_memory.initialize(self.home, self.installed)
+        preference = loom_memory.set_preference(
+            self.home, instance_id, "report_style", "concise")
+
+        opened = self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed)
+        self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
+        result = json.loads(opened.stdout)
+        memory_ids = [item["id"] for item in result["context"]["memory"]]
+        self.assertIn(preference["id"], memory_ids)
+        selected = [item for item in result["context"]["preferences"]
+                    if item["key"] == "report_detail"]
+        self.assertEqual("concise", selected[0]["effective_value"])
+        self.assertLessEqual(
+            len(json.dumps(result["context"], ensure_ascii=False)), 32 * 1024)
+        action = json.loads(Path(result["action_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(result["context"]["memory"], action["context"]["memory"])
+        self.assertEqual(
+            result["context"]["preferences"], action["context"]["preferences"])
+
     def test_tier_s_uses_one_bounded_work_order_without_a_pack_essay(self):
         request = "Plan a single-file CLI flag in src/app.py"
         opened = self.cli(
@@ -444,6 +467,31 @@ class ProductionOrchestratorTests(unittest.TestCase):
         lifecycle = json.loads(
             (self.repo / "plans" / "lifecycle.json").read_text(encoding="utf-8"))
         self.assertEqual([], lifecycle["work_order_completions"])
+
+    def test_elapsed_freshness_expiry_routes_to_repair_before_execution(self):
+        opened = json.loads(self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        self.assertEqual(0, self.cli(
+            "complete", "--action", opened["action_path"], "--usage", usage).returncode)
+
+        future = dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=62)
+        resumed = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed, now=future)
+        self.assertEqual("action-required", resumed["status"])
+        self.assertEqual("repair", resumed["intent"])
+        self.assertEqual("M", resumed["tier"])
+        self.assertEqual(["accounting"], resumed["domains"])
+        self.assertIsNone(resumed["work_order"])
 
     def test_cancel_is_terminal_and_content_bound(self):
         opened = self.cli(

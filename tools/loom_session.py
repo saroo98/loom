@@ -1020,8 +1020,78 @@ class SessionController:
             return {"status": "interrupted", "code": code,
                     "session_id": open_session.session_id}
 
+    def _select_context(self, prepared, session_id, operation_id, path, request):
+        provisional = SessionContext(
+            session_id=session_id,
+            operation_id=operation_id,
+            invocation_id=prepared.invocation_id,
+            project_id=prepared.project_id,
+            intent=prepared.intent,
+            prepared=prepared,
+            selected_memory=(),
+            selected_preferences=(),
+            session_journal=str(path),
+            request_text=request,
+        )
+        housekeeping_result = self.memory.housekeeping(provisional)
+        selected = tuple(self.memory.select(provisional))
+        selection_context = SessionContext(
+            session_id=session_id,
+            operation_id=operation_id,
+            invocation_id=prepared.invocation_id,
+            project_id=prepared.project_id,
+            intent=prepared.intent,
+            prepared=prepared,
+            selected_memory=selected,
+            selected_preferences=(),
+            session_journal=str(path),
+            request_text=request,
+        )
+        preference_selector = getattr(self.memory, "select_preferences", None)
+        preferences = tuple(preference_selector(selection_context)) \
+            if preference_selector is not None else ()
+        return housekeeping_result, selected, preferences
+
+    def prepare_context(self, open_session, request):
+        """Select the bounded owner context before delegated host work begins."""
+        if not isinstance(open_session, OpenSession) \
+                or open_session.terminal_receipt is not None \
+                or open_session.prepared.instance_id != self.instance_id \
+                or not isinstance(request, str) \
+                or open_session.prepared.request_hash != loom_runtime._sha(
+                    " ".join(request.split())):
+            raise SessionBlocked(
+                "SESSION_CONTEXT_INVALID", "context selection requires this open session")
+        path = Path(open_session.journal_path)
+        with _SessionFileLock(path.with_name(".session.lock")):
+            journal = _load_journal(
+                path, self.instance_id, open_session.prepared.project_id)
+            matching = [event for event in journal["events"]
+                        if event["operation_id"] == open_session.operation_id]
+            if not matching or matching[-1]["kind"] not in {
+                    "session-opened", "session-reconciled"}:
+                raise SessionBlocked(
+                    "SESSION_NOT_ACTIVE", "session is unavailable for context selection")
+            housekeeping, selected, preferences = self._select_context(
+                open_session.prepared, open_session.session_id,
+                open_session.operation_id, path, request)
+        try:
+            capsule = json.loads(json.dumps({
+                "memory": list(selected),
+                "preferences": list(preferences),
+                "archived_count": _transition_count(housekeeping),
+            }, ensure_ascii=False, allow_nan=False))
+        except (TypeError, ValueError) as exc:
+            raise SessionBlocked(
+                "SESSION_CONTEXT_INVALID", "selected context is not strict JSON") from exc
+        if len(_canonical_json(capsule)) > 32 * 1024:
+            raise SessionBlocked(
+                "SESSION_CONTEXT_INVALID", "selected context exceeds its hard byte bound")
+        return capsule
+
     def run(self, request, *, invocation_id, cwd, explicit_target=None,
-            explicit_config=None, now=None, continue_open=False, prepared=None):
+            explicit_config=None, now=None, continue_open=False, prepared=None,
+            selected_context=None):
         instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
         if prepared is None:
             prepared = loom_runtime.prepare_invocation(
@@ -1051,10 +1121,10 @@ class SessionController:
         with _SessionFileLock(lock_path):
             return self._run_locked(
                 prepared, invocation_id, instant, path, request,
-                continue_open=continue_open)
+                continue_open=continue_open, selected_context=selected_context)
 
     def _run_locked(self, prepared, invocation_id, instant, path, request,
-                    *, continue_open=False):
+                    *, continue_open=False, selected_context=None):
         operation_id, session_id = _operation_identity(prepared)
         journal = _load_journal(path, self.instance_id, prepared.project_id)
         for event in reversed(journal["events"]):
@@ -1095,36 +1165,25 @@ class SessionController:
             })
         _atomic_json(path, journal)
 
-        provisional = SessionContext(
-            session_id=session_id,
-            operation_id=operation_id,
-            invocation_id=invocation_id,
-            project_id=prepared.project_id,
-            intent=prepared.intent,
-            prepared=prepared,
-            selected_memory=(),
-            selected_preferences=(),
-            session_journal=str(path),
-            request_text=request,
-        )
         try:
-            housekeeping_result = self.memory.housekeeping(provisional)
-            selected = tuple(self.memory.select(provisional))
-            selection_context = SessionContext(
-                session_id=session_id,
-                operation_id=operation_id,
-                invocation_id=invocation_id,
-                project_id=prepared.project_id,
-                intent=prepared.intent,
-                prepared=prepared,
-                selected_memory=selected,
-                selected_preferences=(),
-                session_journal=str(path),
-                request_text=request,
-            )
-            preference_selector = getattr(self.memory, "select_preferences", None)
-            preferences = tuple(preference_selector(selection_context)) \
-                if preference_selector is not None else ()
+            if selected_context is None:
+                housekeeping_result, selected, preferences = self._select_context(
+                    prepared, session_id, operation_id, path, request)
+            else:
+                if not continue_open or not isinstance(selected_context, dict) \
+                        or set(selected_context) != {
+                            "memory", "preferences", "archived_count"} \
+                        or not isinstance(selected_context["memory"], list) \
+                        or not isinstance(selected_context["preferences"], list) \
+                        or type(selected_context["archived_count"]) is not int \
+                        or selected_context["archived_count"] < 0 \
+                        or len(_canonical_json(selected_context)) > 32 * 1024:
+                    raise SessionBlocked(
+                        "SESSION_CONTEXT_INVALID", "sealed context capsule is invalid")
+                selected = tuple(selected_context["memory"])
+                preferences = tuple(selected_context["preferences"])
+                housekeeping_result = {
+                    "archived": selected_context["archived_count"]}
             context = SessionContext(
                 session_id=session_id,
                 operation_id=operation_id,

@@ -971,7 +971,7 @@ def _hash_frontier(path, *, lifecycle_only=False):
     return digest.hexdigest()
 
 
-def _inspect_lifecycle(pack, lifecycle_repo_hash):
+def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
     pack = Path(pack)
     if _path_has_link_or_junction(pack):
         raise RuntimeError("pack lifecycle must not traverse a symlink or junction")
@@ -1082,12 +1082,41 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash):
     }
     if result["failed"]:
         result["state_error"] = "INVALID_LIFECYCLE"
+    if authorized and not result["failed"]:
+        manifest = pack / "MANIFEST.md"
+        try:
+            frontmatter, _ = loom_lint.parse_frontmatter(
+                _bounded_read(
+                    manifest, MAX_CONFIG_BYTES,
+                    "planning-pack manifest").decode("utf-8"))
+            verified = dt.date.fromisoformat(str((frontmatter or {})["last_verified"]))
+            window = int((frontmatter or {})["freshness_window_days"])
+            current = today or dt.datetime.now(dt.timezone.utc).date()
+            if verified > current:
+                raise ValueError("manifest last_verified is in the future")
+            if (current - verified).days > window:
+                result.update({
+                    "authorized": False,
+                    "active_frontier": False,
+                    "terminal": False,
+                    "drift": True,
+                    "state_error": "STALE_TIME",
+                })
+        except (OSError, UnicodeError, KeyError, TypeError, ValueError):
+            result.update({
+                "authorized": False,
+                "active_frontier": False,
+                "terminal": False,
+                "failed": True,
+                "state_error": "INVALID_LIFECYCLE",
+            })
     return result
 
 
 def _pack_route_contract(pack, state):
     """Read the validated route identity owned by an existing planning pack."""
-    if not state.get("pack_exists") or state.get("state_error"):
+    if not state.get("pack_exists") or state.get("state_error") not in {
+            None, "STALE_LIFECYCLE", "STALE_TIME"}:
         return None
     pack = Path(pack)
     manifest = pack / "MANIFEST.md"
@@ -1157,12 +1186,15 @@ def _owner_state_versions(owner_root, instance_id, project_id, use_profile):
     }
 
 
-def _observe_world(project, pack, config, config_hash, owner_root, instance_id):
+def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
+                   prepared_time=None):
     """Read one complete preparation snapshot through owned bounded primitives."""
     pack_rel = pack.relative_to(project.root).as_posix()
     repo_state = loom_survey.repo_state(
         project.root, exclude_prefixes=(pack_rel,))
-    state = _inspect_lifecycle(pack, repo_state.state_hash)
+    state = _inspect_lifecycle(
+        pack, repo_state.state_hash,
+        today=(prepared_time.date() if prepared_time is not None else None))
     components = {
         "target_survey_hash": repo_state.state_hash,
         "pack_hash": _hash_frontier(pack),
@@ -1197,13 +1229,15 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
         raise RuntimeBlocked("PROJECT_INDETERMINATE", "pack path escapes the project") from exc
     try:
         first_repo, first_state, first_components = _observe_world(
-            project, pack, config, config_hash, owner_root, instance_id)
+            project, pack, config, config_hash, owner_root, instance_id,
+            prepared_time)
         check_config = _load_config(project.root, explicit_config, owner_root)
         if check_config != (config, config_source, config_hash, config_error):
             raise RuntimeBlocked(
                 "PROJECT_INDETERMINATE", "selected config changed during preparation")
         second_repo, second_state, second_components = _observe_world(
-            project, pack, config, config_hash, owner_root, instance_id)
+            project, pack, config, config_hash, owner_root, instance_id,
+            prepared_time)
         if (first_repo, first_state, first_components) != \
                 (second_repo, second_state, second_components):
             raise RuntimeBlocked(
@@ -1247,7 +1281,7 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "recommendation": "Repair the invalid selected Loom config before continuing.",
             "evidence": ["invalid-config"],
         })
-    elif state.get("state_error") == "STALE_LIFECYCLE":
+    elif state.get("state_error") in {"STALE_LIFECYCLE", "STALE_TIME"}:
         decision.update({
             "intent": "repair",
             "blocked": False,
@@ -1256,7 +1290,9 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "confidence": 1.0,
             "recommendation": (
                 "Regate the changed plan sections internally before execution."),
-            "evidence": ["target-drift"],
+            "evidence": [
+                "elapsed-time-drift" if state.get("state_error") == "STALE_TIME"
+                else "target-drift"],
         })
     elif state.get("state_error"):
         decision.update({

@@ -31,7 +31,8 @@ ACTION_FIELDS = {
     "explicit_target", "intent", "tier", "domains", "survey_hash",
     "created_at", "expires_at", "attempts", "max_attempts", "session_id",
     "operation_id", "journal_path", "initial_pack_hash",
-    "remove_pristine_pack", "work_order", "prepared", "result", "action_hash",
+    "remove_pristine_pack", "work_order", "prepared", "context", "result",
+    "action_hash",
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
@@ -116,9 +117,20 @@ def _validate_action(value, path):
                 or not re.fullmatch(r"(?:work-orders/)?WO-[0-9]{3,}(?:-[A-Za-z0-9._-]+)?\.md",
                                     value["work_order"]))) \
             or not isinstance(value["prepared"], dict) \
+            or not isinstance(value["context"], dict) \
             or (value["initial_pack_hash"] is not None and not re.fullmatch(
                 r"[0-9a-f]{64}", str(value["initial_pack_hash"]))):
         raise OrchestratorError("ACTION_CORRUPT", "action contract is invalid")
+    context = value["context"]
+    if set(context) != {"memory", "preferences", "archived_count"} \
+            or not isinstance(context["memory"], list) \
+            or not isinstance(context["preferences"], list) \
+            or len(context["memory"]) > 16 \
+            or len(context["preferences"]) > 32 \
+            or type(context["archived_count"]) is not int \
+            or context["archived_count"] < 0 \
+            or len(_canonical_bytes(context)) > 32 * 1024:
+        raise OrchestratorError("ACTION_CORRUPT", "sealed context capsule is invalid")
     try:
         prepared = loom_runtime.PreparedInvocation.from_dict(value["prepared"])
     except loom_runtime.RuntimeError as exc:
@@ -471,6 +483,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     if opened.terminal_receipt is not None:
         return opened.terminal_receipt.to_dict()
     prepared = opened.prepared
+    context_capsule = controller.prepare_context(opened, request)
     created_at = _stamp(now)
     expires_at = _stamp(
         loom_runtime._parse_time(created_at) + dt.timedelta(seconds=timeout_seconds))
@@ -490,19 +503,22 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "operation_id": opened.operation_id, "journal_path": opened.journal_path,
         "initial_pack_hash": None, "remove_pristine_pack": False,
         "work_order": None, "prepared": prepared.to_dict(),
+        "context": context_capsule,
         "result": None,
     }
     if prepared.route_contract["blocked"]:
         receipt = controller.run(
             request, invocation_id=invocation_id, cwd=cwd,
-            explicit_target=target, now=now, continue_open=True)
+            explicit_target=target, now=now, continue_open=True,
+            prepared=prepared, selected_context=context_capsule)
         action["status"], action["result"] = "completed", receipt.to_dict()
         _write_action(path, action)
         return receipt.to_dict()
     if prepared.intent in {"status", "why", "undo", "forget", "remember"}:
         immediate = _controller(action).run(
             request, invocation_id=invocation_id, cwd=cwd,
-            explicit_target=target, now=now, continue_open=True)
+            explicit_target=target, now=now, continue_open=True,
+            prepared=prepared, selected_context=context_capsule)
         action["status"], action["result"] = "completed", immediate.to_dict()
         _write_action(path, action)
         return immediate.to_dict()
@@ -548,6 +564,10 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "intent": action["intent"], "tier": action["tier"],
         "domains": action["domains"], "expires_at": expires_at,
         "work_order": work_order_id if prepared.intent == "execute" else None,
+        "context": {
+            "memory": context_capsule["memory"],
+            "preferences": context_capsule["preferences"],
+        },
         "attempts_remaining": action["max_attempts"] - action["attempts"],
         "session_environment": opened.environment(),
         "required_outcome": (
@@ -625,7 +645,8 @@ def complete(action_path, usage_path, *, now=None):
         receipt = controller.run(
             action["request"], invocation_id=action["invocation_id"],
             cwd=action["cwd"], explicit_target=action["explicit_target"],
-            now=instant, continue_open=True, prepared=sealed)
+            now=instant, continue_open=True, prepared=sealed,
+            selected_context=action["context"])
     except loom_session.SessionInterrupted as exc:
         action["attempts"] += 1
         if action["attempts"] >= action["max_attempts"]:

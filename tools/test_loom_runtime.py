@@ -1,5 +1,6 @@
 """Acceptance tests for the pure `/loom` invocation preparation slice."""
 
+import datetime as dt
 import json
 import os
 import subprocess
@@ -49,7 +50,8 @@ class RuntimeFixture(unittest.TestCase):
             "invocation_id": self.invocation,
             "cwd": self.repo,
             "owner_home": self.owner_home,
-            "now": "2026-07-13T12:00:00Z",
+            "now": dt.datetime.combine(
+                dt.date.today(), dt.time(12), tzinfo=dt.timezone.utc),
         }
         values.update(overrides)
         return loom_runtime.prepare_invocation(request, **values)
@@ -591,6 +593,22 @@ class UncertainRouteTests(unittest.TestCase):
 
 
 class InvalidWorldStateTests(RuntimeFixture):
+    def test_freshness_boundary_is_current_through_day_14_and_stale_on_day_15(self):
+        pack = self.authorize_fixture_pack()
+        current = loom_survey.repo_state(
+            self.repo, exclude_prefixes=("plans",))
+        verified = dt.date.today()
+
+        current_state = loom_runtime._inspect_lifecycle(
+            pack, current.state_hash, today=verified + dt.timedelta(days=14))
+        stale_state = loom_runtime._inspect_lifecycle(
+            pack, current.state_hash, today=verified + dt.timedelta(days=15))
+
+        self.assertTrue(current_state["authorized"])
+        self.assertNotIn("state_error", current_state)
+        self.assertFalse(stale_state["authorized"])
+        self.assertEqual("STALE_TIME", stale_state["state_error"])
+
     def test_invalid_lifecycle_blocks_instead_of_routing_through(self):
         pack = self.repo / "plans"
         pack.mkdir()
