@@ -18,10 +18,23 @@ import loom_memory
 MAX_SCAN_FILE_BYTES = 64 * 1024 * 1024
 MAX_EXPORT_BYTES = 64 * 1024 * 1024
 SAFE_RECEIVER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+TOKEN_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be")
+TRANSPARENT_TEXT_SUFFIXES = {
+    ".bat", ".cfg", ".cmd", ".css", ".csv", ".env", ".htm", ".html",
+    ".ini", ".js", ".json", ".md", ".ps1", ".py", ".rst", ".sh",
+    ".svg", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
+}
 NETWORK_MODULES = {
     "aiohttp", "ftplib", "http", "httpx", "requests", "smtplib", "socket",
     "telnetlib", "urllib", "websockets",
 }
+NETWORK_EXECUTABLES = {
+    "curl", "ftp", "nc", "ncat", "scp", "sftp", "ssh", "telnet", "wget",
+}
+NETWORK_GIT_SUBCOMMANDS = {
+    "clone", "fetch", "ls-remote", "pull", "push", "remote-update", "submodule",
+}
+SUBPROCESS_CALLS = {"call", "check_call", "check_output", "Popen", "run"}
 SECRET_PATTERNS = (
     ("private-key", re.compile(br"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----", re.I)),
     ("github-token", re.compile(br"\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})\b")),
@@ -105,6 +118,30 @@ def _iter_regular_files(root):
                 raise PrivacyError(f"cannot inspect publication entry: {path}: {exc}") from exc
 
 
+def _scan_views(content):
+    """Return raw bytes plus normalized text views for supported public encodings."""
+    views = [content]
+    decoded = False
+    encodings = ["utf-8-sig"]
+    if content.startswith((b"\xff\xfe", b"\xfe\xff")):
+        encodings.append("utf-16")
+    elif len(content) % 2 == 0 and content:
+        pairs = len(content) // 2
+        even_nuls = content[0::2].count(0) / pairs
+        odd_nuls = content[1::2].count(0) / pairs
+        if max(even_nuls, odd_nuls) >= 0.20:
+            encodings.extend(("utf-16-le", "utf-16-be"))
+    for encoding in encodings:
+        try:
+            normalized = content.decode(encoding).encode("utf-8")
+        except (UnicodeDecodeError, UnicodeEncodeError):
+            continue
+        decoded = True
+        if normalized not in views:
+            views.append(normalized)
+    return tuple(views), decoded
+
+
 def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
     """Scan every regular file byte and every relative filename without extension filters."""
     root = _safe_absolute(root, "publication root", must_exist=True)
@@ -116,15 +153,19 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
     tokens = [item.strip() for item in forbidden_tokens if item.strip()]
     if require_owner_tokens and not tokens:
         raise PrivacyError("private/owner publication requires real owner tokens")
-    folded_tokens = [(item, item.encode("utf-8").lower()) for item in tokens]
+    folded_tokens = [
+        (item, tuple(item.casefold().encode(encoding).lower()
+                     for encoding in TOKEN_ENCODINGS))
+        for item in tokens
+    ]
     findings = []
     files_scanned = 0
     bytes_scanned = 0
     for path in _iter_regular_files(root):
         relative = path.relative_to(root).as_posix()
         name_bytes = relative.encode("utf-8").lower()
-        for token, encoded in folded_tokens:
-            if encoded in name_bytes:
+        for token, encoded_forms in folded_tokens:
+            if encoded_forms[0] in name_bytes:
                 findings.append({"kind": "forbidden-filename", "path": relative,
                                  "rule": hashlib.sha256(token.encode()).hexdigest()[:12]})
                 break
@@ -146,15 +187,26 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
         files_scanned += 1
         bytes_scanned += len(content)
         folded = content.lower()
-        token_match = next((token for token, encoded in folded_tokens if encoded in folded), None)
+        token_match = next((
+            token for token, encoded_forms in folded_tokens
+            if any(encoded in folded for encoded in encoded_forms)
+        ), None)
         if token_match is not None:
             findings.append({"kind": "forbidden-content", "path": relative,
                              "rule": hashlib.sha256(token_match.encode()).hexdigest()[:12]})
+        scan_views, decoded_text = _scan_views(content)
+        secret_match = None
         for label, pattern in SECRET_PATTERNS:
-            if pattern.search(content):
+            if any(pattern.search(view) for view in scan_views):
                 findings.append({"kind": "secret-signature", "path": relative,
                                  "rule": label})
+                secret_match = label
                 break
+        transparent_name = not path.suffix or path.suffix.lower() in TRANSPARENT_TEXT_SUFFIXES
+        if token_match is None and secret_match is None \
+                and (not decoded_text or not transparent_name):
+            findings.append({"kind": "opaque-content", "path": relative,
+                             "rule": "unsupported-binary"})
     return {"clean": not findings, "files_scanned": files_scanned,
             "bytes_scanned": bytes_scanned, "findings": findings}
 
@@ -180,8 +232,40 @@ def minimize_evidence(text, *, roots=(), max_chars=4096):
     return value[:head] + marker + value[-tail:]
 
 
+def _literal_command_parts(node):
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return [node.value]
+    if isinstance(node, (ast.List, ast.Tuple)):
+        values = []
+        for item in node.elts:
+            if not isinstance(item, ast.Constant) or not isinstance(item.value, str):
+                return []
+            values.append(item.value)
+        return values
+    return []
+
+
+def _network_command(parts):
+    if not parts:
+        return None
+    flattened = " ".join(parts).lower()
+    executable = re.split(r"[\\/]", parts[0].strip().lower())[-1]
+    executable = executable.removesuffix(".exe")
+    if executable in NETWORK_EXECUTABLES:
+        return executable
+    words = set(re.findall(r"[a-z0-9_.-]+", flattened))
+    if executable == "git" and words & NETWORK_GIT_SUBCOMMANDS:
+        return "git"
+    if executable in {"powershell", "pwsh"} and words & {
+            "invoke-restmethod", "invoke-webrequest", "start-bitstransfer"}:
+        return executable
+    if re.search(r"\b(?:https?|ftp)://", flattened):
+        return executable or "subprocess"
+    return None
+
+
 def audit_offline_modules(tools_root):
-    """Prove production Python modules contain no network-capable imports."""
+    """Audit direct network imports and literal network subprocess commands."""
     root = _safe_absolute(tools_root, "tools root", must_exist=True)
     findings = []
     scanned = 0
@@ -191,6 +275,33 @@ def audit_offline_modules(tools_root):
             tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         except (OSError, UnicodeError, SyntaxError) as exc:
             raise PrivacyError(f"cannot audit offline module {path.name}: {exc}") from exc
+        subprocess_aliases = {"subprocess"}
+        os_aliases = {"os"}
+        importlib_aliases = {"importlib"}
+        subprocess_functions = set()
+        system_functions = set()
+        import_module_functions = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name == "subprocess":
+                        subprocess_aliases.add(alias.asname or alias.name)
+                    elif alias.name == "os":
+                        os_aliases.add(alias.asname or alias.name)
+                    elif alias.name == "importlib":
+                        importlib_aliases.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+                for alias in node.names:
+                    if alias.name in SUBPROCESS_CALLS:
+                        subprocess_functions.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module == "os":
+                for alias in node.names:
+                    if alias.name == "system":
+                        system_functions.add(alias.asname or alias.name)
+            elif isinstance(node, ast.ImportFrom) and node.module == "importlib":
+                for alias in node.names:
+                    if alias.name == "import_module":
+                        import_module_functions.add(alias.asname or alias.name)
         for node in ast.walk(tree):
             names = []
             if isinstance(node, ast.Import):
@@ -201,6 +312,43 @@ def audit_offline_modules(tools_root):
                 if name in NETWORK_MODULES:
                     findings.append({"path": path.name, "line": node.lineno,
                                      "module": name})
+            if not isinstance(node, ast.Call) or not node.args:
+                continue
+            function = node.func
+            is_dynamic_import = (
+                isinstance(function, ast.Name)
+                and function.id in ({"__import__"} | import_module_functions)
+            ) or (
+                isinstance(function, ast.Attribute)
+                and isinstance(function.value, ast.Name)
+                and function.value.id in importlib_aliases
+                and function.attr == "import_module"
+            )
+            if is_dynamic_import and isinstance(node.args[0], ast.Constant) \
+                    and isinstance(node.args[0].value, str):
+                module = node.args[0].value.split(".")[0]
+                if module in NETWORK_MODULES:
+                    findings.append({"path": path.name, "line": node.lineno,
+                                     "module": module})
+            is_subprocess = (
+                isinstance(function, ast.Attribute)
+                and isinstance(function.value, ast.Name)
+                and function.value.id in subprocess_aliases
+                and function.attr in SUBPROCESS_CALLS
+            ) or (isinstance(function, ast.Name)
+                  and function.id in subprocess_functions)
+            is_system = (
+                isinstance(function, ast.Attribute)
+                and isinstance(function.value, ast.Name)
+                and function.value.id in os_aliases and function.attr == "system"
+            ) or (isinstance(function, ast.Name)
+                  and function.id in system_functions)
+            if is_subprocess or is_system:
+                command = _network_command(_literal_command_parts(node.args[0]))
+                if command:
+                    findings.append({"path": path.name, "line": node.lineno,
+                                     "kind": "network-subprocess",
+                                     "command": command})
     return {"offline": not findings, "modules_scanned": scanned, "findings": findings}
 
 

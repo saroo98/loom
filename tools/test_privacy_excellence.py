@@ -37,6 +37,86 @@ class PrivacyExcellenceTests(unittest.TestCase):
             {("forbidden-content", "asset.bin"),
              ("forbidden-filename", "PersonalIdentifier-notes.txt")})
 
+    def test_firewall_detects_utf16_owner_tokens(self):
+        cut = self.root / "cut"
+        cut.mkdir()
+        (cut / "windows-notes.txt").write_text(
+            "prefix PrivateOwnerSentinel suffix", encoding="utf-16")
+
+        result = loom_privacy.scan_publication(
+            cut, forbidden_tokens=["PrivateOwnerSentinel"],
+            require_owner_tokens=True)
+
+        self.assertFalse(result["clean"])
+        self.assertEqual("forbidden-content", result["findings"][0]["kind"])
+        self.assertEqual("windows-notes.txt", result["findings"][0]["path"])
+
+    def test_firewall_detects_utf16_secret_signatures(self):
+        cut = self.root / "cut"
+        cut.mkdir()
+        secret = "OPENAI_API_KEY=sk-proj-" + "A1b2C3d4" * 6
+        (cut / "windows.env").write_text(secret, encoding="utf-16")
+
+        result = loom_privacy.scan_publication(cut, forbidden_tokens=[])
+
+        self.assertFalse(result["clean"])
+        self.assertEqual(result["findings"], [{
+            "kind": "secret-signature",
+            "path": "windows.env",
+            "rule": "openai-token",
+        }])
+
+    def test_firewall_fails_closed_on_opaque_binary_content(self):
+        cut = self.root / "cut"
+        cut.mkdir()
+        (cut / "opaque.bin").write_bytes(
+            b"\x89PNG\r\n\x1a\n\x00\xff\x10\x80compressed-or-encrypted")
+
+        result = loom_privacy.scan_publication(
+            cut, forbidden_tokens=["PrivateOwnerSentinel"],
+            require_owner_tokens=True)
+
+        self.assertFalse(result["clean"])
+        self.assertEqual(result["findings"], [{
+            "kind": "opaque-content",
+            "path": "opaque.bin",
+            "rule": "unsupported-binary",
+        }])
+
+    def test_offline_audit_rejects_literal_network_subprocesses(self):
+        tools_root = self.root / "tools"
+        tools_root.mkdir()
+        (tools_root / "loom_probe.py").write_text(
+            "import subprocess\n"
+            "subprocess.run(['curl', 'https://example.invalid'])\n",
+            encoding="utf-8")
+
+        result = loom_privacy.audit_offline_modules(tools_root)
+
+        self.assertFalse(result["offline"])
+        self.assertEqual(result["findings"], [{
+            "path": "loom_probe.py",
+            "line": 2,
+            "kind": "network-subprocess",
+            "command": "curl",
+        }])
+
+    def test_offline_audit_rejects_literal_dynamic_network_imports(self):
+        tools_root = self.root / "tools"
+        tools_root.mkdir()
+        (tools_root / "loom_probe.py").write_text(
+            "import importlib\n"
+            "socket_module = __import__('socket')\n"
+            "requests_module = importlib.import_module('requests')\n",
+            encoding="utf-8")
+
+        result = loom_privacy.audit_offline_modules(tools_root)
+
+        self.assertFalse(result["offline"])
+        self.assertEqual(
+            {(item["line"], item["module"]) for item in result["findings"]},
+            {(2, "socket"), (3, "requests")})
+
     def test_private_publication_without_real_owner_tokens_fails_closed(self):
         cut = self.root / "cut"
         cut.mkdir()
