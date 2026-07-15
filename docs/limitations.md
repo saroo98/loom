@@ -12,6 +12,10 @@ Loom fails closed around evidence it does not possess.
   observations and 8 controlled memory-enabled versus memory-disabled replay pairs.
 - Domain guidance is not current legal, tax, medical, safety, or regulatory advice. Loom must verify
   present rules and target-environment facts before those claims become load-bearing.
+- Verification commands run in a disposable target snapshot, but the Python standard library does
+  not provide a portable host-level filesystem/network sandbox. Loom protects the original target
+  from relative-path mutation and detects target drift; command authority outside that snapshot is
+  **[UNVERIFIED]** until an OS sandbox provider is configured and certified.
 
 `tools/loom_release.py certify` enforces the first 3 evidence contracts. Certification requires a
 separate trust policy whose independently provisioned RSA public keys authorize each evidence type;

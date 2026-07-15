@@ -99,6 +99,19 @@ class AutomaticLifecycleTests(unittest.TestCase):
                 command=[sys.executable, "-c",
                          "from pathlib import Path; Path('app.py').write_text('changed')"])
         self.assertFalse((self.pack / "evidence" / "WO-001.json").exists())
+        self.assertEqual("print('baseline')\n",
+                         (self.repo / "app.py").read_text(encoding="utf-8"))
+
+    def test_verification_command_cannot_mutate_parent_of_real_target(self):
+        outside = self.repo.parent / "owner-data.txt"
+        outside.write_text("must survive", encoding="utf-8")
+        with self.assertRaisesRegex(loom_lifecycle.LifecycleError, "command failed"):
+            loom_lifecycle.capture_acceptance(
+                self.pack, self.repo, "WO-001", medium="cli-process",
+                command=[sys.executable, "-c",
+                         "from pathlib import Path; Path('../owner-data.txt').unlink()"])
+        self.assertEqual("must survive", outside.read_text(encoding="utf-8"))
+        self.assertFalse((self.pack / "evidence" / "WO-001.json").exists())
 
     def test_selective_regate_maps_only_changed_consumers_and_unmapped_is_full(self):
         baseline = {"src/api.py": "a", "src/ui.py": "b", "README.md": "c"}

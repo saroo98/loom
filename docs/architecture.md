@@ -16,6 +16,13 @@ terminal cancellation, and safe cleanup only when its newly created draft pack i
 `loom_gate`, `loom_lifecycle`, and `loom_lint` provide chronology, freshness, evidence, and pack
 integrity enforcement. Any unknown at a trust boundary is a typed block.
 
+Real-medium verification commands run against a link-free disposable snapshot of the target, not
+the owner's working tree. Any mutation of that snapshot invalidates the evidence and the snapshot
+is discarded. The original target is fingerprinted before and after capture so concurrent or
+absolute-path interference is still detected. This protects ordinary relative-path verification;
+it is not a portable host-level process sandbox, so commands still require the same authority and
+care as any executable launched by the agent.
+
 The world fingerprint treats path, entry kind, regular-file content, symlink target, executable
 mode, Git HEAD/branch/index, and staged/unstaged/untracked sets as project semantics. Device and
 inode identity, mtimes, ownership IDs, archive/indexing flags, platform attributes, and extended

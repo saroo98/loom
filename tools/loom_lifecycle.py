@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -21,6 +22,7 @@ import loom_privacy
 
 
 SCHEMA_VERSION = 1
+ACCEPTANCE_SCHEMA_VERSION = 2
 EVIDENCE_DIR = "evidence"
 REGATE_FILE = ".loom-regate.json"
 DEPENDENCY_FILE = "plan-dependencies.json"
@@ -171,6 +173,40 @@ def _run_bounded(command, cwd, timeout):
         return process.returncode, stdout, stderr
 
 
+def _copy_verification_snapshot(source, destination, excluded):
+    """Copy regular target content without links into a disposable verification tree."""
+    source, destination = Path(source), Path(destination)
+    excluded = Path(excluded) if excluded is not None else None
+    destination.mkdir(parents=True)
+    pending = [(source, destination)]
+    while pending:
+        current, output = pending.pop()
+        try:
+            entries = sorted(os.scandir(current), key=lambda item: item.name.casefold())
+        except OSError as exc:
+            raise LifecycleError(f"verification snapshot cannot enumerate target: {exc}") \
+                from exc
+        for entry in entries:
+            path = Path(entry.path)
+            if excluded is not None and (path == excluded or excluded in path.parents):
+                continue
+            if entry.is_symlink() or loom_privacy._is_redirect(path):
+                raise LifecycleError(
+                    f"verification snapshot refuses symlink or reparse entry: {path}")
+            target = output / entry.name
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    target.mkdir()
+                    pending.append((path, target))
+                elif entry.is_file(follow_symlinks=False):
+                    shutil.copy2(path, target)
+                else:
+                    raise LifecycleError(
+                        f"verification snapshot refuses non-regular entry: {path}")
+            except OSError as exc:
+                raise LifecycleError(f"verification snapshot copy failed: {exc}") from exc
+
+
 def capture_acceptance(pack, repo, work_order, *, medium, command,
                        timeout=120, now=None):
     pack, repo = Path(pack).absolute(), Path(repo).absolute()
@@ -182,7 +218,19 @@ def capture_acceptance(pack, repo, work_order, *, medium, command,
         raise LifecycleError("verification timeout is invalid")
     before = _repo_state(repo, pack)
     started = _stamp(now)
-    exit_code, stdout, stderr = _run_bounded(command, repo, timeout)
+    relative_pack = _pack_relative(repo, pack)
+    snapshot_parent = None
+    with tempfile.TemporaryDirectory(prefix="loom-verification-") as temporary:
+        snapshot_parent = Path(temporary)
+        snapshot_root = snapshot_parent / "target"
+        excluded = repo / relative_pack if relative_pack else None
+        _copy_verification_snapshot(repo, snapshot_root, excluded)
+        excluded_snapshot_pack = snapshot_root / ".loom-pack-excluded"
+        snapshot_before = _repo_state(snapshot_root, excluded_snapshot_pack)
+        exit_code, stdout, stderr = _run_bounded(command, snapshot_root, timeout)
+        snapshot_after = _repo_state(snapshot_root, excluded_snapshot_pack)
+        if snapshot_before.state_hash != snapshot_after.state_hash:
+            raise LifecycleError("verification command changed its disposable target snapshot")
     completed = _stamp()
     after = _repo_state(repo, pack)
     if exit_code != 0:
@@ -194,14 +242,14 @@ def capture_acceptance(pack, repo, work_order, *, medium, command,
         stderr_text = stderr.decode("utf-8")
     except UnicodeError as exc:
         raise LifecycleError("verification transcript is not UTF-8") from exc
-    roots = [repo, Path.home()]
+    roots = [repo, snapshot_parent, Path.home()]
     stdout_minimized = loom_privacy.minimize_evidence(
         stdout_text, roots=roots, max_chars=MAX_PERSISTED_TRANSCRIPT_CHARS)
     stderr_minimized = loom_privacy.minimize_evidence(
         stderr_text, roots=roots, max_chars=MAX_PERSISTED_TRANSCRIPT_CHARS)
     command_minimized = [loom_privacy.minimize_evidence(
         item, roots=roots, max_chars=1000) for item in command]
-    evidence = {"schema_version": SCHEMA_VERSION,
+    evidence = {"schema_version": ACCEPTANCE_SCHEMA_VERSION,
         "evidence_id": str(uuid.uuid4()), "work_order": str(work_order),
         "medium": medium, "command": command_minimized, "started_at": started,
         "completed_at": completed, "exit_code": exit_code,
@@ -211,6 +259,7 @@ def capture_acceptance(pack, repo, work_order, *, medium, command,
         "raw_stdout_sha256": hashlib.sha256(stdout).hexdigest(),
         "raw_stderr_sha256": hashlib.sha256(stderr).hexdigest(),
         "transcript_minimized": True,
+        "execution_isolation": "disposable-target-snapshot",
         "repo_state_before": before.state_hash,
         "repo_state_after": after.state_hash}
     evidence["evidence_hash"] = _digest(evidence)
@@ -233,12 +282,12 @@ def validate_acceptance_evidence(pack, work_order, repo=None, *,
     fields = {"schema_version", "evidence_id", "work_order", "medium", "command",
         "started_at", "completed_at", "exit_code", "stdout", "stderr",
         "stdout_sha256", "stderr_sha256", "raw_stdout_sha256", "raw_stderr_sha256",
-        "transcript_minimized", "repo_state_before", "repo_state_after",
+        "transcript_minimized", "execution_isolation", "repo_state_before", "repo_state_after",
         "evidence_hash"}
     body = {key: item for key, item in value.items() if key != "evidence_hash"} \
         if isinstance(value, dict) else {}
     if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != SCHEMA_VERSION \
+            or value.get("schema_version") != ACCEPTANCE_SCHEMA_VERSION \
             or value.get("work_order") != work_order \
             or not isinstance(value.get("evidence_id"), str) \
             or value.get("exit_code") != 0 \
@@ -247,6 +296,7 @@ def validate_acceptance_evidence(pack, work_order, repo=None, *,
             or len(value.get("stdout", "")) > MAX_PERSISTED_TRANSCRIPT_CHARS \
             or len(value.get("stderr", "")) > MAX_PERSISTED_TRANSCRIPT_CHARS \
             or value.get("transcript_minimized") is not True \
+            or value.get("execution_isolation") != "disposable-target-snapshot" \
             or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("raw_stdout_sha256", ""))) \
             or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("raw_stderr_sha256", ""))) \
             or not isinstance(value.get("repo_state_before"), str) \
