@@ -26,6 +26,7 @@ LEGACY_PATTERNS = (
         r"(?:run|invoke)\s+(?:an?\s+)?(?:auto[- ]?close|retro)\s+(?:command|step)", re.I)),
 )
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
+REPO_DOC_RE = re.compile(r"(?<![A-Za-z0-9_.-])(loom/[A-Za-z0-9_./-]+\.md)\b")
 
 
 class DocsError(RuntimeError):
@@ -120,6 +121,29 @@ def _link_findings(root, relative_paths):
     return findings
 
 
+def _repo_reference_findings(root):
+    """Catch repository-document references that are prose/code literals, not links."""
+    root = Path(root).resolve()
+    findings = []
+    for path in sorted(root.rglob("*")):
+        if ".git" in path.parts or not path.is_file() \
+                or path.suffix.lower() not in {".md", ".py", ".json", ".html"}:
+            continue
+        relative = path.relative_to(root).as_posix()
+        if relative == "tools/loom_docs.py" \
+                or (relative.startswith("tools/test_") and relative.endswith(".py")):
+            continue
+        text = path.read_text(encoding="utf-8", errors="strict")
+        for target in sorted(set(REPO_DOC_RE.findall(text))):
+            if not _safe_relative(root, target).is_file():
+                findings.append({
+                    "code": "REPO_REFERENCE_MISSING",
+                    "path": relative,
+                    "target": target,
+                })
+    return findings
+
+
 def audit_docs(root):
     root = Path(root).resolve()
     findings = []
@@ -144,6 +168,7 @@ def audit_docs(root):
                 findings.append({"code": "PUBLIC_COMMAND_SPRAWL", "path": relative,
                                  "value": command})
     findings.extend(_link_findings(root, PUBLIC_SURFACE + ("docs/architecture.md",)))
+    findings.extend(_repo_reference_findings(root))
     try:
         registry = load_capabilities(root)
         for item in registry["capabilities"]:

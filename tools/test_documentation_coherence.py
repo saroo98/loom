@@ -52,6 +52,18 @@ class DocumentationCoherenceTests(unittest.TestCase):
             evidence["schema_documents"])
         self.assertNotIn("passing_tests", evidence)
 
+    def test_non_link_repository_document_reference_must_exist(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "note.md").write_text(
+                "Follow `loom/execution/missing.md` before work.\n",
+                encoding="utf-8")
+            self.assertEqual([{
+                "code": "REPO_REFERENCE_MISSING",
+                "path": "note.md",
+                "target": "loom/execution/missing.md",
+            }], loom_docs._repo_reference_findings(root))
+
     def test_version_is_single_source_and_all_entry_points_match(self):
         version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")
