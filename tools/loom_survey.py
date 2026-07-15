@@ -483,6 +483,80 @@ def _state_pathspec(excluded):
     return ("--", ".", *(f":({magic}){path.rstrip('/')}/**" for path in excluded))
 
 
+def _parse_porcelain_v2(content):
+    """Parse one NUL-delimited Git status snapshot without losing unusual path bytes."""
+    if not isinstance(content, bytes):
+        raise SurveyError("Git status snapshot is not binary")
+    records = content.split(b"\0")
+    head = branch_raw = None
+    staged, unstaged, untracked = set(), set(), set()
+    index = 0
+    while index < len(records):
+        record = records[index]
+        index += 1
+        if not record:
+            continue
+        if record.startswith(b"# branch.oid "):
+            if head is not None:
+                raise SurveyError("Git status repeats branch identity")
+            raw = record[len(b"# branch.oid "):]
+            if raw == b"(initial)":
+                head = ""
+            elif re.fullmatch(rb"[0-9a-f]{40}(?:[0-9a-f]{24})?", raw):
+                head = raw.decode("ascii")
+            else:
+                raise SurveyError("Git status branch object is invalid")
+            continue
+        if record.startswith(b"# branch.head "):
+            if branch_raw is not None:
+                raise SurveyError("Git status repeats branch name")
+            branch_raw = record[len(b"# branch.head "):]
+            if not branch_raw:
+                raise SurveyError("Git status branch name is empty")
+            continue
+        if record.startswith(b"# "):
+            continue
+        original = None
+        if record.startswith(b"1 "):
+            fields = record.split(b" ", 8)
+            if len(fields) != 9:
+                raise SurveyError("Git ordinary status record is malformed")
+            xy, path = fields[1], fields[8]
+        elif record.startswith(b"2 "):
+            fields = record.split(b" ", 9)
+            if len(fields) != 10 or index >= len(records):
+                raise SurveyError("Git rename status record is malformed")
+            xy, path, original = fields[1], fields[9], records[index]
+            index += 1
+        elif record.startswith(b"u "):
+            fields = record.split(b" ", 10)
+            if len(fields) != 11:
+                raise SurveyError("Git unmerged status record is malformed")
+            xy, path = fields[1], fields[10]
+        elif record.startswith(b"? "):
+            path = record[2:]
+            if not path:
+                raise SurveyError("Git untracked status path is empty")
+            untracked.add(path)
+            continue
+        else:
+            raise SurveyError("Git status contains an unsupported record")
+        if len(xy) != 2 or not path or original == b"":
+            raise SurveyError("Git tracked status record is invalid")
+        if xy[0:1] != b".":
+            staged.add(path)
+        if xy[1:2] != b".":
+            unstaged.add(path)
+    if head is None or branch_raw is None:
+        raise SurveyError("Git status omitted branch identity")
+    return {
+        "head": head, "branch_raw": branch_raw,
+        "staged": tuple(sorted(staged)),
+        "unstaged": tuple(sorted(unstaged)),
+        "untracked": tuple(sorted(untracked)),
+    }
+
+
 def repo_state(root_path, exclude_prefixes=None):
     """Return a content-sensitive snapshot of committed and local Git state."""
     root = Path(root_path)
@@ -497,49 +571,26 @@ def repo_state(root_path, exclude_prefixes=None):
     entries = _workspace_census(root, excluded)
     workspace_hash = _hash_workspace(entries)
     pathspec = _state_pathspec(excluded)
-    try:
-        probe = run_git(root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
-    except SurveyError:
-        if (root / ".git").exists():
-            raise
-        return _filesystem_state(root, excluded, entries, workspace_hash)
-    if probe.returncode != 0:
-        diagnostic = (probe.stderr or probe.stdout).lower()
-        if "not a git repository" in diagnostic or "not a git directory" in diagnostic:
+    filter_drivers = _configured_filter_drivers(root)
+    status_result = run_git(
+        root, "status", "--porcelain=v2", "--branch", "-z",
+        "--untracked-files=all", "--no-renames", *pathspec,
+        allowed=(0, 128), filter_drivers=filter_drivers, binary=True)
+    if status_result.returncode != 0:
+        diagnostic = (status_result.stderr or status_result.stdout).lower()
+        if b"not a git repository" in diagnostic or b"not a git directory" in diagnostic:
             return _filesystem_state(root, excluded, entries, workspace_hash)
         raise SurveyError(
-            "cannot determine Git state: " + (probe.stderr.strip() or "unknown error"))
-    if probe.stdout.strip() != "true":
-        return _filesystem_state(root, excluded, entries, workspace_hash)
-    head_result = run_git(
-        root, "rev-parse", "--verify", "HEAD", allowed=(0, 1, 128))
-    if head_result.returncode == 0:
-        head = head_result.stdout.strip()
-        branch_raw = run_git(
-            root, "branch", "--show-current", binary=True).stdout.strip() or b"(detached)"
-        branch = _display_git_path(branch_raw)
-    else:
-        symbolic = run_git(
-            root, "symbolic-ref", "-q", "HEAD", allowed=(0, 1), binary=True)
-        symbolic_raw = symbolic.stdout.strip()
-        if symbolic.returncode != 0 or not symbolic_raw.startswith(b"refs/heads/"):
-            detail = head_result.stderr.strip() or head_result.stdout.strip() or "invalid HEAD"
-            raise SurveyError(f"Git HEAD is indeterminate: {detail}")
-        head = ""
-        branch_raw = symbolic_raw[len(b"refs/heads/"):]
-        branch = _display_git_path(branch_raw)
-    filter_drivers = _configured_filter_drivers(root)
-    staged_raw = _nul_path_bytes(run_git(
-        root, "diff", "--cached", "--name-only", "-z", *pathspec,
-        filter_drivers=filter_drivers, binary=True).stdout)
-    unstaged_raw = _nul_path_bytes(run_git(
-        root, "diff", "--name-only", "-z", *pathspec,
-        filter_drivers=filter_drivers, binary=True).stdout)
+            "cannot determine Git state: "
+            + (diagnostic.decode("utf-8", errors="replace").strip() or "unknown error"))
+    status = _parse_porcelain_v2(status_result.stdout)
+    head, branch_raw = status["head"], status["branch_raw"]
+    branch = _display_git_path(branch_raw)
+    staged_raw = status["staged"]
+    unstaged_raw = status["unstaged"]
     staged = tuple(_display_git_path(path) for path in staged_raw)
     unstaged = tuple(_display_git_path(path) for path in unstaged_raw)
-    untracked_raw = _nul_path_bytes(run_git(
-        root, "ls-files", "--others", "--exclude-standard", "-z",
-        *pathspec, binary=True).stdout)
+    untracked_raw = status["untracked"]
     untracked = tuple(_display_git_path(path) for path in untracked_raw)
     index_state = run_git(
         root, "ls-files", "--stage", "-v", "-z", *pathspec, binary=True).stdout
@@ -557,6 +608,7 @@ def repo_state(root_path, exclude_prefixes=None):
     digest.update(b"head\0" + head.encode("ascii") + b"\0")
     digest.update(b"branch\0" + branch_raw + b"\0")
     digest.update(b"index\0" + index_state + b"\0")
+    digest.update(b"status\0" + status_result.stdout + b"\0")
     digest.update(b"workspace\0" + bytes.fromhex(workspace_hash) + b"\0")
     for label, paths in ((b"staged", staged_raw), (b"unstaged", unstaged_raw),
                          (b"untracked", untracked_raw)):

@@ -64,6 +64,29 @@ class AutomaticLifecycleTests(unittest.TestCase):
             loom_survey._workspace_census(self.repo, ("plans",)))
         self.assertNotEqual(baseline, changed)
 
+    def test_porcelain_v2_snapshot_parses_branch_and_complete_change_classes(self):
+        oid = b"a" * 40
+        raw = b"\0".join((
+            b"# branch.oid " + oid,
+            b"# branch.head feature/safe-state",
+            b"1 M. N... 100644 100644 100644 " + oid + b" " + oid
+            + b" staged name.txt",
+            b"1 .M N... 100644 100644 100644 " + oid + b" " + oid
+            + b" unstaged.txt",
+            b"u UU N... 100644 100644 100644 100644 " + oid + b" "
+            + oid + b" " + oid + b" conflict.txt",
+            b"? untracked space.txt",
+            b"",
+        ))
+        parsed = loom_survey._parse_porcelain_v2(raw)
+        self.assertEqual(oid.decode("ascii"), parsed["head"])
+        self.assertEqual(b"feature/safe-state", parsed["branch_raw"])
+        self.assertEqual(
+            (b"conflict.txt", b"staged name.txt"), parsed["staged"])
+        self.assertEqual(
+            (b"conflict.txt", b"unstaged.txt"), parsed["unstaged"])
+        self.assertEqual((b"untracked space.txt",), parsed["untracked"])
+
     @unittest.skipUnless(
         hasattr(os, "setxattr") and hasattr(os, "removexattr"),
         "extended attributes require POSIX support")
