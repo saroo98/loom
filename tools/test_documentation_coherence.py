@@ -1,7 +1,9 @@
 import json
 import tempfile
 import unittest
+from html.parser import HTMLParser
 from pathlib import Path
+from urllib.parse import urlparse
 
 import loom_docs
 
@@ -9,7 +11,70 @@ import loom_docs
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class _SiteParser(HTMLParser):
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.ids = []
+        self.links = []
+        self.scripts = []
+        self.meta = {}
+        self.has_main = False
+        self.has_nav = False
+        self.has_skip_link = False
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        if values.get("id"):
+            self.ids.append(values["id"])
+        if tag == "main":
+            self.has_main = True
+        if tag == "nav":
+            self.has_nav = True
+        if tag == "a" and values.get("href"):
+            self.links.append(values["href"])
+            if values.get("class") == "skip-link":
+                self.has_skip_link = True
+        if tag == "script" and values.get("src"):
+            self.scripts.append(values["src"])
+        if tag == "link" and values.get("href"):
+            self.links.append(values["href"])
+        if tag == "meta":
+            key = values.get("name") or values.get("property")
+            if key:
+                self.meta[key] = values.get("content")
+
+
 class DocumentationCoherenceTests(unittest.TestCase):
+    def test_public_website_is_self_contained_accessible_and_share_ready(self):
+        docs = ROOT / "docs"
+        index = docs / "index.html"
+        parser = _SiteParser()
+        parser.feed(index.read_text(encoding="utf-8"))
+
+        self.assertTrue(parser.has_main)
+        self.assertTrue(parser.has_nav)
+        self.assertTrue(parser.has_skip_link)
+        self.assertEqual(len(parser.ids), len(set(parser.ids)), "duplicate HTML id")
+        self.assertEqual(["site.js"], parser.scripts)
+        self.assertIn("description", parser.meta)
+        self.assertIn("og:title", parser.meta)
+        self.assertIn("og:image", parser.meta)
+        self.assertEqual("summary_large_image", parser.meta.get("twitter:card"))
+
+        required = {
+            ".nojekyll", "404.html", "favicon.svg", "readme-hero.svg", "robots.txt",
+            "site.css", "site.js", "sitemap.xml", "social-card.svg",
+        }
+        self.assertEqual([], sorted(name for name in required if not (docs / name).is_file()))
+        self.assertLess((docs / "social-card.svg").stat().st_size, 25_000)
+
+        for reference in parser.links + parser.scripts:
+            parsed = urlparse(reference)
+            if parsed.scheme or reference.startswith(("#", "//")):
+                continue
+            target = (docs / parsed.path).resolve()
+            self.assertTrue(target.is_file(), reference)
+
     def test_public_surface_teaches_one_command_without_internal_command_sprawl(self):
         report = loom_docs.audit_docs(ROOT)
         self.assertEqual([], report["findings"], report)
