@@ -57,13 +57,16 @@ improvement.
 ## Release Boundary
 
 `loom_release` creates a new destination from a positive allowlist, rejects links and non-regular
-entries, scans every output byte and filename, and emits a deterministic manifest. It will not build
-without explicit private/owner firewall tokens. `loom_install` installs only into a new directory,
+entries, scans every output byte and filename through UTF-8/UTF-16 views, refuses unsupported opaque
+binary/container formats, and emits a deterministic manifest. It will not build without explicit
+private/owner firewall tokens. `loom_install` installs only into a new directory,
 checks receipt-proven hashes, and uninstalls only an unchanged owned set. `loom_release certify`
 accepts only fresh, content-bound local evidence for one clean GitHub commit plus fresh external
 evidence signed by independently provisioned RSA trust roots. Evidence IDs must be unique and every
-subject must match the exact repository, commit, and public-build hash. It cannot award 100 unless
-local checks and all 5 signed external evidence contracts pass. The local
+subject must match the exact repository, commit, and public-build hash. Cross-platform evidence must
+contain the exact 3-OS by 4-Python matrix; usability must bind clean-environment install and real-
+request receipts; hostile review must bind a complete independently reproduced report. It cannot
+award 100 unless local checks and all 5 signed external evidence contracts pass. The local
 `performance_contracts` check proves only deterministic cache, context, and fixture-budget
 invariants. It never substitutes for the separate provider-attested production-performance or
 production-memory-replay records.

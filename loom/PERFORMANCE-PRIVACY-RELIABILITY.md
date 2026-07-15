@@ -16,11 +16,14 @@ failure-injection suite.
 
 ## Sovereign privacy
 
-- `tools/loom_privacy.py scan` inspects every regular file's bytes and relative filename. It uses
-  no extension allowlist. Owner/private publication mode refuses to run without explicit real
-  owner tokens.
-- Production `loom_*.py` modules are statically checked for network-capable imports by
-  `offline-audit`. The runtime has no telemetry transport.
+- `tools/loom_privacy.py scan` inspects every regular file's bytes and relative filename, including
+  UTF-8 and UTF-16 token/secret views. Owner/private publication mode refuses to run without
+  explicit real owner tokens. Unsupported opaque binary/container files fail closed rather than
+  receiving a clean result.
+- Production `loom_*.py` modules are statically checked for direct and literal dynamic network
+  imports and literal network subprocess commands by `offline-audit`. Current source has no
+  built-in telemetry transport. Dynamically constructed or owner-selected verification commands
+  remain outside that static proof and require an OS sandbox for containment.
 - Global memory cannot contain domain/project identity or raw local paths. Private export is an
   explicit receiver-bound local operation. Erasure requires the exact installation UUID and only
   removes that marker-proven instance.

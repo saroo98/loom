@@ -23,7 +23,7 @@ jobs:
       - name: Compile production modules
         working-directory: tools
         run: python -m compileall -q -f .
-      - name: Prove production modules are offline
+      - name: Audit network imports and literal subprocesses
         working-directory: tools
         run: python loom_privacy.py offline-audit .
       - name: Run full suite

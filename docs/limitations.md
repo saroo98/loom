@@ -2,12 +2,17 @@
 
 Loom fails closed around evidence it does not possess.
 
-- Cross-platform behavior is **[UNVERIFIED]** until the current revision passes the complete CI
-  matrix on Windows, macOS, and Linux. A workflow definition is not a successful run.
-- Fresh-install usability is **[UNVERIFIED]** until at least 1 person unfamiliar with Loom installs
-  it from the public cut and completes a real request without maintainer coaching.
+- Cross-platform behavior is **[UNVERIFIED]** until the current revision passes the exact 12-job
+  matrix: Windows, macOS, and Linux on Python 3.10, 3.11, 3.12, and 3.13. The certificate requires
+  unique bound job IDs/URLs and all 12 successful conclusions; a workflow definition or Linux-only
+  run cannot satisfy it.
+- Fresh-install usability is **[UNVERIFIED]** until at least 1 person unfamiliar with Loom uses a
+  clean environment, installs the exact public-build hash, and completes a real request without
+  maintainer coaching. The certificate requires distinct study/install/request receipt bundles and
+  complete participant counts.
 - Independent hostile review is **[UNVERIFIED]** until a reviewer independent of the implementation
-  reports 0 Critical and 0 High findings against the exact release candidate.
+  reports 0 Critical and 0 High findings against the exact reproduced build. The certificate
+  requires complete-scope and independence flags plus distinct report/review-bundle hashes.
 - Production token and latency budgets are **[UNVERIFIED]** until an independent benchmark signs
   provider-attested receipts for at least 20 successful samples across S, M, L, and XL workloads,
   including p50, p95, worst case, and explicit token and wall-time budgets.

@@ -8,7 +8,7 @@
 - Added exact-domain comparative improvement proof and independent claim reproduction.
 - Added fail-closed lifecycle, freshness, chronology, pack-integrity, and release enforcement.
 - Added a positive-allowlist public builder, whole-artifact firewall, and receipt-proven installer.
-- Added deterministic 20-scenario adaptation evaluation and a 296-test standard-library suite.
+- Added deterministic adaptation evaluation and a generated-inventory standard-library suite.
 
 Production certification remains blocked until the external evidence listed in
 [`docs/limitations.md`](docs/limitations.md) exists.
