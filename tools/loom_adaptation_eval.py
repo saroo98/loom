@@ -530,7 +530,9 @@ def _second_relevant_project_improves(root):
         metric="prediction-calibration-error", domain="three-d")
     reproduced = loom_improvement_audit.audit_bundle(tracker.audit_bundle(
         metric="prediction-calibration-error", domain="three-d"))
-    s.equal("second relevant project has comparative proof", True,
+    s.equal("second relevant project has reproducible local comparison", True,
+            report["local_improvement_observed"])
+    s.equal("local simulation cannot authorize production improvement claim", False,
             report["improvement_claim_allowed"])
     s.true("recent error is below first-project error",
            report["longitudinal"]["recent_mean"]

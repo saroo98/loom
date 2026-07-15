@@ -21,7 +21,8 @@ the owner's working tree. Any mutation of that snapshot invalidates the evidence
 is discarded. The original target is fingerprinted before and after capture so concurrent or
 absolute-path interference is still detected. This protects ordinary relative-path verification;
 it is not a portable host-level process sandbox, so commands still require the same authority and
-care as any executable launched by the agent.
+care as any executable launched by the agent. Successful evidence receives an identity derived
+from its canonical content; changing and re-hashing the content while reusing the ID is rejected.
 
 The world fingerprint treats path, entry kind, regular-file content, symlink target, executable
 mode, Git HEAD/branch/index, and staged/unstaged/untracked sets as project semantics. Device and
@@ -48,11 +49,12 @@ network contribution mechanism.
 evidence identities, and serialized bytes, and never combines domains. Evidence identifiers are
 bound permanently to a canonical measurement hash even after the active record is compacted.
 Legacy stores whose compacted identities cannot be reconstructed are reset as untrusted proof and
-their discarded count is retained; old evidence is never silently credited. A claim needs 16
-longitudinal samples plus 8 paired memory-enabled and memory-disabled replays.
+their discarded count is retained; old evidence is never silently credited. A reproducible local
+comparison needs 16 longitudinal samples plus 8 paired memory-enabled and memory-disabled replays.
 `loom_improvement_audit` independently reimplements the calculation, checks the evidence hash, and
 rejects altered claims. Regressions raise an alarm; accumulation alone never qualifies as
-improvement.
+improvement. Local evidence is always labeled `local-unattested` and cannot authorize a production
+improvement claim; only the independently signed release evidence contract can cross that boundary.
 
 ## Release Boundary
 
@@ -62,8 +64,9 @@ binary/container formats, and emits a deterministic manifest. It will not build 
 private/owner firewall tokens. `loom_install` installs only into a new directory,
 checks receipt-proven hashes, and uninstalls only an unchanged owned set. `loom_release certify`
 accepts only fresh, content-bound local evidence for one clean GitHub commit plus fresh external
-evidence signed by independently provisioned RSA trust roots. Evidence IDs must be unique and every
-subject must match the exact repository, commit, and public-build hash. Cross-platform evidence must
+evidence signed by independently provisioned RSA trust roots. External evidence IDs are derived
+from the complete unsigned claim content, must be unique, and cannot be reused for changed content;
+every subject must match the exact repository, commit, and public-build hash. Cross-platform evidence must
 contain the exact 3-OS by 4-Python matrix; usability must bind clean-environment install and real-
 request receipts; hostile review must bind a complete independently reproduced report. It cannot
 award 100 unless local checks and all 5 signed external evidence contracts pass. The local

@@ -9,6 +9,8 @@
 - Added fail-closed lifecycle, freshness, chronology, pack-integrity, and release enforcement.
 - Added a positive-allowlist public builder, whole-artifact firewall, and receipt-proven installer.
 - Added deterministic adaptation evaluation and a generated-inventory standard-library suite.
+- Made acceptance and signed external evidence identities immutable and content-bound.
+- Separated reproducible local improvement observations from independently attested production claims.
 
 Production certification remains blocked until the external evidence listed in
 [`docs/limitations.md`](docs/limitations.md) exists.

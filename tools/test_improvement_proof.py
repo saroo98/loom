@@ -87,8 +87,10 @@ class ImprovementProofTests(unittest.TestCase):
         self.assertEqual(8, proven["replay"]["pair_count"])
         self.assertLess(proven["replay"]["enabled_mean"],
                         proven["replay"]["disabled_mean"])
-        self.assertTrue(proven["improvement_claim_allowed"])
-        self.assertEqual("improved", proven["claim_status"])
+        self.assertTrue(proven["local_improvement_observed"])
+        self.assertFalse(proven["improvement_claim_allowed"])
+        self.assertEqual("requires-independent-attestation", proven["claim_status"])
+        self.assertEqual("local-unattested", proven["attestation_status"])
 
     def test_direction_aware_regression_alarm_fires_when_recent_work_worsens(self):
         for index in range(16):
@@ -124,7 +126,11 @@ class ImprovementProofTests(unittest.TestCase):
         reproduced = loom_improvement_audit.audit_bundle(bundle)
         self.assertEqual("passed", reproduced["status"])
         self.assertTrue(reproduced["reproduced"])
-        self.assertTrue(reproduced["report"]["improvement_claim_allowed"])
+        self.assertTrue(reproduced["report"]["local_improvement_observed"])
+        self.assertFalse(reproduced["report"]["improvement_claim_allowed"])
+        self.assertEqual(
+            "requires-independent-attestation",
+            reproduced["report"]["claim_status"])
         self.assertNotIn(str(self.home), str(bundle))
 
         bundle["claim"]["longitudinal"]["recent_mean"] = 0.0

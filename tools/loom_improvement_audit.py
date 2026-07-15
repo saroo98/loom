@@ -94,9 +94,10 @@ def _reproduce(bundle):
         replay = {"status": "improved" if improved else "not-improved",
                   "pair_count": pair_count, "required_pair_count": minimum_pairs,
                   "enabled_mean": enabled_mean, "disabled_mean": disabled_mean}
-    claim_allowed = longitudinal["status"] == "improved" and replay["status"] == "improved"
-    if claim_allowed:
-        claim_status = "improved"
+    local_improvement_observed = longitudinal["status"] == "improved" \
+        and replay["status"] == "improved"
+    if local_improvement_observed:
+        claim_status = "requires-independent-attestation"
     elif longitudinal["status"] == "insufficient-evidence":
         claim_status = "insufficient-longitudinal-evidence"
     elif replay["status"] == "insufficient-evidence":
@@ -108,7 +109,9 @@ def _reproduce(bundle):
         "domain": domain,
         "scope": "general-calibration" if domain == "general" else "exact-domain",
         "longitudinal": longitudinal, "replay": replay,
-        "improvement_claim_allowed": claim_allowed,
+        "local_improvement_observed": local_improvement_observed,
+        "attestation_status": "local-unattested",
+        "improvement_claim_allowed": False,
         "claim_status": claim_status,
         "regression_alarm": longitudinal["status"] == "regressed",
     }
