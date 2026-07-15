@@ -55,6 +55,45 @@ class PerformanceExcellenceTests(unittest.TestCase):
             "output_tokens": 30, "tool_tokens": 40, "retry_tokens": 10,
         })
         self.assertEqual(measured["total_tokens"], 200)
+        self.assertEqual(measured["measurement_source"], "caller-reported")
+        with self.assertRaisesRegex(loom_performance.PerformanceError, "nonzero"):
+            loom_performance.normalize_usage({
+                "input_tokens": 0, "cache_read_tokens": 0,
+                "output_tokens": 0, "tool_tokens": 0, "retry_tokens": 0,
+            })
+
+    def test_production_usage_ledger_is_bounded_and_reports_real_distribution(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            home, install = root / "home", root / "install"
+            install.mkdir()
+            instance = loom_memory.initialize(home, install)
+            for index in range(300):
+                loom_performance.record_usage(
+                    home, instance,
+                    session_id=str(uuid.uuid5(uuid.UUID(instance), f"session-{index}")),
+                    project_id="p-00000000000000000000000000001201",
+                    intent="plan", tier="S", domains=["cli"],
+                    usage={
+                        "input_tokens": 100 + index,
+                        "cache_read_tokens": 10,
+                        "output_tokens": 50,
+                        "tool_tokens": 5,
+                        "retry_tokens": 0,
+                    },
+                    recorded_at=f"2026-07-{1 + index % 28:02d}T12:00:00Z")
+            report = loom_performance.usage_report(home, instance)
+
+            self.assertEqual(300, report["total_count"])
+            self.assertEqual(256, report["retained_sample_count"])
+            self.assertEqual("caller-reported", report["measurement_source"])
+            self.assertIn("not provider-attested", report["source_limitation"])
+            self.assertLessEqual(
+                report["p50_total_tokens"], report["p95_total_tokens"])
+            self.assertLessEqual(
+                report["p95_total_tokens"], report["worst_total_tokens"])
+            self.assertEqual(0, report["budget_violation_count"])
+            self.assertEqual("observed-within-budget", report["certification_status"])
 
     def test_performance_benchmarks_cover_all_lifecycle_shapes(self):
         report = loom_performance.evaluate_benchmarks()

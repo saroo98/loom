@@ -3,9 +3,13 @@
 
 import hashlib
 import json
+import math
 import os
+import re
 import tempfile
 import time
+import uuid
+import datetime as dt
 from pathlib import Path
 
 
@@ -14,6 +18,14 @@ USAGE_FIELDS = (
     "input_tokens", "cache_read_tokens", "output_tokens",
     "tool_tokens", "retry_tokens",
 )
+MAX_USAGE_SAMPLES = 256
+MAX_USAGE_STORE_BYTES = 2 * 1024 * 1024
+USAGE_STORE_FIELDS = {"schema_version", "instance_id", "total_count", "samples"}
+USAGE_SAMPLE_FIELDS = {
+    "schema_version", "id", "session_id", "project_id", "intent", "tier",
+    "domains", "recorded_at", "measurement_source", *USAGE_FIELDS, "total_tokens",
+}
+TIER_BUDGETS = {"S": 2000, "M": 6000, "L": 16000, "XL": 40000}
 
 
 class PerformanceError(RuntimeError):
@@ -53,6 +65,7 @@ def normalize_usage(value):
     if value is None:
         return {
             "measurement_status": "unreported",
+            "measurement_source": None,
             **{field: None for field in USAGE_FIELDS},
             "total_tokens": None,
         }
@@ -65,10 +78,157 @@ def normalize_usage(value):
         if type(count) is not int or count < 0:
             raise PerformanceError("usage token counts must be non-negative integers")
         normalized[field] = count
+    if normalized["input_tokens"] == 0 or normalized["output_tokens"] == 0:
+        raise PerformanceError(
+            "measured agent work requires nonzero input and output token counts")
     return {
         "measurement_status": "measured",
+        "measurement_source": "caller-reported",
         **normalized,
         "total_tokens": sum(normalized.values()),
+    }
+
+
+def _usage_path(owner_home, instance_id):
+    try:
+        uuid.UUID(str(instance_id))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise PerformanceError("usage ledger instance_id is invalid") from exc
+    root = Path(owner_home)
+    if not root.is_absolute():
+        raise PerformanceError("usage ledger owner_home must be absolute")
+    return root / "instances" / str(instance_id) / "performance.json"
+
+
+def _empty_usage_store(instance_id):
+    return {"schema_version": 1, "instance_id": str(instance_id),
+            "total_count": 0, "samples": []}
+
+
+def _read_usage_store(path, instance_id):
+    path = Path(path)
+    if not path.is_file():
+        return _empty_usage_store(instance_id)
+    try:
+        if path.stat().st_size > MAX_USAGE_STORE_BYTES:
+            raise PerformanceError("usage ledger exceeds its byte bound")
+        store = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PerformanceError(f"usage ledger is unreadable: {exc}") from exc
+    if not isinstance(store, dict) or set(store) != USAGE_STORE_FIELDS \
+            or store.get("schema_version") != 1 \
+            or store.get("instance_id") != str(instance_id) \
+            or type(store.get("total_count")) is not int \
+            or store["total_count"] < 0 \
+            or not isinstance(store.get("samples"), list) \
+            or len(store["samples"]) > MAX_USAGE_SAMPLES \
+            or store["total_count"] < len(store["samples"]):
+        raise PerformanceError("usage ledger shape or bounds are invalid")
+    for sample in store["samples"]:
+        if not isinstance(sample, dict) or set(sample) != USAGE_SAMPLE_FIELDS \
+                or sample.get("schema_version") != 1 \
+                or sample.get("tier") not in TIER_BUDGETS \
+                or sample.get("measurement_source") != "caller-reported" \
+                or not isinstance(sample.get("domains"), list) \
+                or not sample["domains"] \
+                or any(type(sample.get(field)) is not int or sample[field] < 0
+                       for field in (*USAGE_FIELDS, "total_tokens")) \
+                or sample["total_tokens"] != sum(sample[field] for field in USAGE_FIELDS):
+            raise PerformanceError("usage ledger sample is invalid")
+    return store
+
+
+def record_usage(owner_home, instance_id, *, session_id, project_id, intent, tier,
+                 domains, usage, recorded_at=None):
+    """Persist one bounded production measurement without calling it provider-attested."""
+    normalized = normalize_usage(usage)
+    if normalized["measurement_status"] != "measured":
+        return None
+    if tier not in TIER_BUDGETS or not isinstance(intent, str) or not intent \
+            or not isinstance(project_id, str) \
+            or not re.fullmatch(r"p-[0-9a-f]{32}", project_id) \
+            or not isinstance(domains, (list, tuple)) or not domains:
+        raise PerformanceError("usage sample route identity is invalid")
+    try:
+        canonical_session = str(uuid.UUID(str(session_id)))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise PerformanceError("usage sample session_id is invalid") from exc
+    if canonical_session != str(session_id):
+        raise PerformanceError("usage sample session_id is not canonical")
+    if recorded_at is None:
+        stamp = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    elif isinstance(recorded_at, dt.datetime):
+        stamp = recorded_at
+    else:
+        try:
+            stamp = dt.datetime.fromisoformat(str(recorded_at).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise PerformanceError("usage sample recorded_at is invalid") from exc
+    if stamp.tzinfo is None:
+        raise PerformanceError("usage sample recorded_at must be timezone-aware")
+    stamp_text = stamp.astimezone(dt.timezone.utc).replace(microsecond=0).isoformat() \
+        .replace("+00:00", "Z")
+    sample = {
+        "schema_version": 1,
+        "id": str(uuid.uuid5(uuid.UUID(str(instance_id)), f"usage:{session_id}")),
+        "session_id": str(session_id), "project_id": project_id,
+        "intent": intent, "tier": tier, "domains": list(domains),
+        "recorded_at": stamp_text,
+        "measurement_source": normalized["measurement_source"],
+        **{field: normalized[field] for field in USAGE_FIELDS},
+        "total_tokens": normalized["total_tokens"],
+    }
+    path = _usage_path(owner_home, instance_id)
+    import loom_memory
+    with loom_memory.FileLock(path.with_name(".performance.lock")):
+        store = _read_usage_store(path, instance_id)
+        existing = next((item for item in store["samples"]
+                         if item["id"] == sample["id"]), None)
+        if existing is not None:
+            if existing != sample:
+                raise PerformanceError(
+                    "usage sample identity is already bound to different counts")
+            return json.loads(json.dumps(existing))
+        store["samples"] = (store["samples"] + [sample])[-MAX_USAGE_SAMPLES:]
+        store["total_count"] += 1
+        encoded = (json.dumps(
+            store, indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+        if len(encoded) > MAX_USAGE_STORE_BYTES:
+            raise PerformanceError("usage ledger would exceed its byte bound")
+        loom_memory._atomic_bytes(path, encoded)
+    return json.loads(json.dumps(sample))
+
+
+def _percentile(values, percentile):
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = max(0, math.ceil(percentile * len(ordered)) - 1)
+    return ordered[index]
+
+
+def usage_report(owner_home, instance_id):
+    store = _read_usage_store(_usage_path(owner_home, instance_id), instance_id)
+    totals = [sample["total_tokens"] for sample in store["samples"]]
+    violations = [sample for sample in store["samples"]
+                  if sample["total_tokens"] > TIER_BUDGETS[sample["tier"]]]
+    return {
+        "schema_version": 1,
+        "measurement_source": "caller-reported",
+        "source_limitation": (
+            "counts are supplied by the host; they are not provider-attested"),
+        "total_count": store["total_count"],
+        "retained_sample_count": len(totals),
+        "retained_sample_bound": MAX_USAGE_SAMPLES,
+        "p50_total_tokens": _percentile(totals, 0.50),
+        "p95_total_tokens": _percentile(totals, 0.95),
+        "worst_total_tokens": max(totals) if totals else None,
+        "budget_violation_count": len(violations),
+        "budgets": dict(TIER_BUDGETS),
+        "certification_status": (
+            "failed" if violations else
+            "observed-within-budget" if len(totals) >= 20 else
+            "insufficient-evidence"),
     }
 
 

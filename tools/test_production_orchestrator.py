@@ -16,6 +16,7 @@ import loom_lifecycle  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_memory  # noqa: E402
 import loom_orchestrator  # noqa: E402
+import loom_performance  # noqa: E402
 import loom_release  # noqa: E402
 
 
@@ -333,6 +334,18 @@ class ProductionOrchestratorTests(unittest.TestCase):
             self.repo / "plans", self.repo, require_authorized=True))
         self.assertTrue(result["outcome_ids"])
         self.assertTrue(result["improvement_evidence_ids"])
+        instance_id = (self.installed / loom_install.INSTANCE_MARKER).read_text(
+            encoding="utf-8").strip()
+        performance = loom_performance.usage_report(self.home, instance_id)
+        self.assertEqual(1, performance["retained_sample_count"])
+        self.assertEqual(900, performance["p95_total_tokens"])
+        self.assertEqual("caller-reported", performance["measurement_source"])
+        status = json.loads(self.cli(
+            "invoke", "--request", "Show my token usage", "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        visible = json.loads(status["user_message"])
+        self.assertEqual(900, visible["p95_total_tokens"])
+        self.assertEqual("insufficient-evidence", visible["certification_status"])
         cycle_install = self.root / "cycle-install"
         loom_install.install(self.public, cycle_install)
         self.assertEqual("installed", loom_install.check(cycle_install)["status"])

@@ -189,6 +189,11 @@ class IntentRoutingTests(unittest.TestCase):
                 self.assertEqual(decision["intent"], expected)
                 self.assertFalse(decision["blocked"])
 
+    def test_token_usage_request_uses_existing_status_surface(self):
+        decision = loom_runtime.resolve_intent("Show my token usage", {})
+        self.assertEqual("status", decision["intent"])
+        self.assertFalse(decision["blocked"])
+
     def test_internal_command_vocabulary_is_not_required(self):
         requests = [
             "Keep going", "What has happened so far?", "Please inspect this",

@@ -706,6 +706,17 @@ class LocalMemoryAdapter:
             return {"outcome_ids": [], "adaptation_receipts": [],
                     "improvement_evidence_ids": [],
                     "reversible_action_ids": result.get("reversible_action_ids", [])}
+        measured_usage = result.get("usage", {})
+        loom_performance.record_usage(
+            self.owner_home, self.instance_id,
+            session_id=context.session_id, project_id=context.project_id,
+            intent=context.intent,
+            tier=context.prepared.route_contract["tier"],
+            domains=context.prepared.domains,
+            usage=(
+                {field: measured_usage[field] for field in loom_performance.USAGE_FIELDS}
+                if measured_usage.get("measurement_status") == "measured" else None),
+            recorded_at=context.prepared.prepared_at)
         outcome_id = str(uuid.uuid5(
             uuid.UUID(self.instance_id),
             f"{context.operation_id}:confidence"))
@@ -904,6 +915,11 @@ class LocalMemoryAdapter:
     def profile_summary(self):
         return loom_transparency.profile_summary(
             self.owner_home, self.instance_id, max_chars=1200)
+
+    def performance_summary(self):
+        return json.dumps(
+            loom_performance.usage_report(self.owner_home, self.instance_id),
+            sort_keys=True, separators=(",", ":"))
 
     def forget(self, text, selected):
         return loom_transparency.forget_memory(
@@ -1298,6 +1314,15 @@ class SessionController:
                 "success": True, "metrics": {}, "evidence_ids": [],
                 "reversible_action_ids": []}
         if context.intent == "status":
+            if re.search(
+                    r"\btoken usage\b|\bperformance report\b|\bcost report\b",
+                    context.request_text, re.I):
+                selector = getattr(self.memory, "performance_summary", None)
+                if selector is None:
+                    return {**base, "status": "blocked", "code": "profile-disabled",
+                            "success": False,
+                            "user_message": "Performance history is disabled."}
+                return {**base, "user_message": selector()}
             if re.search(r"remember about me|remembered preferences", context.request_text, re.I):
                 selector = getattr(self.memory, "profile_summary", None)
                 if selector is None:

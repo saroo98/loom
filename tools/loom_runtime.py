@@ -557,7 +557,8 @@ def resolve_intent(request, state=None):
             "status": bool(re.search(
                 r"\bshow me where\b|\bwhere are we\b|\bwhat has happened\b|"
                 r"\bshow (?:me )?the progress\b|\bwhat(?:'s| is) the status\b|"
-                r"\bprogress\b|\bstatus\b", text)),
+                r"\bprogress\b|\bstatus\b|\btoken usage\b|\bperformance report\b|"
+                r"\bcost report\b", text)),
             "review": bool(re.search(r"\breview\b|\binspect\b|\baudit\b", text)),
             "repair": bool(re.search(
                 r"\brepair\b|\bfix (?:the )?(?:stale |broken )?plan\b|"
