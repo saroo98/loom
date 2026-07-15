@@ -63,7 +63,10 @@ checks receipt-proven hashes, and uninstalls only an unchanged owned set. `loom_
 accepts only fresh, content-bound local evidence for one clean GitHub commit plus fresh external
 evidence signed by independently provisioned RSA trust roots. Evidence IDs must be unique and every
 subject must match the exact repository, commit, and public-build hash. It cannot award 100 unless
-local checks and all 3 signed external evidence contracts pass.
+local checks and all 5 signed external evidence contracts pass. The local
+`performance_contracts` check proves only deterministic cache, context, and fixture-budget
+invariants. It never substitutes for the separate provider-attested production-performance or
+production-memory-replay records.
 
 ## Truth surfaces
 

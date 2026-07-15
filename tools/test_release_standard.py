@@ -91,6 +91,50 @@ class ReleaseStandardTests(unittest.TestCase):
             "independent-hostile-review": ("independent-reviewer", {
                 "report_sha256": "c" * 64, "critical_findings": 0,
                 "high_findings": 0}),
+            "production-performance": ("independent-benchmark", {
+                "provider_attested": True,
+                "receipt_bundle_sha256": "d" * 64,
+                "measurement_bundle_sha256": "e" * 64,
+                "sample_count": 24, "workload_count": 4,
+                "workloads": [
+                    {"id": "tiny-cli", "tier": "S", "sample_count": 6,
+                     "p50_total_tokens": 800, "p95_total_tokens": 1200,
+                     "worst_total_tokens": 1500, "token_budget": 2000,
+                     "p95_wall_ms": 900, "worst_wall_ms": 1200,
+                     "wall_budget_ms": 1500},
+                    {"id": "medium-mobile", "tier": "M", "sample_count": 6,
+                     "p50_total_tokens": 3000, "p95_total_tokens": 4500,
+                     "worst_total_tokens": 5500, "token_budget": 6000,
+                     "p95_wall_ms": 1800, "worst_wall_ms": 2400,
+                     "wall_budget_ms": 3000},
+                    {"id": "large-etl", "tier": "L", "sample_count": 6,
+                     "p50_total_tokens": 9000, "p95_total_tokens": 13000,
+                     "worst_total_tokens": 15000, "token_budget": 16000,
+                     "p95_wall_ms": 3200, "worst_wall_ms": 4000,
+                     "wall_budget_ms": 5000},
+                    {"id": "portfolio", "tier": "XL", "sample_count": 6,
+                     "p50_total_tokens": 24000, "p95_total_tokens": 34000,
+                     "worst_total_tokens": 39000, "token_budget": 40000,
+                     "p95_wall_ms": 6000, "worst_wall_ms": 7500,
+                     "wall_budget_ms": 9000}],
+                "successful_samples": 24, "regression_status": "passed"}),
+            "production-memory-replay": ("independent-benchmark", {
+                "provider_attested": True,
+                "session_bundle_sha256": "f" * 64,
+                "replay_bundle_sha256": "1" * 64,
+                "production_session_count": 32, "pair_count": 16,
+                "simulation_count": 0, "exact_domain": True,
+                "improvement_reproduced": True,
+                "regression_guard_passed": True,
+                "claims": [{
+                    "metric": "memory-help-rate", "domain": "cli",
+                    "scope": "exact-domain", "longitudinal_sample_count": 16,
+                    "replay_pair_count": 8, "longitudinal_status": "improved",
+                    "replay_status": "improved", "regression_alarm": False},
+                    {"metric": "prediction-calibration-error", "domain": "general",
+                     "scope": "general-calibration", "longitudinal_sample_count": 16,
+                     "replay_pair_count": 8, "longitudinal_status": "improved",
+                     "replay_status": "improved", "regression_alarm": False}]}),
         }
         evidence = {}
         issuers = []
@@ -191,7 +235,8 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertLess(report["score"], 100)
         self.assertEqual({
             "cross-platform-ci", "unfamiliar-user-usability",
-            "independent-hostile-review",
+            "independent-hostile-review", "production-performance",
+            "production-memory-replay",
         }, {item["id"] for item in report["unverified"]})
 
     def test_external_evidence_contract_rejects_high_findings_and_accepts_proof(self):
@@ -220,6 +265,12 @@ class ReleaseStandardTests(unittest.TestCase):
             "independent-hostile-review": {
                 "status": "passed", "evidence": "trust me",
                 "critical_findings": 0, "high_findings": 0},
+            "production-performance": {
+                "status": "passed", "evidence": "trust me",
+                "provider_attested": True, "sample_count": 100},
+            "production-memory-replay": {
+                "status": "passed", "evidence": "trust me",
+                "provider_attested": True, "pair_count": 100},
         }
 
         report = loom_release.certification_report(
@@ -229,8 +280,77 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertFalse(report["claim_100_allowed"])
         self.assertEqual(
             {"cross-platform-ci", "unfamiliar-user-usability",
-             "independent-hostile-review"},
+             "independent-hostile-review", "production-performance",
+             "production-memory-replay"},
             {item["id"] for item in report["unverified"]})
+
+    def test_production_performance_requires_provider_attested_complete_distribution(self):
+        external, trust_policy = self._signed_external_evidence()
+        local = self._sealed_local_evidence(trust_policy["subject"])
+        instant = dt.datetime(2026, 7, 16, tzinfo=dt.timezone.utc)
+        invalid_values = (
+            ("provider_attested", False),
+            ("sample_count", 19),
+            ("workload_count", 3),
+            ("successful_samples", 23),
+            ("regression_status", "failed"),
+        )
+        for field, value in invalid_values:
+            with self.subTest(field=field, value=value):
+                candidate = copy.deepcopy(external)
+                item = candidate["production-performance"]
+                item["payload"][field] = value
+                item["payload_sha256"] = loom_release._canonical_hash(item["payload"])
+                self._sign_item(item)
+                report = loom_release.certification_report(
+                    local_checks=local, external_evidence=candidate,
+                    trust_policy=trust_policy, now=instant)
+                self.assertEqual("blocked", report["status"])
+                self.assertIn("production-performance", {
+                    check["id"] for check in report["unverified"]})
+        candidate = copy.deepcopy(external)
+        item = candidate["production-performance"]
+        item["payload"]["workloads"][0]["p95_total_tokens"] = 2100
+        item["payload_sha256"] = loom_release._canonical_hash(item["payload"])
+        self._sign_item(item)
+        report = loom_release.certification_report(
+            local_checks=local, external_evidence=candidate,
+            trust_policy=trust_policy, now=instant)
+        self.assertEqual("blocked", report["status"])
+
+    def test_production_replay_requires_real_provider_attested_paired_sessions(self):
+        external, trust_policy = self._signed_external_evidence()
+        local = self._sealed_local_evidence(trust_policy["subject"])
+        instant = dt.datetime(2026, 7, 16, tzinfo=dt.timezone.utc)
+        invalid_values = (
+            ("provider_attested", False),
+            ("production_session_count", 15),
+            ("pair_count", 7),
+            ("simulation_count", 1),
+            ("exact_domain", False),
+            ("improvement_reproduced", False),
+            ("regression_guard_passed", False),
+        )
+        for field, value in invalid_values:
+            with self.subTest(field=field, value=value):
+                candidate = copy.deepcopy(external)
+                item = candidate["production-memory-replay"]
+                item["payload"][field] = value
+                item["payload_sha256"] = loom_release._canonical_hash(item["payload"])
+                self._sign_item(item)
+                report = loom_release.certification_report(
+                    local_checks=local, external_evidence=candidate,
+                    trust_policy=trust_policy, now=instant)
+                self.assertEqual("blocked", report["status"])
+                self.assertIn("production-memory-replay", {
+                    check["id"] for check in report["unverified"]})
+
+    def test_local_verification_names_mechanical_performance_truthfully(self):
+        self.assertIn("performance_contracts", loom_release.LOCAL_CHECKS)
+        self.assertNotIn("performance_budgets", loom_release.LOCAL_CHECKS)
+        result = loom_release._performance_contracts()
+        self.assertTrue(result["passed"], result)
+        self.assertFalse(result["certifies_production_usage"])
 
     def test_certification_rejects_unsealed_local_boolean_map(self):
         external, trust_policy = self._signed_external_evidence()

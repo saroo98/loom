@@ -21,6 +21,8 @@ import loom_reliability
 import loom_adaptation_eval
 import loom_docs
 import loom_install
+import loom_improvement
+import loom_performance
 
 
 ROOT_FILES = {
@@ -31,11 +33,12 @@ ROOT_DIRECTORIES = {".github", "docs", "loom", "schemas", "skill", "templates", 
 MANIFEST = "BUILD-MANIFEST.json"
 LOCAL_CHECKS = (
     "suite", "adaptation", "privacy", "failure_injection",
-    "reproducible_build", "installer_cycle", "performance_budgets", "docs",
+    "reproducible_build", "installer_cycle", "performance_contracts", "docs",
     "twenty_project_bound",
 )
 EXTERNAL_CHECKS = (
     "cross-platform-ci", "unfamiliar-user-usability", "independent-hostile-review",
+    "production-performance", "production-memory-replay",
 )
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
@@ -55,6 +58,25 @@ LOCAL_EVIDENCE_FIELDS = {
     "expires_at", "local_checks", "evidence", "evidence_sha256",
 }
 SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
+PRODUCTION_PERFORMANCE_FIELDS = {
+    "provider_attested", "receipt_bundle_sha256", "measurement_bundle_sha256",
+    "sample_count", "workload_count", "workloads", "successful_samples",
+    "regression_status",
+}
+PERFORMANCE_WORKLOAD_FIELDS = {
+    "id", "tier", "sample_count", "p50_total_tokens", "p95_total_tokens",
+    "worst_total_tokens", "token_budget", "p95_wall_ms", "worst_wall_ms",
+    "wall_budget_ms",
+}
+PRODUCTION_REPLAY_FIELDS = {
+    "provider_attested", "session_bundle_sha256", "replay_bundle_sha256",
+    "production_session_count", "pair_count", "simulation_count", "exact_domain",
+    "improvement_reproduced", "regression_guard_passed", "claims",
+}
+REPLAY_CLAIM_FIELDS = {
+    "metric", "domain", "scope", "longitudinal_sample_count", "replay_pair_count",
+    "longitudinal_status", "replay_status", "regression_alarm",
+}
 
 
 class ReleaseError(RuntimeError):
@@ -256,6 +278,106 @@ def _signature_valid(evidence, trusted_key):
     return hmac.compare_digest(recovered, expected)
 
 
+def _sha256(value):
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def _nonnegative_integer(value):
+    return type(value) is int and value >= 0
+
+
+def _production_performance_passed(payload):
+    if set(payload) != PRODUCTION_PERFORMANCE_FIELDS \
+            or payload.get("provider_attested") is not True \
+            or not _sha256(payload.get("receipt_bundle_sha256")) \
+            or not _sha256(payload.get("measurement_bundle_sha256")) \
+            or type(payload.get("sample_count")) is not int \
+            or payload["sample_count"] < 20 \
+            or payload.get("successful_samples") != payload["sample_count"] \
+            or type(payload.get("workload_count")) is not int \
+            or payload["workload_count"] < 4 \
+            or payload.get("regression_status") != "passed" \
+            or not isinstance(payload.get("workloads"), list) \
+            or len(payload["workloads"]) != payload["workload_count"]:
+        return False
+    identifiers = set()
+    tiers = set()
+    measured_samples = 0
+    for workload in payload["workloads"]:
+        if not isinstance(workload, dict) or set(workload) != PERFORMANCE_WORKLOAD_FIELDS:
+            return False
+        identifier = workload.get("id")
+        tier = workload.get("tier")
+        if not isinstance(identifier, str) \
+                or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", identifier) is None \
+                or identifier in identifiers or tier not in {"S", "M", "L", "XL"} \
+                or tier in tiers or type(workload.get("sample_count")) is not int \
+                or workload["sample_count"] < 5:
+            return False
+        token_values = [workload.get(field) for field in (
+            "p50_total_tokens", "p95_total_tokens", "worst_total_tokens",
+            "token_budget")]
+        wall_values = [workload.get(field) for field in (
+            "p95_wall_ms", "worst_wall_ms", "wall_budget_ms")]
+        if not all(_nonnegative_integer(value) for value in token_values + wall_values) \
+                or token_values[3] == 0 or wall_values[2] == 0 \
+                or not token_values[0] <= token_values[1] <= token_values[2] \
+                <= token_values[3] \
+                or not wall_values[0] <= wall_values[1] <= wall_values[2]:
+            return False
+        identifiers.add(identifier)
+        tiers.add(tier)
+        measured_samples += workload["sample_count"]
+    return tiers == {"S", "M", "L", "XL"} \
+        and measured_samples == payload["sample_count"]
+
+
+def _production_replay_passed(payload):
+    if set(payload) != PRODUCTION_REPLAY_FIELDS \
+            or payload.get("provider_attested") is not True \
+            or not _sha256(payload.get("session_bundle_sha256")) \
+            or not _sha256(payload.get("replay_bundle_sha256")) \
+            or type(payload.get("production_session_count")) is not int \
+            or type(payload.get("pair_count")) is not int \
+            or payload["pair_count"] < 16 \
+            or payload["production_session_count"] < payload["pair_count"] * 2 \
+            or payload.get("simulation_count") != 0 \
+            or payload.get("exact_domain") is not True \
+            or payload.get("improvement_reproduced") is not True \
+            or payload.get("regression_guard_passed") is not True \
+            or not isinstance(payload.get("claims"), list) \
+            or not 2 <= len(payload["claims"]) <= 32:
+        return False
+    scopes = set()
+    pair_total = 0
+    claim_keys = set()
+    for claim in payload["claims"]:
+        if not isinstance(claim, dict) or set(claim) != REPLAY_CLAIM_FIELDS \
+                or claim.get("metric") not in loom_improvement.METRICS \
+                or not isinstance(claim.get("domain"), str) \
+                or loom_improvement.ID_RE.fullmatch(claim["domain"]) is None \
+                or claim.get("scope") not in {"general-calibration", "exact-domain"} \
+                or (claim["scope"] == "general-calibration") != \
+                (claim["domain"] == "general") \
+                or type(claim.get("longitudinal_sample_count")) is not int \
+                or claim["longitudinal_sample_count"] < \
+                loom_improvement.MIN_LONGITUDINAL_SAMPLES \
+                or type(claim.get("replay_pair_count")) is not int \
+                or claim["replay_pair_count"] < loom_improvement.MIN_REPLAY_PAIRS \
+                or claim.get("longitudinal_status") != "improved" \
+                or claim.get("replay_status") != "improved" \
+                or claim.get("regression_alarm") is not False:
+            return False
+        key = (claim["metric"], claim["domain"])
+        if key in claim_keys:
+            return False
+        claim_keys.add(key)
+        scopes.add(claim["scope"])
+        pair_total += claim["replay_pair_count"]
+    return scopes == {"general-calibration", "exact-domain"} \
+        and pair_total == payload["pair_count"]
+
+
 def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
     if not isinstance(evidence, dict) or set(evidence) != EXTERNAL_EVIDENCE_FIELDS \
             or evidence.get("schema_version") != 1 \
@@ -279,7 +401,8 @@ def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
     if not isinstance(issuer, dict) or set(issuer) != ISSUER_FIELDS \
             or not isinstance(issuer.get("id"), str) or not issuer["id"].strip() \
             or issuer.get("kind") not in {
-                "github-actions", "independent-participant", "independent-reviewer"} \
+                "github-actions", "independent-participant", "independent-reviewer",
+                "independent-benchmark"} \
             or issuer.get("independent") is not True:
         return False
     payload = evidence.get("payload")
@@ -303,6 +426,10 @@ def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
     if check_id == "independent-hostile-review":
         return payload.get("critical_findings") == 0 \
             and payload.get("high_findings") == 0
+    if check_id == "production-performance":
+        return _production_performance_passed(payload)
+    if check_id == "production-memory-replay":
+        return _production_replay_passed(payload)
     return type(payload.get("total_jobs")) is int \
         and payload["total_jobs"] >= 3 \
         and payload.get("passed_jobs") == payload["total_jobs"] \
@@ -360,6 +487,25 @@ def _suite(root):
             "output": (result.stdout + result.stderr)[-4000:]}
 
 
+def _performance_contracts():
+    policy = loom_performance.evaluate_benchmarks()
+    observed = loom_performance.run_observed_benchmarks()
+    scenarios = observed.get("scenarios", {})
+    passed = policy.get("passed") is True \
+        and set(scenarios) == {
+            "cold_start", "warm_session", "project_switch", "resume", "year_long"} \
+        and scenarios["cold_start"].get("disk_reads") == 2 \
+        and scenarios["warm_session"].get("disk_reads") == 0 \
+        and scenarios["warm_session"].get("cache_hits") == 2 \
+        and scenarios["project_switch"].get("disk_reads") == 1 \
+        and scenarios["resume"].get("disk_reads") == 1 \
+        and scenarios["year_long"].get("capsule_chars", 513) <= 512 \
+        and observed.get("tiny_task", {}).get("measurement_kind") == \
+        "synthetic-policy-fixture"
+    return {"passed": passed, "policy": policy, "observed": observed,
+            "certifies_production_usage": False}
+
+
 def sanitize_suite_evidence(suite, *, root, home):
     value = dict(suite)
     value["output"] = loom_privacy.minimize_evidence(
@@ -403,6 +549,7 @@ def verify_local(root, *, forbidden_tokens):
         raise ReleaseError("local verification requires real private/owner tokens")
     identity_before = _git_release_identity(root)
     suite = sanitize_suite_evidence(_suite(root), root=root, home=Path.home())
+    performance_contracts = _performance_contracts()
     docs = loom_docs.audit_docs(root)
     offline = loom_privacy.audit_offline_modules(root / "tools")
     with tempfile.TemporaryDirectory(prefix="loom-release-proof-") as temporary:
@@ -429,7 +576,7 @@ def verify_local(root, *, forbidden_tokens):
         "failure_injection": suite["passed"],
         "reproducible_build": reproducible,
         "installer_cycle": installer_cycle,
-        "performance_budgets": suite["passed"],
+        "performance_contracts": performance_contracts["passed"],
         "docs": docs["status"] == "passed",
         "twenty_project_bound": bool(scenario and scenario["passed"]),
     }
@@ -446,6 +593,7 @@ def verify_local(root, *, forbidden_tokens):
         "build_hashes": [first["root_sha256"], second["root_sha256"]],
         "installer": {"files_verified": checked["files_verified"],
                       "target_removed": removed["target_removed"]},
+        "performance_contracts": performance_contracts,
         "twenty_project_measurements": (
             scenario["measurements"] if scenario else None),
     }

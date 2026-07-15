@@ -49,8 +49,10 @@ cannot be proven. Mechanical and advisory capabilities are distinguished in
 [the evidence report](docs/generated-evidence.json), not typed into this page.
 
 Production certification is intentionally fail-closed. Local tests cannot substitute for a real
-cross-platform CI run, an unfamiliar-person usability study, or an independent hostile review.
-See [current limitations](docs/limitations.md); Loom never labels itself 100 without those records.
+cross-platform CI run, an unfamiliar-person usability study, an independent hostile review,
+provider-attested production performance, or independently reproduced production memory replay.
+See [current limitations](docs/limitations.md); Loom never labels itself 100 without all five
+signed evidence records.
 
 Agents start with [START-HERE.md](START-HERE.md). Maintainers can read the
 [advanced architecture](docs/architecture.md).
