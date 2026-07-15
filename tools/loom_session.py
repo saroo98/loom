@@ -306,6 +306,13 @@ def _append_event(journal, kind, session_id, operation_id, instant, payload):
         _event(kind, session_id, operation_id, instant, payload, previous))
 
 
+def _content_evidence_id(prefix, payload):
+    digest = hashlib.sha256(json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+        allow_nan=False).encode("utf-8")).hexdigest()
+    return f"{prefix}-{digest}"
+
+
 def _validate_handler_result(value):
     required = {
         "status", "code", "success", "metrics", "evidence_ids",
@@ -866,10 +873,16 @@ class LocalMemoryAdapter:
                 kwargs.update(task_class=context.intent, risk_class=risk_class)
             elif observation["key"] == "concern":
                 kwargs["subject"] = observation.get("subject")
+            observation_evidence = _content_evidence_id("preference", {
+                "source_evidence_ids": sorted(evidence),
+                "operation_id": context.operation_id,
+                "project_id": context.project_id,
+                "observation": observation,
+            })
             receipt = self.preferences.observe(
                 key=observation["key"], value=observation["value"], source="observed",
                 project_id=context.project_id,
-                evidence_id=f"session-{context.operation_id[:16]}-{index}", **kwargs)
+                evidence_id=observation_evidence, **kwargs)
             if receipt["material_change"]:
                 adaptation_receipts.append(receipt["message"])
                 action_id = f"adapt-{context.operation_id[:20]}-{index}"
@@ -882,16 +895,22 @@ class LocalMemoryAdapter:
                         "risk_class": kwargs.get("risk_class"),
                         "subject": kwargs.get("subject"),
                     },
-                    evidence_ids=[f"session-{context.operation_id[:16]}-{index}"])
+                    evidence_ids=[observation_evidence])
                 reversible_action_ids.append(action_id)
         if result.get("artifact_usage"):
             self.planning.record_usage_batch(
                 domain=context.prepared.domains[0], project_id=context.project_id,
                 usages=result["artifact_usage"])
         proof_batch = []
-        for index, (metric, value, measurement_domain) in enumerate(measurements):
-            evidence_id = (
-                f"session-{context.operation_id[:20]}-{index}-{metric}")
+        for metric, value, measurement_domain in measurements:
+            evidence_id = _content_evidence_id("measurement", {
+                "source_evidence_ids": sorted(evidence),
+                "operation_id": context.operation_id,
+                "project_id": context.project_id,
+                "metric": metric,
+                "value": value,
+                "domain": measurement_domain,
+            })
             proof_batch.append({
                 "metric": metric, "value": value, "domain": measurement_domain,
                 "project_id": context.project_id, "evidence_id": evidence_id,

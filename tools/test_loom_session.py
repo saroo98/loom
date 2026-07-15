@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+import hashlib
 import json
 import os
 import subprocess
@@ -243,6 +244,20 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertEqual(1, domain["longitudinal"]["sample_count"])
         self.assertEqual(1, general["longitudinal"]["sample_count"])
         self.assertEqual(2.0, round_trips["evidence"]["longitudinal"]["recent"][0]["value"])
+        expected_body = {
+            "source_evidence_ids": ["real-session-evidence"],
+            "operation_id": receipt.operation_id,
+            "project_id": receipt.project_id,
+            "metric": "human-decision-round-trips",
+            "value": 2.0,
+            "domain": "cli",
+        }
+        expected_id = "measurement-" + hashlib.sha256(json.dumps(
+            expected_body, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+        self.assertEqual(
+            expected_id,
+            round_trips["evidence"]["longitudinal"]["recent"][0]["evidence_id"])
         self.assertEqual("exact-domain", domain["scope"])
         self.assertEqual("general-calibration", general["scope"])
 
