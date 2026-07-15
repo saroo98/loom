@@ -268,7 +268,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             forbidden_tokens=[
                 "-".join(("private", "fixture", "token")),
                 "-".join(("owner", "fixture", "token")),
-            ])
+            ], source_classification="public-release")
         loom_install.install(cls.public, cls.installed_fixture)
 
     @classmethod
@@ -609,16 +609,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
             lifecycle["events"][0]["rebaseline_record_sha256"],
             hashlib.sha256(history.read_bytes()).hexdigest())
 
-        evidence = self.repo / "plans" / "evidence" / "small-replan-review.txt"
-        _write(evidence, "Revalidated the compact CLI plan against the current target.\n")
         result = self.root / "small-repair-result.json"
         result.write_text(json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "repair_verification": [{
-                "section": "compact-plan", "passed": True,
-                "medium": "review-log",
-                "evidence_path": "evidence/small-replan-review.txt",
-                "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                "section": "compact-plan", "medium": "cli-process",
+                "command": [sys.executable, "-c",
+                            "print('compact plan verified against current target')"],
+                "timeout_seconds": 30,
             }],
         }), encoding="utf-8")
         source = self.repo / "src" / "app.py"
@@ -780,16 +778,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("full", resumed["repair_plan"]["regate_scope"])
         self.assertEqual(["full-pack"], resumed["repair_plan"]["affected_plan_sections"])
 
-        evidence = self.repo / "plans" / "evidence" / "freshness-review.txt"
-        _write(evidence, "Revalidated accounting invariants and executable acceptance media.\n")
         repair_result = self.root / "repair-result.json"
         repair_result.write_text(json.dumps({
-            "schema_version": 1,
+            "schema_version": 2,
             "repair_verification": [{
-                "section": "full-pack", "passed": True,
-                "medium": "review-log",
-                "evidence_path": "evidence/freshness-review.txt",
-                "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest(),
+                "section": "full-pack", "medium": "cli-process",
+                "command": [sys.executable, "-c",
+                            "print('full pack freshness verification passed')"],
+                "timeout_seconds": 30,
             }],
         }), encoding="utf-8")
         repaired = loom_orchestrator.complete(
@@ -827,30 +823,68 @@ class ProductionOrchestratorTests(unittest.TestCase):
                                     "REPAIR_EVIDENCE_REQUIRED"):
             loom_orchestrator.complete(repair["action_path"], usage)
 
-        evidence = self.repo / "plans" / "evidence" / "regate.txt"
-        _write(evidence, "Observed balanced posting tests in a real process.\n")
         result_path = self.root / "repair.json"
         result_path.write_text(json.dumps({
             "schema_version": 1,
             "repair_verification": [
                 {"section": section, "passed": True, "medium": "cli-process",
-                 "evidence_path": "evidence/regate.txt",
-                 "evidence_sha256": hashlib.sha256(evidence.read_bytes()).hexdigest()}
+                 "evidence_path": "evidence/fabricated.txt",
+                 "evidence_sha256": "a" * 64}
                 for section in ["accounting", "testing"]
             ],
         }), encoding="utf-8")
-        evidence.write_text("tampered\n", encoding="utf-8")
         with self.assertRaisesRegex(loom_orchestrator.OrchestratorError,
                                     "REPAIR_EVIDENCE_INVALID"):
             loom_orchestrator.complete(
                 repair["action_path"], usage, result_path=result_path)
-        _write(evidence, "Observed balanced posting tests in a real process.\n")
+        result_path.write_text(json.dumps({
+            "schema_version": 2,
+            "repair_verification": [
+                {"section": section, "medium": "cli-process",
+                 "command": [sys.executable, "-c", "raise SystemExit(7)"],
+                 "timeout_seconds": 30}
+                for section in ["accounting", "testing"]
+            ],
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(loom_orchestrator.OrchestratorError,
+                                    "REPAIR_VERIFICATION_FAILED"):
+            loom_orchestrator.complete(
+                repair["action_path"], usage, result_path=result_path)
+        result_path.write_text(json.dumps({
+            "schema_version": 2,
+            "repair_verification": [
+                {"section": section, "medium": "cli-process",
+                 "command": [sys.executable, "-c",
+                             "print('balanced posting verification passed')"],
+                 "timeout_seconds": 30}
+                for section in ["accounting", "testing"]
+            ],
+        }), encoding="utf-8")
         completed = self.cli(
             "complete", "--action", repair["action_path"], "--usage", usage,
             "--result", result_path)
         self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
         repaired = json.loads(completed.stdout)
         self.assertEqual("repair-complete", repaired["code"])
+        action = json.loads(Path(repair["action_path"]).read_text(encoding="utf-8"))
+        entries = action["host_result"]["repair_verification"]
+        self.assertEqual(2, len(entries))
+        self.assertTrue(all(item["attestation_status"] == "loom-executed-local"
+                            for item in entries))
+        self.assertTrue(all(item["evidence_id"].startswith("sha256-")
+                            for item in entries))
+        for item in entries:
+            receipt_path = Path(repair["action_path"]).parent / item["receipt_path"]
+            self.assertTrue(receipt_path.is_file())
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            self.assertEqual(item["evidence_id"], receipt["evidence_id"])
+            self.assertEqual(item["evidence_hash"], receipt["evidence_hash"])
+            unsigned = dict(receipt)
+            unsigned.pop("evidence_id")
+            unsigned.pop("evidence_hash")
+            self.assertEqual(loom_lifecycle._digest(unsigned), receipt["evidence_hash"])
+            self.assertEqual("disposable-target-snapshot",
+                             receipt["execution_isolation"])
         continued = loom_orchestrator.invoke(
             request="Continue", cwd=self.repo, home=self.home,
             install_root=self.installed)

@@ -5,6 +5,7 @@
     {"id":"one-request-routing","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_runtime.py","tools/loom_session.py"],"tests":["tools/test_production_orchestrator.py","tools/test_loom_runtime.py","tools/test_loom_session.py"]},
     {"id":"complete-world-fingerprint","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_survey.py"],"tests":["tools/test_loom_runtime.py"]},
     {"id":"plan-before-implementation","kind":"mechanical","enforcement":["tools/loom_gate.py"],"tests":["tools/test_loom_gate.py"]},
+    {"id":"loom-executed-repair-verification","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_lifecycle.py"],"tests":["tools/test_production_orchestrator.py"]},
     {"id":"pack-integrity","kind":"mechanical","enforcement":["tools/loom_lint.py"],"tests":["tools/test_loom_lint.py"]},
     {"id":"domain-discovery","kind":"mechanical","enforcement":["tools/loom_domain.py"],"tests":["tools/test_domain_universality.py"]},
     {"id":"scoped-memory","kind":"mechanical","enforcement":["tools/loom_memory.py"],"tests":["tools/test_memory_lifecycle.py","tools/test_domain_rehydration.py"]},

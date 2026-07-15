@@ -83,6 +83,7 @@ CROSS_PLATFORM_CI_FIELDS = {
 CI_JOB_FIELDS = {"id", "os", "python", "conclusion", "url"}
 REQUIRED_CI_OSES = {"ubuntu-latest", "macos-latest", "windows-latest"}
 REQUIRED_CI_PYTHONS = {"3.10", "3.11", "3.12", "3.13"}
+SOURCE_CLASSIFICATIONS = {"private-owner", "public-release"}
 USABILITY_FIELDS = {
     "study_id", "study_bundle_sha256", "public_build_sha256",
     "participant_count", "unfamiliar_participant_count",
@@ -112,7 +113,70 @@ def _eligible(relative):
         and relative.suffix.lower() not in {".pyc", ".pyo"}
 
 
-def build_public(source, destination, *, forbidden_tokens):
+def _owner_token_policy(source, forbidden_tokens, source_classification):
+    if source_classification not in SOURCE_CLASSIFICATIONS:
+        raise ReleaseError("release source classification is invalid")
+    if not isinstance(forbidden_tokens, (list, tuple)) or any(
+            not isinstance(item, str) for item in forbidden_tokens):
+        raise ReleaseError("release owner tokens must be a list of strings")
+    tokens = list(dict.fromkeys(
+        item.strip() for item in forbidden_tokens if item.strip()))
+    if not tokens:
+        raise ReleaseError("release build requires configured private/owner firewall tokens")
+    if source_classification == "public-release":
+        return {
+            "source_classification": source_classification,
+            "configured_count": len(tokens), "grounded_count": 0,
+            "grounding_status": "not-applicable-public-source",
+            "protection_claimed": False,
+        }
+    grounded = set()
+    try:
+        source_files = loom_reliability._regular_files(source)
+        for path in source_files:
+            relative = path.relative_to(source)
+            if _eligible(relative):
+                continue
+            try:
+                size = path.stat().st_size
+                if size > loom_reliability.MAX_FILE_BYTES:
+                    raise ReleaseError(
+                        "private owner-token grounding file exceeds the safe scan limit")
+                raw = path.read_bytes()
+            except OSError as exc:
+                raise ReleaseError(f"private owner-token grounding failed: {exc}") from exc
+            if len(raw) != size:
+                raise ReleaseError("private owner-token grounding source changed during scan")
+            folded_raw = raw.lower()
+            _views, decoded = loom_privacy._scan_views(raw)
+            relative_text = relative.as_posix().casefold()
+            for token in tokens:
+                if token in grounded:
+                    continue
+                forms = {
+                    form for encoding in loom_privacy.TOKEN_ENCODINGS for form in (
+                        token.encode(encoding), token.casefold().encode(encoding))
+                }
+                if token.casefold() in relative_text \
+                        or any(form in raw or form.lower() in folded_raw for form in forms) \
+                        or any(token.casefold() in text.casefold() for text in decoded):
+                    grounded.add(token)
+    except loom_reliability.ReliabilityError as exc:
+        raise ReleaseError(f"private owner-token grounding failed: {exc}") from exc
+    if not grounded:
+        raise ReleaseError(
+            "private owner-token policy would protect nothing: no configured token "
+            "is grounded in private-only source material")
+    return {
+        "source_classification": source_classification,
+        "configured_count": len(tokens), "grounded_count": len(grounded),
+        "grounding_status": "grounded-private-source",
+        "protection_claimed": True,
+    }
+
+
+def build_public(source, destination, *, forbidden_tokens,
+                 source_classification="private-owner"):
     try:
         source = loom_reliability._absolute(
             source, "release source", must_exist=True)
@@ -124,8 +188,8 @@ def build_public(source, destination, *, forbidden_tokens):
     if destination == source or destination.is_relative_to(source) \
             or source.is_relative_to(destination):
         raise ReleaseError("release source and destination must be separate trees")
-    if not forbidden_tokens:
-        raise ReleaseError("release build requires real private/owner firewall tokens")
+    owner_token_policy = _owner_token_policy(
+        source, forbidden_tokens, source_classification)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".loom-public-", dir=destination.parent))
     try:
@@ -148,13 +212,18 @@ def build_public(source, destination, *, forbidden_tokens):
         if not firewall["clean"]:
             raise ReleaseError("release firewall rejected the public build")
         os.replace(staging, destination)
+    except loom_reliability.ReliabilityError as exc:
+        if staging.exists():
+            shutil.rmtree(staging)
+        raise ReleaseError(f"release source traversal failed: {exc}") from exc
     except BaseException:
         if staging.exists():
             shutil.rmtree(staging)
         raise
     return {"status": "built", "destination": str(destination),
             "root_sha256": payload_manifest["root_sha256"],
-            "files": payload_manifest["files"], "firewall": firewall}
+            "files": payload_manifest["files"], "firewall": firewall,
+            "owner_token_policy": owner_token_policy}
 
 
 def _canonical_hash(value):
@@ -644,10 +713,12 @@ def verify_local(root, *, forbidden_tokens):
     with tempfile.TemporaryDirectory(prefix="loom-release-proof-") as temporary:
         workspace = Path(temporary)
         adaptation = loom_adaptation_eval.run_suite(workspace / "adaptation")
-        first = build_public(root, workspace / "public-one",
-                             forbidden_tokens=forbidden_tokens)
-        second = build_public(root, workspace / "public-two",
-                              forbidden_tokens=forbidden_tokens)
+        first = build_public(
+            root, workspace / "public-one", forbidden_tokens=forbidden_tokens,
+            source_classification="public-release")
+        second = build_public(
+            root, workspace / "public-two", forbidden_tokens=forbidden_tokens,
+            source_classification="public-release")
         reproducible = first["root_sha256"] == second["root_sha256"]
         installed = loom_install.install(workspace / "public-one", workspace / "installed")
         checked = loom_install.check(workspace / "installed")
@@ -655,7 +726,8 @@ def verify_local(root, *, forbidden_tokens):
             workspace / "installed", confirmation=installed["install_id"])
         installer_cycle = checked["status"] == "installed" \
             and removed["status"] == "uninstalled" and removed["target_removed"]
-        privacy = first["firewall"]
+        privacy = {**first["firewall"],
+                   "owner_token_policy": first["owner_token_policy"]}
     scenario = next((item for item in adaptation["scenarios"]
                      if item["id"] == "twenty-project-year"), None)
     local = {
@@ -697,6 +769,9 @@ def main(argv=None):
     build.add_argument("source")
     build.add_argument("destination")
     build.add_argument("--forbid", action="append", default=[])
+    build.add_argument(
+        "--source-classification", choices=sorted(SOURCE_CLASSIFICATIONS),
+        default="private-owner")
     certify = sub.add_parser("certify")
     certify.add_argument("--local-checks", required=True)
     certify.add_argument("--external-evidence", required=True)
@@ -709,7 +784,8 @@ def main(argv=None):
     try:
         if args.command == "build":
             result = build_public(
-                args.source, args.destination, forbidden_tokens=args.forbid)
+                args.source, args.destination, forbidden_tokens=args.forbid,
+                source_classification=args.source_classification)
         elif args.command == "certify":
             local = json.loads(Path(args.local_checks).read_text(encoding="utf-8"))
             external = json.loads(Path(args.external_evidence).read_text(encoding="utf-8"))

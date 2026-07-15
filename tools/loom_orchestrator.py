@@ -298,43 +298,54 @@ def _read_repair_result(result_path, action):
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise OrchestratorError("REPAIR_EVIDENCE_INVALID", str(exc)) from exc
     if not isinstance(value, dict) or set(value) != {"schema_version", "repair_verification"} \
-            or value["schema_version"] != 1 \
-            or not isinstance(value["repair_verification"], list):
+            or value["schema_version"] != 2 \
+            or not isinstance(value["repair_verification"], list) \
+            or not 1 <= len(value["repair_verification"]) <= 32:
         raise OrchestratorError("REPAIR_EVIDENCE_INVALID", "repair result fields are invalid")
     expected = action["repair_plan"]["affected_plan_sections"]
     entries, seen = [], set()
-    pack = Path(action["explicit_target"] or action["cwd"]) / "plans"
+    root = Path(action["explicit_target"] or action["cwd"])
+    pack = root / "plans"
+    action_file = _action_path(
+        action["owner_home"], action["instance_id"], action["project_id"],
+        action["action_id"])
+    receipt_root = action_file.parent / f"{action['action_id']}.evidence"
     for item in value["repair_verification"]:
         if not isinstance(item, dict) or set(item) != {
-                "section", "passed", "medium", "evidence_path", "evidence_sha256"} \
+                "section", "medium", "command", "timeout_seconds"} \
                 or item["section"] not in expected or item["section"] in seen \
-                or item["passed"] is not True \
                 or not isinstance(item["medium"], str) \
                 or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", item["medium"]) \
-                or not isinstance(item["evidence_path"], str) \
-                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,255}", item["evidence_path"]) \
-                or ".." in item["evidence_path"].split("/") \
-                or not re.fullmatch(r"[0-9a-f]{64}", str(item["evidence_sha256"])):
+                or not isinstance(item["command"], list) \
+                or not 1 <= len(item["command"]) <= 32 \
+                or not all(isinstance(part, str) and 0 < len(part) <= 1000
+                           and "\x00" not in part for part in item["command"]) \
+                or type(item["timeout_seconds"]) is not int \
+                or not 1 <= item["timeout_seconds"] <= 300:
             raise OrchestratorError("REPAIR_EVIDENCE_INVALID", "repair evidence entry is invalid")
-        evidence = pack / Path(*item["evidence_path"].split("/"))
         try:
-            loom_memory._reject_link_ancestors(evidence, "repair evidence")
-            if evidence.is_symlink() or not evidence.is_file() \
-                    or evidence.stat().st_size > 8 * 1024 * 1024:
-                raise OrchestratorError(
-                    "REPAIR_EVIDENCE_INVALID", "repair evidence is not a bounded regular file")
-            raw = evidence.read_bytes()
-        except (OSError, loom_memory.MemoryError) as exc:
-            raise OrchestratorError("REPAIR_EVIDENCE_INVALID", str(exc)) from exc
-        if hashlib.sha256(raw).hexdigest() != item["evidence_sha256"]:
+            receipt = loom_lifecycle.capture_repair_verification(
+                pack, root, item["section"], medium=item["medium"],
+                command=item["command"], timeout=item["timeout_seconds"])
+            receipt_path = receipt_root / f"{item['section']}.json"
+            loom_memory._atomic_json(receipt_path, receipt)
+        except (OSError, loom_lifecycle.LifecycleError,
+                loom_memory.MemoryError) as exc:
             raise OrchestratorError(
-                "REPAIR_EVIDENCE_INVALID", "repair evidence content does not match its digest")
+                "REPAIR_VERIFICATION_FAILED", f"{item['section']}: {exc}") from exc
         seen.add(item["section"])
-        entries.append({**item, "evidence_id": "sha256-" + item["evidence_sha256"]})
+        entries.append({
+            "section": item["section"], "passed": True,
+            "medium": receipt["medium"],
+            "evidence_id": receipt["evidence_id"],
+            "evidence_hash": receipt["evidence_hash"],
+            "attestation_status": "loom-executed-local",
+            "receipt_path": receipt_path.relative_to(action_file.parent).as_posix(),
+        })
     if sorted(seen) != sorted(expected):
         raise OrchestratorError(
             "REPAIR_EVIDENCE_INVALID", "repair evidence does not cover the sealed scope exactly")
-    return {"schema_version": 1, "repair_verification": entries}
+    return {"schema_version": 2, "repair_verification": entries}
 
 
 def _read_host_outcome(result_path, action):

@@ -23,6 +23,7 @@ import loom_privacy
 
 SCHEMA_VERSION = 1
 ACCEPTANCE_SCHEMA_VERSION = 3
+REPAIR_EVIDENCE_SCHEMA_VERSION = 1
 EVIDENCE_DIR = "evidence"
 REGATE_FILE = ".loom-regate.json"
 DEPENDENCY_FILE = "plan-dependencies.json"
@@ -207,11 +208,8 @@ def _copy_verification_snapshot(source, destination, excluded):
                 raise LifecycleError(f"verification snapshot copy failed: {exc}") from exc
 
 
-def capture_acceptance(pack, repo, work_order, *, medium, command,
-                       timeout=120, now=None):
+def _capture_real_medium(pack, repo, *, medium, command, timeout, now):
     pack, repo = Path(pack).absolute(), Path(repo).absolute()
-    if not WO_ID.fullmatch(str(work_order)):
-        raise LifecycleError("work-order id is invalid")
     _validate_medium(medium)
     _validate_command(command)
     if type(timeout) not in (int, float) or not 0 < timeout <= 300:
@@ -249,9 +247,7 @@ def capture_acceptance(pack, repo, work_order, *, medium, command,
         stderr_text, roots=roots, max_chars=MAX_PERSISTED_TRANSCRIPT_CHARS)
     command_minimized = [loom_privacy.minimize_evidence(
         item, roots=roots, max_chars=1000) for item in command]
-    evidence = {"schema_version": ACCEPTANCE_SCHEMA_VERSION,
-        "work_order": str(work_order),
-        "medium": medium, "command": command_minimized, "started_at": started,
+    return {"medium": medium, "command": command_minimized, "started_at": started,
         "completed_at": completed, "exit_code": exit_code,
         "stdout": stdout_minimized, "stderr": stderr_minimized,
         "stdout_sha256": hashlib.sha256(stdout_minimized.encode("utf-8")).hexdigest(),
@@ -262,10 +258,39 @@ def capture_acceptance(pack, repo, work_order, *, medium, command,
         "execution_isolation": "disposable-target-snapshot",
         "repo_state_before": before.state_hash,
         "repo_state_after": after.state_hash}
+
+
+def _seal_content_evidence(evidence):
     evidence_hash = _digest(evidence)
-    evidence["evidence_id"] = "sha256-" + evidence_hash
-    evidence["evidence_hash"] = evidence_hash
+    return {**evidence, "evidence_id": "sha256-" + evidence_hash,
+            "evidence_hash": evidence_hash}
+
+
+def capture_acceptance(pack, repo, work_order, *, medium, command,
+                       timeout=120, now=None):
+    pack = Path(pack).absolute()
+    if not WO_ID.fullmatch(str(work_order)):
+        raise LifecycleError("work-order id is invalid")
+    evidence = _seal_content_evidence({
+        "schema_version": ACCEPTANCE_SCHEMA_VERSION,
+        "work_order": str(work_order),
+        **_capture_real_medium(
+            pack, repo, medium=medium, command=command, timeout=timeout, now=now),
+    })
     _atomic_json(pack / EVIDENCE_DIR / f"{work_order}.json", evidence)
+    return json.loads(json.dumps(evidence))
+
+
+def capture_repair_verification(pack, repo, section, *, medium, command,
+                                timeout=120, now=None):
+    if not isinstance(section, str) or not SAFE_ID.fullmatch(section):
+        raise LifecycleError("repair section identity is invalid")
+    evidence = _seal_content_evidence({
+        "schema_version": REPAIR_EVIDENCE_SCHEMA_VERSION,
+        "section": section,
+        **_capture_real_medium(
+            pack, repo, medium=medium, command=command, timeout=timeout, now=now),
+    })
     return json.loads(json.dumps(evidence))
 
 

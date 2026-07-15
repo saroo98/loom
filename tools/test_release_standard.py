@@ -8,9 +8,11 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 import loom_install
 import loom_release
+import loom_reliability
 
 
 TEST_RSA_N = int(
@@ -57,6 +59,9 @@ class ReleaseStandardTests(unittest.TestCase):
         (source / "docs" / "index.html").write_text("<!doctype html>\n", encoding="utf-8")
         (source / "skill" / "loom" / "SKILL.md").write_text(
             "---\nname: loom\n---\n", encoding="utf-8")
+        (source / "private").mkdir()
+        (source / "private" / "owner-grounding.txt").write_text(
+            "real-owner-token\nowner-token\n", encoding="utf-8")
         return source
 
     @staticmethod
@@ -208,6 +213,12 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertEqual(first["root_sha256"], second["root_sha256"])
         self.assertTrue(first["firewall"]["clean"])
         self.assertEqual(first["files"], second["files"])
+        self.assertEqual({
+            "source_classification": "private-owner",
+            "configured_count": 1, "grounded_count": 1,
+            "grounding_status": "grounded-private-source",
+            "protection_claimed": True,
+        }, first["owner_token_policy"])
 
         (source / "docs" / "private.bin").write_bytes(b"prefix REAL-OWNER-TOKEN suffix")
         refused = self.root / "refused"
@@ -215,6 +226,53 @@ class ReleaseStandardTests(unittest.TestCase):
             loom_release.build_public(
                 source, refused, forbidden_tokens=["real-owner-token"])
         self.assertFalse(refused.exists())
+
+    def test_private_build_refuses_owner_policy_that_would_protect_nothing(self):
+        source = self._source()
+        destination = self.root / "dummy-policy"
+
+        with self.assertRaisesRegex(loom_release.ReleaseError, "protect nothing"):
+            loom_release.build_public(
+                source, destination,
+                forbidden_tokens=["__definitely_not_an_owner_token_9f4c2d__"])
+
+        self.assertFalse(destination.exists())
+
+    def test_public_source_build_does_not_claim_owner_token_grounding(self):
+        source = self._source()
+        result = loom_release.build_public(
+            source, self.root / "public-source",
+            forbidden_tokens=["__scan_only_defense_in_depth__"],
+            source_classification="public-release")
+
+        self.assertEqual({
+            "source_classification": "public-release",
+            "configured_count": 1, "grounded_count": 0,
+            "grounding_status": "not-applicable-public-source",
+            "protection_claimed": False,
+        }, result["owner_token_policy"])
+
+    def test_private_owner_grounding_translates_unsafe_tree_to_release_refusal(self):
+        source = self._source()
+        with mock.patch.object(
+                loom_reliability, "_regular_files",
+                side_effect=loom_reliability.ReliabilityError("seeded unsafe tree")):
+            with self.assertRaisesRegex(loom_release.ReleaseError, "grounding failed"):
+                loom_release.build_public(
+                    source, self.root / "unsafe-tree",
+                    forbidden_tokens=["real-owner-token"])
+
+    def test_public_source_traversal_error_is_structured_and_leaves_no_destination(self):
+        source = self._source()
+        destination = self.root / "unsafe-public-tree"
+        with mock.patch.object(
+                loom_reliability, "_regular_files",
+                side_effect=loom_reliability.ReliabilityError("seeded unsafe tree")):
+            with self.assertRaisesRegex(loom_release.ReleaseError, "traversal failed"):
+                loom_release.build_public(
+                    source, destination, forbidden_tokens=["scan-token"],
+                    source_classification="public-release")
+        self.assertFalse(destination.exists())
 
     def test_installer_cycle_checks_and_removes_only_receipt_proven_files(self):
         source = self._source()

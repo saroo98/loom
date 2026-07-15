@@ -26,6 +26,11 @@ absolute-path interference is still detected. This protects ordinary relative-pa
 it is not a portable host-level process sandbox, so commands still require the same authority and
 care as any executable launched by the agent. Successful evidence receives an identity derived
 from its canonical content; changing and re-hashing the content while reusing the ID is rejected.
+Repair completion accepts only a schema-v2 verification plan with one bounded command per sealed
+plan section. The host cannot submit `passed`, an evidence file, or a digest. Loom executes each
+command, stores the minimized transcript and world hashes beside the private action record, and
+passes only the derived evidence identity into the regate. This is local execution evidence, not
+independent attestation or an OS containment claim.
 
 The world fingerprint treats path, entry kind, regular-file content, symlink target, executable
 mode, Git HEAD/branch/index, and staged/unstaged/untracked sets as project semantics. Device and
@@ -63,8 +68,10 @@ improvement claim; only the independently signed release evidence contract can c
 
 `loom_release` creates a new destination from a positive allowlist, rejects links and non-regular
 entries, scans every output byte and filename through UTF-8/UTF-16 views, refuses unsupported opaque
-binary/container formats, and emits a deterministic manifest. It will not build without explicit
-private/owner firewall tokens. `loom_install` installs only into a new directory,
+binary/container formats, and emits a deterministic manifest. Private-owner mode requires at least
+one configured token to occur in source material excluded by the positive allowlist, so a dummy-only
+policy fails instead of claiming protection. Public-release scan mode explicitly reports that it
+does not attest private-source grounding. `loom_install` installs only into a new directory,
 checks receipt-proven hashes, and uninstalls only an unchanged owned set. `loom_release certify`
 accepts only fresh, content-bound local evidence for one clean GitHub commit plus fresh external
 evidence signed by independently provisioned RSA trust roots. External evidence IDs are derived

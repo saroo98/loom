@@ -12,6 +12,9 @@
 - Made acceptance and signed external evidence identities immutable and content-bound.
 - Separated reproducible local improvement observations from independently attested production claims.
 - Blocked explicitly self-reviewed G1 records from authorizing implementation.
+- Replaced host-authored repair pass files with Loom-executed, content-bound verification receipts.
+- Grounded private publication token policies in excluded source and made public-source scans deny
+  any private-protection claim.
 
 Production certification remains blocked until the external evidence listed in
 [`docs/limitations.md`](docs/limitations.md) exists.
