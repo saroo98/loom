@@ -211,7 +211,7 @@ def parse_frontmatter(text):
         if not m:
             continue  # tolerate nested/unknown lines
         key, val = m.group(1), m.group(2)
-        val = re.split(r"\s+#", val, 1)[0].strip()  # strip inline comment
+        val = re.split(r"\s+#", val, maxsplit=1)[0].strip()  # strip inline comment
         if val.startswith("[") and val.endswith("]"):
             inner = val[1:-1].strip()
             fm[key] = [v.strip().strip("'\"") for v in inner.split(",") if v.strip()] if inner else []
@@ -455,7 +455,7 @@ def parse_ledger(rep, path, text):
         if current:
             fm = re.match(r"^-\s*([a-z_]+)\s*:\s*(.*)$", line.strip())
             if fm:
-                value = re.split(r"\s+#", fm.group(2), 1)[0].strip()
+                value = re.split(r"\s+#", fm.group(2), maxsplit=1)[0].strip()
                 entries[current][fm.group(1)] = value
     for aid, e in entries.items():
         for field in LEDGER_FIELDS:
