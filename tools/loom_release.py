@@ -811,12 +811,14 @@ def _git_release_identity(root):
     return {"repository": repository, "commit_sha": commit}
 
 
-def verify_local(root, *, forbidden_tokens):
+def verify_local(root, *, forbidden_tokens, source_classification="private-owner"):
     try:
         root = loom_reliability._absolute(root, "release root", must_exist=True)
     except loom_reliability.ReliabilityError as exc:
         raise ReleaseError(str(exc)) from exc
-    if not forbidden_tokens:
+    if source_classification not in SOURCE_CLASSIFICATIONS:
+        raise ReleaseError("local verification source classification is invalid")
+    if source_classification == "private-owner" and not forbidden_tokens:
         raise ReleaseError("local verification requires real private/owner tokens")
     identity_before = _git_release_identity(root)
     performance_contracts = _performance_contracts()
@@ -826,10 +828,10 @@ def verify_local(root, *, forbidden_tokens):
         adaptation = loom_adaptation_eval.run_suite(workspace / "adaptation")
         first = build_public(
             root, workspace / "public-one", forbidden_tokens=forbidden_tokens,
-            source_classification="public-release")
+            source_classification=source_classification)
         second = build_public(
             root, workspace / "public-two", forbidden_tokens=forbidden_tokens,
-            source_classification="public-release")
+            source_classification=source_classification)
         cut_verification = verify_cut(
             workspace / "public-one", forbidden_tokens=forbidden_tokens)
         suite = sanitize_suite_evidence(
@@ -901,6 +903,9 @@ def main(argv=None):
     verify = sub.add_parser("verify")
     verify.add_argument("root")
     verify.add_argument("--forbid", action="append", default=[])
+    verify.add_argument(
+        "--source-classification", choices=sorted(SOURCE_CLASSIFICATIONS),
+        default="private-owner")
     verify.add_argument("--output")
     verify_cut_parser = sub.add_parser("verify-cut")
     verify_cut_parser.add_argument("root")
@@ -920,7 +925,9 @@ def main(argv=None):
                 local_checks=local, external_evidence=external,
                 trust_policy=trust_policy)
         elif args.command == "verify":
-            result = verify_local(args.root, forbidden_tokens=args.forbid)
+            result = verify_local(
+                args.root, forbidden_tokens=args.forbid,
+                source_classification=args.source_classification)
             if args.output:
                 loom_reliability.atomic_write_json(Path(args.output).resolve(), result)
         else:

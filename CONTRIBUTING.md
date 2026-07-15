@@ -18,6 +18,9 @@ For source changes:
 6. Do not claim production certification while `docs/limitations.md` contains unresolved external
    evidence requirements.
 
+For this public repository, run
+`python -B tools/loom_release.py verify . --source-classification public-release` first. This keeps
+the owner-token claim explicitly not applicable while the all-file secret firewall still runs.
 After building a public cut, run `python -B tools/loom_release.py verify-cut <cut> --forbid <token>`
 for every real private/owner scan token. This verifies the manifest, rejects undeclared files, runs
 the cut's suite and offline/docs audits, and repeats the firewall after validation. Publish only the

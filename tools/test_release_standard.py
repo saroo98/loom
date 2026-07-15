@@ -276,6 +276,22 @@ class ReleaseStandardTests(unittest.TestCase):
             "protection_claimed": False,
         }, result["owner_token_policy"])
 
+    def test_public_local_verification_does_not_demand_fake_owner_tokens(self):
+        source = self._source()
+        with mock.patch.object(
+                loom_release, "_git_release_identity",
+                side_effect=loom_release.ReleaseError("identity-probe-reached")) as identity:
+            with self.assertRaisesRegex(
+                    loom_release.ReleaseError, "private/owner tokens"):
+                loom_release.verify_local(
+                    source, forbidden_tokens=[], source_classification="private-owner")
+            identity.assert_not_called()
+            with self.assertRaisesRegex(
+                    loom_release.ReleaseError, "identity-probe-reached"):
+                loom_release.verify_local(
+                    source, forbidden_tokens=[], source_classification="public-release")
+            identity.assert_called_once()
+
     def test_pristine_public_cut_is_independently_verifiable_without_git(self):
         source = self._source()
         built = self.root / "verified-cut"
