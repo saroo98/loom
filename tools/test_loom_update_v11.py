@@ -86,6 +86,11 @@ class UpdateTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_platform_id_supports_apple_silicon(self):
+        with mock.patch.object(loom_update.platform, "system", return_value="Darwin"), \
+                mock.patch.object(loom_update.platform, "machine", return_value="arm64"):
+            self.assertEqual("macos-arm64", loom_update.platform_id())
+
     def stage(self, **kwargs):
         health = {"healthy": True, "migration_complete": True,
                   "disposable_request_passed": True,

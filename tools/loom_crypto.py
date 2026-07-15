@@ -8,6 +8,8 @@ import stat
 import subprocess
 from pathlib import Path
 
+from loom_reliability import _is_trusted_os_alias
+
 
 MAX_HELPER_BYTES = 128 * 1024 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
@@ -29,7 +31,7 @@ def _helper_path(path):
                 attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
         except FileNotFoundError:
             redirected = False
-        if redirected:
+        if redirected and not _is_trusted_os_alias(component):
             raise CryptoError(f"crypto helper path is redirected: {component}")
     if not value.is_file() or value.stat().st_size > MAX_HELPER_BYTES:
         raise CryptoError("crypto helper is missing, non-regular, or oversized")

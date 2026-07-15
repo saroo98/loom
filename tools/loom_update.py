@@ -47,7 +47,10 @@ def _time(value):
 
 def platform_id():
     systems = {"Windows": "windows", "Darwin": "macos", "Linux": "linux"}
-    machines = {"x86_64": "x64", "AMD64": "x64", "aarch64": "arm64", "ARM64": "arm64"}
+    machines = {
+        "x86_64": "x64", "AMD64": "x64", "aarch64": "arm64",
+        "arm64": "arm64", "ARM64": "arm64",
+    }
     try:
         return f"{systems[platform.system()]}-{machines[platform.machine()]}"
     except KeyError as exc:
