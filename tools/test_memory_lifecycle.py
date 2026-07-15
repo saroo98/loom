@@ -295,6 +295,25 @@ class MemoryLifecycleTests(unittest.TestCase):
         self.assertEqual(loom_memory.inspect_record(
             self.home, self.instance, record["id"])["status"], "active")
 
+    def test_inactive_archives_garbage_collect_oldest_detail_at_hard_bounds(self):
+        archive = self.home / "bounded-archive.jsonl"
+        loom_memory._append_archive_lines(archive, [
+            {"index": index, "payload": "x" * 1024}
+            for index in range(5000)
+        ])
+
+        retained = loom_memory._read_archive(archive)
+        self.assertLessEqual(archive.stat().st_size, loom_memory.MAX_ARCHIVE_BYTES)
+        self.assertLessEqual(len(retained), loom_memory.MAX_ARCHIVE_ENTRIES)
+        self.assertEqual(4999, retained[-1]["index"])
+        self.assertGreater(retained[0]["index"], 0)
+
+        loom_memory._append_archive_lines(
+            archive, [{"index": 5000, "payload": "newest"}])
+        retained = loom_memory._read_archive(archive)
+        self.assertEqual(5000, retained[-1]["index"])
+        self.assertLessEqual(archive.stat().st_size, loom_memory.MAX_ARCHIVE_BYTES)
+
 
 if __name__ == "__main__":
     unittest.main()

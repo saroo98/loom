@@ -13,6 +13,7 @@ import sys
 import tempfile
 import time
 import uuid
+from collections import deque
 from pathlib import Path
 
 SCHEMA_VERSION = 1
@@ -35,6 +36,9 @@ OUTCOME_WINDOW = 64
 MAX_HARD_STOPS = 32
 MAX_ACTIVE_STORE_BYTES = 8 * 1024 * 1024
 MAX_TOMBSTONES = 4096
+MAX_ARCHIVE_ENTRIES = 4096
+MAX_ARCHIVE_BYTES = 4 * 1024 * 1024
+MAX_ARCHIVE_LINE_BYTES = 256 * 1024
 SAFETY_CAPACITY_ERROR = "mandatory safety floor exceeds hard-stop capacity"
 PARTITION_CAPS = {"global": 64, "domain": 48, "project": 48, "temporary": 16}
 INSTANCE_FIELDS = {"schema_version", "instance_id", "created_at"}
@@ -1197,7 +1201,7 @@ def inspect_record(home, instance_id, record_id):
         active = next((item for item in store["records"] if item["id"] == record_id), None)
         if active is not None:
             return json.loads(json.dumps(active))
-        for wrapper in reversed(_read_jsonl(directory / "archive.jsonl")):
+        for wrapper in reversed(_read_archive(directory / "archive.jsonl")):
             record = wrapper.get("record") if isinstance(wrapper, dict) else None
             if isinstance(record, dict) and record.get("id") == record_id:
                 return json.loads(json.dumps(record))
@@ -1215,7 +1219,7 @@ def forget(home, instance_id, record_id):
     with FileLock(directory / ".lock"):
         store = _read_store_locked(directory, _validate_instance_id(instance_id))
         archive_path = directory / "archive.jsonl"
-        archived_wrappers = _read_jsonl(archive_path)
+        archived_wrappers = _read_archive(archive_path)
         target = next((record for record in store["records"]
                        if record.get("id") == record_id), None)
         if target is None:
@@ -1571,17 +1575,73 @@ def _append_jsonl(path, value):
 
 
 def _append_archive_lines(path, values):
-    """Append inactive history without rereading an ever-growing archive."""
+    """Retain a bounded newest archive tail; old inactive detail is garbage-collected."""
     if not values:
         return
     path = _reject_link_ancestors(path, "archive path")
     path.parent.mkdir(parents=True, exist_ok=True)
     _reject_link_ancestors(path, "archive path")
-    with path.open("a", encoding="utf-8", newline="\n") as stream:
-        for value in values:
-            stream.write(json.dumps(value, sort_keys=True, ensure_ascii=False) + "\n")
-        stream.flush()
-        os.fsync(stream.fileno())
+    lines = deque(_archive_tail_lines(path), maxlen=MAX_ARCHIVE_ENTRIES)
+    for value in values:
+        if not isinstance(value, dict):
+            raise MemoryError("archive entries must be objects")
+        line = (json.dumps(
+            value, sort_keys=True, ensure_ascii=False,
+            separators=(",", ":")) + "\n").encode("utf-8")
+        if len(line) > MAX_ARCHIVE_LINE_BYTES:
+            raise MemoryError("archive entry exceeds its byte bound")
+        lines.append(line)
+    total = sum(len(line) for line in lines)
+    while lines and total > MAX_ARCHIVE_BYTES:
+        total -= len(lines.popleft())
+    _atomic_bytes(path, b"".join(lines))
+
+
+def _archive_tail_lines(path):
+    """Read only the bounded newest complete lines from a possibly legacy-large archive."""
+    path = _reject_link_ancestors(path, "archive path")
+    if not path.is_file():
+        return []
+    try:
+        size = path.stat().st_size
+        scan = min(size, MAX_ARCHIVE_BYTES + MAX_ARCHIVE_LINE_BYTES)
+        with path.open("rb") as stream:
+            stream.seek(size - scan)
+            raw = stream.read(scan)
+    except OSError as exc:
+        raise MemoryError(f"cannot read archive tail: {exc}") from exc
+    if size > scan:
+        boundary = raw.find(b"\n")
+        raw = b"" if boundary < 0 else raw[boundary + 1:]
+    complete = raw.splitlines(keepends=True)
+    if complete and not complete[-1].endswith(b"\n"):
+        complete.pop()
+    kept = deque(maxlen=MAX_ARCHIVE_ENTRIES)
+    total = 0
+    for line in reversed(complete):
+        if len(line) > MAX_ARCHIVE_LINE_BYTES:
+            continue
+        if total + len(line) > MAX_ARCHIVE_BYTES:
+            break
+        kept.appendleft(line)
+        total += len(line)
+        if len(kept) >= MAX_ARCHIVE_ENTRIES:
+            break
+    return list(kept)
+
+
+def _read_archive(path):
+    values = []
+    for number, line in enumerate(_archive_tail_lines(path), 1):
+        try:
+            value = json.loads(line.decode("utf-8"), object_pairs_hook=_strict_object)
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise MemoryError(f"invalid archive JSONL at retained line {number}: {exc}") \
+                from exc
+        if not isinstance(value, dict):
+            raise MemoryError("archive entry must be an object")
+        values.append(value)
+    return values
 
 
 def queue_feedback(home, instance_id, *, pattern, action, evidence_count):
