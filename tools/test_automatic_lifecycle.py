@@ -40,11 +40,12 @@ class AutomaticLifecycleTests(unittest.TestCase):
         canonical_pack = canonical_repo / "plans"
 
         original_resolve = Path.resolve
+        canonical_target = original_resolve(canonical_repo, strict=False)
 
         def canonicalize(path, strict=False):
             absolute = path.absolute()
             if absolute == lexical_repo.absolute():
-                return canonical_repo.absolute()
+                return canonical_target
             return original_resolve(path, strict=strict)
 
         with mock.patch.object(Path, "resolve", canonicalize):
