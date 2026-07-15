@@ -21,7 +21,9 @@ For source changes:
 For this public repository, run
 `python -B tools/loom_release.py verify . --source-classification public-release` first. This keeps
 the owner-token claim explicitly not applicable while the all-file secret firewall still runs.
-After building a public cut, run `python -B tools/loom_release.py verify-cut <cut> --forbid <token>`
+After building this already-public source, run `python -B tools/loom_release.py verify-cut <cut>`.
+When a cut is built from a private-owner source, pass every real owner token with `--forbid`;
+private-source local verification refuses to proceed without them.
 for every real private/owner scan token. This verifies the manifest, rejects undeclared files, runs
 the cut's suite and offline/docs audits, and repeats the firewall after validation. Publish only the
 unchanged verified cut.

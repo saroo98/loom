@@ -278,8 +278,9 @@ class ReleaseStandardTests(unittest.TestCase):
 
     def test_public_source_build_needs_no_dummy_owner_token(self):
         source = self._source()
+        cut = self.root / "public-source-no-token"
         result = loom_release.build_public(
-            source, self.root / "public-source-no-token",
+            source, cut,
             forbidden_tokens=[], source_classification="public-release")
         self.assertEqual({
             "source_classification": "public-release",
@@ -287,6 +288,10 @@ class ReleaseStandardTests(unittest.TestCase):
             "grounding_status": "not-applicable-public-source",
             "protection_claimed": False,
         }, result["owner_token_policy"])
+        verified = loom_release.verify_cut(cut, forbidden_tokens=[])
+        self.assertEqual("verified", verified["status"])
+        self.assertTrue(verified["firewall"]["clean"])
+        self.assertEqual([], verified["firewall"]["findings"])
 
     def test_public_local_verification_does_not_demand_fake_owner_tokens(self):
         source = self._source()
