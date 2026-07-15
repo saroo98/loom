@@ -10,6 +10,7 @@ import tempfile
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_lifecycle
 import loom_survey
@@ -32,6 +33,23 @@ class AutomaticLifecycleTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_pack_exclusion_survives_one_sided_path_canonicalization(self):
+        lexical_repo = self.repo
+        canonical_repo = self.repo.parent / "canonical-repo"
+        canonical_pack = canonical_repo / "plans"
+
+        original_resolve = Path.resolve
+
+        def canonicalize(path, strict=False):
+            absolute = path.absolute()
+            if absolute == lexical_repo.absolute():
+                return canonical_repo.absolute()
+            return original_resolve(path, strict=strict)
+
+        with mock.patch.object(Path, "resolve", canonicalize):
+            self.assertEqual(
+                "plans", loom_lifecycle._pack_relative(lexical_repo, canonical_pack))
 
     def test_real_medium_capture_runs_command_and_binds_current_world(self):
         evidence = loom_lifecycle.capture_acceptance(

@@ -190,7 +190,15 @@ def _pack_relative(repo, pack):
     try:
         return pack.relative_to(repo).as_posix()
     except ValueError:
-        return None
+        # The caller may have canonicalized only one side.  macOS commonly
+        # exposes temporary paths through /var while Path.resolve() returns
+        # /private/var.  Compare canonical identities as a fallback so Loom's
+        # own pack remains excluded from target-world evidence.
+        try:
+            return pack.resolve(strict=False).relative_to(
+                repo.resolve(strict=False)).as_posix()
+        except (OSError, ValueError):
+            return None
 
 
 def _repo_state(repo, pack):
