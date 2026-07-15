@@ -122,6 +122,91 @@ class AutomaticLearningTests(unittest.TestCase):
                 self.home, self.instance, "hard_stop", "never delete",
                 provenance="inferred")
 
+    def test_storage_boundary_rejects_domain_semantics_from_global_learning(self):
+        with self.assertRaisesRegex(loom_memory.MemoryError, "transferable"):
+            loom_memory.admit_learning(
+                self.home, self.instance, scope="global", category="process",
+                signal="web-breakpoint-missed",
+                future_decision="responsive-layout-planning",
+                evidence_count=3, confidence=1.0)
+        admitted = loom_memory.admit_learning(
+            self.home, self.instance, scope="global", category="calibration",
+            signal="confidence-error", future_decision="confidence-calibration",
+            evidence_count=3, confidence=1.0)
+        selected = loom_memory.select(
+            self.home, self.instance, domain="accounting",
+            project_id="p-00000000000000000000000000000012")
+        self.assertEqual([admitted["id"]], [item["id"] for item in selected])
+
+    def test_composite_project_attributes_learning_to_every_domain(self):
+        adapter = loom_session.LocalMemoryAdapter(
+            owner_home=self.home, instance_id=self.instance)
+
+        def plan(context):
+            self.assertEqual({"data-etl", "ml"}, set(context.prepared.domains))
+            return {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {"effort-estimate": 0.7, "effort-actual": 0.5,
+                            "artifact-unused": 1},
+                "evidence_ids": ["composite-plan"], "reversible_action_ids": [],
+                "preference_observations": [
+                    {"key": "stack", "value": "dbt", "domain": "data-etl"},
+                    {"key": "stack", "value": "pytorch", "domain": "ml"},
+                ],
+                "artifact_usage": [{
+                    "artifact_id": "testing", "opened": True, "cited": True,
+                    "work_order_used": True, "prevented_defect": False,
+                }],
+            }
+
+        receipt = loom_session.SessionController(
+            owner_home=self.home, instance_id=self.instance,
+            handlers={"plan": plan}, memory=adapter).run(
+                "Build an ETL and machine-learning pipeline",
+                invocation_id="00000000-0000-4000-8000-000000000777",
+                cwd=self.project, now="2026-07-14T12:00:00Z")
+
+        outcomes = json.loads((self.home / "instances" / self.instance /
+                               "outcomes.json").read_text(encoding="utf-8"))
+        self.assertEqual({"data-etl", "ml"}, {
+            item["domain"] for item in outcomes["records"]})
+        events = loom_learning.LearningEngine(self.home, self.instance).events()
+        for kind in ("prediction-outcome", "routing-outcome", "effort-outcome"):
+            self.assertEqual({"data-etl", "ml"}, {
+                item["domain"] for item in events if item["kind"] == kind})
+        self.assertEqual({"data-etl", "ml"}, {
+            item["domain"] for item in adapter.planning.utility()})
+        self.assertEqual({"data-etl", "ml"}, {
+            item["domain"] for item in adapter.preferences.inspect()
+            if item["key"] == "stack"})
+        self.assertEqual(4, len(receipt.outcome_ids))
+
+    def test_composite_stack_observation_without_domain_fails_before_learning(self):
+        adapter = loom_session.LocalMemoryAdapter(
+            owner_home=self.home, instance_id=self.instance)
+        controller = loom_session.SessionController(
+            owner_home=self.home, instance_id=self.instance,
+            handlers={"plan": lambda _context: {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {"effort-estimate": 0.7, "effort-actual": 0.5},
+                "evidence_ids": ["composite-plan"], "reversible_action_ids": [],
+                "preference_observations": [
+                    {"key": "stack", "value": "ambiguous-stack"}],
+            }}, memory=adapter)
+
+        with self.assertRaises(loom_session.SessionInterrupted):
+            controller.run(
+                "Build an ETL and machine-learning pipeline",
+                invocation_id="00000000-0000-4000-8000-000000000778",
+                cwd=self.project, now="2026-07-14T12:00:00Z")
+
+        instance_root = self.home / "instances" / self.instance
+        self.assertFalse((instance_root / "outcomes.json").exists())
+        self.assertEqual([], loom_learning.LearningEngine(
+            self.home, self.instance).events())
+        self.assertEqual([], adapter.preferences.inspect())
+        self.assertEqual([], adapter.planning.utility())
+
     def test_low_confidence_candidate_expires_without_entering_active_memory(self):
         engine = loom_learning.LearningEngine(self.home, self.instance)
         project = "p-00000000000000000000000000000013"

@@ -703,6 +703,35 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(1, report["replay"]["pair_count"])
         self.assertEqual("insufficient-evidence", report["replay"]["status"])
 
+    def test_composite_host_outcome_requires_domain_bound_stack_observations(self):
+        opened = loom_orchestrator.invoke(
+            request="Build an ETL and machine-learning pipeline",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
+        self.assertEqual({"data-etl", "ml"}, set(action["domains"]))
+        outcome = self.root / "composite-host-outcome.json"
+
+        def write_observation(observation):
+            outcome.write_text(json.dumps({
+                "schema_version": 1, "applied_memory_ids": [],
+                "verified_memory_ids": [], "rejected_memory_ids": [],
+                "metrics": {}, "preference_observations": [observation],
+                "artifact_usage": [],
+            }), encoding="utf-8")
+
+        write_observation({"key": "stack", "value": "ambiguous"})
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "active domain"):
+            loom_orchestrator._read_host_outcome(outcome, action)
+        write_observation({"key": "stack", "value": "wrong", "domain": "web"})
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "active domain"):
+            loom_orchestrator._read_host_outcome(outcome, action)
+        write_observation({"key": "stack", "value": "dbt", "domain": "data-etl"})
+        accepted = loom_orchestrator._read_host_outcome(outcome, action)
+        self.assertEqual("data-etl", accepted["learning"][
+            "preference_observations"][0]["domain"])
+
     def test_tier_s_uses_one_bounded_work_order_without_a_pack_essay(self):
         request = "Plan a single-file CLI flag in src/app.py"
         opened = self.cli(

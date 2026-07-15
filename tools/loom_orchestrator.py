@@ -679,6 +679,17 @@ def _read_host_outcome(result_path, action):
         normalized = loom_session._validate_handler_result(candidate)
     except loom_session.SessionBlocked as exc:
         raise OrchestratorError("HOST_OUTCOME_INVALID", str(exc)) from exc
+    active_domains = set(action["domains"])
+    for observation in normalized["preference_observations"]:
+        if observation["key"] != "stack":
+            continue
+        observed_domain = observation.get("domain")
+        if observed_domain is None and len(active_domains) == 1:
+            continue
+        if observed_domain not in active_domains:
+            raise OrchestratorError(
+                "HOST_OUTCOME_INVALID",
+                "stack preference observation must name one active domain")
     selected = {item.get("id") for item in action["context"]["memory"]
                 if isinstance(item, dict)}
     referenced = set(normalized["applied_memory_ids"]) \
@@ -720,7 +731,7 @@ def _validated_replay_pair(value, action, applied_memory_ids):
             or not isinstance(value.get("replay_id"), str) \
             or loom_improvement.EVIDENCE_RE.fullmatch(value["replay_id"]) is None \
             or value.get("metric") not in loom_improvement.METRICS \
-            or value.get("domain") not in {action["domains"][0], "general"} \
+            or value.get("domain") not in (set(action["domains"]) | {"general"}) \
             or value.get("request_hash") != prepared["request_hash"] \
             or value.get("world_fingerprint") != prepared["world_fingerprint"] \
             or not isinstance(value.get("evaluator_id"), str) \

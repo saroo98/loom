@@ -363,14 +363,19 @@ def _validate_handler_result(value):
         raise SessionBlocked("HANDLER_RESULT_INVALID", "preference observations are invalid")
     normalized_observations = []
     for observation in observations:
-        if not isinstance(observation, dict) or set(observation) - {"key", "value", "subject"} \
+        if not isinstance(observation, dict) \
+                or set(observation) - {"key", "value", "subject", "domain"} \
                 or not {"key", "value"}.issubset(observation) \
                 or observation["key"] not in loom_preferences.KEYS \
                 or not isinstance(observation["value"], str) \
                 or not observation["value"] or len(observation["value"]) > 80 \
                 or ("subject" in observation and (
                     not isinstance(observation["subject"], str)
-                    or not SAFE_ID_RE.fullmatch(observation["subject"]))):
+                    or not SAFE_ID_RE.fullmatch(observation["subject"]))) \
+                or ("domain" in observation and (
+                    observation["key"] != "stack"
+                    or not isinstance(observation["domain"], str)
+                    or not SAFE_ID_RE.fullmatch(observation["domain"]))):
             raise SessionBlocked("HANDLER_RESULT_INVALID", "preference observation is invalid")
         normalized_observations.append(dict(observation))
     normalized["preference_observations"] = normalized_observations
@@ -677,10 +682,14 @@ class LocalMemoryAdapter:
     def select_preferences(self, context):
         risk_class = {"S": "low", "M": "medium", "L": "high", "XL": "high"}[
             context.prepared.route_contract["tier"]]
-        selected = self.preferences.select(
-            domain=context.prepared.domains[0], task_class=context.intent,
-            risk_class=risk_class)
-        by_key = {item["key"]: item for item in selected}
+        selected = []
+        for domain in context.prepared.domains:
+            selected.extend(self.preferences.select(
+                domain=domain, task_class=context.intent, risk_class=risk_class))
+        by_key = {
+            (item["key"], item.get("domain") if item["key"] == "stack" else None): item
+            for item in selected
+        }
         key_map = {
             "report_style": "report_detail",
             "decision_batching": "decision_batch_size",
@@ -694,25 +703,37 @@ class LocalMemoryAdapter:
             key = key_map.get(record.get("preference_key"))
             if key is None:
                 continue
-            by_key[key] = {
+            slot = (key, record.get("domain") if key == "stack" else None)
+            by_key[slot] = {
                 "id": record["id"], "key": key,
                 "effective_value": record["preference_value"],
                 "effective_source": "stated", "stated_confidence": 1.0,
-                "inferred_confidence": by_key.get(key, {}).get(
+                "inferred_confidence": by_key.get(slot, {}).get(
                     "inferred_confidence", 0.0),
                 "domain": record.get("domain"),
                 "task_class": context.intent if key == "autonomy" else None,
                 "risk_class": risk_class if key == "autonomy" else None,
                 "subject": None,
-                "retired_values": by_key.get(key, {}).get("retired_values", []),
+                "retired_values": by_key.get(slot, {}).get("retired_values", []),
             }
-        return sorted(by_key.values(), key=lambda item: (item["key"], item["id"]))
+        return sorted(by_key.values(), key=lambda item: (
+            item["key"], item.get("domain") or "", item["id"]))
 
     def record_outcome(self, context, result):
         if context.intent in {"why", "status", "undo", "forget"}:
             return {"outcome_ids": [], "adaptation_receipts": [],
                     "improvement_evidence_ids": [],
                     "reversible_action_ids": result.get("reversible_action_ids", [])}
+        domains = tuple(dict.fromkeys(context.prepared.domains))
+        for observation in result.get("preference_observations", []):
+            if observation["key"] != "stack":
+                continue
+            observed_domain = observation.get("domain")
+            if observed_domain is None and len(domains) == 1:
+                continue
+            if observed_domain not in domains:
+                raise loom_memory.MemoryError(
+                    "stack preference observation must name one active domain")
         measured_usage = result.get("usage", {})
         loom_performance.record_usage(
             self.owner_home, self.instance_id,
@@ -724,42 +745,45 @@ class LocalMemoryAdapter:
                 {field: measured_usage[field] for field in loom_performance.USAGE_FIELDS}
                 if measured_usage.get("measurement_status") == "measured" else None),
             recorded_at=context.prepared.prepared_at)
-        outcome_id = str(uuid.uuid5(
-            uuid.UUID(self.instance_id),
-            f"{context.operation_id}:confidence"))
-        outcome = loom_memory.record_outcome(
-            self.owner_home,
-            self.instance_id,
-            metric="confidence",
-            predicted=float(context.prepared.route_contract["confidence"]),
-            actual=1.0 if result["success"] else 0.0,
-            domain=context.prepared.domains[0],
-            project_id=context.project_id,
-            outcome_id=outcome_id,
-        )
+        outcome_ids = []
+        for domain in domains:
+            outcome_id = str(uuid.uuid5(
+                uuid.UUID(self.instance_id),
+                f"{context.operation_id}:confidence:{domain}"))
+            outcome = loom_memory.record_outcome(
+                self.owner_home,
+                self.instance_id,
+                metric="confidence",
+                predicted=float(context.prepared.route_contract["confidence"]),
+                actual=1.0 if result["success"] else 0.0,
+                domain=domain,
+                project_id=context.project_id,
+                outcome_id=outcome_id,
+            )
+            outcome_ids.append(outcome["id"])
         evidence = list(result["evidence_ids"])
         if evidence:
-            self.learning.capture(
-                kind="prediction-outcome", scope="project",
-                signal="confidence-error", decision_target="confidence-calibration",
-                evidence_ids=evidence, domain=context.prepared.domains[0],
-                project_id=context.project_id,
-                predicted=float(context.prepared.route_contract["confidence"]),
-                actual=1.0 if result["success"] else 0.0)
-            self.learning.capture(
-                kind="routing-outcome", scope="project",
-                signal="route-succeeded" if result["success"] else "route-escalated",
-                decision_target="routing-strategy", evidence_ids=evidence,
-                domain=context.prepared.domains[0], project_id=context.project_id,
-                actual=1.0 if result["success"] else 0.0)
-        outcome_ids = [outcome["id"]]
+            for domain in domains:
+                self.learning.capture(
+                    kind="prediction-outcome", scope="project",
+                    signal="confidence-error", decision_target="confidence-calibration",
+                    evidence_ids=evidence, domain=domain,
+                    project_id=context.project_id,
+                    predicted=float(context.prepared.route_contract["confidence"]),
+                    actual=1.0 if result["success"] else 0.0)
+                self.learning.capture(
+                    kind="routing-outcome", scope="project",
+                    signal="route-succeeded" if result["success"] else "route-escalated",
+                    decision_target="routing-strategy", evidence_ids=evidence,
+                    domain=domain, project_id=context.project_id,
+                    actual=1.0 if result["success"] else 0.0)
         metrics = result["metrics"]
-        domain = context.prepared.domains[0]
         calibration_error = abs(
             float(context.prepared.route_contract["confidence"])
             - (1.0 if result["success"] else 0.0))
         measurements = ([
-            ("prediction-calibration-error", calibration_error, domain),
+            *(("prediction-calibration-error", calibration_error, domain)
+              for domain in domains),
             ("prediction-calibration-error", calibration_error, "general"),
         ] if evidence else [])
         metric_map = {
@@ -775,7 +799,9 @@ class LocalMemoryAdapter:
         }
         for handler_metric, proof_metric in metric_map.items():
             if handler_metric in metrics:
-                measurements.append((proof_metric, float(metrics[handler_metric]), domain))
+                measurements.extend(
+                    (proof_metric, float(metrics[handler_metric]), domain)
+                    for domain in domains)
         selected_ids = {item.get("id") for item in context.selected_memory
                         if isinstance(item, dict)}
         applied_ids = result.get("applied_memory_ids", [])
@@ -793,33 +819,39 @@ class LocalMemoryAdapter:
             "rework-observed", "verification-escape", "guidance-wasted-work"))
         application_outcome = "hurt" if harmful else (
             "helped" if result["success"] else "neutral")
-        if applied_ids:
+        for record_id in applied_ids:
+            applied_record = loom_memory.inspect_record(
+                self.owner_home, self.instance_id, record_id)
+            measurement_domain = (
+                applied_record.get("domain") if isinstance(applied_record, dict) else None
+            ) or "general"
             measurements.extend([
                 ("memory-help-rate", 1.0 if application_outcome == "helped" else 0.0,
-                 domain),
+                 measurement_domain),
                 ("memory-hurt-rate", 1.0 if application_outcome == "hurt" else 0.0,
-                 domain),
+                 measurement_domain),
             ])
-        for record_id in applied_ids:
             loom_memory.record_application(
                 self.owner_home, self.instance_id, record_id,
                 outcome=application_outcome, project_id=context.project_id)
         if "effort-estimate" in metrics and "effort-actual" in metrics:
-            effort_id = str(uuid.uuid5(
-                uuid.UUID(self.instance_id), f"{context.operation_id}:effort-estimate"))
-            effort = loom_memory.record_outcome(
-                self.owner_home, self.instance_id, metric="effort-estimate",
-                predicted=float(metrics["effort-estimate"]),
-                actual=float(metrics["effort-actual"]),
-                domain=context.prepared.domains[0], project_id=context.project_id,
-                outcome_id=effort_id)
-            outcome_ids.append(effort["id"])
-            self.learning.capture(
-                kind="effort-outcome", scope="project", signal="effort-error",
-                decision_target="effort-calibration", evidence_ids=evidence,
-                domain=context.prepared.domains[0], project_id=context.project_id,
-                predicted=float(metrics["effort-estimate"]),
-                actual=float(metrics["effort-actual"]))
+            for domain in domains:
+                effort_id = str(uuid.uuid5(
+                    uuid.UUID(self.instance_id),
+                    f"{context.operation_id}:effort-estimate:{domain}"))
+                effort = loom_memory.record_outcome(
+                    self.owner_home, self.instance_id, metric="effort-estimate",
+                    predicted=float(metrics["effort-estimate"]),
+                    actual=float(metrics["effort-actual"]),
+                    domain=domain, project_id=context.project_id,
+                    outcome_id=effort_id)
+                outcome_ids.append(effort["id"])
+                self.learning.capture(
+                    kind="effort-outcome", scope="project", signal="effort-error",
+                    decision_target="effort-calibration", evidence_ids=evidence,
+                    domain=domain, project_id=context.project_id,
+                    predicted=float(metrics["effort-estimate"]),
+                    actual=float(metrics["effort-actual"]))
         automatic_signals = {
             "rework-observed": ("rework", "rework-observed", "effort-calibration"),
             "verification-escape": (
@@ -853,12 +885,13 @@ class LocalMemoryAdapter:
             if metric == "project-completed":
                 observed = observed or project_completed
             if observed and evidence:
-                self.learning.capture(
-                    kind=kind, scope="project", signal=signal,
-                    decision_target=target, evidence_ids=evidence,
-                    domain=context.prepared.domains[0], project_id=context.project_id,
-                    actual=(1.0 if metric == "project-completed" and project_completed
-                            else min(1.0, float(metrics[metric]))))
+                for domain in domains:
+                    self.learning.capture(
+                        kind=kind, scope="project", signal=signal,
+                        decision_target=target, evidence_ids=evidence,
+                        domain=domain, project_id=context.project_id,
+                        actual=(1.0 if metric == "project-completed" and project_completed
+                                else min(1.0, float(metrics[metric]))))
         if project_completed or float(metrics.get("project-completed", 0)) > 0:
             self.learning.close_project(context.project_id)
         adaptation_receipts = []
@@ -868,7 +901,13 @@ class LocalMemoryAdapter:
         for index, observation in enumerate(result.get("preference_observations", [])):
             kwargs = {}
             if observation["key"] == "stack":
-                kwargs["domain"] = context.prepared.domains[0]
+                observed_domain = observation.get("domain")
+                if observed_domain is None and len(domains) == 1:
+                    observed_domain = domains[0]
+                if observed_domain not in domains:
+                    raise loom_memory.MemoryError(
+                        "stack preference observation must name one active domain")
+                kwargs["domain"] = observed_domain
             elif observation["key"] == "autonomy":
                 kwargs.update(task_class=context.intent, risk_class=risk_class)
             elif observation["key"] == "concern":
@@ -898,9 +937,10 @@ class LocalMemoryAdapter:
                     evidence_ids=[observation_evidence])
                 reversible_action_ids.append(action_id)
         if result.get("artifact_usage"):
-            self.planning.record_usage_batch(
-                domain=context.prepared.domains[0], project_id=context.project_id,
-                usages=result["artifact_usage"])
+            for domain in domains:
+                self.planning.record_usage_batch(
+                    domain=domain, project_id=context.project_id,
+                    usages=result["artifact_usage"])
         proof_batch = []
         for metric, value, measurement_domain in measurements:
             evidence_id = _content_evidence_id("measurement", {

@@ -53,7 +53,11 @@ Content-erased tombstones prevent forgotten semantics from silent readmission.
 `loom_preferences` separates transferable preferences from domain stacks and task/risk autonomy.
 Observed preferences require repeated cross-project evidence; a stated preference takes precedence.
 `loom_learning` keeps bounded events and evidence-linked candidates. It is local state, not a
-network contribution mechanism.
+network contribution mechanism. Its storage boundary admits only the controlled transferable
+general pairs for confidence calibration, delegation strategy, and question batching; domain
+semantics cannot be relabeled as global. Composite sessions write separate outcomes, utility,
+signals, and stack observations for every active domain, and reject ambiguous stack attribution
+before any learning write.
 
 ## Comparative Improvement Proof
 

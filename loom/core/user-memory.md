@@ -14,6 +14,12 @@ to create a permanent dossier.
 
 Selection uses exact scope matching. A website rule is not loaded for accounting or 3D work.
 Project memory is not loaded for another project. General memory must be genuinely domain-neutral.
+The storage boundary permits only three inferred general signal/decision pairs:
+`confidence-error`/`confidence-calibration`, `decision-delegated`/`delegation-strategy`, and
+`question-rejected`/`question-batching`. Every other inferred lesson must name an exact domain.
+For a composite request, Loom records outcomes independently for every selected domain. A stack
+observation must name which active domain it belongs to; ambiguous or foreign-domain observations
+fail before any learning state is written.
 
 ## Admission and lifecycle
 

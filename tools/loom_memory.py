@@ -79,6 +79,11 @@ OUTCOME_METRICS = {
     "confidence", "tier-estimate", "effort-estimate", "rework-rate",
     "verification-escape-rate",
 }
+GLOBAL_LEARNING_ALLOWLIST = {
+    ("calibration", "confidence-error", "confidence-calibration"),
+    ("process", "decision-delegated", "delegation-strategy"),
+    ("process", "question-rejected", "question-batching"),
+}
 GENERAL_PREFERENCE_KEYS = {
     "autonomy_default", "report_style", "decision_batching", "language",
     "hard_stop",
@@ -895,6 +900,10 @@ def admit_learning(home, instance_id, *, scope, category, signal, future_decisio
             or not isinstance(signal, str) or not ID_RE.fullmatch(signal) \
             or not isinstance(future_decision, str) or not ID_RE.fullmatch(future_decision):
         raise MemoryError("typed learning admission fields are invalid")
+    if scope == "global" \
+            and (category, signal, future_decision) not in GLOBAL_LEARNING_ALLOWLIST:
+        raise MemoryError(
+            "global learning is not a transferable signal/decision pair; use domain scope")
     minimum = {"global": 3, "domain": 3, "project": 2}[scope]
     if type(evidence_count) is not int or evidence_count < minimum:
         raise MemoryError("typed learning admission lacks repeated evidence")

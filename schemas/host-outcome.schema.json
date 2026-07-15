@@ -25,7 +25,8 @@
         "properties": {
           "key": {"enum": ["report_detail", "autonomy", "stack", "concern"]},
           "value": {"type": "string", "minLength": 1, "maxLength": 80},
-          "subject": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}
+          "subject": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}
         }
       }
     },
