@@ -367,7 +367,8 @@ def _instance_dir(home, instance_id):
 
 def _project_anchor(project_root, state_mode=None):
     """Return a move-stable, non-secret project anchor without writing to the target."""
-    root = Path(project_root).expanduser().resolve()
+    root = Path(project_root).expanduser()
+    root = root if root.is_absolute() else root.resolve()
     mode = state_mode
     if mode is None:
         probe = loom_survey.run_git(

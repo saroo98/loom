@@ -733,20 +733,25 @@ def certification_report(*, local_checks, external_evidence, trust_policy=None, 
 
 
 def _suite(root):
+    runner = root / "tools" / "loom_test.py"
+    command = ([sys.executable, "-B", "loom_test.py", "full", "--max-seconds", "600",
+                "--quiet"] if runner.is_file() else
+               [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
     result = subprocess.run(
-        [sys.executable, "-B", "loom_test.py", "full", "--max-seconds", "600",
-         "--quiet"],
+        command,
         cwd=root / "tools", capture_output=True, text=True, timeout=900, check=False,
         env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
     try:
-        timing = json.loads(result.stdout)
+        timing = json.loads(result.stdout) if runner.is_file() else None
     except json.JSONDecodeError:
         timing = None
     return {
-        "passed": result.returncode == 0 and isinstance(timing, dict)
-        and timing.get("successful") is True,
+        "passed": result.returncode == 0 and (
+            not runner.is_file() or isinstance(timing, dict)
+            and timing.get("successful") is True),
         "returncode": result.returncode,
-        "output": result.stderr[-4000:],
+        "output": (result.stderr if runner.is_file()
+                   else result.stdout + result.stderr)[-4000:],
         "elapsed_seconds": timing.get("elapsed_seconds") if timing else None,
         "tests_run": timing.get("tests_run") if timing else None,
         "timings": timing.get("timings", []) if timing else [],
