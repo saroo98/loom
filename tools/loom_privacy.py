@@ -25,6 +25,12 @@ NETWORK_MODULES = {
 SECRET_PATTERNS = (
     ("private-key", re.compile(br"-----BEGIN (?:[A-Z0-9 ]+ )?PRIVATE KEY-----", re.I)),
     ("github-token", re.compile(br"\b(?:gh[pousr]_[A-Za-z0-9]{20,255}|github_pat_[A-Za-z0-9_]{20,255})\b")),
+    ("openai-token", re.compile(
+        br"\bsk-(?:(?:proj|svcacct)-)?[A-Za-z0-9_-]{20,255}\b")),
+    ("google-api-key", re.compile(br"\bAIza[A-Za-z0-9_-]{35}\b")),
+    ("stripe-secret", re.compile(
+        br"\b(?:(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{20,255}|"
+        br"whsec_[A-Za-z0-9]{20,255})\b")),
     ("aws-access-key", re.compile(br"\b(?:AKIA|ASIA)[A-Z0-9]{16}\b")),
     ("slack-token", re.compile(br"\bxox[baprs]-[A-Za-z0-9-]{20,255}\b")),
     ("jwt", re.compile(br"\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b")),
@@ -34,6 +40,12 @@ SECRET_PATTERNS = (
     ("assigned-secret", re.compile(
         br"\b(?:api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|password|passwd)"
         br"\s*[:=]\s*[\"']?(?!REDACTED\b|CHANGEME\b|EXAMPLE\b)[^\s\"',;]{8,}", re.I)),
+    ("high-entropy-credential", re.compile(
+        br"\b[A-Za-z0-9_.-]*(?:(?i:credential|api[_-]?key|access[_-]?token|"
+        br"auth[_-]?token|secret|password|passwd))[A-Za-z0-9_.-]*\s*[:=]\s*[\"']?"
+        br"(?=[A-Za-z0-9_~+/=-]{24,})(?=[A-Za-z0-9_~+/=-]*[A-Z])"
+        br"(?=[A-Za-z0-9_~+/=-]*[a-z])(?=[A-Za-z0-9_~+/=-]*[0-9])"
+        br"(?=[A-Za-z0-9_~+/=-]*[_~+/=-])[A-Za-z0-9_~+/=-]{24,}")),
 )
 
 

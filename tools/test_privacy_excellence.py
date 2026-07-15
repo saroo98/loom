@@ -55,6 +55,29 @@ class PrivacyExcellenceTests(unittest.TestCase):
         self.assertEqual(
             {item["path"] for item in result["findings"]}, {"LICENSE", "blob.dat"})
 
+    def test_firewall_rejects_common_provider_and_high_entropy_credentials(self):
+        cut = self.root / "cut"
+        cut.mkdir()
+        fixtures = {
+            "openai.env": "OPENAI_API_KEY=" + "sk-" + "proj-" + "A1b2C3d4" * 6,
+            "google.env": "GOOGLE_API_KEY=" + "AI" + "za" + "Ab1_" * 8 + "XYZ",
+            "stripe.env": "STRIPE_SECRET_KEY=" + "sk_" + "live_" + "Q7w8E9r0" * 4,
+            "generic.env": (
+                "SERVICE_CREDENTIAL=" + "mN7_" + "qP9-" + "Zx4/" + "Kv2+" * 8),
+        }
+        for name, value in fixtures.items():
+            (cut / name).write_text(value, encoding="utf-8")
+
+        result = loom_privacy.scan_publication(
+            cut, forbidden_tokens=["real-owner-token"], require_owner_tokens=True)
+
+        self.assertFalse(result["clean"])
+        self.assertEqual(
+            {item["path"] for item in result["findings"]}, set(fixtures))
+        self.assertEqual(
+            {item["rule"] for item in result["findings"]},
+            {"openai-token", "google-api-key", "stripe-secret", "high-entropy-credential"})
+
     def test_secret_signatures_are_scanned_in_filenames(self):
         cut = self.root / "cut"
         cut.mkdir()
