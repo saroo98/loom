@@ -130,8 +130,6 @@ def _owner_token_policy(source, forbidden_tokens, source_classification):
         raise ReleaseError("release owner tokens must be a list of strings")
     tokens = list(dict.fromkeys(
         item.strip() for item in forbidden_tokens if item.strip()))
-    if not tokens:
-        raise ReleaseError("release build requires configured private/owner firewall tokens")
     if source_classification == "public-release":
         return {
             "source_classification": source_classification,
@@ -139,6 +137,8 @@ def _owner_token_policy(source, forbidden_tokens, source_classification):
             "grounding_status": "not-applicable-public-source",
             "protection_claimed": False,
         }
+    if not tokens:
+        raise ReleaseError("release build requires configured private/owner firewall tokens")
     grounded = set()
     try:
         source_files = loom_reliability._regular_files(source)
@@ -217,7 +217,8 @@ def build_public(source, destination, *, forbidden_tokens,
         payload_manifest = loom_reliability.deterministic_manifest(staging)
         loom_reliability.atomic_write_json(staging / MANIFEST, payload_manifest)
         firewall = loom_privacy.scan_publication(
-            staging, forbidden_tokens=forbidden_tokens, require_owner_tokens=True)
+            staging, forbidden_tokens=forbidden_tokens,
+            require_owner_tokens=source_classification == "private-owner")
         if not firewall["clean"]:
             raise ReleaseError("release firewall rejected the public build")
         os.replace(staging, destination)
