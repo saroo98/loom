@@ -1291,6 +1291,7 @@ class SessionController:
                     "status": "blocked", "code": prepared.route_contract["code"].lower(),
                     "success": False, "metrics": {}, "evidence_ids": [],
                     "reversible_action_ids": [],
+                    "user_message": prepared.route_contract["recommendation"],
                 }
             elif handler is None and prepared.intent in {"why", "status", "undo", "forget"}:
                 result = _validate_handler_result(

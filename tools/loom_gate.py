@@ -1190,7 +1190,7 @@ def _load_small(record):
         raise ValueError(f"cannot read small lifecycle record: {exc}") from exc
 
 
-def verify_small(record):
+def verify_small(record, *, require_authorized=False, require_completed=False):
     record = Path(record).resolve()
     findings = []
     try:
@@ -1233,6 +1233,13 @@ def verify_small(record):
                      ["small-planning-started", "small-authorized"],
                      ["small-planning-started", "small-authorized", "small-completed"]):
         findings.append("small lifecycle event order is invalid")
+    if require_completed and names != [
+            "small-planning-started", "small-authorized", "small-completed"]:
+        findings.append("small lifecycle is not completed")
+    elif require_authorized and names not in ([
+            "small-planning-started", "small-authorized"], [
+            "small-planning-started", "small-authorized", "small-completed"]):
+        findings.append("small lifecycle is not authorized")
     previous = None
     last_time = None
     for index, event in enumerate(events):
@@ -1619,6 +1626,8 @@ def main(argv=None):
     small_done.add_argument("--wo", required=True)
     small_check = sub.add_parser("small-verify", help="verify a Tier-S lifecycle record")
     small_check.add_argument("record")
+    small_check.add_argument("--require-authorized", action="store_true")
+    small_check.add_argument("--require-completed", action="store_true")
     check = sub.add_parser("verify", help="verify the lifecycle hash chain")
     check.add_argument("pack")
     check.add_argument("--repo")
@@ -1696,11 +1705,21 @@ def main(argv=None):
     if args.command == "small-close":
         return finish(small_close(args.record, args.repo, args.wo), "work-order-closed")
     if args.command == "small-verify":
-        findings = verify_small(args.record)
+        findings = verify_small(
+            args.record, require_authorized=args.require_authorized,
+            require_completed=args.require_completed)
         for finding in findings:
             print(f"loom_gate: FINDING — {finding}")
-        print(f"loom_gate: {'PASS' if not findings else 'FAIL'} — "
-              f"{len(findings)} finding(s)")
+        if findings:
+            print(f"loom_gate: FAIL — {len(findings)} finding(s)")
+        else:
+            events = _load_small(args.record)["events"]
+            state = {
+                1: "valid-planning-started", 2: "valid-authorized",
+                3: "valid-completed",
+            }[len(events)]
+            label = "PASS" if args.require_authorized or args.require_completed else "VALID"
+            print(f"loom_gate: {label} — {state}")
         return 1 if findings else 0
     findings = verify(args.pack, args.repo, args.require_authorized)
     for finding in findings:

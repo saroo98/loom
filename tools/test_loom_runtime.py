@@ -17,6 +17,7 @@ import loom_runtime
 import loom_survey
 import loom_gate
 import loom_lifecycle
+import loom_lint
 from test_loom_lint import good_pack
 
 
@@ -642,6 +643,20 @@ class InvalidWorldStateTests(RuntimeFixture):
         self.assertTrue(prepared.route_contract["blocked"])
         self.assertEqual(prepared.route_contract["code"], "INVALID_LIFECYCLE")
         self.assertEqual(prepared.route_contract["target_mutation_count"], 0)
+
+    def test_invalid_lifecycle_preserves_only_valid_manifest_route_for_diagnosis(self):
+        pack = self.authorize_fixture_pack()
+        manifest_frontmatter, _ = loom_lint.parse_frontmatter(
+            (pack / "MANIFEST.md").read_text(encoding="utf-8"))
+        (pack / "lifecycle.json").write_text("{not-json", encoding="utf-8")
+        prepared = self.prepare("Continue")
+        self.assertTrue(prepared.route_contract["blocked"])
+        self.assertEqual("INVALID_LIFECYCLE", prepared.route_contract["code"])
+        self.assertEqual(manifest_frontmatter["tier"],
+                         prepared.route_contract["tier"])
+        self.assertEqual(tuple(manifest_frontmatter["domain_ids"]),
+                         prepared.domains)
+        self.assertTrue(prepared.route_contract["recommendation"])
 
     def test_drift_routes_to_internal_selective_regate_then_execution(self):
         pack = self.authorize_fixture_pack()

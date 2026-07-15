@@ -540,6 +540,35 @@ Stop if another component is required.
             loom_gate.verify_small(self.record),
         )
 
+    def test_small_verify_names_state_and_passes_only_requested_gate(self):
+        self.assertEqual(loom_gate.small_start(
+            self.record, self.repo, self.wo, ["cli"]), 0)
+
+        def verify(*flags):
+            return subprocess.run(
+                [sys.executable, "-B", str(Path(loom_gate.__file__)),
+                 "small-verify", str(self.record), *flags],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=30)
+
+        structural = verify()
+        self.assertEqual(0, structural.returncode, structural.stderr)
+        self.assertIn("valid-planning-started", structural.stdout)
+        self.assertNotIn("PASS", structural.stdout)
+        unauthorized = verify("--require-authorized")
+        self.assertEqual(1, unauthorized.returncode)
+        self.assertIn("small lifecycle is not authorized", unauthorized.stdout)
+        self.write_wo("ready")
+        self.assertEqual(0, loom_gate.small_authorize(
+            self.record, self.repo, self.wo))
+        authorized = verify("--require-authorized")
+        self.assertEqual(0, authorized.returncode, authorized.stderr)
+        self.assertIn("PASS", authorized.stdout)
+        self.assertIn("valid-authorized", authorized.stdout)
+        incomplete = verify("--require-completed")
+        self.assertEqual(1, incomplete.returncode)
+        self.assertIn("small lifecycle is not completed", incomplete.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

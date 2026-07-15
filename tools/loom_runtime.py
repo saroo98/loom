@@ -1183,12 +1183,13 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
 
 def _pack_route_contract(pack, state):
     """Read the validated route identity owned by an existing planning pack."""
-    if not state.get("pack_exists") or state.get("state_error") not in {
-            None, "STALE_LIFECYCLE", "STALE_TIME"}:
+    if not state.get("pack_exists"):
         return None
     pack = Path(pack)
     manifest = pack / "MANIFEST.md"
     if not manifest.is_file():
+        if state.get("state_error") not in {None, "STALE_LIFECYCLE", "STALE_TIME"}:
+            return None
         record = pack / ".loom-small-lifecycle.json"
         if not record.is_file() or _path_has_link_or_junction(record):
             return None
@@ -1227,8 +1228,9 @@ def _pack_route_contract(pack, state):
             or len(domains) != len(set(domains)) \
             or not all(isinstance(item, str) and ID_RE.fullmatch(item)
                        for item in domains):
-        raise RuntimeError(
-            "authorized planning-pack route identity is missing or invalid")
+        if state.get("state_error") == "INVALID_LIFECYCLE":
+            return None
+        raise RuntimeError("planning-pack diagnostic route identity is missing or invalid")
     return {"tier": tier, "domains": domains}
 
 
