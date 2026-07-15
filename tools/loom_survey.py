@@ -16,7 +16,6 @@ Exit codes: 0 ok, 2 usage/IO problem.
 
 import argparse
 import datetime as dt
-import errno
 import hashlib
 import os
 import re
@@ -37,9 +36,6 @@ MAX_STATE_FILE_BYTES = 64 * 1024 * 1024 * 1024
 MAX_STATE_TOTAL_BYTES = 512 * 1024 * 1024 * 1024
 STATE_HASH_DEADLINE_SECONDS = 60.0
 GIT_CONFIG_CAP = 256 * 1024
-MAX_XATTRS_PER_ENTRY = 128
-MAX_XATTR_VALUE_BYTES = 1024 * 1024
-MAX_XATTR_TOTAL_BYTES = 16 * 1024 * 1024
 FILTER_DRIVER_RE = re.compile(r"^filter\.([A-Za-z0-9._-]{1,128})\."
                               r"(?:clean|smudge|process)$", re.I)
 
@@ -388,62 +384,24 @@ def _hash_stream_header(digest, label, size):
     digest.update(int(size).to_bytes(8, "big"))
 
 
-def _read_posix_xattrs(path):
-    if not hasattr(os, "listxattr") or not hasattr(os, "getxattr"):
-        return ()
-    try:
-        names = os.listxattr(path, follow_symlinks=False)
-    except OSError as exc:
-        if exc.errno in {errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP)}:
-            return ()
-        raise SurveyError(f"cannot enumerate extended attributes: {exc}") from exc
-    if len(names) > MAX_XATTRS_PER_ENTRY:
-        raise SurveyError("workspace extended-attribute count exceeds its safety bound")
-    values = []
-    for name in sorted(names, key=os.fsencode):
-        try:
-            value = os.getxattr(path, name, follow_symlinks=False)
-        except OSError as exc:
-            raise SurveyError(f"cannot read workspace extended attribute: {exc}") from exc
-        if len(value) > MAX_XATTR_VALUE_BYTES:
-            raise SurveyError("workspace extended attribute exceeds its safety bound")
-        values.append((os.fsencode(name), value))
-    return tuple(values)
-
-
 def _hash_workspace(entries):
-    """Hash every entry with length-delimited fields and fixed-size entry digests."""
-    digest = hashlib.sha256(b"complete-workspace-v3\0")
+    """Hash semantic project state while using volatile metadata only for race detection."""
+    digest = hashlib.sha256(b"complete-workspace-v4\0")
     digest.update(len(entries).to_bytes(8, "big"))
     deadline = time.monotonic() + STATE_HASH_DEADLINE_SECONDS
     total_read = 0
-    total_xattr = 0
     for entry in entries:
         if time.monotonic() > deadline:
             raise SurveyError(
                 "complete workspace hash exceeded its time bound; no partial state hash "
                 "was produced")
-        entry_digest = hashlib.sha256(b"workspace-entry-v1\0")
+        entry_digest = hashlib.sha256(b"workspace-entry-v2\0")
         _hash_field(entry_digest, b"path", os.fsencode(entry.rel))
         _hash_field(entry_digest, b"kind", entry.kind.encode("ascii"))
         _hash_field(entry_digest, b"mode", f"{entry.mode:o}".encode("ascii"))
-        _hash_field(entry_digest, b"uid", str(entry.uid).encode("ascii"))
-        _hash_field(entry_digest, b"gid", str(entry.gid).encode("ascii"))
-        _hash_field(entry_digest, b"flags", str(entry.flags).encode("ascii"))
-        _hash_field(
-            entry_digest, b"attributes", str(entry.attributes).encode("ascii"))
-        xattrs = _read_posix_xattrs(entry.path)
-        if xattrs != _read_posix_xattrs(entry.path):
-            raise SurveyError(
-                f"workspace extended attributes changed during survey: {entry.rel}")
-        _hash_stream_header(entry_digest, b"xattr-count", len(xattrs))
-        for name, value in xattrs:
-            total_xattr += len(name) + len(value)
-            if total_xattr > MAX_XATTR_TOTAL_BYTES:
-                raise SurveyError(
-                    "workspace extended attributes exceed the aggregate safety bound")
-            _hash_field(entry_digest, b"xattr-name", name)
-            _hash_field(entry_digest, b"xattr-value", value)
+        # Ownership IDs, archive/indexing flags, platform attributes, mtimes, and xattrs
+        # vary across checkout filesystems without changing a project's executable source.
+        # They remain census/stability inputs where applicable, not freshness semantics.
         if entry.kind == "directory":
             digest.update(entry_digest.digest())
             continue

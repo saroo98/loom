@@ -16,6 +16,12 @@ terminal cancellation, and safe cleanup only when its newly created draft pack i
 `loom_gate`, `loom_lifecycle`, and `loom_lint` provide chronology, freshness, evidence, and pack
 integrity enforcement. Any unknown at a trust boundary is a typed block.
 
+The world fingerprint treats path, entry kind, regular-file content, symlink target, executable
+mode, Git HEAD/branch/index, and staged/unstaged/untracked sets as project semantics. Device and
+inode identity, mtimes, ownership IDs, archive/indexing flags, platform attributes, and extended
+attributes are used only where needed to detect a mid-read race or unsafe entry. They are not
+cross-checkout plan semantics and cannot create false drift after an otherwise identical run.
+
 ## Memory boundaries
 
 `loom_memory` separates install, global, domain, and project partitions. Selection has a hard byte

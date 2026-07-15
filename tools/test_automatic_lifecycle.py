@@ -1,6 +1,8 @@
 """Behavioral tests for automatic lifecycle preflight and real-medium evidence."""
 
 import json
+import dataclasses
+import os
 import subprocess
 import sys
 import tempfile
@@ -8,6 +10,7 @@ import unittest
 from pathlib import Path
 
 import loom_lifecycle
+import loom_survey
 
 
 def git(repo, *args):
@@ -42,6 +45,42 @@ class AutomaticLifecycleTests(unittest.TestCase):
         with self.assertRaisesRegex(loom_lifecycle.LifecycleError, "world changed"):
             loom_lifecycle.validate_acceptance_evidence(
                 self.pack, "WO-001", self.repo, require_current=True)
+
+    def test_world_hash_ignores_volatile_platform_metadata_but_not_content(self):
+        empty = self.repo / "empty"
+        empty.mkdir()
+        entries = loom_survey._workspace_census(self.repo, ("plans",))
+        baseline = loom_survey._hash_workspace(entries)
+        altered = tuple(
+            dataclasses.replace(
+                item, uid=item.uid + 17, gid=item.gid + 19,
+                flags=item.flags ^ 4, attributes=item.attributes ^ 32)
+            if item.rel == "empty" else item
+            for item in entries)
+        self.assertEqual(baseline, loom_survey._hash_workspace(altered))
+
+        (self.repo / "app.py").write_text("print('material change')\n", encoding="utf-8")
+        changed = loom_survey._hash_workspace(
+            loom_survey._workspace_census(self.repo, ("plans",)))
+        self.assertNotEqual(baseline, changed)
+
+    @unittest.skipUnless(
+        hasattr(os, "setxattr") and hasattr(os, "removexattr"),
+        "extended attributes require POSIX support")
+    def test_platform_indexing_xattr_does_not_invalidate_acceptance(self):
+        evidence = loom_lifecycle.capture_acceptance(
+            self.pack, self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('stable')"])
+        try:
+            os.setxattr(self.repo / "app.py", "user.loom-indexer", b"indexed")
+        except OSError as exc:
+            self.skipTest(f"user xattrs unavailable: {exc}")
+        try:
+            validated = loom_lifecycle.validate_acceptance_evidence(
+                self.pack, "WO-001", self.repo, require_current=True)
+            self.assertEqual(evidence["evidence_hash"], validated["evidence_hash"])
+        finally:
+            os.removexattr(self.repo / "app.py", "user.loom-indexer")
 
     def test_failed_or_generic_verification_cannot_be_acceptance_evidence(self):
         with self.assertRaisesRegex(loom_lifecycle.LifecycleError, "real medium"):
