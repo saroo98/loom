@@ -1,0 +1,12 @@
+{
+  "fixture_version": "0.8.0",
+  "sanitized": true,
+  "scenarios": ["active", "dormant", "archived", "forgotten", "corrupted", "oversized", "interrupted"],
+  "legacy_install_id": "00000000-0000-4000-8000-000000000080",
+  "records": [
+    {"id": "legacy-general", "scope": null, "status": "dormant", "statement": "Batch low-consequence questions when evidence supports it.", "provenance": "observed"},
+    {"id": "legacy-domain", "scope": null, "status": "archived", "statement": "Measure the actual rendering medium before accepting visual output.", "provenance": "observed"},
+    {"id": "legacy-forgotten", "scope": null, "status": "forgotten", "statement": null, "provenance": "stated"}
+  ],
+  "faults": {"corrupted_source": "invalid-json", "oversized_bytes": 8388609, "interrupted_after": 1}
+}

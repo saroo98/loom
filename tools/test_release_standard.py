@@ -59,6 +59,7 @@ class ReleaseStandardTests(unittest.TestCase):
         (source / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
         (source / "CONTRIBUTING.md").write_text("# Contributing\n", encoding="utf-8")
         (source / "PRIVACY.md").write_text("# Privacy\n", encoding="utf-8")
+        (source / "TERMS.md").write_text("# Terms\n", encoding="utf-8")
         (source / "tools" / "loom_example.py").write_text("VALUE = 1\n", encoding="utf-8")
         (source / "tools" / "test_smoke.py").write_text(
             "import unittest\n\n"

@@ -1,0 +1,31 @@
+{
+  "name": "loom",
+  "version": "1.1.0",
+  "description": "One request becomes a scoped, evidence-backed plan that earns the right to execute.",
+  "author": {
+    "name": "Loom Project",
+    "url": "https://github.com/saroo98"
+  },
+  "homepage": "https://saroo98.github.io/loom/",
+  "repository": "https://github.com/saroo98/loom",
+  "license": "Apache-2.0",
+  "keywords": ["planning", "agents", "verification", "local-first"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Loom",
+    "shortDescription": "Planning intelligence that learns locally",
+    "longDescription": "Turn any request into a scoped, evidence-backed execution plan with lifecycle gates, bounded owner learning, and local-first privacy.",
+    "developerName": "Loom Project",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "websiteURL": "https://saroo98.github.io/loom/",
+    "privacyPolicyURL": "https://github.com/saroo98/loom/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/saroo98/loom/blob/main/TERMS.md",
+    "defaultPrompt": [
+      "/loom Plan this request safely and completely.",
+      "/loom Move my Loom to this device.",
+      "/loom Show what you learned from this project."
+    ],
+    "brandColor": "#1F6B5C"
+  }
+}

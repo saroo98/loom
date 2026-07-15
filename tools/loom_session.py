@@ -21,6 +21,7 @@ import loom_planning
 import loom_performance
 import loom_transparency
 import loom_improvement
+import loom_vault_adapter
 
 
 SCHEMA_VERSION = 1
@@ -531,12 +532,14 @@ def _transition_count(value):
     return 0
 
 
-def _latest_sealed_receipt(journal):
+def _latest_sealed_receipt(journal, opener=None):
     """Return the latest trustworthy receipt, excluding the session being built."""
     for event in reversed(journal.get("events", [])):
         if event.get("kind") != "session-receipt-sealed":
             continue
         payload = event.get("payload")
+        if opener is not None:
+            payload = opener(event.get("operation_id"), payload)
         receipt = payload.get("receipt") if isinstance(payload, dict) else None
         if isinstance(receipt, dict):
             return receipt
@@ -1045,6 +1048,14 @@ class SessionController:
         return (self.owner_home / "instances" / self.instance_id / "runtime" /
                 "projects" / project_id / JOURNAL_FILE)
 
+    def _protect_payload(self, operation_id, payload):
+        protector = getattr(self.memory, "protect_session_payload", None)
+        return protector(operation_id, payload) if protector is not None else payload
+
+    def _open_payload(self, operation_id, payload):
+        opener = getattr(self.memory, "open_session_payload", None)
+        return opener(operation_id, payload) if opener is not None else payload
+
     def open(self, request, *, invocation_id, cwd, explicit_target=None,
              explicit_config=None, now=None):
         """Open an authenticated host-agent action without sealing a false result."""
@@ -1060,8 +1071,8 @@ class SessionController:
             for event in reversed(journal["events"]):
                 if event["kind"] == "session-receipt-sealed" \
                         and event["operation_id"] == operation_id:
-                    receipt = _receipt_from_data(
-                        event["payload"].get("receipt"), repeated=True)
+                    payload = self._open_payload(operation_id, event["payload"])
+                    receipt = _receipt_from_data(payload.get("receipt"), repeated=True)
                     return OpenSession(
                         prepared, session_id, operation_id, str(path),
                         receipt.started_at, receipt)
@@ -1071,18 +1082,20 @@ class SessionController:
                 if prior[-1]["kind"] == "session-interrupted":
                     _append_event(
                         journal, "session-reconciled", session_id, operation_id,
-                        instant, {"prior_event_hash": prior[-1]["event_hash"]})
+                        instant, self._protect_payload(
+                            operation_id, {"prior_event_hash": prior[-1]["event_hash"]}))
                 started = next(event["recorded_at"] for event in prior
                                if event["kind"] == "session-opened")
             else:
                 started = _format_time(instant)
-                _append_event(journal, "session-opened", session_id, operation_id, instant, {
+                _append_event(journal, "session-opened", session_id, operation_id, instant,
+                              self._protect_payload(operation_id, {
                     "invocation_id": invocation_id,
                     "request_hash": prepared.request_hash,
                     "world_fingerprint": prepared.world_fingerprint,
                     "intent": prepared.intent,
                     "domains": list(prepared.domains),
-                })
+                }))
             _atomic_json(path, journal)
         return OpenSession(
             prepared, session_id, operation_id, str(path), started, None)
@@ -1104,7 +1117,8 @@ class SessionController:
             if matching[-1]["kind"] in {"session-opened", "session-reconciled"}:
                 _append_event(
                     journal, "session-interrupted", open_session.session_id,
-                    open_session.operation_id, instant, {"code": code})
+                    open_session.operation_id, instant, self._protect_payload(
+                        open_session.operation_id, {"code": code}))
                 _atomic_json(path, journal)
             return {"status": "interrupted", "code": code,
                     "session_id": open_session.session_id}
@@ -1220,7 +1234,8 @@ class SessionController:
             if event["kind"] == "session-receipt-sealed" \
                     and event["operation_id"] == operation_id:
                 return _receipt_from_data(
-                    event["payload"].get("receipt"), repeated=True)
+                    self._open_payload(operation_id, event["payload"]).get("receipt"),
+                    repeated=True)
         prior = [event for event in journal["events"]
                  if event["operation_id"] == operation_id]
         reconciled_session_id = None
@@ -1232,26 +1247,29 @@ class SessionController:
                 reconciled_session_id = session_id
                 _append_event(
                     journal, "session-interrupted", session_id, operation_id, instant,
-                    {"code": "prior-run-ended-without-terminal"})
+                    self._protect_payload(
+                        operation_id, {"code": "prior-run-ended-without-terminal"}))
             if not (continue_open and prior[-1]["kind"] in {
                     "session-opened", "session-reconciled"}):
                 reconciled_session_id = session_id
                 interrupted_hash = journal["events"][-1]["event_hash"]
                 _append_event(
                     journal, "session-reconciled", session_id, operation_id, instant,
-                    {"prior_event_hash": interrupted_hash})
+                    self._protect_payload(
+                        operation_id, {"prior_event_hash": interrupted_hash}))
             started = next(
                 event["recorded_at"] for event in prior
                 if event["kind"] == "session-opened")
         else:
             started = _format_time(instant)
-            _append_event(journal, "session-opened", session_id, operation_id, instant, {
+            _append_event(journal, "session-opened", session_id, operation_id, instant,
+                          self._protect_payload(operation_id, {
                 "invocation_id": invocation_id,
                 "request_hash": prepared.request_hash,
                 "world_fingerprint": prepared.world_fingerprint,
                 "intent": prepared.intent,
                 "domains": list(prepared.domains),
-            })
+            }))
         _atomic_json(path, journal)
 
         try:
@@ -1320,7 +1338,8 @@ class SessionController:
         except Exception as exc:
             _append_event(
                 journal, "session-interrupted", session_id, operation_id, instant,
-                {"code": "handler-or-housekeeping-failed"})
+                self._protect_payload(
+                    operation_id, {"code": "handler-or-housekeeping-failed"}))
             _atomic_json(path, journal)
             raise SessionInterrupted(
                 "HANDLER_INTERRUPTED",
@@ -1369,7 +1388,8 @@ class SessionController:
         receipt_data["receipt_hash"] = _receipt_hash(receipt_data)
         _append_event(
             journal, "session-receipt-sealed", session_id, operation_id, instant,
-            {"receipt": receipt_data, "result": result})
+            self._protect_payload(
+                operation_id, {"receipt": receipt_data, "result": result}))
         _atomic_json(path, journal)
         return _receipt_from_data(receipt_data, repeated=False)
 
@@ -1378,6 +1398,11 @@ class SessionController:
                 "success": True, "metrics": {}, "evidence_ids": [],
                 "reversible_action_ids": []}
         if context.intent == "status":
+            special = getattr(self.memory, "special_status", None)
+            if special is not None:
+                special_result = special(context)
+                if special_result is not None:
+                    return {**base, **special_result}
             if re.search(
                     r"\btoken usage\b|\bperformance report\b|\bcost report\b",
                     context.request_text, re.I):
@@ -1393,13 +1418,13 @@ class SessionController:
                     return {**base, "status": "blocked", "code": "profile-disabled",
                             "success": False, "user_message": "Owner memory is disabled."}
                 return {**base, "user_message": selector()}
-            prior = _latest_sealed_receipt(journal)
+            prior = _latest_sealed_receipt(journal, self._open_payload)
             message = ("No prior Loom run exists for this project." if prior is None
                        else loom_transparency.render_compact_receipt(
                            loom_transparency.compact_receipt(prior)))
             return {**base, "user_message": message}
         if context.intent == "why":
-            prior = _latest_sealed_receipt(journal)
+            prior = _latest_sealed_receipt(journal, self._open_payload)
             if prior is None:
                 return {**base, "status": "blocked", "code": "no-prior-decision",
                         "success": False, "user_message": "No prior decision exists to explain."}
@@ -1412,7 +1437,8 @@ class SessionController:
             try:
                 result = undo()
             except (loom_transparency.TransparencyError,
-                    loom_preferences.PreferenceError) as exc:
+                    loom_preferences.PreferenceError,
+                    loom_vault_adapter.VaultAdapterError) as exc:
                 return {**base, "status": "blocked", "code": "nothing-to-undo",
                         "success": False, "user_message": str(exc)}
             return {**base, "user_message": result["message"]}
@@ -1422,7 +1448,8 @@ class SessionController:
                     "success": False, "user_message": "Owner memory is disabled."}
         try:
             result = forgetter(context.request_text, context.selected_memory)
-        except loom_transparency.TransparencyError as exc:
+        except (loom_transparency.TransparencyError,
+                loom_vault_adapter.VaultAdapterError) as exc:
             return {**base, "status": "blocked", "code": "memory-reference-unclear",
                     "success": False, "user_message": str(exc)}
         return {**base, "user_message": result["message"]}

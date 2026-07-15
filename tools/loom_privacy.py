@@ -22,7 +22,8 @@ TOKEN_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be")
 TRANSPARENT_TEXT_SUFFIXES = {
     ".bat", ".cfg", ".cmd", ".css", ".csv", ".env", ".htm", ".html",
     ".ini", ".js", ".json", ".md", ".ps1", ".py", ".rst", ".sh",
-    ".svg", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
+    ".rs", ".svg", ".toml", ".ts", ".tsx", ".txt", ".xml", ".yaml", ".yml",
+    ".lock",
 }
 NETWORK_MODULES = {
     "aiohttp", "ftplib", "http", "httpx", "requests", "smtplib", "socket",
@@ -144,7 +145,8 @@ def _scan_views(content):
     return tuple(views), tuple(texts)
 
 
-def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
+def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False,
+                     verified_opaque_hashes=()):
     """Scan every regular file byte and every relative filename without extension filters."""
     root = _safe_absolute(root, "publication root", must_exist=True)
     if not root.is_dir():
@@ -155,6 +157,11 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
     tokens = [item.strip() for item in forbidden_tokens if item.strip()]
     if require_owner_tokens and not tokens:
         raise PrivacyError("private/owner publication requires real owner tokens")
+    if not isinstance(verified_opaque_hashes, (list, tuple, set, frozenset)) or any(
+            not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item)
+            for item in verified_opaque_hashes):
+        raise PrivacyError("verified opaque hashes must be explicit SHA-256 values")
+    verified_opaque_hashes = set(verified_opaque_hashes)
     folded_tokens = [
         (item, tuple({form for encoding in TOKEN_ENCODINGS for form in (
             item.encode(encoding), item.encode(encoding).lower(),
@@ -208,7 +215,8 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False):
                 secret_match = label
                 break
         transparent_name = not path.suffix or path.suffix.lower() in TRANSPARENT_TEXT_SUFFIXES
-        if token_match is None and secret_match is None \
+        opaque_verified = hashlib.sha256(content).hexdigest() in verified_opaque_hashes
+        if token_match is None and secret_match is None and not opaque_verified \
                 and (not decoded_texts or not transparent_name):
             findings.append({"kind": "opaque-content", "path": relative,
                              "rule": "unsupported-binary"})

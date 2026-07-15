@@ -509,7 +509,9 @@ def resolve_intent(request, state=None):
     build_request = _is_build_request(text)
     profile_query = bool(re.search(
         r"\bshow (?:me )?what you remember about me\b|"
-        r"\bwhat do you remember about me\b|\bshow my remembered preferences\b",
+        r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
+        r"\bshow (?:me )?what you learned from this project\b|"
+        r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b",
         text))
     explicit_forget = bool(re.search(r"\bforget\b|\bstop remembering\b", text)) \
         and not build_request

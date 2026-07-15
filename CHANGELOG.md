@@ -1,5 +1,22 @@
 # Changelog
 
+## 1.1.0
+
+- Separated immutable Loom runtimes from a stable encrypted owner vault and explicit owner,
+  device, runtime, and project identities.
+- Added transactional legacy migration, signed staged updates, atomic session pinning, rollback,
+  deterministic platform archives, and a marketplace bootstrap that never activates an
+  unverifiable payload.
+- Added encrypted device pairing and recovery backups, deterministic event merging, permanent
+  forgetting propagation, bounded memory lifecycle maintenance, checkpoints, and active-device
+  acknowledgement before compaction.
+- Added receipt-owned global agent adapters and a stable per-user launcher so supported agents
+  share one runtime and owner vault without repository-local installation files.
+- Added native OS key-store integration and a narrow Rust cryptographic helper; executable
+  adaptations, raw transcripts, credentials, and absolute local paths remain non-transferable.
+- Added package-wide privacy scanning and reproducible-build provenance requirements for opaque
+  platform binaries and deterministic runtime archives.
+
 ## 1.0.0 trust remediation
 
 - Verify exported public cuts independently of Git, reject undeclared post-build files, and rerun

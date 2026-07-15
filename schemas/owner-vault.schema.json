@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/owner-vault.schema.json",
+  "title": "Opaque Loom owner-vault metadata",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["owner_vault_id", "schema_version", "generation", "devices", "bounds"],
+  "properties": {
+    "owner_vault_id": {"type": "string", "format": "uuid"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "generation": {"type": "integer", "minimum": 1},
+    "devices": {
+      "type": "array", "maxItems": 32, "uniqueItems": true,
+      "items": {"type": "string", "format": "uuid"}
+    },
+    "bounds": {
+      "type": "object", "additionalProperties": false,
+      "required": ["active_records", "events", "state_entities", "checkpoints", "backups", "quarantine_bytes"],
+      "properties": {
+        "active_records": {"type": "integer", "minimum": 1, "maximum": 256},
+        "events": {"type": "integer", "minimum": 500, "maximum": 10000},
+        "state_entities": {"type": "integer", "minimum": 256, "maximum": 1024},
+        "checkpoints": {"type": "integer", "minimum": 2, "maximum": 32},
+        "backups": {"type": "integer", "minimum": 3, "maximum": 19},
+        "quarantine_bytes": {"type": "integer", "minimum": 1048576, "maximum": 536870912}
+      }
+    }
+  }
+}

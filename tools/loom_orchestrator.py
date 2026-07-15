@@ -16,16 +16,19 @@ import uuid
 from pathlib import Path
 
 import loom_gate
+import loom_crypto
 import loom_domain
 import loom_install
 import loom_improvement
 import loom_lifecycle
 import loom_lint
 import loom_memory
+import loom_owner
 import loom_performance
 import loom_runtime
 import loom_session
 import loom_survey
+import loom_vault_adapter
 
 
 SCHEMA_VERSION = 1
@@ -42,6 +45,7 @@ ACTION_FIELDS = {
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
+MAX_ENCRYPTED_ACTION_BYTES = 384 * 1024
 PLAN_CONTRACT_SCHEMA_VERSION = 1
 ARTIFACT_ORDER = (
     "intake.md", "survey.md", "product.md", "architecture.md", "uiux.md",
@@ -230,25 +234,69 @@ def _validate_action(value, path):
     return value
 
 
-def _read_action(path):
+def _read_action(path, *, owner_home=None, install_root=None):
     path = _absolute(path, "action")
     try:
         loom_memory._reject_link_ancestors(path, "orchestration action")
     except loom_memory.MemoryError as exc:
         raise OrchestratorError("ACTION_UNSAFE", str(exc)) from exc
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_ACTION_BYTES:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > MAX_ENCRYPTED_ACTION_BYTES:
         raise OrchestratorError("ACTION_UNSAFE", "action must be a bounded regular file")
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise OrchestratorError("ACTION_CORRUPT", f"action cannot be read: {exc}") from exc
-    return path, _validate_action(value, path)
+    security = None
+    if isinstance(value, dict) and set(value) == {
+            "schema_version", "kind", "action_id", "owner_vault_id", "ciphertext"} \
+            and value.get("kind") == "loom-encrypted-action-v1":
+        if owner_home is None or install_root is None:
+            raise OrchestratorError(
+                "ACTION_KEY_REQUIRED", "encrypted action requires the active owner vault")
+        helper = _vault_helper(install_root)
+        if helper is None:
+            raise OrchestratorError("ACTION_KEY_REQUIRED", "active runtime has no vault helper")
+        try:
+            if str(uuid.UUID(value["action_id"])) != value["action_id"] \
+                    or str(uuid.UUID(value["owner_vault_id"])) != value["owner_vault_id"]:
+                raise ValueError("non-canonical action identity")
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise OrchestratorError("ACTION_CORRUPT", "encrypted action identity is invalid") \
+                from exc
+        opened, crypto = loom_owner.open_owner_vault(owner_home, helper)
+        if opened.identity()["owner_vault_id"] != value["owner_vault_id"]:
+            raise OrchestratorError("ACTION_OWNER_MISMATCH", "action belongs to another vault")
+        aad = f"action:{value['owner_vault_id']}:{value['action_id']}".encode()
+        try:
+            value = json.loads(crypto.open(value["ciphertext"].encode("ascii"), aad))
+        except (loom_crypto.CryptoError, ValueError, UnicodeError,
+                json.JSONDecodeError, AttributeError) as exc:
+            raise OrchestratorError("ACTION_CORRUPT", "encrypted action authentication failed") \
+                from exc
+        if Path(owner_home).resolve() != Path(value.get("owner_home", "")).resolve() \
+                or Path(install_root).resolve() != Path(value.get("install_root", "")).resolve():
+            raise OrchestratorError(
+                "ACTION_RUNTIME_MISMATCH", "action does not belong to this home and runtime")
+        security = (crypto, opened.identity()["owner_vault_id"])
+    return path, _validate_action(value, path), security
 
 
-def _write_action(path, value):
+def _write_action(path, value, security=None):
     value = dict(value)
     value["action_hash"] = _action_hash(value)
-    loom_session._atomic_json(path, value)
+    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                     ensure_ascii=False).encode("utf-8")
+    if len(raw) > MAX_ACTION_BYTES:
+        raise OrchestratorError("ACTION_CAPACITY", "action exceeds its plaintext bound")
+    if security is None:
+        loom_session._atomic_json(path, value)
+    else:
+        crypto, owner_vault_id = security
+        aad = f"action:{owner_vault_id}:{value['action_id']}".encode()
+        envelope = {"schema_version": 1, "kind": "loom-encrypted-action-v1",
+                    "action_id": value["action_id"], "owner_vault_id": owner_vault_id,
+                    "ciphertext": crypto.seal(raw, aad).decode("ascii")}
+        loom_session._atomic_json(path, envelope)
     return value
 
 
@@ -838,24 +886,28 @@ def _validated_replay_pair(value, action, applied_memory_ids):
     return {**value, **normalized, "attestation_status": "local-receipts-only"}
 
 
-def _record_production_replay(action):
+def _record_production_replay(action, memory=None):
     replay = (action.get("host_result") or {}).get("replay_pair")
     if replay is None:
         return None
-    records = loom_improvement.ImprovementTracker(
-        Path(action["owner_home"]), action["instance_id"]).record_replay_pair(
-            metric=replay["metric"], domain=replay["domain"],
-            replay_id=replay["replay_id"],
-            enabled_value=replay["enabled"]["value"],
-            disabled_value=replay["disabled"]["value"],
-            project_id=action["project_id"],
-            evidence_ids=[replay["enabled"]["evidence_id"],
-                          replay["disabled"]["evidence_id"]],
-            recorded_at=replay["enabled"]["provider_receipt"]["captured_at"])
+    if memory is not None and hasattr(memory, "record_replay"):
+        record_ids = memory.record_replay(replay, action["project_id"])
+    else:
+        records = loom_improvement.ImprovementTracker(
+            Path(action["owner_home"]), action["instance_id"]).record_replay_pair(
+                metric=replay["metric"], domain=replay["domain"],
+                replay_id=replay["replay_id"],
+                enabled_value=replay["enabled"]["value"],
+                disabled_value=replay["disabled"]["value"],
+                project_id=action["project_id"],
+                evidence_ids=[replay["enabled"]["evidence_id"],
+                              replay["disabled"]["evidence_id"]],
+                recorded_at=replay["enabled"]["provider_receipt"]["captured_at"])
+        record_ids = [item["id"] for item in records]
     return {
         "status": "recorded", "replay_id": replay["replay_id"],
         "metric": replay["metric"], "domain": replay["domain"],
-        "record_ids": [item["id"] for item in records],
+        "record_ids": record_ids,
         "source": "production-provider-response",
         "certification_status": "requires-independent-attestation",
     }
@@ -947,7 +999,7 @@ def _remove_pristine_pack(action):
 
 
 def _handler_result(context, root, owner_home, usage, work_order=None,
-                    repair_plan=None, host_result=None):
+                    repair_plan=None, host_result=None, memory_adapter=None):
     pack = root / "plans"
     tier = context.prepared.route_contract["tier"]
     intent = context.intent
@@ -1170,11 +1222,14 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
                 "reversible_action_ids": [], "usage": usage,
                 "user_message": "State one memory item of at most 280 characters.",
             }
-        record = loom_memory.add_record(
-            owner_home, context.prepared.instance_id, scope="project",
-            category="process", statement=statement, provenance="stated",
-            evidence_count=1, domain=context.prepared.domains[0],
-            project_id=context.project_id, confidence=1.0)
+        if memory_adapter is not None and hasattr(memory_adapter, "remember"):
+            record = memory_adapter.remember(context, statement)
+        else:
+            record = loom_memory.add_record(
+                owner_home, context.prepared.instance_id, scope="project",
+                category="process", statement=statement, provenance="stated",
+                evidence_count=1, domain=context.prepared.domains[0],
+                project_id=context.project_id, confidence=1.0)
         return {
             "status": "completed", "code": "remember-complete", "success": True,
             "metrics": {}, "evidence_ids": ["memory-" + record["id"]],
@@ -1189,7 +1244,7 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
 
 
 def default_handlers(*, root, owner_home, usage=None, work_order=None,
-                     repair_plan=None, host_result=None):
+                     repair_plan=None, host_result=None, memory_adapter=None):
     """Return the complete audited production handler registry."""
     root, owner_home = Path(root), Path(owner_home)
     normalized = loom_performance.normalize_usage(usage)
@@ -1197,24 +1252,49 @@ def default_handlers(*, root, owner_home, usage=None, work_order=None,
     return {
         intent: (lambda context, _intent=intent: _merge_host_outcome(
             _handler_result(context, root, owner_home, usage_payload, work_order,
-                            repair_plan, host_result), host_result))
+                            repair_plan, host_result, memory_adapter), host_result))
         for intent in {
             "plan", "resume", "execute", "review", "repair", "close", "remember"
         }
     }
 
 
+def _vault_helper(install_root):
+    root = Path(install_root)
+    names = ("loom-vault.exe", "loom-vault") if os.name == "nt" else ("loom-vault",)
+    for name in names:
+        candidate = root / "bin" / name
+        if candidate.is_file() and not candidate.is_symlink():
+            return candidate
+    return None
+
+
+def _memory_backend(home, install_root, project_root=None):
+    helper = _vault_helper(install_root)
+    if helper is None:
+        instance_id = loom_memory.initialize(home, install_root)
+        return instance_id, loom_session.LocalMemoryAdapter(
+            owner_home=home, instance_id=instance_id)
+    opened = loom_owner.initialize_owner_vault(home, helper)
+    adapter = loom_vault_adapter.VaultMemoryAdapter(
+        owner_home=home, vault=opened["vault"], project_root=project_root)
+    return adapter.instance_id, adapter
+
+
 def _controller(action, *, usage=None):
     home = Path(action["owner_home"])
     root = Path(action["explicit_target"] or action["cwd"])
-    memory = loom_session.LocalMemoryAdapter(
-        owner_home=home, instance_id=action["instance_id"])
+    instance_id, memory = _memory_backend(home, action["install_root"], root)
+    if instance_id != action["instance_id"]:
+        raise OrchestratorError(
+            "OWNER_VAULT_CHANGED", "the action owner vault no longer matches the active vault")
     handlers = default_handlers(
         root=root, owner_home=home, usage=usage,
         work_order=action.get("work_order"),
-        repair_plan=action.get("repair_plan"), host_result=action.get("host_result"))
+        repair_plan=action.get("repair_plan"), host_result=action.get("host_result"),
+        memory_adapter=memory)
     return loom_session.SessionController(
-        owner_home=home, instance_id=action["instance_id"],
+        owner_home=home, instance_id=instance_id,
         handlers=handlers, memory=memory)
 
 
@@ -1231,12 +1311,13 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     except loom_install.InstallError as exc:
         raise OrchestratorError(
             "INSTALL_UNVERIFIED", f"installation receipt check failed: {exc}") from exc
-    instance_id = loom_memory.initialize(home, install_root)
+    instance_id, memory = _memory_backend(home, install_root, target)
+    action_security = ((memory.vault.crypto, instance_id)
+                       if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = str(uuid.uuid4())
     controller = loom_session.SessionController(
         owner_home=home, instance_id=instance_id, handlers={},
-        memory=loom_session.LocalMemoryAdapter(
-            owner_home=home, instance_id=instance_id))
+        memory=memory)
     opened = controller.open(
         request, invocation_id=invocation_id, cwd=cwd,
         explicit_target=target, now=now)
@@ -1274,7 +1355,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared, selected_context=context_capsule)
         action["status"], action["result"] = "completed", receipt.to_dict()
-        _write_action(path, action)
+        _write_action(path, action, action_security)
         return receipt.to_dict()
     if prepared.intent in {"status", "why", "undo", "forget", "remember"}:
         immediate = _controller(action).run(
@@ -1282,7 +1363,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared, selected_context=context_capsule)
         action["status"], action["result"] = "completed", immediate.to_dict()
-        _write_action(path, action)
+        _write_action(path, action, action_security)
         return immediate.to_dict()
     if prepared.intent == "plan":
         pack = target / "plans"
@@ -1357,7 +1438,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                     "REPAIR_SCOPE_INDETERMINATE",
                     "repair route has no verifiable affected scope")
             action["repair_plan"] = {**preview, "force_full": force_full}
-    action = _write_action(path, action)
+    action = _write_action(path, action, action_security)
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
         "action_id": action_id, "action_path": str(path),
@@ -1393,15 +1474,22 @@ def _reopen(action):
     return controller, opened
 
 
-def complete(action_path, usage_path, *, result_path=None, now=None):
-    path, action = _read_action(action_path)
+def complete(action_path, usage_path, *, result_path=None, now=None,
+             owner_home=None, install_root=None):
+    path, action, action_security = _read_action(
+        action_path, owner_home=owner_home, install_root=install_root)
     try:
         checked = loom_install.check(action["install_root"])
     except loom_install.InstallError as exc:
         raise OrchestratorError("INSTALL_CHANGED", str(exc)) from exc
-    marker = Path(action["install_root"]) / loom_install.INSTANCE_MARKER
-    if marker.read_text(encoding="utf-8").strip() != action["instance_id"] \
-            or checked["status"] != "installed":
+    helper = _vault_helper(action["install_root"])
+    if helper is None:
+        marker = Path(action["install_root"]) / loom_install.INSTANCE_MARKER
+        identity_valid = marker.read_text(encoding="utf-8").strip() == action["instance_id"]
+    else:
+        vault, _crypto = loom_owner.open_owner_vault(action["owner_home"], helper)
+        identity_valid = vault.identity()["owner_vault_id"] == action["instance_id"]
+    if not identity_valid or checked["status"] != "installed":
         raise OrchestratorError("INSTALL_CHANGED", "installation identity changed")
     if action["status"] != "pending":
         raise OrchestratorError(
@@ -1413,7 +1501,7 @@ def complete(action_path, usage_path, *, result_path=None, now=None):
         controller.interrupt(opened, code="orchestration-timeout", now=instant)
         _remove_pristine_pack(action)
         action["status"] = "expired"
-        _write_action(path, action)
+        _write_action(path, action, action_security)
         raise OrchestratorError("ACTION_TIMEOUT", "action deadline expired", status="expired")
     try:
         usage = json.loads(_absolute(usage_path, "usage").read_text(encoding="utf-8"))
@@ -1487,20 +1575,21 @@ def complete(action_path, usage_path, *, result_path=None, now=None):
         action["attempts"] += 1
         if action["attempts"] >= action["max_attempts"]:
             action["status"] = "failed"
-        _write_action(path, action)
+        _write_action(path, action, action_security)
         raise OrchestratorError(
             "HANDLER_INTERRUPTED", str(exc), status=action["status"]) from exc
     result = receipt.to_dict()
-    production_replay = _record_production_replay(action)
+    production_replay = _record_production_replay(action, controller.memory)
     if production_replay is not None:
         result["production_replay"] = production_replay
     action["status"], action["result"] = "completed", result
-    _write_action(path, action)
+    _write_action(path, action, action_security)
     return result
 
 
-def cancel(action_path, *, now=None):
-    path, action = _read_action(action_path)
+def cancel(action_path, *, now=None, owner_home=None, install_root=None):
+    path, action, action_security = _read_action(
+        action_path, owner_home=owner_home, install_root=install_root)
     try:
         loom_install.check(action["install_root"])
     except loom_install.InstallError as exc:
@@ -1513,7 +1602,7 @@ def cancel(action_path, *, now=None):
     controller.interrupt(opened, code="owner-cancelled", now=now)
     _remove_pristine_pack(action)
     action["status"] = "cancelled"
-    _write_action(path, action)
+    _write_action(path, action, action_security)
     return {"status": "cancelled", "action_id": action["action_id"],
             "session_id": action["session_id"]}
 
@@ -1532,8 +1621,12 @@ def main(argv=None):
     complete_parser.add_argument("--action", required=True)
     complete_parser.add_argument("--usage", required=True)
     complete_parser.add_argument("--result")
+    complete_parser.add_argument("--home")
+    complete_parser.add_argument("--install-root")
     cancel_parser = commands.add_parser("cancel")
     cancel_parser.add_argument("--action", required=True)
+    cancel_parser.add_argument("--home")
+    cancel_parser.add_argument("--install-root")
     args = parser.parse_args(argv)
     try:
         if args.command == "invoke":
@@ -1542,16 +1635,20 @@ def main(argv=None):
                 install_root=args.install_root, explicit_target=args.target,
                 timeout_seconds=args.timeout_seconds)
         elif args.command == "complete":
-            result = complete(args.action, args.usage, result_path=args.result)
+            result = complete(
+                args.action, args.usage, result_path=args.result,
+                owner_home=args.home, install_root=args.install_root)
         else:
-            result = cancel(args.action)
+            result = cancel(
+                args.action, owner_home=args.home, install_root=args.install_root)
     except OrchestratorError as exc:
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": exc.status,
             "code": exc.code, "error": exc.message,
         }, sort_keys=True))
         return 2
-    except (loom_memory.MemoryError, loom_runtime.RuntimeError,
+    except (loom_memory.MemoryError, loom_crypto.CryptoError, loom_owner.OwnerError,
+            loom_vault_adapter.VaultAdapterError, loom_runtime.RuntimeError,
             loom_session.SessionError, loom_install.InstallError) as exc:
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": "blocked",

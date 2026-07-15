@@ -1,4 +1,4 @@
-# Loom 1.0.0 Limitations
+# Loom 1.1.0 Limitations
 
 Loom fails closed around evidence it does not possess.
 
@@ -34,6 +34,25 @@ Loom fails closed around evidence it does not possess.
   not provide a portable host-level filesystem/network sandbox. Loom protects the original target
   from relative-path mutation and detects target drift; command authority outside that snapshot is
   **[UNVERIFIED]** until an OS sandbox provider is configured and certified.
+- The exact six-platform marketplace package is **[UNVERIFIED]** until independent x64 and ARM64
+  builds, their second reproducible builds, SBOMs, provenance statements, and the final signed
+  package all pass the package builder. The builder opens and hashes every claimed evidence
+  artifact; local source tests do not substitute for those release inputs.
+- Automatic host delivery is **[UNVERIFIED]** because Codex marketplace refresh behavior is owned
+  by Codex. Once a newer plugin payload is present, Loom's verification, migration, activation,
+  and rollback are automatic and offline.
+- Device revocation rotates the data key locally and forces every other paired device to obtain a
+  complete new checkpoint. Automatic re-wrapping and transport to every remaining device is not
+  yet implemented; those devices remain dormant rather than receiving or contributing state.
+- The natural-language move and restore intents currently stop at the unavoidable authorization
+  or recovery-material checkpoint. A marketplace host UI for selecting the pairing payload or
+  encrypted backup is not present in this source tree.
+- The bootstrap migrates the exact verified active Loom 1.0 instance. Discovery and creation of
+  separate inactive candidate vaults for additional independent legacy installations is not yet
+  implemented; Loom leaves those installations untouched and does not merge them.
+- Adapter installation verifies the receipt-owned shared launcher and every written adapter, but
+  real disposable invocations through every named third-party host/version are **[UNVERIFIED]**
+  until the clean-machine agent matrix runs. Unsupported hosts must not be described as connected.
 
 `tools/loom_release.py certify` enforces the first 5 evidence contracts. Certification requires a
 separate trust policy whose independently provisioned RSA public keys authorize each evidence type;

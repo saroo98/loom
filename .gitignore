@@ -20,6 +20,9 @@ scratch/
 __pycache__/
 *.pyc
 
+# Native build output (release packages contain separately verified binaries)
+vault-helper/target/
+
 # Generated pack views (loom_report) — disposable by design, regenerate any time
 report.html
 

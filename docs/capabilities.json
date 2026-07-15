@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "capabilities": [
     {"id":"one-request-routing","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_runtime.py","tools/loom_session.py"],"tests":["tools/test_production_orchestrator.py","tools/test_loom_runtime.py","tools/test_loom_session.py"]},
     {"id":"complete-world-fingerprint","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_survey.py"],"tests":["tools/test_loom_runtime.py"]},
@@ -22,6 +22,11 @@
     {"id":"receipt-proven-installer","kind":"mechanical","enforcement":["tools/loom_install.py","tools/loom_reliability.py"],"tests":["tools/test_release_standard.py"]},
     {"id":"evidence-gated-release","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py"]},
     {"id":"artifact-self-verification","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_docs.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py","tools/test_documentation_coherence.py"]},
+    {"id":"encrypted-owner-vault","kind":"mechanical","enforcement":["tools/loom_owner.py","tools/loom_vault.py","tools/loom_crypto.py"],"tests":["tools/test_loom_owner_v11.py","tools/test_loom_vault_v11.py","tools/test_loom_vault_adapter_v11.py"]},
+    {"id":"signed-atomic-runtime-updates","kind":"mechanical","enforcement":["tools/loom_update.py","tools/loom_launcher.py","tools/loom_release_sign.py"],"tests":["tools/test_loom_update_v11.py","tools/test_loom_bootstrap_v11.py","tools/test_loom_release_sign_v11.py"]},
+    {"id":"encrypted-transfer-and-recovery","kind":"mechanical","enforcement":["tools/loom_transfer.py","tools/loom_crypto.py"],"tests":["tools/test_loom_transfer_v11.py"]},
+    {"id":"deterministic-device-merge","kind":"mechanical","enforcement":["tools/loom_vault.py"],"tests":["tools/test_loom_merge_v11.py"]},
+    {"id":"receipt-owned-shared-agent-adapters","kind":"mechanical","enforcement":["tools/loom_adapters.py","tools/loom_launcher.py"],"tests":["tools/test_loom_plugin_adapters_v11.py"]},
     {"id":"human-judgment-remains-owner-controlled","kind":"advisory","enforcement":[],"tests":[]}
   ]
 }

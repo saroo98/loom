@@ -435,7 +435,7 @@ def _disabled_profile(root):
     f = Fixture(root, s.id)
     project, _project_id = f.project("profile-off")
     config = json.loads(json.dumps(loom_runtime.DEFAULT_CONFIG))
-    config["loom_version"] = "1.0.0"
+    config["loom_version"] = "1.1.0"
     config["use_profile"] = False
     observed = []
 

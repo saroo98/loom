@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/runtime-api.schema.json",
+  "title": "Loom shared-runtime invocation contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["request", "runtime", "vault", "session"],
+  "properties": {
+    "request": {"type": "string", "minLength": 1, "maxLength": 16384},
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "runtime_install_id", "payload_sha256"],
+      "properties": {
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+        "runtime_install_id": {"type": "string", "format": "uuid"},
+        "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "vault": {
+      "type": "object", "additionalProperties": false,
+      "required": ["owner_vault_id", "schema_version", "generation"],
+      "properties": {
+        "owner_vault_id": {"type": "string", "format": "uuid"},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "generation": {"type": "integer", "minimum": 1}
+      }
+    },
+    "session": {
+      "type": "object", "additionalProperties": false,
+      "required": ["session_id", "pinned_runtime", "pinned_generation"],
+      "properties": {
+        "session_id": {"type": "string", "format": "uuid"},
+        "pinned_runtime": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+        "pinned_generation": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}

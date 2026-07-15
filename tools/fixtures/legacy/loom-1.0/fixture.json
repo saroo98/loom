@@ -1,0 +1,13 @@
+{
+  "fixture_version": "1.0.0",
+  "sanitized": true,
+  "scenarios": ["active", "dormant", "archived", "forgotten", "corrupted", "oversized", "interrupted"],
+  "legacy_install_id": "00000000-0000-4000-8000-000000000100",
+  "records": [
+    {"id": "00000000-0000-4000-8000-000000000101", "scope": "global", "status": "active", "category": "calibration", "statement": "Observed estimates require calibration against outcomes.", "provenance": "observed"},
+    {"id": "00000000-0000-4000-8000-000000000102", "scope": "domain", "domain": "three-d", "status": "dormant", "category": "domain", "statement": "Verify frame time on a representative device.", "provenance": "observed"},
+    {"id": "00000000-0000-4000-8000-000000000103", "scope": "project", "domain": "accounting", "project_id": "p-00000000000000000000000000000103", "status": "archived", "category": "process", "statement": "Reconcile every posting batch.", "provenance": "observed"},
+    {"id": "00000000-0000-4000-8000-000000000104", "scope": "domain", "domain": "web", "status": "forgotten", "category": "domain", "statement": null, "provenance": "stated"}
+  ],
+  "faults": {"corrupted_source": "hash-mismatch", "oversized_records": 321, "interrupted_after": 2}
+}

@@ -27,9 +27,12 @@ import loom_performance
 
 ROOT_FILES = {
     ".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "PRIVACY.md",
-    "README.md", "START-HERE.md", "VERSION",
+    "README.md", "START-HERE.md", "TERMS.md", "VERSION",
 }
-ROOT_DIRECTORIES = {".github", "docs", "loom", "schemas", "skill", "templates", "tools"}
+ROOT_DIRECTORIES = {
+    ".codex-plugin", ".github", "docs", "hooks", "loom", "schemas", "scripts",
+    "skill", "skills", "templates", "tools", "vault-helper",
+}
 MANIFEST = "BUILD-MANIFEST.json"
 LOCAL_CHECKS = (
     "suite", "adaptation", "privacy", "failure_injection",
@@ -119,6 +122,7 @@ def _eligible(relative):
         return relative.name in ROOT_FILES
     return relative.parts[0] in ROOT_DIRECTORIES \
         and "__pycache__" not in relative.parts \
+        and not (relative.parts[0] == "vault-helper" and "target" in relative.parts) \
         and relative.suffix.lower() not in {".pyc", ".pyo"}
 
 

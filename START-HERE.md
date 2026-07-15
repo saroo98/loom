@@ -1,4 +1,4 @@
-# Loom 1.0.0 agent kernel
+# Loom 1.1.0 agent kernel
 
 The entire owner-facing interface is:
 
