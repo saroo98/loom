@@ -23,7 +23,7 @@ import loom_release  # noqa: E402
 from test_loom_vault_v11 import TestCrypto  # noqa: E402
 
 
-TODAY = dt.date.today().isoformat()
+TODAY = dt.datetime.now(dt.timezone.utc).date().isoformat()
 
 
 def _write(path, text):
