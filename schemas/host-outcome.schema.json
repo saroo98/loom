@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/host-outcome.schema.json",
+  "title": "Local agent-reported learning outcome",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "applied_memory_ids", "verified_memory_ids",
+    "rejected_memory_ids", "metrics", "preference_observations", "artifact_usage"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "applied_memory_ids": {"$ref": "#/$defs/ids"},
+    "verified_memory_ids": {"$ref": "#/$defs/ids"},
+    "rejected_memory_ids": {"$ref": "#/$defs/ids"},
+    "metrics": {
+      "type": "object",
+      "maxProperties": 64,
+      "propertyNames": {"pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+      "additionalProperties": {"type": "number"}
+    },
+    "preference_observations": {
+      "type": "array", "maxItems": 16,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["key", "value"],
+        "properties": {
+          "key": {"enum": ["report_detail", "autonomy", "stack", "concern"]},
+          "value": {"type": "string", "minLength": 1, "maxLength": 80},
+          "subject": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}
+        }
+      }
+    },
+    "artifact_usage": {
+      "type": "array", "maxItems": 64,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["artifact_id", "opened", "cited", "work_order_used", "prevented_defect"],
+        "properties": {
+          "artifact_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+          "opened": {"type": "boolean"},
+          "cited": {"type": "boolean"},
+          "work_order_used": {"type": "boolean"},
+          "prevented_defect": {"type": "boolean"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ids": {
+      "type": "array", "maxItems": 16, "uniqueItems": true,
+      "items": {"type": "string", "format": "uuid"}
+    }
+  }
+}

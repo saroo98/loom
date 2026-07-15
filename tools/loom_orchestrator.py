@@ -328,6 +328,69 @@ def _read_repair_result(result_path, action):
     return {"schema_version": 1, "repair_verification": entries}
 
 
+def _read_host_outcome(result_path, action):
+    if result_path is None:
+        return None
+    path = _absolute(result_path, "host outcome")
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+        raise OrchestratorError("HOST_OUTCOME_INVALID", "host outcome is not a bounded file")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise OrchestratorError("HOST_OUTCOME_INVALID", str(exc)) from exc
+    fields = {
+        "schema_version", "applied_memory_ids", "verified_memory_ids",
+        "rejected_memory_ids", "metrics", "preference_observations", "artifact_usage",
+    }
+    if not isinstance(value, dict) or set(value) != fields or value["schema_version"] != 1:
+        raise OrchestratorError("HOST_OUTCOME_INVALID", "host outcome fields are invalid")
+    evidence_id = "host-outcome-" + _hash(value)
+    candidate = {
+        "status": "completed", "code": "host-outcome", "success": True,
+        "metrics": value["metrics"], "evidence_ids": [evidence_id],
+        "reversible_action_ids": [],
+        "applied_memory_ids": value["applied_memory_ids"],
+        "verified_memory_ids": value["verified_memory_ids"],
+        "rejected_memory_ids": value["rejected_memory_ids"],
+        "preference_observations": value["preference_observations"],
+        "artifact_usage": value["artifact_usage"],
+    }
+    try:
+        normalized = loom_session._validate_handler_result(candidate)
+    except loom_session.SessionBlocked as exc:
+        raise OrchestratorError("HOST_OUTCOME_INVALID", str(exc)) from exc
+    selected = {item.get("id") for item in action["context"]["memory"]
+                if isinstance(item, dict)}
+    referenced = set(normalized["applied_memory_ids"]) \
+        | set(normalized["verified_memory_ids"]) \
+        | set(normalized["rejected_memory_ids"])
+    if not referenced.issubset(selected):
+        raise OrchestratorError(
+            "HOST_OUTCOME_INVALID", "host outcome references memory outside sealed context")
+    if not (referenced or normalized["metrics"] or normalized["preference_observations"]
+            or normalized["artifact_usage"]):
+        raise OrchestratorError("HOST_OUTCOME_INVALID", "empty host outcome has no learning value")
+    return {"schema_version": 1, "learning": {
+        key: normalized[key] for key in (
+            "metrics", "evidence_ids", "applied_memory_ids", "verified_memory_ids",
+            "rejected_memory_ids", "preference_observations", "artifact_usage")}}
+
+
+def _merge_host_outcome(result, host_result):
+    if not host_result or "learning" not in host_result or result["status"] != "completed":
+        return result
+    merged = dict(result)
+    learning = host_result["learning"]
+    merged["metrics"] = dict(learning["metrics"])
+    merged["evidence_ids"] = list(dict.fromkeys(
+        list(result["evidence_ids"]) + list(learning["evidence_ids"])))
+    for field in (
+            "applied_memory_ids", "verified_memory_ids", "rejected_memory_ids",
+            "preference_observations", "artifact_usage"):
+        merged[field] = list(learning[field])
+    return merged
+
+
 def _restamp_verified_pack(pack, repo, verified_at, *, full):
     """Update only verification stamps after a successful sealed regate."""
     pack = Path(pack)
@@ -619,9 +682,9 @@ def default_handlers(*, root, owner_home, usage=None, work_order=None,
         field: normalized[field] for field in loom_performance.USAGE_FIELDS
     })
     return {
-        intent: (lambda context, _intent=intent: _handler_result(
-            context, root, owner_home, usage_payload, work_order,
-            repair_plan, host_result))
+        intent: (lambda context, _intent=intent: _merge_host_outcome(
+            _handler_result(context, root, owner_home, usage_payload, work_order,
+                            repair_plan, host_result), host_result))
         for intent in {
             "plan", "resume", "execute", "review", "repair", "close", "remember"
         }
@@ -823,6 +886,8 @@ def complete(action_path, usage_path, *, result_path=None, now=None):
         raise OrchestratorError("USAGE_REQUIRED", "production completion requires measured usage")
     if action["intent"] == "repair":
         action["host_result"] = _read_repair_result(result_path, action)
+    elif result_path is not None:
+        action["host_result"] = _read_host_outcome(result_path, action)
     sealed = loom_runtime.PreparedInvocation.from_dict(action["prepared"])
     if action["intent"] == "execute":
         project = loom_runtime.resolve_project(

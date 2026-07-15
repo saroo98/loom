@@ -377,6 +377,41 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             result["context"]["preferences"], action["context"]["preferences"])
 
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        host_outcome = self.root / "host-outcome.json"
+        host_outcome.write_text(json.dumps({
+            "schema_version": 1,
+            "applied_memory_ids": ["00000000-0000-4000-8000-000000000999"],
+            "verified_memory_ids": [], "rejected_memory_ids": [],
+            "metrics": {}, "preference_observations": [], "artifact_usage": [],
+        }), encoding="utf-8")
+        refused = self.cli(
+            "complete", "--action", result["action_path"], "--usage", usage,
+            "--result", host_outcome)
+        self.assertEqual(2, refused.returncode)
+        self.assertEqual("HOST_OUTCOME_INVALID", json.loads(refused.stdout)["code"])
+        host_outcome.write_text(json.dumps({
+            "schema_version": 1,
+            "applied_memory_ids": [preference["id"]],
+            "verified_memory_ids": [], "rejected_memory_ids": [],
+            "metrics": {}, "preference_observations": [], "artifact_usage": [],
+        }), encoding="utf-8")
+        completed = self.cli(
+            "complete", "--action", result["action_path"], "--usage", usage,
+            "--result", host_outcome)
+        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+        recorded = loom_memory.inspect_record(
+            self.home, instance_id, preference["id"])
+        self.assertEqual(1, recorded["application_count"])
+        self.assertEqual(1, recorded["helped_count"])
+
     def test_tier_s_uses_one_bounded_work_order_without_a_pack_essay(self):
         request = "Plan a single-file CLI flag in src/app.py"
         opened = self.cli(
