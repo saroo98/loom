@@ -496,6 +496,18 @@ Stop if another component is required.
         self.assertEqual(loom_gate.small_authorize(
             self.record, self.repo, self.wo), 1)
 
+    def test_small_route_contract_is_bounded_and_tamper_evident(self):
+        self.assertEqual(loom_gate.small_start(
+            self.record, self.repo, self.wo, ["cli"]), 0)
+        data = json.loads(self.record.read_text(encoding="utf-8"))
+        self.assertEqual("S", data["route_contract"]["tier"])
+        self.assertEqual(["cli"], data["route_contract"]["domain_ids"])
+        data["route_contract"]["domain_ids"] = ["cli", "INVALID OWNER DOMAIN"]
+        self.record.write_text(json.dumps(data), encoding="utf-8")
+        self.assertIn(
+            "small lifecycle route contract is invalid",
+            loom_gate.verify_small(self.record))
+
 
 if __name__ == "__main__":
     unittest.main()

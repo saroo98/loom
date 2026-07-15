@@ -53,6 +53,14 @@ SMALL_WO_MAX_CHARS = 6000
 SMALL_WO_MAX_LINES = 80
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
+DOMAIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+SMALL_FIELDS = {
+    "schema_version", "mode", "work_order_file", "route_contract",
+    "baseline_files", "events",
+}
+SMALL_ROUTE_FIELDS = {
+    "tier", "domain_ids", "last_verified", "freshness_window_days",
+}
 
 
 class LifecycleBusy(RuntimeError):
@@ -1166,8 +1174,26 @@ def verify_small(record):
         data = _load_small(record)
     except ValueError as exc:
         return [str(exc)]
-    if data.get("schema_version") != SCHEMA_VERSION or data.get("mode") != "small":
+    if set(data) != SMALL_FIELDS \
+            or data.get("schema_version") != SCHEMA_VERSION \
+            or data.get("mode") != "small":
         findings.append("small lifecycle header is invalid")
+    route = data.get("route_contract")
+    if not isinstance(route, dict) or set(route) != SMALL_ROUTE_FIELDS \
+            or route.get("tier") != "S" \
+            or not isinstance(route.get("domain_ids"), list) \
+            or not route["domain_ids"] or len(route["domain_ids"]) > 16 \
+            or len(route["domain_ids"]) != len(set(route["domain_ids"])) \
+            or not all(isinstance(item, str) and DOMAIN_ID_RE.fullmatch(item)
+                       for item in route["domain_ids"]) \
+            or type(route.get("freshness_window_days")) is not int \
+            or not 1 <= route["freshness_window_days"] <= 3650:
+        findings.append("small lifecycle route contract is invalid")
+    else:
+        try:
+            dt.date.fromisoformat(str(route.get("last_verified")))
+        except ValueError:
+            findings.append("small lifecycle last_verified is invalid")
     baseline = data.get("baseline_files")
     if not isinstance(baseline, dict) or len(baseline) > SNAPSHOT_FILE_CAP \
             or not all(_safe_relative_path(path)
@@ -1273,7 +1299,7 @@ def verify_small(record):
 
 
 @_locked(small=True)
-def small_start(record, repo, wo):
+def small_start(record, repo, wo, domains=None):
     record, wo = Path(record).resolve(), Path(wo).resolve()
     if record.suffix.lower() != ".json" or wo.suffix.lower() != ".md" \
             or record.parent != wo.parent:
@@ -1283,6 +1309,12 @@ def small_start(record, repo, wo):
     if record.exists() or wo.exists():
         print("loom_gate: REFUSED — Tier-S record/WO already exists; baseline must come first",
               file=sys.stderr)
+        return 1
+    domains = ["unclassified"] if domains is None else list(domains)
+    if not domains or len(domains) > 16 or len(domains) != len(set(domains)) \
+            or not all(isinstance(item, str) and DOMAIN_ID_RE.fullmatch(item)
+                       for item in domains):
+        print("loom_gate: REFUSED — Tier-S domains are invalid", file=sys.stderr)
         return 1
     try:
         record.parent.mkdir(parents=True, exist_ok=True)
@@ -1294,6 +1326,11 @@ def small_start(record, repo, wo):
             "schema_version": SCHEMA_VERSION,
             "mode": "small",
             "work_order_file": wo.name,
+            "route_contract": {
+                "tier": "S", "domain_ids": domains,
+                "last_verified": dt.datetime.now(dt.timezone.utc).date().isoformat(),
+                "freshness_window_days": 14,
+            },
             "baseline_files": baseline,
             "events": [event],
         })

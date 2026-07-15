@@ -971,10 +971,73 @@ def _hash_frontier(path, *, lifecycle_only=False):
     return digest.hexdigest()
 
 
+def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
+    pack = Path(pack)
+    record = pack / ".loom-small-lifecycle.json"
+    work_order = pack / "WO-001.md"
+    if not record.exists() and not work_order.exists():
+        return None
+    invalid = {
+        "pack_exists": True, "authorized": False, "active_frontier": False,
+        "terminal": False, "drift": False, "failed": True,
+        "state_error": "INVALID_LIFECYCLE",
+    }
+    if not record.is_file() or record.is_symlink() \
+            or not work_order.is_file() or work_order.is_symlink():
+        return invalid
+    findings = loom_gate.verify_small(record)
+    if findings:
+        return invalid
+    try:
+        data = json.loads(_bounded_read(
+            record, MAX_CONFIG_BYTES, "Tier-S lifecycle").decode("utf-8"))
+        frontmatter, _ = loom_lint.parse_frontmatter(
+            _bounded_read(
+                work_order, MAX_CONFIG_BYTES, "Tier-S work order").decode("utf-8"))
+        names = [event["event"] for event in data["events"]]
+        status = str((frontmatter or {}).get("status", ""))
+        checkpoint = data["events"][-1]
+        route = data["route_contract"]
+        verified = dt.date.fromisoformat(route["last_verified"])
+        current = today or dt.datetime.now(dt.timezone.utc).date()
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError,
+            json.JSONDecodeError):
+        return invalid
+    authorized = names == ["small-planning-started", "small-authorized"]
+    terminal = names == [
+        "small-planning-started", "small-authorized", "small-completed"]
+    if checkpoint.get("repo_state_hash") != lifecycle_repo_hash:
+        return {
+            "pack_exists": True, "authorized": False,
+            "active_frontier": False, "terminal": False,
+            "drift": True, "failed": False,
+            "state_error": "STALE_LIFECYCLE",
+        }
+    result = {
+        "pack_exists": True,
+        "authorized": authorized,
+        "active_frontier": authorized and status in {"ready", "in-progress"},
+        "terminal": terminal and status == "done",
+        "drift": False,
+        "failed": False,
+    }
+    if verified > current:
+        return invalid
+    if authorized and (current - verified).days > route["freshness_window_days"]:
+        result.update({
+            "authorized": False, "active_frontier": False,
+            "drift": True, "state_error": "STALE_TIME",
+        })
+    return result
+
+
 def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
     pack = Path(pack)
     if _path_has_link_or_junction(pack):
         raise RuntimeError("pack lifecycle must not traverse a symlink or junction")
+    small = _inspect_small_lifecycle(pack, lifecycle_repo_hash, today)
+    if small is not None:
+        return small
     work_orders = pack / "work-orders"
     statuses = []
     work_order_ids = set()
@@ -1120,7 +1183,26 @@ def _pack_route_contract(pack, state):
         return None
     pack = Path(pack)
     manifest = pack / "MANIFEST.md"
-    if not manifest.is_file() or _path_has_link_or_junction(manifest):
+    if not manifest.is_file():
+        record = pack / ".loom-small-lifecycle.json"
+        if not record.is_file() or _path_has_link_or_junction(record):
+            return None
+        try:
+            data = json.loads(_bounded_read(
+                record, MAX_CONFIG_BYTES, "Tier-S lifecycle").decode("utf-8"))
+            route = data["route_contract"]
+            domains = route["domain_ids"]
+        except (OSError, UnicodeError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            raise RuntimeError(
+                f"Tier-S route identity is unreadable: {exc}") from exc
+        if route.get("tier") != "S" or not isinstance(domains, list) \
+                or not domains or len(domains) > MAX_DOMAINS \
+                or len(domains) != len(set(domains)) \
+                or not all(isinstance(item, str) and ID_RE.fullmatch(item)
+                           for item in domains):
+            raise RuntimeError("Tier-S route identity is invalid")
+        return {"tier": "S", "domains": domains}
+    if _path_has_link_or_junction(manifest):
         return None
     try:
         text = _bounded_read(

@@ -528,7 +528,9 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         if action["tier"] == "S":
             record, work_order = pack / ".loom-small-lifecycle.json", pack / "WO-001.md"
             if not record.exists() and not work_order.exists():
-                code, output = _capture(loom_gate.small_start, record, target, work_order)
+                code, output = _capture(
+                    loom_gate.small_start, record, target, work_order,
+                    list(prepared.domains))
                 if code:
                     raise OrchestratorError("BASELINE_FAILED", output)
         else:
@@ -546,13 +548,15 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     elif prepared.intent == "execute":
         work_order_id, work_order_path = _active_work_order(
             target / "plans", action["tier"])
-        report = loom_lint.lint(
-            target / "plans", repo_path=target, strict_staleness=True)
-        findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
-        findings.extend(
-            loom_gate.verify_small(target / "plans" / ".loom-small-lifecycle.json")
-            if action["tier"] == "S" else
-            loom_gate.verify(target / "plans", target, require_authorized=True))
+        if action["tier"] == "S":
+            findings = loom_gate.verify_small(
+                target / "plans" / ".loom-small-lifecycle.json")
+        else:
+            report = loom_lint.lint(
+                target / "plans", repo_path=target, strict_staleness=True)
+            findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
+            findings.extend(loom_gate.verify(
+                target / "plans", target, require_authorized=True))
         if findings:
             raise OrchestratorError(
                 "EXECUTION_NOT_READY", "; ".join(findings[:8]))

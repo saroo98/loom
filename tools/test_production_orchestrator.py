@@ -240,6 +240,18 @@ def _mark_medium_wo_done(pack):
     return work_order
 
 
+def _mark_small_wo_done(pack):
+    work_order = pack / "WO-001.md"
+    text = work_order.read_text(encoding="utf-8")
+    text = text.replace("status: ready", "status: done")
+    text = text.replace("- [ ]", "- [x]")
+    text = text.replace(
+        "Pending implementation evidence.",
+        "Evidence: isolated real-process verification exited 0.")
+    work_order.write_text(text, encoding="utf-8")
+    return work_order
+
+
 class ProductionOrchestratorTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -363,6 +375,41 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual([], loom_gate.verify_small(
             self.repo / "plans" / ".loom-small-lifecycle.json"))
         self.assertFalse((self.repo / "plans" / "MANIFEST.md").exists())
+
+    def test_tier_s_continue_preserves_cli_route_and_seals_real_change(self):
+        request = "Plan a single-file CLI flag in src/app.py"
+        opened = json.loads(self.cli(
+            "invoke", "--request", request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_small_wo(self.repo / "plans")
+        usage = self.root / "small-usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 300, "cache_read_tokens": 50,
+            "output_tokens": 150, "tool_tokens": 50, "retry_tokens": 0,
+        }), encoding="utf-8")
+        self.assertEqual(0, self.cli(
+            "complete", "--action", opened["action_path"], "--usage", usage).returncode)
+
+        continued = self.cli(
+            "invoke", "--request", "Continue", "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed)
+        self.assertEqual(0, continued.returncode, continued.stderr + continued.stdout)
+        execute = json.loads(continued.stdout)
+        self.assertEqual("execute", execute["intent"])
+        self.assertEqual("S", execute["tier"])
+        self.assertEqual(["cli"], execute["domains"])
+        self.assertEqual("WO-001", execute["work_order"])
+        (self.repo / "src" / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+        _mark_small_wo_done(self.repo / "plans")
+        loom_lifecycle.capture_acceptance(
+            self.repo / "plans", self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('small verification passed')"])
+        completed = self.cli(
+            "complete", "--action", execute["action_path"], "--usage", usage)
+        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+        self.assertEqual("completed", json.loads(completed.stdout)["status"])
+        self.assertEqual([], loom_gate.verify_small(
+            self.repo / "plans" / ".loom-small-lifecycle.json"))
 
     def test_continue_executes_one_declared_work_order_and_seals_completion(self):
         opened = json.loads(self.cli(
