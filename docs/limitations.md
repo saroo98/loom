@@ -13,5 +13,8 @@ Loom fails closed around evidence it does not possess.
 - Domain guidance is not current legal, tax, medical, safety, or regulatory advice. Loom must verify
   present rules and target-environment facts before those claims become load-bearing.
 
-`tools/loom_release.py certify` enforces the first 3 evidence contracts. Missing evidence blocks
-production certification and the 100 score; documentation cannot override that result.
+`tools/loom_release.py certify` enforces the first 3 evidence contracts. Certification requires a
+separate trust policy whose independently provisioned RSA public keys authorize each evidence type;
+unsigned, self-asserted, duplicated, expired, irrelevant, tampered, or wrong-commit evidence fails.
+Missing evidence blocks production certification and the 100 score; documentation cannot override
+that result.

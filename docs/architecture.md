@@ -38,7 +38,10 @@ never qualifies as improvement.
 entries, scans every output byte and filename, and emits a deterministic manifest. It will not build
 without explicit private/owner firewall tokens. `loom_install` installs only into a new directory,
 checks receipt-proven hashes, and uninstalls only an unchanged owned set. `loom_release certify`
-cannot award 100 unless local checks and the 3 external evidence contracts all pass.
+accepts only fresh, content-bound local evidence for one clean GitHub commit plus fresh external
+evidence signed by independently provisioned RSA trust roots. Evidence IDs must be unique and every
+subject must match the exact repository, commit, and public-build hash. It cannot award 100 unless
+local checks and all 3 signed external evidence contracts pass.
 
 ## Truth surfaces
 

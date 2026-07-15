@@ -2,12 +2,18 @@
 """Reproducible public builder and evidence-gated Loom release certification."""
 
 import argparse
+import base64
+import datetime as dt
+import hashlib
+import hmac
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import uuid
 from pathlib import Path
 
 import loom_privacy
@@ -31,6 +37,24 @@ LOCAL_CHECKS = (
 EXTERNAL_CHECKS = (
     "cross-platform-ci", "unfamiliar-user-usability", "independent-hostile-review",
 )
+EXTERNAL_EVIDENCE_FIELDS = {
+    "schema_version", "check_id", "status", "evidence_id", "subject",
+    "issued_at", "expires_at", "issuer", "payload", "payload_sha256",
+    "attestation",
+}
+SUBJECT_FIELDS = {"repository", "commit_sha", "root_sha256"}
+ISSUER_FIELDS = {"id", "kind", "independent"}
+ATTESTATION_FIELDS = {"algorithm", "key_id", "signature"}
+TRUST_POLICY_FIELDS = {"schema_version", "subject", "issuers"}
+TRUSTED_ISSUER_FIELDS = {
+    "id", "kind", "key_id", "algorithm", "modulus_hex", "exponent",
+    "checks", "independent",
+}
+LOCAL_EVIDENCE_FIELDS = {
+    "schema_version", "status", "verification_id", "subject", "verified_at",
+    "expires_at", "local_checks", "evidence", "evidence_sha256",
+}
+SHA256_DIGEST_INFO = bytes.fromhex("3031300d060960864801650304020105000420")
 
 
 class ReleaseError(RuntimeError):
@@ -92,31 +116,223 @@ def build_public(source, destination, *, forbidden_tokens):
             "files": payload_manifest["files"], "firewall": firewall}
 
 
-def _external_passed(check_id, evidence):
-    if not isinstance(evidence, dict) or evidence.get("status") != "passed" \
-            or not isinstance(evidence.get("evidence"), str) \
-            or not evidence["evidence"].strip():
+def _canonical_hash(value):
+    return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _canonical_bytes(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"),
+                      ensure_ascii=False).encode("utf-8")
+
+
+def _evidence_time(value):
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.astimezone(dt.timezone.utc)
+
+
+def _valid_subject(subject):
+    return isinstance(subject, dict) and set(subject) == SUBJECT_FIELDS \
+        and isinstance(subject.get("repository"), str) \
+        and subject["repository"].startswith("https://github.com/") \
+        and re.fullmatch(r"[0-9a-f]{40}", str(subject.get("commit_sha", ""))) \
+        and re.fullmatch(r"[0-9a-f]{64}", str(subject.get("root_sha256", "")))
+
+
+def _validated_local_evidence(value, *, now=None):
+    if not isinstance(value, dict) or set(value) != LOCAL_EVIDENCE_FIELDS \
+            or value.get("schema_version") != 1 or value.get("status") != "passed" \
+            or not _valid_subject(value.get("subject")) \
+            or not isinstance(value.get("evidence"), dict):
+        return None
+    try:
+        if str(uuid.UUID(value["verification_id"])) != value["verification_id"]:
+            return None
+    except (ValueError, TypeError, AttributeError):
+        return None
+    issued = _evidence_time(value.get("verified_at"))
+    expires = _evidence_time(value.get("expires_at"))
+    instant = now or dt.datetime.now(dt.timezone.utc)
+    if issued is None or expires is None or not issued <= instant <= expires:
+        return None
+    checks = value.get("local_checks")
+    if not isinstance(checks, dict) or set(checks) != set(LOCAL_CHECKS) \
+            or not all(type(item) is bool for item in checks.values()):
+        return None
+    body = {key: item for key, item in value.items() if key != "evidence_sha256"}
+    if value.get("evidence_sha256") != _canonical_hash(body):
+        return None
+    return checks, value["subject"]
+
+
+def seal_local_evidence(*, subject, local_checks, evidence, now=None):
+    if not _valid_subject(subject) or not isinstance(local_checks, dict) \
+            or set(local_checks) != set(LOCAL_CHECKS) \
+            or not all(type(item) is bool for item in local_checks.values()) \
+            or not isinstance(evidence, dict):
+        raise ReleaseError("local release evidence inputs are invalid")
+    instant = now or dt.datetime.now(dt.timezone.utc)
+    if instant.tzinfo is None:
+        raise ReleaseError("local release evidence time must be timezone-aware")
+    instant = instant.astimezone(dt.timezone.utc).replace(microsecond=0)
+    expires = instant + dt.timedelta(hours=48)
+    value = {
+        "schema_version": 1,
+        "status": "passed" if all(local_checks.values()) else "failed",
+        "verification_id": str(uuid.uuid4()),
+        "subject": dict(subject),
+        "verified_at": instant.isoformat().replace("+00:00", "Z"),
+        "expires_at": expires.isoformat().replace("+00:00", "Z"),
+        "local_checks": dict(local_checks),
+        "evidence": json.loads(json.dumps(evidence)),
+    }
+    value["evidence_sha256"] = _canonical_hash(value)
+    return value
+
+
+def _trusted_issuer(check_id, evidence, trust_policy):
+    if not isinstance(trust_policy, dict) or set(trust_policy) != TRUST_POLICY_FIELDS \
+            or trust_policy.get("schema_version") != 1 \
+            or trust_policy.get("subject") != evidence.get("subject") \
+            or not isinstance(trust_policy.get("issuers"), list):
+        return None
+    issuer = evidence["issuer"]
+    attestation = evidence["attestation"]
+    matches = [item for item in trust_policy["issuers"]
+               if isinstance(item, dict)
+               and item.get("id") == issuer["id"]
+               and item.get("key_id") == attestation["key_id"]]
+    if len(matches) != 1:
+        return None
+    trusted = matches[0]
+    if set(trusted) != TRUSTED_ISSUER_FIELDS \
+            or trusted.get("kind") != issuer["kind"] \
+            or trusted.get("independent") is not True \
+            or trusted.get("algorithm") != "rsa-pkcs1v15-sha256" \
+            or not isinstance(trusted.get("checks"), list) \
+            or check_id not in trusted["checks"] \
+            or len(trusted["checks"]) != len(set(trusted["checks"])) \
+            or any(item not in EXTERNAL_CHECKS for item in trusted["checks"]):
+        return None
+    try:
+        modulus = int(trusted["modulus_hex"], 16)
+        exponent = trusted["exponent"]
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(trusted.get("modulus_hex"), str) \
+            or not re.fullmatch(r"[0-9a-f]{512,1024}", trusted["modulus_hex"]) \
+            or type(exponent) is not int or exponent < 3 or exponent % 2 == 0 \
+            or modulus.bit_length() < 2048:
+        return None
+    return modulus, exponent
+
+
+def _signature_valid(evidence, trusted_key):
+    modulus, exponent = trusted_key
+    try:
+        signature = base64.b64decode(
+            evidence["attestation"]["signature"], validate=True)
+    except (ValueError, TypeError):
+        return False
+    size = (modulus.bit_length() + 7) // 8
+    if len(signature) != size:
+        return False
+    body = {key: value for key, value in evidence.items() if key != "attestation"}
+    body["attestation"] = {
+        "algorithm": evidence["attestation"]["algorithm"],
+        "key_id": evidence["attestation"]["key_id"],
+    }
+    digest_info = SHA256_DIGEST_INFO + hashlib.sha256(_canonical_bytes(body)).digest()
+    padding = b"\xff" * (size - len(digest_info) - 3)
+    if len(padding) < 8:
+        return False
+    expected = b"\x00\x01" + padding + b"\x00" + digest_info
+    recovered = pow(int.from_bytes(signature, "big"), exponent, modulus).to_bytes(
+        size, "big")
+    return hmac.compare_digest(recovered, expected)
+
+
+def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
+    if not isinstance(evidence, dict) or set(evidence) != EXTERNAL_EVIDENCE_FIELDS \
+            or evidence.get("schema_version") != 1 \
+            or evidence.get("check_id") != check_id \
+            or evidence.get("status") != "passed":
+        return False
+    try:
+        if str(uuid.UUID(evidence["evidence_id"])) != evidence["evidence_id"]:
+            return False
+    except (ValueError, TypeError, AttributeError):
+        return False
+    subject = evidence.get("subject")
+    if not _valid_subject(subject):
+        return False
+    issued = _evidence_time(evidence.get("issued_at"))
+    expires = _evidence_time(evidence.get("expires_at"))
+    instant = now or dt.datetime.now(dt.timezone.utc)
+    if issued is None or expires is None or not issued <= instant <= expires:
+        return False
+    issuer = evidence.get("issuer")
+    if not isinstance(issuer, dict) or set(issuer) != ISSUER_FIELDS \
+            or not isinstance(issuer.get("id"), str) or not issuer["id"].strip() \
+            or issuer.get("kind") not in {
+                "github-actions", "independent-participant", "independent-reviewer"} \
+            or issuer.get("independent") is not True:
+        return False
+    payload = evidence.get("payload")
+    if not isinstance(payload, dict) \
+            or evidence.get("payload_sha256") != _canonical_hash(payload):
+        return False
+    attestation = evidence.get("attestation")
+    if not isinstance(attestation, dict) or set(attestation) != ATTESTATION_FIELDS \
+            or attestation.get("algorithm") != "rsa-pkcs1v15-sha256" \
+            or not all(isinstance(attestation.get(field), str)
+                       and attestation[field].strip()
+                       for field in ("key_id", "signature")):
+        return False
+    trusted_key = _trusted_issuer(check_id, evidence, trust_policy)
+    if trusted_key is None or not _signature_valid(evidence, trusted_key):
         return False
     if check_id == "unfamiliar-user-usability":
-        return type(evidence.get("participant_count")) is int \
-            and evidence["participant_count"] >= 1
+        return type(payload.get("participant_count")) is int \
+            and payload["participant_count"] >= 1 \
+            and payload.get("completed_without_maintainer") is True
     if check_id == "independent-hostile-review":
-        return evidence.get("critical_findings") == 0 \
-            and evidence.get("high_findings") == 0
-    return True
+        return payload.get("critical_findings") == 0 \
+            and payload.get("high_findings") == 0
+    return type(payload.get("total_jobs")) is int \
+        and payload["total_jobs"] >= 3 \
+        and payload.get("passed_jobs") == payload["total_jobs"] \
+        and payload.get("conclusion") == "success"
 
 
-def certification_report(*, local_checks, external_evidence):
+def certification_report(*, local_checks, external_evidence, trust_policy=None, now=None):
     if not isinstance(local_checks, dict) or not isinstance(external_evidence, dict):
         raise ReleaseError("release evidence must be structured mappings")
+    local_validation = _validated_local_evidence(local_checks, now=now)
+    validated_checks = local_validation[0] if local_validation else {}
+    local_subject = local_validation[1] if local_validation else None
     checks = []
     for check_id in LOCAL_CHECKS:
-        passed = local_checks.get(check_id) is True
+        passed = validated_checks.get(check_id) is True
         checks.append({"id": check_id, "status": "passed" if passed else "failed"})
-    unverified = []
+    unverified = ([] if local_validation else [
+        {"id": "local-verification", "status": "failed"}])
+    seen_evidence_ids = set()
     for check_id in EXTERNAL_CHECKS:
         evidence = external_evidence.get(check_id)
-        passed = _external_passed(check_id, evidence)
+        passed = _external_passed(
+            check_id, evidence, trust_policy=trust_policy, now=now)
+        if passed and evidence.get("subject") != local_subject:
+            passed = False
+        evidence_id = evidence.get("evidence_id") if isinstance(evidence, dict) else None
+        if passed and evidence_id in seen_evidence_ids:
+            passed = False
+        if passed:
+            seen_evidence_ids.add(evidence_id)
         status = "passed" if passed else ("failed" if evidence else "unverified")
         checks.append({"id": check_id, "status": status})
         if not passed:
@@ -151,6 +367,33 @@ def sanitize_suite_evidence(suite, *, root, home):
     return value
 
 
+def _git_release_identity(root):
+    def run(*arguments):
+        result = subprocess.run(
+            ["git", "-C", str(root), *arguments], capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=30, check=False)
+        if result.returncode != 0:
+            raise ReleaseError(
+                "release verification requires a readable Git identity: "
+                + (result.stderr.strip() or result.stdout.strip() or "git failed"))
+        return result.stdout.strip()
+
+    commit = run("rev-parse", "--verify", "HEAD")
+    if not re.fullmatch(r"[0-9a-f]{40}", commit):
+        raise ReleaseError("release verification requires an immutable commit SHA")
+    dirty = run("status", "--porcelain=v1", "--untracked-files=all")
+    if dirty:
+        raise ReleaseError("release verification requires a clean committed worktree")
+    remote = run("remote", "get-url", "origin")
+    ssh = re.fullmatch(r"git@github\.com:([^/]+)/(.+?)(?:\.git)?", remote)
+    https = re.fullmatch(r"https://github\.com/([^/]+)/(.+?)(?:\.git)?/?", remote)
+    match = ssh or https
+    if match is None:
+        raise ReleaseError("release verification requires a canonical GitHub origin")
+    repository = f"https://github.com/{match.group(1)}/{match.group(2)}"
+    return {"repository": repository, "commit_sha": commit}
+
+
 def verify_local(root, *, forbidden_tokens):
     try:
         root = loom_reliability._absolute(root, "release root", must_exist=True)
@@ -158,6 +401,7 @@ def verify_local(root, *, forbidden_tokens):
         raise ReleaseError(str(exc)) from exc
     if not forbidden_tokens:
         raise ReleaseError("local verification requires real private/owner tokens")
+    identity_before = _git_release_identity(root)
     suite = sanitize_suite_evidence(_suite(root), root=root, home=Path.home())
     docs = loom_docs.audit_docs(root)
     offline = loom_privacy.audit_offline_modules(root / "tools")
@@ -189,23 +433,24 @@ def verify_local(root, *, forbidden_tokens):
         "docs": docs["status"] == "passed",
         "twenty_project_bound": bool(scenario and scenario["passed"]),
     }
-    return {
-        "schema_version": 1,
-        "status": "passed" if all(local.values()) else "failed",
-        "local_checks": local,
-        "evidence": {
-            "suite": suite,
-            "adaptation_scenarios": adaptation["scenario_count"],
-            "privacy": privacy,
-            "offline": offline,
-            "docs": docs,
-            "build_hashes": [first["root_sha256"], second["root_sha256"]],
-            "installer": {"files_verified": checked["files_verified"],
-                          "target_removed": removed["target_removed"]},
-            "twenty_project_measurements": (
-                scenario["measurements"] if scenario else None),
-        },
+    identity_after = _git_release_identity(root)
+    if identity_after != identity_before:
+        raise ReleaseError("release source identity changed during local verification")
+    subject = {**identity_after, "root_sha256": first["root_sha256"]}
+    evidence = {
+        "suite": suite,
+        "adaptation_scenarios": adaptation["scenario_count"],
+        "privacy": privacy,
+        "offline": offline,
+        "docs": docs,
+        "build_hashes": [first["root_sha256"], second["root_sha256"]],
+        "installer": {"files_verified": checked["files_verified"],
+                      "target_removed": removed["target_removed"]},
+        "twenty_project_measurements": (
+            scenario["measurements"] if scenario else None),
     }
+    return seal_local_evidence(
+        subject=subject, local_checks=local, evidence=evidence)
 
 
 def main(argv=None):
@@ -218,6 +463,7 @@ def main(argv=None):
     certify = sub.add_parser("certify")
     certify.add_argument("--local-checks", required=True)
     certify.add_argument("--external-evidence", required=True)
+    certify.add_argument("--trust-policy", required=True)
     verify = sub.add_parser("verify")
     verify.add_argument("root")
     verify.add_argument("--forbid", action="append", default=[])
@@ -230,8 +476,10 @@ def main(argv=None):
         elif args.command == "certify":
             local = json.loads(Path(args.local_checks).read_text(encoding="utf-8"))
             external = json.loads(Path(args.external_evidence).read_text(encoding="utf-8"))
+            trust_policy = json.loads(Path(args.trust_policy).read_text(encoding="utf-8"))
             result = certification_report(
-                local_checks=local, external_evidence=external)
+                local_checks=local, external_evidence=external,
+                trust_policy=trust_policy)
         else:
             result = verify_local(args.root, forbidden_tokens=args.forbid)
             if args.output:
