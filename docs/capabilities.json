@@ -16,7 +16,7 @@
     {"id":"honest-usage-accounting","kind":"mechanical","enforcement":["tools/loom_performance.py"],"tests":["tools/test_performance_excellence.py"]},
     {"id":"owner-transparency","kind":"mechanical","enforcement":["tools/loom_transparency.py","tools/loom_session.py"],"tests":["tools/test_transparency_surface.py"]},
     {"id":"longitudinal-adaptation-evaluation","kind":"mechanical","enforcement":["tools/loom_adaptation_eval.py"],"tests":["tools/test_adaptation_evaluation.py"]},
-    {"id":"comparative-improvement-proof","kind":"mechanical","enforcement":["tools/loom_improvement.py","tools/loom_improvement_audit.py"],"tests":["tools/test_improvement_proof.py"]},
+    {"id":"comparative-improvement-proof","kind":"mechanical","enforcement":["tools/loom_improvement.py","tools/loom_improvement_audit.py","tools/loom_orchestrator.py"],"tests":["tools/test_improvement_proof.py","tools/test_production_orchestrator.py"]},
     {"id":"receipt-proven-installer","kind":"mechanical","enforcement":["tools/loom_install.py","tools/loom_reliability.py"],"tests":["tools/test_release_standard.py"]},
     {"id":"evidence-gated-release","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py"]},
     {"id":"human-judgment-remains-owner-controlled","kind":"advisory","enforcement":[],"tests":[]}

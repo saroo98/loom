@@ -42,7 +42,8 @@
           "prevented_defect": {"type": "boolean"}
         }
       }
-    }
+    },
+    "replay_pair": {"$ref": "production-replay.schema.json"}
   },
   "$defs": {
     "ids": {

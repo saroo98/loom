@@ -13,6 +13,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_gate  # noqa: E402
 import loom_install  # noqa: E402
+import loom_improvement  # noqa: E402
 import loom_lifecycle  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_memory  # noqa: E402
@@ -411,6 +412,105 @@ class ProductionOrchestratorTests(unittest.TestCase):
             self.home, instance_id, preference["id"])
         self.assertEqual(1, recorded["application_count"])
         self.assertEqual(1, recorded["helped_count"])
+
+    def test_production_host_outcome_records_controlled_provider_replay_pair(self):
+        instance_id = loom_memory.initialize(self.home, self.installed)
+        preference = loom_memory.set_preference(
+            self.home, instance_id, "report_style", "concise")
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        action_path = Path(opened["action_path"])
+        action = json.loads(action_path.read_text(encoding="utf-8"))
+        self.assertIn(preference["id"], {
+            item["id"] for item in action["context"]["memory"]})
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "replay-usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        enabled_evidence = self.repo / "plans" / "evidence" / "enabled-replay.json"
+        disabled_evidence = self.repo / "plans" / "evidence" / "disabled-replay.json"
+        _write(enabled_evidence, '{"verification_passed":true,"rework":0}\n')
+        _write(disabled_evidence, '{"verification_passed":true,"rework":1}\n')
+
+        def cohort(value, response_id, evidence, memory_ids):
+            return {
+                "value": value, "memory_ids": memory_ids,
+                "outcome_evidence_path":
+                    evidence.relative_to(self.repo / "plans").as_posix(),
+                "outcome_evidence_sha256": hashlib.sha256(
+                    evidence.read_bytes()).hexdigest(),
+                "provider_receipt": {
+                    "source": "provider-response", "provider": "fixture-provider",
+                    "model": "fixture-model", "response_id": response_id,
+                    "captured_at": action["created_at"],
+                    "raw_response_sha256": hashlib.sha256(
+                        (response_id + "-raw").encode()).hexdigest(),
+                    "usage": {
+                        "input_tokens": 100, "cache_read_tokens": 20,
+                        "output_tokens": 30, "tool_tokens": 10, "retry_tokens": 0,
+                    },
+                },
+            }
+
+        host_outcome = self.root / "replay-host-outcome.json"
+        replay = {
+            "schema_version": 1, "replay_id": "production-replay-001",
+            "metric": "rework-rate", "domain": "accounting",
+            "request_hash": action["prepared"]["request_hash"],
+            "world_fingerprint": action["prepared"]["world_fingerprint"],
+            "evaluator_id": "real-medium-verifier-v1",
+            "production": True, "simulation": False,
+            "enabled": cohort(0.0, "response-enabled", enabled_evidence,
+                              [preference["id"]]),
+            "disabled": cohort(1.0, "response-disabled", disabled_evidence, []),
+        }
+
+        def write_outcome(pair):
+            host_outcome.write_text(json.dumps({
+                "schema_version": 1,
+                "applied_memory_ids": [preference["id"]],
+                "verified_memory_ids": [], "rejected_memory_ids": [],
+                "metrics": {}, "preference_observations": [], "artifact_usage": [],
+                "replay_pair": pair,
+            }), encoding="utf-8")
+
+        invalid_pairs = []
+        duplicate = json.loads(json.dumps(replay))
+        duplicate["disabled"]["provider_receipt"]["response_id"] = "response-enabled"
+        invalid_pairs.append(duplicate)
+        contaminated = json.loads(json.dumps(replay))
+        contaminated["disabled"]["memory_ids"] = [preference["id"]]
+        invalid_pairs.append(contaminated)
+        wrong_world = json.loads(json.dumps(replay))
+        wrong_world["world_fingerprint"] = "0" * 64
+        invalid_pairs.append(wrong_world)
+        simulation = json.loads(json.dumps(replay))
+        simulation["production"], simulation["simulation"] = False, True
+        invalid_pairs.append(simulation)
+        for invalid in invalid_pairs:
+            with self.subTest(invalid=invalid):
+                write_outcome(invalid)
+                with self.assertRaisesRegex(loom_orchestrator.OrchestratorError,
+                                            "HOST_OUTCOME_INVALID"):
+                    loom_orchestrator.complete(
+                        action_path, usage, result_path=host_outcome)
+
+        write_outcome(replay)
+        completed = loom_orchestrator.complete(
+            action_path, usage, result_path=host_outcome)
+        self.assertEqual("recorded", completed["production_replay"]["status"])
+        self.assertEqual(
+            "requires-independent-attestation",
+            completed["production_replay"]["certification_status"])
+        report = loom_improvement.ImprovementTracker(
+            self.home, instance_id).report(metric="rework-rate", domain="accounting")
+        self.assertEqual(1, report["replay"]["pair_count"])
+        self.assertEqual("insufficient-evidence", report["replay"]["status"])
 
     def test_tier_s_uses_one_bounded_work_order_without_a_pack_essay(self):
         request = "Plan a single-file CLI flag in src/app.py"

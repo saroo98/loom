@@ -79,4 +79,7 @@ regenerated from repository inventory so changing counts cannot leave hand-autho
 switches, aging, project alternation, preference drift, scale bounds, interruption, concurrency,
 corruption, identity errors, disabled memory, permanent forgetting, and domain coverage. Its
 improvement result includes a minimum-sample longitudinal comparison, paired memory replay, and an
-independent reproduction, not an assertion that accumulated state helped.
+independent reproduction, not an assertion that accumulated state helped. Production host outcomes
+may attach a same-request/same-world enabled/disabled pair with distinct provider-response receipts
+and real-medium evidence. The orchestrator records it in the real improvement store but labels it
+as requiring independent attestation; deterministic evaluator pairs never cross that boundary.

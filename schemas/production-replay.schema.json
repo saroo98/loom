@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/production-replay.schema.json",
+  "title": "Controlled production memory replay pair",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "replay_id", "metric", "domain", "request_hash",
+    "world_fingerprint", "evaluator_id", "production", "simulation", "enabled", "disabled"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "replay_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "metric": {"enum": ["prediction-calibration-error", "rework-rate",
+      "verification-escape-rate", "incorrect-tier-rate", "planning-overhead-ratio",
+      "human-decision-round-trips", "unused-artifact-rate", "wo-reopen-rate",
+      "drift-caught-before-execution-rate", "release-rollback-rate", "memory-help-rate",
+      "memory-hurt-rate"]},
+    "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "request_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "world_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "evaluator_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "production": {"const": true},
+    "simulation": {"const": false},
+    "enabled": {"$ref": "#/$defs/cohort"},
+    "disabled": {"$ref": "#/$defs/cohort"}
+  },
+  "$defs": {
+    "cohort": {
+      "type": "object", "additionalProperties": false,
+      "required": ["value", "memory_ids", "outcome_evidence_path",
+        "outcome_evidence_sha256", "provider_receipt"],
+      "properties": {
+        "value": {"type": "number", "minimum": 0},
+        "memory_ids": {"type": "array", "maxItems": 16, "uniqueItems": true,
+          "items": {"type": "string", "format": "uuid"}},
+        "outcome_evidence_path": {"type": "string",
+          "pattern": "^evidence/[A-Za-z0-9][A-Za-z0-9._/-]{0,247}$"},
+        "outcome_evidence_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "provider_receipt": {"$ref": "#/$defs/provider_receipt"}
+      }
+    },
+    "provider_receipt": {
+      "type": "object", "additionalProperties": false,
+      "required": ["source", "provider", "model", "response_id", "captured_at",
+        "raw_response_sha256", "usage"],
+      "properties": {
+        "source": {"const": "provider-response"},
+        "provider": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        "model": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        "response_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        "captured_at": {"type": "string", "format": "date-time"},
+        "raw_response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "usage": {
+          "type": "object", "additionalProperties": false,
+          "required": ["input_tokens", "cache_read_tokens", "output_tokens",
+            "tool_tokens", "retry_tokens"],
+          "properties": {
+            "input_tokens": {"type": "integer", "minimum": 0},
+            "cache_read_tokens": {"type": "integer", "minimum": 0},
+            "output_tokens": {"type": "integer", "minimum": 0},
+            "tool_tokens": {"type": "integer", "minimum": 0},
+            "retry_tokens": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    }
+  }
+}

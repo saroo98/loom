@@ -15,6 +15,9 @@ Loom fails closed around evidence it does not possess.
   attested production sessions containing at least 16 memory-enabled versus memory-disabled replay
   pairs: at least 8 for one exact domain and 8 for transferable general calibration. Simulations and
   deterministic adaptation fixtures do not satisfy this contract.
+- The production orchestrator can ingest a controlled pair into the local improvement store, but
+  its provider-response metadata and evidence hashes remain local host reports. The receipt is
+  labeled `requires-independent-attestation` and cannot satisfy release certification by itself.
 - Improvement claims remain unavailable for any metric/domain pair until it has at least 16 ordered
   observations and 8 controlled memory-enabled versus memory-disabled production replay pairs.
 - Domain guidance is not current legal, tax, medical, safety, or regulatory advice. Loom must verify

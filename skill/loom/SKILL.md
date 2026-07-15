@@ -30,7 +30,11 @@ invisible to the owner:
    When selected memory, observed preferences, measured outcome metrics, or artifact-use facts
    affected the work, also write the private `schemas/host-outcome.schema.json` receipt. Report
    only selected memory IDs and observed facts. This receipt is local agent-reported evidence, not
-   independent proof. Omit it when nothing was learned; never fabricate an empty receipt.
+   independent proof. When the harness has actually run a controlled memory-enabled and memory-
+   disabled production pair against the same sealed request/world, attach the optional
+   `replay_pair` contract with both distinct provider-response receipts and real-medium evidence.
+   Never synthesize the disabled result, reuse a provider response, or label a test/simulation as
+   production. Omit the pair when the harness did not perform it; never fabricate an empty receipt.
 5. Run `python -B LOOM_ROOT/tools/loom_orchestrator.py complete --action <action_path>
    --usage <private usage JSON> [--result <private result JSON>]`. `--result` is required for
    repair and optional for an evidence-bearing host outcome. Return the sealed receipt. On owner

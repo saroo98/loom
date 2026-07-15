@@ -17,6 +17,7 @@ from pathlib import Path
 
 import loom_gate
 import loom_install
+import loom_improvement
 import loom_lifecycle
 import loom_lint
 import loom_memory
@@ -350,7 +351,8 @@ def _read_host_outcome(result_path, action):
         "schema_version", "applied_memory_ids", "verified_memory_ids",
         "rejected_memory_ids", "metrics", "preference_observations", "artifact_usage",
     }
-    if not isinstance(value, dict) or set(value) != fields or value["schema_version"] != 1:
+    if not isinstance(value, dict) or frozenset(value) not in {frozenset(fields),
+            frozenset(fields | {"replay_pair"})} or value["schema_version"] != 1:
         raise OrchestratorError("HOST_OUTCOME_INVALID", "host outcome fields are invalid")
     evidence_id = "host-outcome-" + _hash(value)
     candidate = {
@@ -378,10 +380,156 @@ def _read_host_outcome(result_path, action):
     if not (referenced or normalized["metrics"] or normalized["preference_observations"]
             or normalized["artifact_usage"]):
         raise OrchestratorError("HOST_OUTCOME_INVALID", "empty host outcome has no learning value")
-    return {"schema_version": 1, "learning": {
+    result = {"schema_version": 1, "learning": {
         key: normalized[key] for key in (
             "metrics", "evidence_ids", "applied_memory_ids", "verified_memory_ids",
             "rejected_memory_ids", "preference_observations", "artifact_usage")}}
+    if "replay_pair" in value:
+        result["replay_pair"] = _validated_replay_pair(
+            value["replay_pair"], action, normalized["applied_memory_ids"])
+    return result
+
+
+def _validated_replay_pair(value, action, applied_memory_ids):
+    fields = {
+        "schema_version", "replay_id", "metric", "domain", "request_hash",
+        "world_fingerprint", "evaluator_id", "production", "simulation",
+        "enabled", "disabled",
+    }
+    cohort_fields = {
+        "value", "memory_ids", "outcome_evidence_path", "outcome_evidence_sha256",
+        "provider_receipt",
+    }
+    receipt_fields = {
+        "source", "provider", "model", "response_id", "captured_at",
+        "raw_response_sha256", "usage",
+    }
+    prepared = action["prepared"]
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or not isinstance(value.get("replay_id"), str) \
+            or loom_improvement.EVIDENCE_RE.fullmatch(value["replay_id"]) is None \
+            or value.get("metric") not in loom_improvement.METRICS \
+            or value.get("domain") not in {action["domains"][0], "general"} \
+            or value.get("request_hash") != prepared["request_hash"] \
+            or value.get("world_fingerprint") != prepared["world_fingerprint"] \
+            or not isinstance(value.get("evaluator_id"), str) \
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}",
+                            value["evaluator_id"]) is None \
+            or value.get("production") is not True \
+            or value.get("simulation") is not False:
+        raise OrchestratorError(
+            "HOST_OUTCOME_INVALID", "production replay identity is invalid")
+    selected = {item.get("id") for item in action["context"]["memory"]
+                if isinstance(item, dict)}
+    pack = Path(action["explicit_target"] or action["cwd"]) / "plans"
+    created = loom_runtime._parse_time(action["created_at"])
+    expires = loom_runtime._parse_time(action["expires_at"])
+    normalized = {}
+    for cohort_name in ("enabled", "disabled"):
+        cohort = value.get(cohort_name)
+        if not isinstance(cohort, dict) or set(cohort) != cohort_fields \
+                or not loom_improvement._valid_value(value["metric"], cohort.get("value")) \
+                or not isinstance(cohort.get("memory_ids"), list) \
+                or len(cohort["memory_ids"]) != len(set(cohort["memory_ids"])) \
+                or not all(isinstance(item, str) for item in cohort["memory_ids"]):
+            raise OrchestratorError(
+                "HOST_OUTCOME_INVALID", "production replay cohort is invalid")
+        memory_ids = set(cohort["memory_ids"])
+        if cohort_name == "enabled":
+            if not memory_ids or memory_ids != set(applied_memory_ids) \
+                    or not memory_ids.issubset(selected):
+                raise OrchestratorError(
+                    "HOST_OUTCOME_INVALID",
+                    "enabled replay cohort does not match applied sealed memory")
+        elif memory_ids:
+            raise OrchestratorError(
+                "HOST_OUTCOME_INVALID", "disabled replay cohort contains memory")
+        relative = cohort.get("outcome_evidence_path")
+        digest = cohort.get("outcome_evidence_sha256")
+        if not isinstance(relative, str) \
+                or not re.fullmatch(r"evidence/[A-Za-z0-9][A-Za-z0-9._/-]{0,247}", relative) \
+                or ".." in relative.split("/") \
+                or not isinstance(digest, str) \
+                or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+            raise OrchestratorError(
+                "HOST_OUTCOME_INVALID", "production replay evidence binding is invalid")
+        evidence = pack / Path(*relative.split("/"))
+        try:
+            loom_memory._reject_link_ancestors(evidence, "production replay evidence")
+            if evidence.is_symlink() or not evidence.is_file() \
+                    or evidence.stat().st_size > 8 * 1024 * 1024 \
+                    or hashlib.sha256(evidence.read_bytes()).hexdigest() != digest:
+                raise OrchestratorError(
+                    "HOST_OUTCOME_INVALID", "production replay evidence does not match")
+        except (OSError, loom_memory.MemoryError) as exc:
+            raise OrchestratorError("HOST_OUTCOME_INVALID", str(exc)) from exc
+        receipt = cohort.get("provider_receipt")
+        if not isinstance(receipt, dict) or set(receipt) != receipt_fields \
+                or receipt.get("source") != "provider-response" \
+                or any(not isinstance(receipt.get(field), str)
+                       or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                                       receipt[field]) is None
+                       for field in ("provider", "model", "response_id")) \
+                or not isinstance(receipt.get("raw_response_sha256"), str) \
+                or re.fullmatch(r"[0-9a-f]{64}", receipt["raw_response_sha256"]) is None:
+            raise OrchestratorError(
+                "HOST_OUTCOME_INVALID", "provider replay receipt is invalid")
+        try:
+            captured = loom_runtime._parse_time(receipt.get("captured_at"))
+            usage = loom_performance.normalize_usage(receipt.get("usage"))
+        except (loom_runtime.RuntimeError, loom_performance.PerformanceError) as exc:
+            raise OrchestratorError("HOST_OUTCOME_INVALID", str(exc)) from exc
+        if not created <= captured <= expires \
+                or usage["measurement_status"] != "measured":
+            raise OrchestratorError(
+                "HOST_OUTCOME_INVALID", "provider replay receipt is outside the action")
+        normalized[cohort_name] = {
+            **cohort,
+            "value": float(cohort["value"]),
+            "evidence_id": f"provider-{cohort_name}-" + _hash({
+                "cohort": cohort_name, "replay_id": value["replay_id"],
+                "receipt": receipt, "outcome_evidence_sha256": digest,
+                "value": float(cohort["value"]),
+            })[:32],
+        }
+    enabled_receipt = normalized["enabled"]["provider_receipt"]
+    disabled_receipt = normalized["disabled"]["provider_receipt"]
+    if enabled_receipt["provider"] != disabled_receipt["provider"] \
+            or enabled_receipt["model"] != disabled_receipt["model"] \
+            or enabled_receipt["response_id"] == disabled_receipt["response_id"] \
+            or enabled_receipt["raw_response_sha256"] == \
+            disabled_receipt["raw_response_sha256"] \
+            or normalized["enabled"]["outcome_evidence_path"] == \
+            normalized["disabled"]["outcome_evidence_path"] \
+            or normalized["enabled"]["outcome_evidence_sha256"] == \
+            normalized["disabled"]["outcome_evidence_sha256"]:
+        raise OrchestratorError(
+            "HOST_OUTCOME_INVALID", "production replay cohorts are not independent runs")
+    return {**value, **normalized, "attestation_status": "local-receipts-only"}
+
+
+def _record_production_replay(action):
+    replay = (action.get("host_result") or {}).get("replay_pair")
+    if replay is None:
+        return None
+    records = loom_improvement.ImprovementTracker(
+        Path(action["owner_home"]), action["instance_id"]).record_replay_pair(
+            metric=replay["metric"], domain=replay["domain"],
+            replay_id=replay["replay_id"],
+            enabled_value=replay["enabled"]["value"],
+            disabled_value=replay["disabled"]["value"],
+            project_id=action["project_id"],
+            evidence_ids=[replay["enabled"]["evidence_id"],
+                          replay["disabled"]["evidence_id"]],
+            recorded_at=replay["enabled"]["provider_receipt"]["captured_at"])
+    return {
+        "status": "recorded", "replay_id": replay["replay_id"],
+        "metric": replay["metric"], "domain": replay["domain"],
+        "record_ids": [item["id"] for item in records],
+        "source": "production-provider-response",
+        "certification_status": "requires-independent-attestation",
+    }
 
 
 def _merge_host_outcome(result, host_result):
@@ -1008,9 +1156,13 @@ def complete(action_path, usage_path, *, result_path=None, now=None):
         _write_action(path, action)
         raise OrchestratorError(
             "HANDLER_INTERRUPTED", str(exc), status=action["status"]) from exc
-    action["status"], action["result"] = "completed", receipt.to_dict()
+    result = receipt.to_dict()
+    production_replay = _record_production_replay(action)
+    if production_replay is not None:
+        result["production_replay"] = production_replay
+    action["status"], action["result"] = "completed", result
     _write_action(path, action)
-    return receipt.to_dict()
+    return result
 
 
 def cancel(action_path, *, now=None):
