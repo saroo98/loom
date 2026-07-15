@@ -427,6 +427,44 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
         self.assertFalse((self.repo / "plans" / ".loom-small-lifecycle.json").exists())
 
+    def test_whole_domain_deliverables_receive_domain_aware_tiers(self):
+        cases = (
+            ("Build a cross-platform command-line developer tool with config discovery, "
+             "plugin loading, shell completion, package installers, and compatibility tests.",
+             "cli", "L"),
+            ("Build an offline-first Android and iOS field inspection app with camera, GPS, "
+             "sync conflict resolution, accessibility, and signed store releases.",
+             "android", "L"),
+            ("Build a streaming ETL and machine-learning pipeline with schema evolution, "
+             "backfills, data quality, drift monitoring, reproducible training, and rollback.",
+             "data-etl", "L"),
+            ("Build desktop bookkeeping software with double-entry correctness, currency "
+             "precision, tax rules, reconciliation, immutable audit trails, period close, "
+             "migrations, and signed releases.", "accounting", "L"),
+            ("Design and validate firmware for a battery-powered sensor node with bootloader "
+             "rollback, secure updates, power-loss recovery, hardware-in-loop tests, and "
+             "manufacturing calibration.", "firmware-hardware", "L"),
+            ("Produce a publishable research study with three methods, statistical analysis, "
+             "source provenance, reproducible notebooks, limitations, and publication package.",
+             "research", "L"),
+            ("Build a real-time 3D room configurator with renderer, spatial UX, asset pipeline, "
+             "materials, collision, autosave, and a device performance matrix.",
+             "realtime-3d", "L"),
+        )
+        for index, (request, domain, expected_tier) in enumerate(cases):
+            with self.subTest(domain=domain):
+                target = self.root / f"domain-target-{index}"
+                target.mkdir()
+                (target / "seed.txt").write_text("baseline\n", encoding="utf-8")
+                opened = self.cli(
+                    "invoke", "--request", request, "--cwd", target,
+                    "--home", self.home, "--install-root", self.installed)
+                self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
+                action = json.loads(opened.stdout)
+                self.assertEqual(expected_tier, action["tier"])
+                self.assertIn(domain, action["domains"])
+                self.assertTrue((target / "plans" / "MANIFEST.md").is_file())
+
     def test_production_host_outcome_records_controlled_provider_replay_pair(self):
         instance_id = loom_memory.initialize(self.home, self.installed)
         preference = loom_memory.set_preference(

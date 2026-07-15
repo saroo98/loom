@@ -102,8 +102,15 @@ class ConsumerPlanningTests(unittest.TestCase):
         self.assertEqual(portfolio["tier"], "XL")
         self.assertIn("observed-portfolio-scope", portfolio["tier_evidence"])
         self.assertIn("observed-scope", large["tier_evidence"])
-        self.assertEqual(loom_tier.classify("Build a command-line developer tool")["tier"], "S")
-        self.assertEqual(loom_tier.classify("Write a research paper")["tier"], "S")
+        self.assertEqual(loom_tier.classify(
+            "Build a command-line developer tool", domains=["cli"])["tier"], "M")
+        self.assertEqual(loom_tier.classify(
+            "Write a research paper", domains=["research"])["tier"], "M")
+        self.assertEqual(loom_tier.classify(
+            "Build a real-time 3D room configurator",
+            domains=["realtime-3d"])["tier"], "L")
+        self.assertEqual(loom_tier.classify(
+            "Add one command-line flag", domains=["cli"])["tier"], "S")
         self.assertEqual(loom_tier.classify("Make a tiny mobile app copy change")["tier"], "S")
         self.assertEqual(loom_tier.classify("Build an app")["tier"], "M")
         self.assertEqual(loom_tier.classify(

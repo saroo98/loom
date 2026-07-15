@@ -30,11 +30,19 @@ GREENFIELD_RE = re.compile(
     r"(?i)\b(?:build|create|develop|design|implement)\s+"
     r"(?:(?:a|an|the|new|offline[- ]first)\s+){0,4}"
     r"(?:app|application|system|pipeline|service|platform|firmware)\b")
+WHOLE_DELIVERABLE_RE = re.compile(
+    r"(?i)\b(?:build|create|develop|design|implement|produce|write)\b")
+DOMAIN_COMPLEXITY = {
+    "accounting", "android", "cli", "data-etl", "desktop", "firmware-hardware",
+    "ios-macos", "ml", "mobile", "realtime-3d", "research", "web-app",
+}
 
 
 def classify(description, *, files=None, days=None, new_components=0,
-             new_boundaries=0, implementers=1, irreversible=False):
+             new_boundaries=0, implementers=1, irreversible=False, domains=None):
     text = str(description or "").strip()
+    domain_ids = sorted(set(str(item).strip().casefold()
+                            for item in (domains or []) if str(item).strip()))
     reasons = []
     tier = "S"
     risk_hits = sorted(set(match.group(0).lower() for match in RISK_RE.finditer(text)))
@@ -45,21 +53,32 @@ def classify(description, *, files=None, days=None, new_components=0,
         match.group(0).lower() for match in DISCIPLINED_DELIVERABLE_RE.finditer(text)))
     greenfield_unknown = bool(GREENFIELD_RE.search(text)) \
         and not disciplined_hits and not SMALL_RE.search(text)
+    whole_deliverable = bool(WHOLE_DELIVERABLE_RE.search(text)) \
+        and not SMALL_RE.search(text)
+    subsystem_signals = len(re.findall(r",|\b(?:and|with)\b", text, re.IGNORECASE))
+    cross_domain = whole_deliverable and len(domain_ids) > 1
+    complex_single_domain = whole_deliverable and any(
+        item in DOMAIN_COMPLEXITY for item in domain_ids)
+    multi_subsystem_domain = complex_single_domain and subsystem_signals >= 3
     if portfolio_hits or (days is not None and days > 60) \
             or new_components >= 8 or new_boundaries >= 8 or implementers >= 6:
         tier = "XL"
         reasons.append("portfolio-scale duration, scope, or coordination requires milestone slices")
-    elif program_hits or (days is not None and days > 10) or new_components >= 3 \
-            or new_boundaries >= 3 or implementers >= 3:
+    elif program_hits or cross_domain or multi_subsystem_domain \
+            or ("realtime-3d" in domain_ids and whole_deliverable) \
+            or (days is not None and days > 10) \
+            or new_components >= 3 or new_boundaries >= 3 or implementers >= 3:
         tier = "L"
-        reasons.append("product/subsystem or multi-implementer signals require a release pack")
+        reasons.append(
+            "product/subsystem, domain-boundary, or multi-implementer signals require a "
+            "release pack")
     elif risk_hits or irreversible or (days is not None and days > 1) \
             or new_components > 0 or new_boundaries > 0 \
             or (files is not None and files > 5) or implementers > 1 \
-            or greenfield_unknown:
+            or greenfield_unknown or complex_single_domain:
         tier = "M"
         reasons.append(
-            "observed risk/scope or an unbounded greenfield deliverable exceeds proven small work")
+            "observed risk/scope or a whole domain deliverable exceeds proven small work")
     else:
         reasons.append("one implementer, one sitting, low blast radius; no architecture signal")
         if SMALL_RE.search(text):
@@ -104,6 +123,7 @@ def main(argv=None):
     parser.add_argument("--new-boundaries", type=int, default=0)
     parser.add_argument("--implementers", type=int, default=1)
     parser.add_argument("--irreversible", action="store_true")
+    parser.add_argument("--domain", action="append", default=[])
     args = parser.parse_args(argv)
     numeric = (args.files, args.days, args.new_components,
                args.new_boundaries, args.implementers)
@@ -113,7 +133,8 @@ def main(argv=None):
     result = classify(
         args.description, files=args.files, days=args.days,
         new_components=args.new_components, new_boundaries=args.new_boundaries,
-        implementers=args.implementers, irreversible=args.irreversible)
+        implementers=args.implementers, irreversible=args.irreversible,
+        domains=args.domain)
     print(json.dumps({"status": "ok", "result": result}, sort_keys=True))
     return 0
 
