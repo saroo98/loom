@@ -656,7 +656,7 @@ def _validate_route(route):
     for field in EFFECT_COUNT_FIELDS:
         if type(route.get(field)) is not int or route[field] != 0:
             raise RuntimeError("pure prepared route cannot claim a side effect")
-    if route.get("tier") not in {"S", "M", "L"} \
+    if route.get("tier") not in {"S", "M", "L", "XL"} \
             or route.get("autonomy") not in {"A0", "A1", "A2", "A3"}:
         raise RuntimeError("route tier/autonomy is invalid")
     if not isinstance(route.get("recommendation"), str) \
@@ -1216,7 +1216,7 @@ def _pack_route_contract(pack, state):
             report, manifest, frontmatter, "manifest.schema.json")
     tier = (frontmatter or {}).get("tier")
     domains = (frontmatter or {}).get("domain_ids")
-    if frontmatter is None or report.errors or tier not in {"M", "L"} \
+    if frontmatter is None or report.errors or tier not in {"M", "L", "XL"} \
             or not isinstance(domains, list) or not domains \
             or len(domains) > MAX_DOMAINS \
             or len(domains) != len(set(domains)) \

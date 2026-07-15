@@ -22,8 +22,8 @@ class PerformanceError(RuntimeError):
 
 def adaptive_memory_budget(*, tier, intent, domain_count):
     """Return a small deterministic budget from task risk, not a fixed maximum."""
-    if tier not in {"S", "M", "L"}:
-        raise PerformanceError("tier must be S, M, or L")
+    if tier not in {"S", "M", "L", "XL"}:
+        raise PerformanceError("tier must be S, M, L, or XL")
     if not isinstance(intent, str) or not intent:
         raise PerformanceError("intent is required")
     if type(domain_count) is not int or not 1 <= domain_count <= 16:
@@ -32,8 +32,10 @@ def adaptive_memory_budget(*, tier, intent, domain_count):
         max_chars, max_records = 512, 3
     elif tier == "M":
         max_chars, max_records = 960, 2
-    else:
+    elif tier == "L":
         max_chars, max_records = 1664, 3
+    else:
+        max_chars, max_records = 2304, 4
     max_chars += min(domain_count - 1, 4) * (192 if tier != "S" else 48)
     include_project_history = intent not in {"execute", "wo"}
     if not include_project_history:

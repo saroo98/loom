@@ -102,7 +102,7 @@ def _validate_action(value, path):
             or not re.fullmatch(r"[0-9a-f]{64}", str(value["survey_hash"])) \
             or not re.fullmatch(r"[0-9a-f]{64}", str(value["operation_id"])) \
             or value["intent"] not in loom_runtime.INTENTS \
-            or value["tier"] not in {"S", "M", "L"} \
+            or value["tier"] not in {"S", "M", "L", "XL"} \
             or not isinstance(value["domains"], list) or not value["domains"] \
             or len(value["domains"]) > 16 \
             or len(value["domains"]) != len(set(value["domains"])) \

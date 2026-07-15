@@ -35,10 +35,14 @@ class PerformanceExcellenceTests(unittest.TestCase):
             tier="M", intent="execute", domain_count=1)
         large = loom_performance.adaptive_memory_budget(
             tier="L", intent="plan", domain_count=3)
+        portfolio = loom_performance.adaptive_memory_budget(
+            tier="XL", intent="plan", domain_count=4)
         self.assertLessEqual(small["max_chars"], 512)
         self.assertFalse(execute["include_project_history"])
         self.assertLess(small["max_chars"], large["max_chars"])
         self.assertLessEqual(large["max_chars"], 4096)
+        self.assertGreaterEqual(portfolio["max_chars"], large["max_chars"])
+        self.assertLessEqual(portfolio["max_chars"], 4096)
 
     def test_usage_never_labels_a_partial_measurement_total(self):
         unreported = loom_performance.normalize_usage(None)

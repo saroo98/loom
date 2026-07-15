@@ -12,6 +12,9 @@ RISK_RE = re.compile(
 PROGRAM_RE = re.compile(
     r"(?i)\b(platform|multi[- ]service|multiple apps|migration program|enterprise|"
     r"full product|multi[- ]subsystem|cross[- ]service)\b")
+PORTFOLIO_RE = re.compile(
+    r"(?i)\b(year[- ]long|portfolio|organization[- ]wide|many teams|"
+    r"multi[- ]program|multi[- ]product)\b")
 DISCIPLINED_DELIVERABLE_RE = re.compile(
     r"(?i)\b(?:build|create|develop|produce|write)\s+"
     r"(?:(?:a|an|the|new|reproducible)\s+){0,4}"
@@ -29,9 +32,15 @@ def classify(description, *, files=None, days=None, new_components=0,
     tier = "S"
     risk_hits = sorted(set(match.group(0).lower() for match in RISK_RE.finditer(text)))
     program_hits = sorted(set(match.group(0).lower() for match in PROGRAM_RE.finditer(text)))
+    portfolio_hits = sorted(set(
+        match.group(0).lower() for match in PORTFOLIO_RE.finditer(text)))
     disciplined_hits = sorted(set(
         match.group(0).lower() for match in DISCIPLINED_DELIVERABLE_RE.finditer(text)))
-    if program_hits or (days is not None and days > 10) or new_components >= 3 \
+    if portfolio_hits or (days is not None and days > 60) \
+            or new_components >= 8 or new_boundaries >= 8 or implementers >= 6:
+        tier = "XL"
+        reasons.append("portfolio-scale duration, scope, or coordination requires milestone slices")
+    elif program_hits or (days is not None and days > 10) or new_components >= 3 \
             or new_boundaries >= 3 or implementers >= 3:
         tier = "L"
         reasons.append("product/subsystem or multi-implementer signals require a release pack")
@@ -55,12 +64,18 @@ def classify(description, *, files=None, days=None, new_components=0,
             "promote to L if survey finds three or more subsystems/boundaries, "
             "multi-milestone release work, or three implementers",
         ]
+    elif tier == "L":
+        promotion = [
+            "promote to XL if observed work spans more than 60 days, eight subsystems "
+            "or boundaries, six implementers, or a portfolio-scale program",
+        ]
     return {
         "schema_version": 1,
         "tier": tier,
         "reasons": reasons,
         "risk_terms": risk_hits,
         "program_terms": program_hits,
+        "portfolio_terms": portfolio_hits,
         "disciplined_deliverable_terms": disciplined_hits,
         "promotion_triggers": promotion,
         "policy": "labels never promote; ties choose the lower tier; only risk or observed scope may promote",

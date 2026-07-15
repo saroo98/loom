@@ -59,7 +59,7 @@
         "network_call_count": { "const": 0 },
         "contribution_count": { "const": 0 },
         "real_home_call_count": { "const": 0 },
-        "tier": { "enum": ["S", "M", "L"] },
+        "tier": { "enum": ["S", "M", "L", "XL"] },
         "autonomy": { "enum": ["A0", "A1", "A2", "A3"] },
         "use_profile": { "type": "boolean" },
         "requires_domain_discovery": { "type": "boolean" }

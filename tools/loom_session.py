@@ -668,7 +668,7 @@ class LocalMemoryAdapter:
             max_records=policy["max_records"])
 
     def select_preferences(self, context):
-        risk_class = {"S": "low", "M": "medium", "L": "high"}[
+        risk_class = {"S": "low", "M": "medium", "L": "high", "XL": "high"}[
             context.prepared.route_contract["tier"]]
         selected = self.preferences.select(
             domain=context.prepared.domains[0], task_class=context.intent,
@@ -845,7 +845,7 @@ class LocalMemoryAdapter:
             self.learning.close_project(context.project_id)
         adaptation_receipts = []
         reversible_action_ids = []
-        risk_class = {"S": "low", "M": "medium", "L": "high"}[
+        risk_class = {"S": "low", "M": "medium", "L": "high", "XL": "high"}[
             context.prepared.route_contract["tier"]]
         for index, observation in enumerate(result.get("preference_observations", [])):
             kwargs = {}

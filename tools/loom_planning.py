@@ -146,6 +146,10 @@ class PlanningOptimizer:
 
     @staticmethod
     def _tier(facts):
+        portfolio = facts["new_components"] >= 8 or facts["new_boundaries"] >= 8 \
+            or facts["days"] > 60 or facts["implementers"] >= 6
+        if portfolio:
+            return "XL", ["observed-portfolio-scope"]
         scope = facts["new_components"] >= 3 or facts["new_boundaries"] >= 3 \
             or facts["days"] > 10 or facts["implementers"] >= 3
         if scope:
@@ -171,7 +175,7 @@ class PlanningOptimizer:
             raise PlanningError("artifacts, sections, and verification must be collections")
         tier, tier_evidence = self._tier(facts)
         mode = "compact-work-contract" if tier == "S" else "planning-pack"
-        fraction = {"S": 0.8, "M": 0.9, "L": 1.0}[tier]
+        fraction = {"S": 0.8, "M": 0.9, "L": 1.0, "XL": 1.0}[tier]
         budget = min(implementation_chars, max(320, int(implementation_chars * fraction)))
         utility = {(item["domain"], item["artifact_id"]): item for item in self.utility()}
         selected, omitted, reasons = [], [], {}

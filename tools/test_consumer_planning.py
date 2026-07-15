@@ -93,8 +93,14 @@ class ConsumerPlanningTests(unittest.TestCase):
             description="Build an app",
             facts={"files": 40, "days": 20, "new_components": 4,
                    "new_boundaries": 3, "implementers": 3, "irreversible": True}, **base)
+        portfolio = self.optimizer.decide(
+            description="Coordinate a year-long multi-product program",
+            facts={"files": 400, "days": 90, "new_components": 9,
+                   "new_boundaries": 8, "implementers": 7, "irreversible": True}, **base)
         self.assertEqual(small["tier"], "S")
         self.assertEqual(large["tier"], "L")
+        self.assertEqual(portfolio["tier"], "XL")
+        self.assertIn("observed-portfolio-scope", portfolio["tier_evidence"])
         self.assertIn("observed-scope", large["tier_evidence"])
         self.assertEqual(loom_tier.classify("Build a command-line developer tool")["tier"], "S")
         self.assertEqual(loom_tier.classify("Write a research paper")["tier"], "S")
@@ -103,6 +109,9 @@ class ConsumerPlanningTests(unittest.TestCase):
         self.assertEqual(loom_tier.classify(
             "Build an app", days=20, new_components=4, new_boundaries=3,
             implementers=3)["tier"], "L")
+        self.assertEqual(loom_tier.classify(
+            "Coordinate a year-long multi-product program", days=90,
+            new_components=9, new_boundaries=8, implementers=7)["tier"], "XL")
 
     def test_store_is_bounded_and_invalid_usage_fails_without_write(self):
         with self.assertRaisesRegex(loom_planning.PlanningError, "usage requires"):
