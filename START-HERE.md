@@ -11,9 +11,12 @@ runtime below. Never read every Loom file into context.
 
 ## One-run protocol
 
-1. Call `tools/loom_runtime.py` through `tools/loom_session.py`. The runtime resolves the exact
-   project, surveys committed, staged, unstaged, untracked, ignored-runtime, lifecycle, and owner
-   state, and produces a sealed route contract. Unknown or invalid state blocks.
+1. Call `tools/loom_orchestrator.py invoke` exactly as specified by the installed skill. It checks
+   the installation receipt, opens an authenticated session, calls `loom_runtime` through
+   `loom_session`, and records the pre-plan baseline before returning host-agent work. The runtime
+   resolves the exact project, surveys committed, staged, unstaged, untracked, ignored-runtime,
+   lifecycle, and owner state, and produces a sealed route contract. Unknown or invalid state
+   blocks.
 2. Accept the inferred tier unless consequence or uncertainty requires promotion. Tier S uses one
    work order. Larger work uses only artifact rows selected by the consumer-driven matrix in
    `loom/intake/artifact-matrix.md`.
@@ -23,8 +26,12 @@ runtime below. Never read every Loom file into context.
 4. For planned implementation, record the target baseline with `tools/loom_gate.py` before plan
    credit can be earned. Use `tools/loom_lint.py` to validate required artifacts, references,
    ledgers, work-order invariants, and status parity.
-5. Dispatch the internal intent, capture real-medium acceptance evidence, seal the receipt, record
-   outcomes, and run bounded compaction. Do not claim totals when usage is unreported.
+5. Finish through `tools/loom_orchestrator.py complete`. Its registered production handlers drive
+   plan, resume, execute, review, repair, close, and remember; the session controller owns status,
+   why, undo, and forget. The bridge validates the unchanged target, gates the authored pack,
+   enforces deadline/retry/cancellation state, captures real-medium evidence, seals the receipt,
+   records outcomes, and runs bounded compaction. Do not estimate missing usage or claim a subset
+   as total.
 6. Return the compact owner receipt: what Loom understood, did, changed, learned, archived, remains
    uncertain, needs owner input, and what happens next. Explain a prior decision with its receipt,
    evidence, and memory identifiers. Forget only after a durable content-erased tombstone exists.

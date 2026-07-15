@@ -154,6 +154,9 @@ class ReleaseStandardTests(unittest.TestCase):
         loom_release.build_public(source, built, forbidden_tokens=["owner-token"])
         target = self.root / "installed"
         installed = loom_install.install(built, target)
+        marker = target / ".loom-instance-id"
+        self.assertTrue(marker.is_file())
+        self.assertEqual(36, len(marker.read_text(encoding="utf-8").strip()))
         checked = loom_install.check(target)
         self.assertEqual("installed", checked["status"])
         self.assertEqual(installed["install_id"], checked["install_id"])

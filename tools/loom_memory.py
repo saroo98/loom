@@ -361,13 +361,19 @@ def initialize(home, loom_root):
     loom_root = _reject_link_ancestors(loom_root, "Loom installation root")
     marker = loom_root / INSTANCE_MARKER
     _reject_link(marker, "installation marker")
-    with FileLock(loom_root / ".loom-instance-init.lock"):
-        if marker.is_file():
-            instance_id = _validate_instance_id(
-                marker.read_text(encoding="utf-8").strip())
-        else:
-            instance_id = str(uuid.uuid4())
-            _atomic_text(marker, instance_id + "\n")
+    if marker.is_file():
+        # Installed copies own an immutable marker in their installation receipt. Reading it
+        # must not create an unowned lock file or otherwise mutate the verified installation.
+        instance_id = _validate_instance_id(
+            marker.read_text(encoding="utf-8").strip())
+    else:
+        with FileLock(loom_root / ".loom-instance-init.lock"):
+            if marker.is_file():
+                instance_id = _validate_instance_id(
+                    marker.read_text(encoding="utf-8").strip())
+            else:
+                instance_id = str(uuid.uuid4())
+                _atomic_text(marker, instance_id + "\n")
     directory = _instance_dir(home, instance_id)
     directory.mkdir(parents=True, exist_ok=True)
     _reject_link_ancestors(directory, "instance storage")

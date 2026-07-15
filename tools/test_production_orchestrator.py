@@ -1,0 +1,391 @@
+"""Black-box coverage for the installed one-surface production orchestrator."""
+
+import datetime as dt
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+sys.path.insert(0, str(Path(__file__).parent))
+import loom_gate  # noqa: E402
+import loom_install  # noqa: E402
+import loom_lifecycle  # noqa: E402
+import loom_orchestrator  # noqa: E402
+import loom_release  # noqa: E402
+
+
+TODAY = dt.date.today().isoformat()
+
+
+def _write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _author_medium_pack(pack, version):
+    """Act as the host agent; production code must not import test helpers."""
+    _write(pack / "MANIFEST.md", f"""---
+artifact: manifest
+project: "orchestrator fixture"
+tier: M
+status: active
+execution_mode: planned
+last_verified: {TODAY}
+loom_version: "{version}"
+domain_id: accounting
+domain_ids: [accounting]
+domain_coverage: adapter
+freshness_window_days: 14
+---
+# Planning pack
+
+Original request (verbatim, do not paraphrase):
+> "Plan a financial double-entry accounting change to src/app.py"
+
+## Artifacts
+| Artifact | Action | Consumer | Decision | Why (one line) | Status | last_verified |
+|---|---|---|---|---|---|---|
+| intake.md | produce | planner | scope and constraints | establishes the contract | gated | {TODAY} |
+| survey.md | skip | — | — | target file is explicit | — | — |
+| product.md | skip | — | — | no product-policy change | — | — |
+| architecture.md | skip | — | — | one existing component | — | — |
+| uiux.md | skip | — | — | no interface change | — | — |
+| contracts.md | skip | — | — | no external boundary | — | — |
+| testing.md | produce | verifier | acceptance evidence | invariants need tests | gated | {TODAY} |
+| release-rollback.md | skip | — | — | plan only | — | — |
+| security.md | skip | — | — | no security boundary | — | — |
+| maintenance.md | skip | — | — | no operator change | — | — |
+| scaffold.md | skip | — | — | repository exists | — | — |
+| domain-discovery.md | skip | — | — | shipped accounting adapter selected | — | — |
+| work orders | produce | implementer | execution and acceptance | executable frontier | ready | {TODAY} |
+| routing | skip | — | — | one implementer | — | — |
+| project instructions | skip | — | — | no new instructions | — | — |
+
+## Work order frontier
+| WO | Status | Routing | Claimed by | Claimed at (UTC) | Heartbeat |
+|---|---|---|---|---|---|
+| WO-001 | ready | strong-coding | — | — | — |
+""")
+    _write(pack / "assumptions.md", f"""---
+artifact: assumption-ledger
+status: draft
+last_verified: {TODAY}
+---
+# Assumptions
+
+## A-001: Existing ledger boundary remains stable
+- status: open
+- basis: request names one existing target
+- risk_if_wrong: HIGH — accounting invariants could be incomplete
+- verify_by: before implementation
+- used_in: intake.md, work-orders/WO-001-accounting.md
+""")
+    _write(pack / "decisions.md", f"""---
+artifact: decision-log
+status: draft
+last_verified: {TODAY}
+---
+## D-001: Preserve double-entry balance
+- chosen: every accepted posting keeps total debits equal to total credits
+""")
+    _write(pack / "intake.md", f"""---
+artifact: intake
+status: gated
+last_verified: {TODAY}
+---
+# Intake
+Change only `src/app.py`; verify A-001 before implementation and preserve D-001.
+
+## Domain adaptation
+Accounting requires balanced postings, exact currency precision, audit history, reconciliation,
+period-close behavior, and dated jurisdiction rules.
+""")
+    _write(pack / "testing.md", f"""---
+artifact: testing-plan
+status: gated
+last_verified: {TODAY}
+---
+# Testing
+Use property tests for balanced postings and explicit rounding, reversal, and period-close cases.
+The work order names the real process evidence required for acceptance.
+""")
+    _write(pack / "work-orders" / "WO-001-accounting.md", f"""---
+id: WO-001
+title: Preserve accounting invariants
+status: ready
+depends_on: []
+blocks: []
+routing: strong-coding
+size: S
+touches: [src/app.py]
+last_verified: {TODAY}
+---
+## Intent
+Implement the requested change without violating D-001.
+
+## Context
+- The existing boundary is assumed stable [ASSUMPTION A-001 — assumptions.md].
+
+## Preconditions
+- G1 is sealed and the repository state is unchanged.
+
+## Task
+Change `src/app.py` while preserving balanced postings and exact currency behavior.
+
+## Acceptance criteria
+- [ ] `python -m unittest` exits 0 in a real process.
+- [ ] Negative: an unbalanced posting is rejected without a partial write.
+
+## Out of scope
+- Tax-policy changes and data migration.
+
+## Escalation triggers
+- Stop if currency, period, or jurisdiction rules are not evidenced.
+
+## Epistemic notes
+- A-001 remains open until the implementer surveys the target boundary.
+
+## Close-out
+Pending implementation evidence.
+""")
+    _write(pack / "plan-dependencies.json", json.dumps({
+        "schema_version": 1,
+        "sections": [
+            {"id": "testing", "target_patterns": ["src/app.py"]},
+            {"id": "accounting", "target_patterns": ["src/app.py"]},
+        ],
+    }, indent=2) + "\n")
+    loom_lifecycle.seal_release_policy(
+        pack, external_users=0, irreversible=False,
+        data_migration=False, regulated=False)
+    _write(pack / "reviews" / "G1-plan-review.md", f"""---
+artifact: gate-review
+project: "orchestrator fixture"
+gate: G1
+date: {TODAY}
+reviewer: "independent-fixture-reviewer"
+reviewer_independence: independent
+verdict: pass
+open_high_findings: 0
+rubric_average: 4.0
+rubric_min: 4
+loom_version: "{version}"
+---
+# G1 review
+
+## Rubric scorecard (G1/G4)
+| Dimension | Score | Evidence (pack location) |
+|---|---|---|
+| 1 Goal fidelity | 4 | intake.md |
+| 2 Epistemic hygiene | 4 | assumptions.md |
+| 3 Right-sizing | 4 | MANIFEST.md |
+| 4 Decision quality | 4 | decisions.md |
+| 5 Boundary clarity | 4 | MANIFEST.md |
+| 6 WO executability | 4 | work-orders/WO-001-accounting.md |
+| 7 Verifiability | 4 | testing.md |
+| 8 Failure preparedness | 4 | work-orders/WO-001-accounting.md |
+| 9 Adaptation fit | 4 | intake.md |
+| 10 Clarity | 4 | MANIFEST.md |
+""")
+
+
+def _author_small_wo(pack):
+    _write(pack / "WO-001.md", f"""---
+id: WO-001
+title: Add one CLI flag
+status: ready
+depends_on: []
+blocks: []
+routing: strong-coding
+size: S
+touches: [src/app.py]
+last_verified: {TODAY}
+---
+## Intent
+Add the requested low-risk command-line flag.
+## Context
+Repository baseline is sealed by the Tier-S lifecycle.
+## Preconditions
+Target state remains unchanged.
+## Task
+Change only `src/app.py` and preserve existing exit and stream contracts.
+## Acceptance criteria
+- [ ] `python -m unittest` exits 0.
+- [ ] Negative: an unknown flag exits nonzero without writing normal output.
+## Out of scope
+No architecture or packaging change.
+## Escalation triggers
+Stop if a second component or irreversible effect is required.
+## Epistemic notes
+[FACT — lifecycle baseline] target state was recorded before this work order.
+## Close-out
+Pending implementation evidence.
+""")
+
+
+class ProductionOrchestratorTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.source = Path(__file__).resolve().parents[1]
+        self.public = self.root / "public"
+        self.installed = self.root / "installed"
+        loom_release.build_public(
+            self.source, self.public,
+            forbidden_tokens=[
+                "-".join(("private", "fixture", "token")),
+                "-".join(("owner", "fixture", "token")),
+            ])
+        loom_install.install(self.public, self.installed)
+        self.home = self.root / "home"
+        self.repo = self.root / "target"
+        (self.repo / "src").mkdir(parents=True)
+        _write(self.repo / "src" / "app.py", "VALUE = 1\n")
+        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "config", "user.email",
+                        "test@example.invalid"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "test"],
+                       check=True)
+        subprocess.run(["git", "-C", str(self.repo), "add", "-A"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "baseline"],
+                       check=True)
+        self.request = "Plan a financial double-entry accounting change to src/app.py"
+
+    def tearDown(self):
+        self.temp.cleanup()
+
+    def cli(self, *args):
+        return subprocess.run(
+            [sys.executable, "-B",
+             str(self.installed / "tools" / "loom_orchestrator.py"),
+             *map(str, args)], capture_output=True, text=True, encoding="utf-8",
+            errors="replace", timeout=60)
+
+    def test_installed_invoke_drives_real_gate_and_seals_receipt(self):
+        opened = self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed,
+            "--timeout-seconds", "300")
+        self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
+        action = json.loads(opened.stdout)
+        self.assertEqual("action-required", action["status"])
+        self.assertEqual("plan", action["intent"])
+        self.assertEqual("M", action["tier"])
+        self.assertEqual(["accounting"], action["domains"])
+        self.assertTrue((self.repo / "plans" / "lifecycle.json").is_file())
+
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        completed = self.cli(
+            "complete", "--action", action["action_path"], "--usage", usage)
+        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+        result = json.loads(completed.stdout)
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("plan-complete", result["code"])
+        self.assertEqual("measured", result["usage"]["measurement_status"])
+        self.assertEqual(900, result["usage"]["total_tokens"])
+        self.assertEqual([], loom_gate.verify(
+            self.repo / "plans", self.repo, require_authorized=True))
+        self.assertTrue(result["outcome_ids"])
+        self.assertTrue(result["improvement_evidence_ids"])
+        self.assertEqual("installed", loom_install.check(self.installed)["status"])
+        receipt = loom_install.check(self.installed)
+        removed = loom_install.uninstall(
+            self.installed, confirmation=receipt["install_id"])
+        self.assertTrue(removed["target_removed"])
+
+    def test_tier_s_uses_one_bounded_work_order_without_a_pack_essay(self):
+        request = "Plan a single-file CLI flag in src/app.py"
+        opened = self.cli(
+            "invoke", "--request", request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed)
+        self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
+        action = json.loads(opened.stdout)
+        self.assertEqual("S", action["tier"])
+        self.assertEqual(["cli"], action["domains"])
+        _author_small_wo(self.repo / "plans")
+        usage = self.root / "small-usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 300, "cache_read_tokens": 50,
+            "output_tokens": 150, "tool_tokens": 50, "retry_tokens": 0,
+        }), encoding="utf-8")
+        completed = self.cli(
+            "complete", "--action", action["action_path"], "--usage", usage)
+        self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
+        result = json.loads(completed.stdout)
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("plan-complete", result["code"])
+        self.assertEqual([], loom_gate.verify_small(
+            self.repo / "plans" / ".loom-small-lifecycle.json"))
+        self.assertFalse((self.repo / "plans" / "MANIFEST.md").exists())
+
+    def test_cancel_is_terminal_and_content_bound(self):
+        opened = self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed)
+        action = json.loads(opened.stdout)
+        cancelled = self.cli("cancel", "--action", action["action_path"])
+        self.assertEqual(0, cancelled.returncode, cancelled.stderr + cancelled.stdout)
+        self.assertEqual("cancelled", json.loads(cancelled.stdout)["status"])
+        usage = self.root / "usage.json"
+        usage.write_text("{}", encoding="utf-8")
+        refused = self.cli(
+            "complete", "--action", action["action_path"], "--usage", usage)
+        self.assertEqual(2, refused.returncode)
+        self.assertEqual("cancelled", json.loads(refused.stdout)["status"])
+
+        action_file = Path(action["action_path"])
+        tampered = json.loads(action_file.read_text(encoding="utf-8"))
+        tampered["attempts"] = 2
+        action_file.write_text(json.dumps(tampered), encoding="utf-8")
+        corrupt = self.cli(
+            "complete", "--action", action_file, "--usage", usage)
+        self.assertEqual(2, corrupt.returncode)
+        self.assertEqual("ACTION_CORRUPT", json.loads(corrupt.stdout)["code"])
+
+    def test_timeout_and_retry_ceiling_close_the_action(self):
+        opened = self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed)
+        action = json.loads(opened.stdout)
+        usage = self.root / "usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 1, "cache_read_tokens": 0,
+            "output_tokens": 1, "tool_tokens": 0, "retry_tokens": 0,
+        }), encoding="utf-8")
+        future = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)
+        with self.assertRaisesRegex(loom_orchestrator.OrchestratorError, "ACTION_TIMEOUT"):
+            loom_orchestrator.complete(action["action_path"], usage, now=future)
+        expired = json.loads(Path(action["action_path"]).read_text(encoding="utf-8"))
+        self.assertEqual("expired", expired["status"])
+
+        second = json.loads(self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+        with mock.patch.object(
+                loom_orchestrator, "_handler_result",
+                side_effect=RuntimeError("seeded transient failure")):
+            for expected in (1, 2, 3):
+                with self.assertRaisesRegex(
+                        loom_orchestrator.OrchestratorError, "HANDLER_INTERRUPTED"):
+                    loom_orchestrator.complete(second["action_path"], usage)
+                current = json.loads(
+                    Path(second["action_path"]).read_text(encoding="utf-8"))
+                self.assertEqual(expected, current["attempts"])
+        self.assertEqual("failed", current["status"])
+
+
+if __name__ == "__main__":
+    unittest.main()

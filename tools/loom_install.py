@@ -13,6 +13,7 @@ import loom_reliability
 
 
 RECEIPT = ".loom-install-receipt.json"
+INSTANCE_MARKER = ".loom-instance-id"
 
 
 class InstallError(RuntimeError):
@@ -50,7 +51,8 @@ def install(source, target):
     try:
         for path in loom_reliability._regular_files(source):
             relative = path.relative_to(source)
-            if relative.as_posix() == RECEIPT or "__pycache__" in relative.parts \
+            if relative.as_posix() in {RECEIPT, INSTANCE_MARKER} \
+                    or "__pycache__" in relative.parts \
                     or path.suffix.lower() in {".pyc", ".pyo"}:
                 continue
             destination = staging / relative
@@ -61,6 +63,11 @@ def install(source, target):
         if skill_source.is_file() and "SKILL.md" not in owned:
             shutil.copyfile(skill_source, staging / "SKILL.md")
             owned.append("SKILL.md")
+        # Installation identity is owned from the first receipt. Runtime initialization must
+        # never mutate a verified installation or leave an unowned marker that blocks uninstall.
+        marker = staging / INSTANCE_MARKER
+        marker.write_text(str(uuid.uuid4()) + "\n", encoding="utf-8")
+        owned.append(INSTANCE_MARKER)
         if not owned:
             raise InstallError("installation source has no regular payload files")
         install_id = str(uuid.uuid4())

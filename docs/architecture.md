@@ -8,6 +8,11 @@ maintainers.
 `loom_runtime` resolves identity, surveys the world, classifies intent, tier, and domains, then
 seals immutable prepared state. `loom_session` serializes one project invocation, selects scoped
 memory and preferences, dispatches work, records outcomes, compacts state, and seals a receipt.
+`loom_orchestrator` is the installed host-agent bridge. It verifies the installation before every
+new action, opens an authenticated session, records the baseline before authoring, supplies the
+default production handler registry, and binds completion to one target survey. Its private,
+content-hashed action record enforces a 60-to-3600-second deadline, three-attempt retry ceiling,
+terminal cancellation, and safe cleanup only when its newly created draft pack is byte-unchanged.
 `loom_gate`, `loom_lifecycle`, and `loom_lint` provide chronology, freshness, evidence, and pack
 integrity enforcement. Any unknown at a trust boundary is a typed block.
 

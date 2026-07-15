@@ -21,9 +21,11 @@ python tools/loom_install.py install . "$HOME/.codex/skills/loom"
 ```
 
 The installer accepts only a new target, records every owned file hash, and immediately verifies
-the result. Check it later with `python tools/loom_install.py check <install-path>`. Uninstall needs
-the exact installation ID and refuses the entire removal if any owned file changed. Normal use
-still has one surface: `/loom <request>`.
+the result, including a unique receipt-owned installation identity. Check it later with
+`python tools/loom_install.py check <install-path>`. Uninstall needs the exact installation ID and
+refuses the entire removal if any owned file changed. The installed skill invokes the production
+orchestrator internally with bytecode writes disabled, so a documented run remains receipt-clean
+and reversible. Normal use still has one surface: `/loom <request>`.
 
 ## Automatic local adaptation
 

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "version": "1.0.0",
   "capabilities": [
-    {"id":"one-request-routing","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_session.py"],"tests":["tools/test_loom_runtime.py","tools/test_loom_session.py"]},
+    {"id":"one-request-routing","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_runtime.py","tools/loom_session.py"],"tests":["tools/test_production_orchestrator.py","tools/test_loom_runtime.py","tools/test_loom_session.py"]},
     {"id":"complete-world-fingerprint","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_survey.py"],"tests":["tools/test_loom_runtime.py"]},
     {"id":"plan-before-implementation","kind":"mechanical","enforcement":["tools/loom_gate.py"],"tests":["tools/test_loom_gate.py"]},
     {"id":"pack-integrity","kind":"mechanical","enforcement":["tools/loom_lint.py"],"tests":["tools/test_loom_lint.py"]},

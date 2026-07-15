@@ -554,6 +554,35 @@ def _receipt_from_data(value, *, repeated):
     return SessionReceipt(**data)
 
 
+def _operation_identity(prepared):
+    operation_id = _sha({
+        "project_id": prepared.project_id,
+        "request_hash": prepared.request_hash,
+        "survey_hash": prepared.survey_hash,
+        "intent": prepared.intent,
+        "domains": list(prepared.domains),
+    })
+    return operation_id, str(uuid.uuid5(uuid.UUID(prepared.instance_id), operation_id))
+
+
+@dataclass(frozen=True)
+class OpenSession:
+    prepared: loom_runtime.PreparedInvocation
+    session_id: str
+    operation_id: str
+    journal_path: str
+    started_at: str
+    terminal_receipt: SessionReceipt | None
+
+    def environment(self):
+        return {
+            "LOOM_SESSION_JOURNAL": self.journal_path,
+            "LOOM_SESSION_ID": self.session_id,
+            "LOOM_SESSION_OPERATION_ID": self.operation_id,
+            "LOOM_SESSION_DOMAIN": self.prepared.domains[0],
+        }
+
+
 class NoopMemoryAdapter:
     """Explicit no-profile adapter for tests and disabled-profile operation."""
 
@@ -927,8 +956,72 @@ class SessionController:
         return (self.owner_home / "instances" / self.instance_id / "runtime" /
                 "projects" / project_id / JOURNAL_FILE)
 
+    def open(self, request, *, invocation_id, cwd, explicit_target=None,
+             explicit_config=None, now=None):
+        """Open an authenticated host-agent action without sealing a false result."""
+        instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
+        prepared = loom_runtime.prepare_invocation(
+            request, instance_id=self.instance_id, invocation_id=invocation_id,
+            cwd=cwd, explicit_target=explicit_target, explicit_config=explicit_config,
+            owner_home=self.owner_home, now=instant)
+        path = self._journal_path(prepared.project_id)
+        operation_id, session_id = _operation_identity(prepared)
+        with _SessionFileLock(path.with_name(".session.lock")):
+            journal = _load_journal(path, self.instance_id, prepared.project_id)
+            for event in reversed(journal["events"]):
+                if event["kind"] == "session-receipt-sealed" \
+                        and event["operation_id"] == operation_id:
+                    receipt = _receipt_from_data(
+                        event["payload"].get("receipt"), repeated=True)
+                    return OpenSession(
+                        prepared, session_id, operation_id, str(path),
+                        receipt.started_at, receipt)
+            prior = [event for event in journal["events"]
+                     if event["operation_id"] == operation_id]
+            if prior:
+                if prior[-1]["kind"] == "session-interrupted":
+                    _append_event(
+                        journal, "session-reconciled", session_id, operation_id,
+                        instant, {"prior_event_hash": prior[-1]["event_hash"]})
+                started = next(event["recorded_at"] for event in prior
+                               if event["kind"] == "session-opened")
+            else:
+                started = _format_time(instant)
+                _append_event(journal, "session-opened", session_id, operation_id, instant, {
+                    "invocation_id": invocation_id,
+                    "request_hash": prepared.request_hash,
+                    "world_fingerprint": prepared.world_fingerprint,
+                    "intent": prepared.intent,
+                    "domains": list(prepared.domains),
+                })
+            _atomic_json(path, journal)
+        return OpenSession(
+            prepared, session_id, operation_id, str(path), started, None)
+
+    def interrupt(self, open_session, *, code, now=None):
+        """Close an open delegated action as interrupted, idempotently."""
+        if not isinstance(open_session, OpenSession) \
+                or not isinstance(code, str) or not SAFE_ID_RE.fullmatch(code):
+            raise SessionError("interrupt requires an open session and safe code")
+        instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
+        path = Path(open_session.journal_path)
+        with _SessionFileLock(path.with_name(".session.lock")):
+            journal = _load_journal(
+                path, self.instance_id, open_session.prepared.project_id)
+            matching = [event for event in journal["events"]
+                        if event["operation_id"] == open_session.operation_id]
+            if not matching:
+                raise SessionBlocked("SESSION_NOT_ACTIVE", "session is unavailable")
+            if matching[-1]["kind"] in {"session-opened", "session-reconciled"}:
+                _append_event(
+                    journal, "session-interrupted", open_session.session_id,
+                    open_session.operation_id, instant, {"code": code})
+                _atomic_json(path, journal)
+            return {"status": "interrupted", "code": code,
+                    "session_id": open_session.session_id}
+
     def run(self, request, *, invocation_id, cwd, explicit_target=None,
-            explicit_config=None, now=None):
+            explicit_config=None, now=None, continue_open=False):
         instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
         prepared = loom_runtime.prepare_invocation(
             request,
@@ -943,17 +1036,13 @@ class SessionController:
         path = self._journal_path(prepared.project_id)
         lock_path = path.with_name(".session.lock")
         with _SessionFileLock(lock_path):
-            return self._run_locked(prepared, invocation_id, instant, path, request)
+            return self._run_locked(
+                prepared, invocation_id, instant, path, request,
+                continue_open=continue_open)
 
-    def _run_locked(self, prepared, invocation_id, instant, path, request):
-        operation_id = _sha({
-            "project_id": prepared.project_id,
-            "request_hash": prepared.request_hash,
-            "survey_hash": prepared.survey_hash,
-            "intent": prepared.intent,
-            "domains": list(prepared.domains),
-        })
-        session_id = str(uuid.uuid5(uuid.UUID(self.instance_id), operation_id))
+    def _run_locked(self, prepared, invocation_id, instant, path, request,
+                    *, continue_open=False):
+        operation_id, session_id = _operation_identity(prepared)
         journal = _load_journal(path, self.instance_id, prepared.project_id)
         for event in reversed(journal["events"]):
             if event["kind"] == "session-receipt-sealed" \
@@ -964,15 +1053,21 @@ class SessionController:
                  if event["operation_id"] == operation_id]
         reconciled_session_id = None
         if prior:
-            reconciled_session_id = session_id
-            if prior[-1]["kind"] != "session-interrupted":
+            if continue_open and prior[-1]["kind"] in {
+                    "session-opened", "session-reconciled"}:
+                pass
+            elif prior[-1]["kind"] != "session-interrupted":
+                reconciled_session_id = session_id
                 _append_event(
                     journal, "session-interrupted", session_id, operation_id, instant,
                     {"code": "prior-run-ended-without-terminal"})
-            interrupted_hash = journal["events"][-1]["event_hash"]
-            _append_event(
-                journal, "session-reconciled", session_id, operation_id, instant,
-                {"prior_event_hash": interrupted_hash})
+            if not (continue_open and prior[-1]["kind"] in {
+                    "session-opened", "session-reconciled"}):
+                reconciled_session_id = session_id
+                interrupted_hash = journal["events"][-1]["event_hash"]
+                _append_event(
+                    journal, "session-reconciled", session_id, operation_id, instant,
+                    {"prior_event_hash": interrupted_hash})
             started = next(
                 event["recorded_at"] for event in prior
                 if event["kind"] == "session-opened")
