@@ -1,20 +1,27 @@
 """Deterministic marketplace runtime packaging and opaque-artifact firewall tests."""
 
 import hashlib
+import json
 import os
 import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_plugin_package
 import loom_privacy
+from v11_test_support import build_vault_helper, package_evidence, package_source_commit
 
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class PluginPackageTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.helper = build_vault_helper(ROOT)
+
     def test_opaque_file_requires_exact_provenance_hash(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -31,33 +38,24 @@ class PluginPackageTests(unittest.TestCase):
                 root, forbidden_tokens=[], verified_opaque_hashes={digest})
             self.assertFalse(changed["clean"])
 
+    def test_git_free_fixture_identity_does_not_require_git_executable(self):
+        with mock.patch("v11_test_support.subprocess.run", side_effect=FileNotFoundError):
+            first = package_source_commit(ROOT)
+            second = package_source_commit(ROOT)
+        self.assertRegex(first, r"^[0-9a-f]{40}$")
+        self.assertEqual(first, second)
+
     def test_package_requires_reproducible_helpers_and_scans_final_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
             temp = Path(temporary)
-            helper = temp / "loom-vault.bin"
-            helper.write_bytes(b"verified helper fixture")
-            digest = hashlib.sha256(helper.read_bytes()).hexdigest()
-            sbom = temp / "sbom.json"
-            sbom.write_text('{"components":[]}', encoding="utf-8")
-            provenance = temp / "provenance.json"
-            provenance.write_text('{"builder":"fixture"}', encoding="utf-8")
-            helpers = {platform: helper for platform in loom_plugin_package.PLATFORMS}
-            evidence = {platform: {
-                "rebuild": helper, "sbom": sbom, "provenance": provenance,
-            } for platform in loom_plugin_package.PLATFORMS}
-            receipts = {platform: {
-                "platform": platform, "binary_sha256": digest,
-                "rebuild_sha256": digest,
-                "source_sha256": loom_plugin_package._source_digest(ROOT),
-                "cargo_lock_sha256": hashlib.sha256(
-                    (ROOT / "vault-helper" / "Cargo.lock").read_bytes()).hexdigest(),
-                "sbom_sha256": hashlib.sha256(sbom.read_bytes()).hexdigest(),
-                "provenance_sha256": hashlib.sha256(provenance.read_bytes()).hexdigest(),
-            } for platform in loom_plugin_package.PLATFORMS}
+            helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
+            receipts, evidence = package_evidence(
+                ROOT, self.helper, temp / "evidence", loom_plugin_package.PLATFORMS)
             output = temp / "plugin"
             result = loom_plugin_package.build(
                 ROOT, output, helpers, receipts, evidence,
-                version="1.1.0", release_sequence=2)
+                version="1.1.0", release_sequence=2,
+                source_commit=package_source_commit(ROOT))
             self.assertTrue(result["firewall"]["clean"])
             for platform in loom_plugin_package.PLATFORMS:
                 self.assertTrue((output / "runtime-payload" / platform /
@@ -71,13 +69,64 @@ class PluginPackageTests(unittest.TestCase):
                     loom_plugin_package.PackageError, "reproducible"):
                 loom_plugin_package.build(
                     ROOT, temp / "bad", helpers, bad, evidence,
-                    version="1.1.0", release_sequence=2)
-            sbom.write_text('{"components":["tampered"]}', encoding="utf-8")
+                    version="1.1.0", release_sequence=2,
+                    source_commit=package_source_commit(ROOT))
+            Path(evidence["windows-x64"]["sbom"]).write_text(
+                '{"components":["tampered"]}', encoding="utf-8")
             with self.assertRaisesRegex(
                     loom_plugin_package.PackageError, "evidence"):
                 loom_plugin_package.build(
                     ROOT, temp / "bad-evidence", helpers, receipts, evidence,
-                    version="1.1.0", release_sequence=2)
+                    version="1.1.0", release_sequence=2,
+                    source_commit=package_source_commit(ROOT))
+
+    def test_package_rejects_hash_valid_but_semantically_incomplete_sbom(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
+            receipts, evidence = package_evidence(
+                ROOT, self.helper, temp / "evidence", loom_plugin_package.PLATFORMS)
+            platform = "windows-x64"
+            sbom_path = Path(evidence[platform]["sbom"])
+            sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
+            removed = sbom["packages"].pop()
+            sbom["relationships"] = [
+                item for item in sbom["relationships"]
+                if item.get("relatedSpdxElement") != removed["SPDXID"]]
+            sbom_path.write_text(
+                json.dumps(sbom, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+            receipts[platform]["sbom_sha256"] = hashlib.sha256(
+                sbom_path.read_bytes()).hexdigest()
+
+            with self.assertRaisesRegex(
+                    loom_plugin_package.PackageError, "Cargo.lock"):
+                loom_plugin_package.build(
+                    ROOT, temp / "incomplete-sbom", helpers, receipts, evidence,
+                    version="1.1.0", release_sequence=2,
+                    source_commit=package_source_commit(ROOT))
+
+    def test_package_rejects_provenance_for_a_different_source_commit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
+            receipts, evidence = package_evidence(
+                ROOT, self.helper, temp / "evidence", loom_plugin_package.PLATFORMS)
+            platform = "windows-x64"
+            provenance_path = Path(evidence[platform]["provenance"])
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+            provenance["commit"] = "0" * 40
+            provenance_path.write_text(
+                json.dumps(provenance, sort_keys=True, separators=(",", ":")),
+                encoding="utf-8")
+            receipts[platform]["provenance_sha256"] = hashlib.sha256(
+                provenance_path.read_bytes()).hexdigest()
+
+            with self.assertRaisesRegex(
+                    loom_plugin_package.PackageError, "provenance contract"):
+                loom_plugin_package.build(
+                    ROOT, temp / "wrong-commit", helpers, receipts, evidence,
+                    version="1.1.0", release_sequence=2,
+                    source_commit=package_source_commit(ROOT))
 
 
 if __name__ == "__main__":

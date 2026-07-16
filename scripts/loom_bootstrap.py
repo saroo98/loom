@@ -6,6 +6,8 @@ import datetime as dt
 import hashlib
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -33,10 +35,143 @@ def _empty_inventory():
     return hashlib.sha256(b"loom-empty-owner-vault-v1").hexdigest()
 
 
+def _verified_current_runtime(home):
+    """Locate and hash-check the already-active runtime before importing any update code."""
+    home = Path(home).resolve()
+    pointer_path = home / "runtime" / "current.json"
+    if not pointer_path.is_file():
+        return None
+    pointer = _load(pointer_path, "runtime pointer")
+    if set(pointer) != {
+            "version", "path", "payload_sha256", "release_sequence", "previous"} \
+            or pointer.get("path") != pointer.get("version") \
+            or not re.fullmatch(
+                r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",
+                str(pointer.get("version", ""))):
+        raise BootstrapError("runtime pointer is unsafe")
+    versions = (home / "runtime" / "versions").resolve()
+    runtime = (versions / pointer["path"]).resolve()
+    if not runtime.is_dir() or not runtime.is_relative_to(versions):
+        raise BootstrapError("runtime pointer escapes the version store")
+    manifest = _load(runtime / "RUNTIME-MANIFEST.json", "active runtime manifest")
+    if set(manifest) != {"schema_version", "version", "platform", "files"} \
+            or manifest.get("schema_version") != 1 \
+            or manifest.get("version") != pointer["version"] \
+            or not isinstance(manifest.get("files"), list):
+        raise BootstrapError("active runtime manifest contract is invalid")
+    expected = set()
+    for item in manifest["files"]:
+        if not isinstance(item, dict) or set(item) != {"path", "bytes", "sha256"} \
+                or not isinstance(item["path"], str) or "\\" in item["path"]:
+            raise BootstrapError("active runtime manifest target is invalid")
+        relative = Path(item["path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise BootstrapError("active runtime manifest target traverses")
+        path = runtime.joinpath(*relative.parts)
+        if not path.is_file() or path.is_symlink():
+            raise BootstrapError("active runtime manifest target is missing or redirected")
+        raw = path.read_bytes()
+        if len(raw) != item["bytes"] \
+                or hashlib.sha256(raw).hexdigest() != item["sha256"]:
+            raise BootstrapError("active runtime bytes do not match their manifest")
+        expected.add(relative.as_posix())
+    ignored = {
+        "RUNTIME-MANIFEST.json", ".loom-runtime-receipt.json",
+        ".loom-install-receipt.json", ".loom-health-receipt.json",
+    }
+    observed = {
+        path.relative_to(runtime).as_posix() for path in runtime.rglob("*")
+        if path.is_file() and path.name not in ignored
+    }
+    if observed != expected:
+        raise BootstrapError("active runtime contains unlisted or missing files")
+    return runtime
+
+
+def _migrate_legacy_staged(home, helper, current_runtime, expected_instance_id, *,
+                           owner_module, migrate_module, reliability_module):
+    """Migrate into an isolated vault and activate only a verified standalone backup."""
+    home = Path(home).resolve()
+    vault_dir = home / "vault"
+    vault_dir.mkdir(parents=True, exist_ok=True)
+    active = vault_dir / "owner.sqlite3"
+    journal_path = vault_dir / "bootstrap-journal.json"
+    staged_home = vault_dir / ".legacy-migration-home"
+    prepared = vault_dir / ".owner.sqlite3.prepared"
+    source_hash = reliability_module.deterministic_manifest(
+        current_runtime)["root_sha256"]
+    expected_journal = {
+        "schema_version": 1,
+        "kind": "legacy-v1-migration",
+        "expected_instance_id": expected_instance_id,
+        "source_runtime_sha256": source_hash,
+    }
+    if journal_path.is_file():
+        journal = _load(journal_path, "bootstrap journal")
+        if any(journal.get(key) != value for key, value in expected_journal.items()) \
+                or journal.get("state") not in {"preparing", "prepared", "complete"} \
+                or set(journal) != set(expected_journal) | {"state", "inventory_sha256"}:
+            raise BootstrapError("bootstrap journal does not match the legacy source")
+        if active.is_file():
+            vault, crypto = owner_module.open_owner_vault(home, helper)
+            inventory = vault.semantic_inventory()["sha256"]
+            if journal["state"] not in {"prepared", "complete"} \
+                    or inventory != journal["inventory_sha256"]:
+                raise BootstrapError("active vault does not match the prepared migration")
+            reliability_module.atomic_write_json(
+                journal_path, {**expected_journal, "state": "complete",
+                               "inventory_sha256": inventory})
+            return vault, crypto
+    else:
+        reliability_module.atomic_write_json(
+            journal_path, {**expected_journal, "state": "preparing",
+                           "inventory_sha256": None})
+    if active.exists():
+        raise BootstrapError("active vault exists without a completed migration journal")
+
+    opened = owner_module.initialize_owner_vault(staged_home, helper)
+    staged_vault = opened["vault"]
+    migrate_module.migrate_v1(
+        staged_home, current_runtime, staged_vault,
+        expected_instance_id=expected_instance_id)
+    inventory = staged_vault.semantic_inventory()["sha256"]
+    reliability_module.atomic_write_json(
+        journal_path, {**expected_journal, "state": "prepared",
+                       "inventory_sha256": inventory})
+
+    temporary = vault_dir / f".owner.sqlite3.backup-{os.getpid()}"
+    if temporary.exists():
+        raise BootstrapError("migration backup target already exists")
+    try:
+        staged_vault.online_backup(temporary)
+        if prepared.exists():
+            prepared.unlink()
+        os.replace(temporary, prepared)
+        os.replace(prepared, active)
+        vault, crypto = owner_module.open_owner_vault(home, helper)
+        if vault.semantic_inventory()["sha256"] != inventory:
+            raise BootstrapError("activated migration inventory changed")
+        reliability_module.atomic_write_json(
+            journal_path, {**expected_journal, "state": "complete",
+                           "inventory_sha256": inventory})
+    finally:
+        temporary.unlink(missing_ok=True)
+    if staged_home.is_dir():
+        shutil.rmtree(staged_home)
+    return vault, crypto
+
+
 def reconcile(plugin_root, home):
     plugin_root = Path(plugin_root).resolve()
     home = Path(home).resolve()
-    tools = plugin_root / "tools"
+    manifest = _load(plugin_root / ".codex-plugin" / "plugin.json", "plugin manifest")
+    version = manifest.get("version")
+    current_runtime = _verified_current_runtime(home)
+    # Updates use only the already-verified runtime's Python modules until the incoming
+    # payload has passed signature, target, extraction, and health verification. A fresh
+    # marketplace install has no earlier Loom trust anchor and therefore uses plugin code.
+    tools = (current_runtime / "tools") if current_runtime is not None \
+        else (plugin_root / "tools")
     if str(tools) not in sys.path:
         sys.path.insert(0, str(tools))
     import loom_adapters
@@ -46,11 +181,10 @@ def reconcile(plugin_root, home):
     import loom_reliability
     import loom_update
 
-    manifest = _load(plugin_root / ".codex-plugin" / "plugin.json", "plugin manifest")
-    version = manifest.get("version")
     platform_id = loom_update.platform_id()
     binary_name = "loom-vault.exe" if platform_id.startswith("windows-") else "loom-vault"
-    helper = plugin_root / "crypto" / platform_id / binary_name
+    helper = ((current_runtime / "bin" / binary_name) if current_runtime is not None
+              else (plugin_root / "crypto" / platform_id / binary_name))
     payload = plugin_root / "runtime-payload" / platform_id
     release = plugin_root / "release"
     bundle = _load(release / "metadata.json", "signed release metadata")
@@ -61,12 +195,11 @@ def reconcile(plugin_root, home):
     manager = loom_update.SharedRuntime(home, plugin_roots=[plugin_root])
     if manager.current_path.is_file() and manager.current().get("version") == version:
         launcher = loom_adapters.install_launcher(
-            home, plugin_root / "tools" / "loom_launcher.py")
+            home, current_runtime / "tools" / "loom_launcher.py")
         return {"status": "current", "version": version, "launcher": launcher}
 
     vault = None
     before_hash = _empty_inventory()
-    current_runtime = None
     if manager.current_path.is_file():
         current = manager.current()
         current_runtime = manager.versions / current["path"]
@@ -76,10 +209,10 @@ def reconcile(plugin_root, home):
         before_hash = vault.semantic_inventory()["sha256"]
     elif current_runtime is not None and (current_runtime / ".loom-instance-id").is_file():
         expected = (current_runtime / ".loom-instance-id").read_text(encoding="utf-8").strip()
-        opened = loom_owner.initialize_owner_vault(home, helper)
-        vault = opened["vault"]
-        loom_migrate.migrate_v1(
-            home, current_runtime, vault, expected_instance_id=expected)
+        vault, _crypto = _migrate_legacy_staged(
+            home, helper, current_runtime, expected,
+            owner_module=loom_owner, migrate_module=loom_migrate,
+            reliability_module=loom_reliability)
         before_hash = vault.semantic_inventory()["sha256"]
 
     def health_check(staged):
@@ -130,7 +263,10 @@ def reconcile(plugin_root, home):
         vault_schema=1, health_check=health_check, now=now)
     if not trust_path.exists():
         loom_reliability.atomic_write_json(trust_path, supplied_root)
-    launcher = loom_adapters.install_launcher(home, plugin_root / "tools" / "loom_launcher.py")
+    activated = manager.current()
+    active_runtime = manager.versions / activated["path"]
+    launcher = loom_adapters.install_launcher(
+        home, active_runtime / "tools" / "loom_launcher.py")
     return {**result, "launcher": launcher}
 
 

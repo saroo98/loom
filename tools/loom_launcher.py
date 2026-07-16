@@ -85,7 +85,7 @@ def _verify_runtime(runtime, version):
         observed = {path.relative_to(runtime).as_posix() for path in runtime.rglob("*")
                     if path.is_file() and path.name not in {
                         "RUNTIME-MANIFEST.json", ".loom-runtime-receipt.json",
-                        ".loom-install-receipt.json"}}
+                        ".loom-install-receipt.json", ".loom-health-receipt.json"}}
         if observed != expected:
             raise RuntimeError("active runtime contains unlisted or missing files")
         return
@@ -163,6 +163,8 @@ def main(argv=None):
                        "--install-root", str(runtime)]
         result = subprocess.run(command, check=False, env=environment)
         runtime_healthy = result.returncode in {0, 2}
+        if not runtime_healthy:
+            trust_failure = f"runtime-exit-{result.returncode}"
         return result.returncode
     except (RuntimeError, loom_update.UpdateError) as exc:
         if isinstance(exc, RuntimeError):

@@ -147,17 +147,43 @@ def _verify_envelope(envelope, root, verify_signature, label):
     return envelope["signed"]
 
 
+def _root_contract(root, label):
+    required = {"version", "threshold", "keys", "expires"}
+    if not isinstance(root, dict) or set(root) != required \
+            or type(root.get("version")) is not int or root["version"] < 1 \
+            or root.get("threshold") != 2 or not isinstance(root.get("keys"), dict) \
+            or len(root["keys"]) != 3:
+        raise UpdateError(f"{label} root policy is invalid")
+    _time(root["expires"])
+    return root
+
+
+def _verify_root_envelope(envelope, trusted_root, verify_signature, now):
+    trusted_root = _root_contract(trusted_root, "trusted")
+    if not isinstance(envelope, dict) or not isinstance(envelope.get("signed"), dict):
+        raise UpdateError("root metadata envelope is invalid")
+    candidate = _root_contract(envelope["signed"], "candidate")
+    instant = _time(now)
+    if candidate == trusted_root:
+        _verify_envelope(envelope, trusted_root, verify_signature, "root")
+    else:
+        if candidate["version"] != trusted_root["version"] + 1:
+            raise UpdateError("trusted root transition skipped or rolled back a version")
+        # One transition envelope must carry independent old-root and new-root thresholds.
+        _verify_envelope(envelope, trusted_root, verify_signature, "old-root transition")
+        _verify_envelope(envelope, candidate, verify_signature, "new-root transition")
+    if instant > _time(candidate["expires"]):
+        raise UpdateError("trusted root metadata is expired")
+    return candidate
+
+
 def verify_metadata(bundle, *, trusted_root, verify_signature, now):
     if not isinstance(bundle, dict) or set(bundle) != {"root", "targets", "snapshot", "timestamp"}:
         raise UpdateError("release metadata bundle is incomplete")
     if not callable(verify_signature):
         raise UpdateError("release signature verifier is unavailable")
-    root = _verify_envelope(bundle["root"], trusted_root, verify_signature, "root")
-    if root != trusted_root:
-        raise UpdateError("root rotation requires a separately trusted transition")
     instant = _time(now)
-    if instant > _time(root.get("expires")):
-        raise UpdateError("trusted root metadata is expired")
+    root = _verify_root_envelope(bundle["root"], trusted_root, verify_signature, now)
     targets = _verify_envelope(bundle["targets"], root, verify_signature, "targets")
     snapshot = _verify_envelope(bundle["snapshot"], root, verify_signature, "snapshot")
     timestamp = _verify_envelope(bundle["timestamp"], root, verify_signature, "timestamp")
@@ -249,6 +275,81 @@ class SharedRuntime:
             if _redirect(component):
                 raise UpdateError("runtime payload traverses a symlink or junction")
         return value
+
+    @staticmethod
+    def _read_receipt(path, label):
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise UpdateError(f"existing runtime {label} is invalid: {exc}") from exc
+        if not isinstance(value, dict):
+            raise UpdateError(f"existing runtime {label} is invalid")
+        return value
+
+    def _verify_existing_runtime(self, final, *, version, manifest, selected):
+        """Accept only an exact receipt-owned runtime left by this release's staging path."""
+        if not final.is_dir() or _redirect(final):
+            raise UpdateError("existing staged runtime is unsafe")
+        runtime_receipt = self._read_receipt(
+            final / ".loom-runtime-receipt.json", "release receipt")
+        expected_runtime = {
+            "version": version,
+            "release_sequence": manifest["release_sequence"],
+            "manifest_sha256": hashlib.sha256(_canonical(manifest)).hexdigest(),
+            "targets": selected,
+        }
+        if runtime_receipt != expected_runtime:
+            raise UpdateError("existing runtime release receipt does not match this release")
+        install = self._read_receipt(
+            final / ".loom-install-receipt.json", "installation receipt")
+        if set(install) != {"schema_version", "install_id", "files", "receipt_hash"} \
+                or install.get("schema_version") != 1 \
+                or not isinstance(install.get("files"), list) \
+                or install.get("receipt_hash") != _sha({
+                    key: install[key] for key in (
+                        "schema_version", "install_id", "files")
+                }):
+            raise UpdateError("existing runtime installation receipt is invalid")
+        owned = set()
+        for item in install["files"]:
+            if not isinstance(item, dict) or set(item) != {"path", "sha256"} \
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256", ""))):
+                raise UpdateError("existing runtime owned-file receipt is invalid")
+            relative = _relative(item["path"])
+            path = final.joinpath(*relative.parts)
+            if not path.is_file() or _redirect(path) \
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != item["sha256"]:
+                raise UpdateError("existing runtime owned bytes do not match their receipt")
+            owned.add(relative.as_posix())
+        ignored = {
+            ".loom-install-receipt.json", ".loom-runtime-receipt.json",
+            ".loom-health-receipt.json",
+        }
+        observed = {
+            path.relative_to(final).as_posix()
+            for path in loom_reliability._regular_files(final)
+            if path.name not in ignored
+        }
+        if observed != owned:
+            raise UpdateError("existing runtime has unowned, missing, or substituted files")
+        health = self._read_receipt(
+            final / ".loom-health-receipt.json", "health receipt")
+        required_health = {
+            "schema_version", "version", "manifest_sha256", "healthy",
+            "migration_complete", "disposable_request_passed",
+            "before_inventory_sha256", "after_inventory_sha256",
+        }
+        if set(health) != required_health or health["schema_version"] != 1 \
+                or health["version"] != version \
+                or health["manifest_sha256"] != expected_runtime["manifest_sha256"] \
+                or health["healthy"] is not True \
+                or health["migration_complete"] is not True \
+                or health["disposable_request_passed"] is not True \
+                or health["before_inventory_sha256"] != health["after_inventory_sha256"] \
+                or not re.fullmatch(
+                    r"[0-9a-f]{64}", str(health["before_inventory_sha256"])):
+            raise UpdateError("existing runtime has no matching verified health receipt")
+        return expected_runtime
 
     @staticmethod
     def _pid_alive(pid):
@@ -407,8 +508,8 @@ class SharedRuntime:
         staging = self.versions / f".{version}.staged-{uuid.uuid4().hex}"
         try:
             if final.exists():
-                if not final.is_dir() or _redirect(final):
-                    raise UpdateError("existing staged runtime is unsafe")
+                self._verify_existing_runtime(
+                    final, version=version, manifest=manifest, selected=selected)
             else:
                 staging.mkdir()
                 archives = [path for path in expected_paths if path.endswith(".zip")]
@@ -446,6 +547,13 @@ class SharedRuntime:
                             r"[0-9a-f]{64}", str(health.get("before_inventory_sha256", ""))) \
                         or health["before_inventory_sha256"] != health["after_inventory_sha256"]:
                     raise UpdateError("staged runtime health check failed")
+                loom_reliability.atomic_write_json(
+                    staging / ".loom-health-receipt.json", {
+                        "schema_version": 1,
+                        "version": version,
+                        "manifest_sha256": receipt["manifest_sha256"],
+                        **health,
+                    })
                 os.replace(staging, final)
             payload_hash = hashlib.sha256(_canonical(selected)).hexdigest()
             pending = {"version": version, "path": version,

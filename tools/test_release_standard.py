@@ -44,6 +44,32 @@ class ReleaseStandardTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_suite_separates_correctness_from_cross_platform_capability_skips(self):
+        tools = self.root / "tools"
+        tools.mkdir()
+        (tools / "loom_test.py").write_text("# fixture runner\n", encoding="utf-8")
+        report = {
+            "capability_complete": False,
+            "failures": 0,
+            "errors": 0,
+            "within_budget": True,
+            "status": "passed-with-capability-skips",
+            "successful": False,
+            "skip_receipts": [{"test": "fixture.posix", "reason": "not on Windows"}],
+            "elapsed_seconds": 1.25,
+            "tests_run": 10,
+            "timings": [],
+        }
+        completed = mock.Mock(
+            returncode=1, stdout=json.dumps(report), stderr="10 tests passed; 1 skipped")
+        with mock.patch.object(subprocess, "run", return_value=completed):
+            result = loom_release._suite(self.root)
+
+        self.assertTrue(result["passed"])
+        self.assertFalse(result["capability_complete"])
+        self.assertEqual("requires-matrix", result["capability_status"])
+        self.assertEqual(report["skip_receipts"], result["skip_receipts"])
+
     def _source(self):
         source = self.root / "source"
         (source / "tools").mkdir(parents=True)
@@ -85,6 +111,26 @@ class ReleaseStandardTests(unittest.TestCase):
         (source / "private" / "owner-grounding.txt").write_text(
             "real-owner-token\nowner-token\n", encoding="utf-8")
         return source
+
+    def test_public_builder_never_traverses_excluded_mutating_rust_target(self):
+        source = self._source()
+        (source / "vault-helper" / "target" / "debug").mkdir(parents=True)
+        (source / "vault-helper" / "target" / "debug" / "transient").write_text(
+            "compiler scratch", encoding="utf-8")
+        destination = self.root / "public-cut"
+        real_scandir = loom_release.os.scandir
+
+        def guarded_scandir(path):
+            if "target" in Path(path).parts:
+                raise FileNotFoundError("simulated concurrent Cargo replacement")
+            return real_scandir(path)
+
+        with mock.patch.object(loom_release.os, "scandir", side_effect=guarded_scandir):
+            result = loom_release.build_public(
+                source, destination, forbidden_tokens=[],
+                source_classification="public-release")
+        self.assertEqual("built", result["status"])
+        self.assertFalse((destination / "vault-helper" / "target").exists())
 
     @staticmethod
     def _sign_item(item):

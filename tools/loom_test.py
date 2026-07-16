@@ -32,6 +32,19 @@ FAST_TESTS = (
     "test_every_capability_is_mechanical_with_existing_proof_or_advisory",
     "test_loom_runtime.InvalidWorldStateTests."
     "test_invalid_lifecycle_preserves_only_valid_manifest_route_for_diagnosis",
+    "test_owner_learning_phase2.OwnerLearningPhase2Tests."
+    "test_active_task_language_never_inherits_ambient_web_domains",
+    "test_owner_learning_phase2.OwnerLearningPhase2Tests."
+    "test_per_memory_effects_prevent_session_wide_credit",
+    "test_owner_learning_phase2.OwnerLearningPhase2Tests."
+    "test_derived_forgetting_removes_children_and_checkpoints_floor",
+    "test_unknown_domain_routing.UnknownDomainRoutingTests."
+    "test_recognized_unknown_keeps_identity_but_cannot_activate_memory",
+    "test_domain_evidence.DomainEvidenceTests.test_complete_bundle_is_gate_ready",
+    "test_domain_evidence.DomainEvidenceTests.test_semantic_mutation_under_same_id_is_rejected",
+    "test_domain_benchmark.DomainBenchmarkTests.test_locked_corpus_meets_release_thresholds",
+    "test_unknown_domain_learning.UnknownDomainLearningTests."
+    "test_gate_ready_invariant_reuses_only_in_exact_scope",
 )
 
 
@@ -81,13 +94,23 @@ def run(mode, *, max_seconds=None, verbosity=1):
             stream=sys.stderr, verbosity=verbosity, resultclass=TimingResult).run(suite)
     elapsed = time.perf_counter() - started
     within_budget = budget is None or elapsed <= budget
+    skip_receipts = sorted(
+        ({"test": test.id(), "reason": str(reason)} for test, reason in result.skipped),
+        key=lambda item: item["test"])
+    capability_complete = not skip_receipts
+    successful = result.wasSuccessful() and within_budget and capability_complete
     report = {
         "schema_version": 1, "mode": mode, "tests_run": result.testsRun,
         "failures": len(result.failures), "errors": len(result.errors),
         "skipped": len(result.skipped), "elapsed_seconds": round(elapsed, 6),
         "suppressed_stdout_chars": len(captured_stdout.getvalue()),
         "max_seconds": budget, "within_budget": within_budget,
-        "successful": result.wasSuccessful() and within_budget,
+        "capability_complete": capability_complete,
+        "status": ("passed" if successful else
+                   "passed-with-capability-skips" if result.wasSuccessful()
+                   and within_budget else "failed"),
+        "successful": successful,
+        "skip_receipts": skip_receipts,
         "timings": sorted(
             getattr(result, "timings", []),
             key=lambda item: (-item["seconds"], item["test"])),

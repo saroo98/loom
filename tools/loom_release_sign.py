@@ -14,6 +14,10 @@ import loom_privacy
 
 
 KEY_AAD = b"loom-offline-root-key-v1"
+LEGACY_KDF = {
+    "algorithm": "argon2id", "version": 19, "memory_kib": 19 * 1024,
+    "iterations": 2, "parallelism": 1, "output_bytes": 32,
+}
 
 
 class SigningError(RuntimeError):
@@ -49,7 +53,7 @@ def create_root_authority(helper, directory, passphrases, *, expires):
             wrapped = loom_crypto.passphrase_wrap(
                 helper, passphrase=passphrase, plaintext=secret,
                 aad=KEY_AAD + b":" + key_id.encode("ascii"))
-            value = {"schema_version": 1, "key_id": key_id, "public_key": public,
+            value = {"schema_version": 2, "key_id": key_id, "public_key": public,
                      **wrapped}
             path = directory / f"{key_id}.loom-root-key"
             loom_reliability.atomic_write_json(path, value)
@@ -79,13 +83,16 @@ def _unlock(helper, path, passphrase):
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise SigningError(f"offline signing key is invalid: {exc}") from exc
-    required = {"schema_version", "key_id", "public_key", "salt", "ciphertext"}
-    if not isinstance(value, dict) or set(value) != required or value["schema_version"] != 1:
+    v1 = {"schema_version", "key_id", "public_key", "salt", "ciphertext"}
+    v2 = v1 | {"kdf"}
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
+            or set(value) != (v1 if value.get("schema_version") == 1 else v2):
         raise SigningError("offline signing key contract is invalid")
+    kdf = LEGACY_KDF if value["schema_version"] == 1 else value["kdf"]
     try:
         secret = loom_crypto.passphrase_open(
             helper, passphrase=passphrase, salt=value["salt"],
-            ciphertext=value["ciphertext"],
+            ciphertext=value["ciphertext"], kdf=kdf,
             aad=KEY_AAD + b":" + value["key_id"].encode("ascii"))
         crypto = loom_crypto.HelperCrypto(
             helper, master_key=b"\0" * 32, signing_key=secret)
@@ -133,6 +140,45 @@ def sign_release(helper, root, manifest, authorities, *, expires, output=None):
             raise SigningError("release metadata output already exists")
         loom_reliability.atomic_write_json(output, bundle)
     return bundle
+
+
+def sign_root_transition(helper, old_root, new_root, old_authorities, new_authorities,
+                         *, output=None):
+    """Create one sequential root envelope authorized by both trust generations."""
+    required = {"version", "threshold", "keys", "expires"}
+    for label, root in (("old", old_root), ("new", new_root)):
+        if not isinstance(root, dict) or set(root) != required \
+                or root.get("threshold") != 2 or len(root.get("keys", {})) != 3:
+            raise SigningError(f"{label} root policy is invalid")
+    if new_root["version"] != old_root["version"] + 1:
+        raise SigningError("root transition must advance exactly one version")
+
+    unlocked = []
+    for label, root, authorities in (
+            ("old", old_root, old_authorities), ("new", new_root, new_authorities)):
+        if not isinstance(authorities, (list, tuple)) or len(authorities) < root["threshold"]:
+            raise SigningError(f"{label} root transition lacks authorities")
+        accepted = set()
+        for path, passphrase in authorities:
+            key_id, secret, public = _unlock(helper, path, passphrase)
+            if root["keys"].get(key_id) != public or key_id in accepted:
+                raise SigningError(f"{label} root authority is duplicated or not trusted")
+            accepted.add(key_id)
+            unlocked.append((key_id, secret))
+        if len(accepted) < root["threshold"]:
+            raise SigningError(f"{label} root transition lacks threshold authority")
+
+    message = _canonical(new_root)
+    envelope_value = {"signed": new_root, "signatures": [
+        {"key_id": key_id,
+         "signature": loom_crypto.sign_message(helper, message, secret)}
+        for key_id, secret in unlocked]}
+    if output is not None:
+        output = loom_reliability._absolute(output, "root transition output")
+        if output.exists():
+            raise SigningError("root transition output already exists")
+        loom_reliability.atomic_write_json(output, envelope_value)
+    return envelope_value
 
 
 def finalize_package(helper, package, root, authorities, *, expires,

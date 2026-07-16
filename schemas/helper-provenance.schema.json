@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/helper-provenance.schema.json",
+  "title": "Independent native helper build provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "repository", "commit", "platform", "binary_sha256", "source_sha256", "cargo_lock_sha256", "independent_build", "builder"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "repository": {"const": "https://github.com/saroo98/loom"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "platform": {"enum": ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64", "linux-arm64"]},
+    "binary_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "source_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "cargo_lock_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "independent_build": {"const": true},
+    "builder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "run_id"],
+      "properties": {
+        "id": {"type": "string", "minLength": 3, "maxLength": 200},
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 200}
+      }
+    }
+  }
+}

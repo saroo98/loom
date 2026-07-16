@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/tool-contract.schema.json",
+  "title": "Loom maintenance CLI contract inventory",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "tools"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "tools": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "path", "surface", "writes", "idempotency", "machine_output", "exit_codes", "options", "subcommands"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^loom_[a-z0-9_]+$"},
+          "path": {"type": "string", "pattern": "^tools/loom_[a-z0-9_]+\\.py$"},
+          "surface": {"enum": ["maintenance", "runtime"]},
+          "writes": {"enum": ["none", "explicit-destination", "owner-state", "runtime-state"]},
+          "idempotency": {"enum": ["read-only", "receipt-guarded", "operation-id-guarded", "not-idempotent"]},
+          "machine_output": {"enum": ["json", "text", "mixed"]},
+          "options": {
+            "type": "object",
+            "propertyNames": {"pattern": "^--?[A-Za-z][A-Za-z0-9-]*$"},
+            "additionalProperties": {
+              "type": "object", "additionalProperties": false,
+              "required": ["expects_value", "requires_value"],
+              "properties": {"expects_value": {"type": "boolean"},
+                "requires_value": {"type": "boolean"}}
+            }
+          },
+          "subcommands": {"type": "array", "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 64}},
+          "exit_codes": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["success", "refused"],
+            "properties": {
+              "success": {"const": 0},
+              "refused": {"type": "array", "minItems": 1, "uniqueItems": true,
+                "items": {"type": "integer", "minimum": 1, "maximum": 255}}
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,51 @@
+name: native-compatibility
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-compatibility-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-helpers:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, platform: linux-x64}
+          - {runner: ubuntu-24.04-arm, platform: linux-arm64}
+          - {runner: windows-2025, platform: windows-x64}
+          - {runner: windows-11-arm, platform: windows-arm64}
+          - {runner: macos-15-intel, platform: macos-x64}
+          - {runner: macos-15, platform: macos-arm64}
+    uses: ./.github/workflows/build-helper.yml
+    with:
+      runner: ${{ matrix.runner }}
+      platform: ${{ matrix.platform }}
+
+  python-contract:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2025, macos-15]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Verify complete public cut
+        working-directory: tools
+        run: python -B loom_release.py verify-cut ..

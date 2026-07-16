@@ -298,6 +298,38 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual("rolled-back", rolled["status"])
         self.assertEqual("1.0.0", self.runtime.current()["version"])
 
+    def test_preexisting_version_directory_without_exact_receipts_never_activates(self):
+        final = self.runtime.versions / "1.1.0"
+        final.mkdir()
+        (final / "unverified.txt").write_text("must not activate", encoding="utf-8")
+        health_calls = []
+
+        with self.assertRaisesRegex(loom_update.UpdateError, "existing|receipt|verified"):
+            self.runtime.stage_update(
+                self.plugin, self.bundle, trusted_root=self.trusted_root,
+                verify_signature=self.fixture.verify, vault_schema=1,
+                health_check=lambda path: health_calls.append(path),
+                now="2026-07-15T12:00:00Z")
+
+        self.assertEqual([], health_calls)
+        self.assertEqual("1.0.0", self.runtime.current()["version"])
+        self.assertEqual("must not activate", (final / "unverified.txt").read_text(
+            encoding="utf-8"))
+
+    def test_exact_existing_runtime_receipt_rejects_changed_owned_bytes(self):
+        session = self.runtime.begin_session()
+        self.stage()
+        final = self.runtime.versions / "1.1.0"
+        (final / "loom-runtime.txt").write_text("tampered runtime", encoding="utf-8")
+
+        try:
+            with self.assertRaisesRegex(loom_update.UpdateError, "owned bytes"):
+                self.stage()
+        finally:
+            self.runtime.end_session(session["session_id"])
+
+        self.assertEqual("1.0.0", self.runtime.current()["version"])
+
 
 if __name__ == "__main__":
     unittest.main()

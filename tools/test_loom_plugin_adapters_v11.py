@@ -22,7 +22,7 @@ class PluginPackageTests(unittest.TestCase):
         manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(
             encoding="utf-8"))
         self.assertEqual("loom", manifest["name"])
-        self.assertEqual("1.1.0", manifest["version"])
+        self.assertEqual("1.3.0", manifest["version"])
         self.assertEqual("./skills/", manifest["skills"])
         self.assertNotIn("mcpServers", manifest)
         self.assertNotIn("apps", manifest)
@@ -149,6 +149,36 @@ class AdapterTests(unittest.TestCase):
         (runtime / "unlisted.txt").write_text("unexpected", encoding="utf-8")
         with self.assertRaisesRegex(RuntimeError, "unlisted"):
             loom_launcher._verify_runtime(runtime, "1.1.0")
+
+    def test_crash_exit_is_recorded_as_unhealthy_for_automatic_rollback(self):
+        runtime = self.root / "runtime"
+        orchestrator = runtime / "tools" / "loom_orchestrator.py"
+        orchestrator.parent.mkdir(parents=True)
+        orchestrator.write_text("raise SystemExit(1)\n", encoding="utf-8")
+        manager = mock.Mock()
+        manager.begin_session.return_value = {
+            "session_id": "00000000-0000-4000-8000-000000000001",
+            "version": "1.1.0",
+        }
+        failed = mock.Mock(returncode=1)
+
+        with mock.patch.object(
+                loom_launcher.loom_update, "SharedRuntime", return_value=manager), \
+                mock.patch.object(
+                    loom_launcher, "_current",
+                    return_value=({"version": "1.1.0", "release_sequence": 2}, runtime)), \
+                mock.patch.object(loom_launcher, "_reject_local_shadow"), \
+                mock.patch.object(loom_launcher.subprocess, "run", return_value=failed):
+            result = loom_launcher.main([
+                "--home", str(self.home / ".loom"), "invoke",
+                "--request", "plan safely", "--cwd", str(self.root),
+                "--agent", "codex", "--agent-version", "test"])
+
+        self.assertEqual(1, result)
+        manager.end_session.assert_called_once_with(
+            "00000000-0000-4000-8000-000000000001", successful=False)
+        manager.record_trust_health.assert_called_once_with(
+            healthy=False, reason="runtime-exit-1")
 
 
 if __name__ == "__main__":

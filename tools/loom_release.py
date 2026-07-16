@@ -30,7 +30,7 @@ ROOT_FILES = {
     "README.md", "START-HERE.md", "TERMS.md", "VERSION",
 }
 ROOT_DIRECTORIES = {
-    ".codex-plugin", ".github", "docs", "hooks", "loom", "schemas", "scripts",
+    ".codex-plugin", ".github", "benchmarks", "contracts", "docs", "hooks", "loom", "schemas", "scripts",
     "skill", "skills", "templates", "tools", "vault-helper",
 }
 MANIFEST = "BUILD-MANIFEST.json"
@@ -127,6 +127,49 @@ def _eligible(relative):
         and relative.suffix.lower() not in {".pyc", ".pyo"}
 
 
+def _eligible_files(source):
+    """Traverse only public allowlisted roots, never mutable excluded build trees."""
+    for name in sorted(ROOT_FILES):
+        path = source / name
+        if not path.exists():
+            continue
+        if path.is_symlink() or loom_reliability._is_redirect(path) or not path.is_file():
+            raise ReleaseError(f"public root file is not regular: {name}")
+        yield path
+    pending = [source / name for name in sorted(ROOT_DIRECTORIES, reverse=True)
+               if (source / name).exists()]
+    while pending:
+        directory = pending.pop()
+        relative_directory = directory.relative_to(source)
+        if directory.is_symlink() or loom_reliability._is_redirect(directory) \
+                or not directory.is_dir():
+            raise ReleaseError(
+                f"public root directory is not regular: {relative_directory.as_posix()}")
+        try:
+            entries = sorted(os.scandir(directory), key=lambda item: item.name.casefold())
+        except OSError as exc:
+            raise ReleaseError(
+                f"public allowlist traversal failed at {relative_directory.as_posix()}: {exc}") \
+                from exc
+        for entry in entries:
+            path = Path(entry.path)
+            relative = path.relative_to(source)
+            if entry.name == "__pycache__" \
+                    or relative.parts[:2] == ("vault-helper", "target"):
+                continue
+            if entry.is_symlink() or loom_reliability._is_redirect(path):
+                raise ReleaseError(
+                    f"public allowlist contains a redirected entry: {relative.as_posix()}")
+            if entry.is_dir(follow_symlinks=False):
+                pending.append(path)
+            elif entry.is_file(follow_symlinks=False):
+                if _eligible(relative):
+                    yield path
+            else:
+                raise ReleaseError(
+                    f"public allowlist contains a non-regular entry: {relative.as_posix()}")
+
+
 def _owner_token_policy(source, forbidden_tokens, source_classification):
     if source_classification not in SOURCE_CLASSIFICATIONS:
         raise ReleaseError("release source classification is invalid")
@@ -208,10 +251,8 @@ def build_public(source, destination, *, forbidden_tokens,
     staging = Path(tempfile.mkdtemp(prefix=".loom-public-", dir=destination.parent))
     try:
         copied = []
-        for path in loom_reliability._regular_files(source):
+        for path in _eligible_files(source):
             relative = path.relative_to(source)
-            if not _eligible(relative):
-                continue
             output = staging / relative
             output.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(path, output)
@@ -760,10 +801,29 @@ def _suite(root):
         timing = json.loads(result.stdout) if runner.is_file() else None
     except json.JSONDecodeError:
         timing = None
+    if runner.is_file() and isinstance(timing, dict):
+        capability_complete = timing.get("capability_complete") is True
+        expected_returncode = 0 if capability_complete else 1
+        expected_status = "passed" if capability_complete else "passed-with-capability-skips"
+        skips = timing.get("skip_receipts")
+        correctness_passed = (
+            result.returncode == expected_returncode
+            and timing.get("failures") == 0
+            and timing.get("errors") == 0
+            and timing.get("within_budget") is True
+            and timing.get("status") == expected_status
+            and timing.get("successful") is capability_complete
+            and isinstance(skips, list)
+            and bool(skips) is not capability_complete
+        )
+    else:
+        capability_complete = result.returncode == 0
+        correctness_passed = result.returncode == 0
     return {
-        "passed": result.returncode == 0 and (
-            not runner.is_file() or isinstance(timing, dict)
-            and timing.get("successful") is True),
+        "passed": correctness_passed,
+        "capability_complete": capability_complete,
+        "capability_status": ("complete" if capability_complete else "requires-matrix"),
+        "skip_receipts": timing.get("skip_receipts", []) if timing else [],
         "returncode": result.returncode,
         "output": (result.stderr if runner.is_file()
                    else result.stdout + result.stderr)[-4000:],

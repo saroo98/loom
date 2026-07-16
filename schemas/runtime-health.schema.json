@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/runtime-health.schema.json",
+  "title": "Receipt binding one staged runtime to its shadow health result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "version", "manifest_sha256", "healthy", "migration_complete", "disposable_request_passed", "before_inventory_sha256", "after_inventory_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "healthy": {"const": true},
+    "migration_complete": {"const": true},
+    "disposable_request_passed": {"const": true},
+    "before_inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "after_inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

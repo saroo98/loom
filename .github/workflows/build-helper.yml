@@ -1,0 +1,52 @@
+name: build-native-helper
+
+on:
+  workflow_call:
+    inputs:
+      runner:
+        required: true
+        type: string
+      platform:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  build-helper:
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Record native runner identity
+        shell: bash
+        run: |
+          mkdir -p native-evidence
+          python -B -c "import json,platform; from pathlib import Path; Path('native-evidence/runner.json').write_text(json.dumps({'platform':'${{ inputs.platform }}','os':platform.system(),'architecture':platform.machine(),'python':platform.python_version()},sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')"
+      - name: Build locked native helper
+        run: cargo build --locked --release --manifest-path vault-helper/Cargo.toml
+      - name: Test locked native helper
+        run: cargo test --locked --manifest-path vault-helper/Cargo.toml
+      - name: Record exact binary and source evidence
+        shell: bash
+        run: >-
+          python -B -c "import hashlib,json,os; from pathlib import Path;
+          binary=Path('vault-helper/target/release/loom-vault' + ('.exe' if os.name=='nt' else ''));
+          receipt={'schema_version':1,'platform':'${{ inputs.platform }}','commit':'${{ github.sha }}','binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cargo_lock_sha256':hashlib.sha256(Path('vault-helper/Cargo.lock').read_bytes()).hexdigest()};
+          Path('native-evidence/receipt.json').write_text(json.dumps(receipt,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8');
+          Path('native-evidence/loom-vault' + ('.exe' if os.name=='nt' else '')).write_bytes(binary.read_bytes())"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-helper-${{ inputs.platform }}-${{ github.sha }}
+          path: native-evidence/
+          retention-days: 7
+          if-no-files-found: error

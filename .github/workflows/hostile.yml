@@ -1,0 +1,57 @@
+name: hostile-assurance
+
+on:
+  schedule:
+    - cron: "43 2 * * 2,5"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: hostile-assurance
+  cancel-in-progress: true
+
+jobs:
+  model-and-contract-hostility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.14"
+      - name: Run 10000 deterministic three-device traces
+        working-directory: tools
+        run: python -B loom_modelcheck.py --seed 12026 --traces 10000
+      - name: Run trust-critical mutation gate
+        run: python -B tools/loom_mutation.py --minimum-score 100 --timeout 120
+      - name: Run locked unknown-domain benchmark and scope firewall
+        working-directory: tools
+        run: python -B loom_domain_benchmark.py --scope-traces 100000 --performance-iterations 1000
+      - name: Compile bounded Rust fuzz targets
+        run: cargo check --locked --manifest-path vault-helper/fuzz/Cargo.toml --bins
+      - name: Run hostile and trust-critical regressions
+        working-directory: tools
+        run: >-
+          python -B -m unittest
+          test_loom_merge_model.py
+          test_loom_merge_v11.py
+          test_loom_update_v11.py
+          test_loom_transfer_v11.py
+          test_loom_crash_recovery.py
+          test_release_asset.py
+          test_tool_contracts.py
+          test_workflow_policy.py
+          test_owner_learning_phase2.py
+          test_learning_scope_firewall.py
+          test_domain_universality.py
+          test_unknown_domain_routing.py
+          test_domain_composition.py
+          test_domain_discovery.py
+          test_domain_evidence.py
+          test_domain_freshness.py
+          test_unknown_domain_learning.py
+          test_domain_benchmark.py

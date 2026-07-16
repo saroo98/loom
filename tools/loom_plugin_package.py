@@ -5,15 +5,18 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import tempfile
+import unicodedata
 import zipfile
 from pathlib import Path
 
 import loom_reliability
 import loom_release
 import loom_privacy
+import loom_sbom
 
 
 PLATFORMS = {
@@ -22,6 +25,10 @@ PLATFORMS = {
     "linux-x64": "loom-vault", "linux-arm64": "loom-vault",
 }
 FIXED_ZIP_TIME = (2020, 1, 1, 0, 0, 0)
+WINDOWS_RESERVED = {
+    "CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)),
+    *(f"LPT{i}" for i in range(1, 10)),
+}
 
 
 class PackageError(RuntimeError):
@@ -35,14 +42,31 @@ def _copy_helper_executable(source, destination):
         os.chmod(destination, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _archive_name(relative, seen):
+    if not relative or relative.startswith("/") or "\\" in relative:
+        raise PackageError("archive path is absolute or ambiguous")
+    parts = relative.split("/")
+    if any(part in {"", ".", ".."} or part.endswith((" ", "."))
+           or part.split(".", 1)[0].upper() in WINDOWS_RESERVED for part in parts):
+        raise PackageError("archive path is unsafe on a supported platform")
+    canonical = unicodedata.normalize("NFC", relative).casefold()
+    if canonical in seen:
+        raise PackageError("archive contains a case-fold or Unicode path collision")
+    seen.add(canonical)
+    return relative
+
+
 def _deterministic_zip(source, output):
-    files = list(loom_reliability._regular_files(source))
+    files = sorted(
+        loom_reliability._regular_files(source),
+        key=lambda path: path.relative_to(source).as_posix())
     if not files:
         raise PackageError("runtime source is empty")
     output.parent.mkdir(parents=True, exist_ok=True)
+    seen = set()
     with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as package:
         for path in files:
-            relative = path.relative_to(source).as_posix()
+            relative = _archive_name(path.relative_to(source).as_posix(), seen)
             info = zipfile.ZipInfo(relative, FIXED_ZIP_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
             executable = relative.startswith("bin/")
@@ -50,6 +74,22 @@ def _deterministic_zip(source, output):
             package.writestr(info, path.read_bytes())
     return {"sha256": loom_reliability.file_sha256(output), "bytes": output.stat().st_size,
             "files": len(files)}
+
+
+def archive_finalized(package, output):
+    """Create the one canonical deterministic ZIP from a finalized plugin directory."""
+    package = loom_reliability._absolute(package, "finalized plugin", must_exist=True)
+    output = loom_reliability._absolute(output, "canonical plugin ZIP")
+    required = {
+        package / "FINAL-PACKAGE-RECEIPT.json",
+        package / "release" / "metadata.json",
+        package / "release" / "trusted-root.json",
+    }
+    if not package.is_dir() or output.exists() or not all(path.is_file() for path in required) \
+            or (package / "release" / "unsigned-manifest.json").exists():
+        raise PackageError("canonical archive requires one finalized, signed plugin directory")
+    result = _deterministic_zip(package, output)
+    return {"status": "archived", "path": str(output), **result}
 
 
 def _source_digest(source):
@@ -73,7 +113,7 @@ def _verified_artifact(path, label):
     return loom_reliability.file_sha256(value)
 
 
-def _verify_helper_receipt(platform_id, helper, receipt, evidence, source):
+def _verify_helper_receipt(platform_id, helper, receipt, evidence, source, source_commit):
     required = {"platform", "binary_sha256", "rebuild_sha256", "source_sha256",
                 "cargo_lock_sha256", "sbom_sha256", "provenance_sha256"}
     if not isinstance(receipt, dict) or set(receipt) != required \
@@ -98,13 +138,38 @@ def _verify_helper_receipt(platform_id, helper, receipt, evidence, source):
             or receipt["cargo_lock_sha256"] != lock \
             or receipt["source_sha256"] != _source_digest(source):
         raise PackageError(f"{platform_id} helper evidence does not match its receipt")
+    try:
+        loom_sbom.validate(evidence["sbom"], source, helper, platform_id)
+        provenance_value = json.loads(Path(evidence["provenance"]).read_text(encoding="utf-8"))
+    except (loom_sbom.SbomError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise PackageError(f"{platform_id} helper evidence is invalid: {exc}") from exc
+    provenance_fields = {
+        "schema_version", "repository", "commit", "platform", "binary_sha256",
+        "source_sha256", "cargo_lock_sha256", "independent_build", "builder",
+    }
+    builder = provenance_value.get("builder") if isinstance(provenance_value, dict) else None
+    if not isinstance(provenance_value, dict) or set(provenance_value) != provenance_fields \
+            or provenance_value["schema_version"] != 1 \
+            or provenance_value["repository"] != "https://github.com/saroo98/loom" \
+            or provenance_value["commit"] != source_commit \
+            or provenance_value["platform"] != platform_id \
+            or provenance_value["binary_sha256"] != rebuilt \
+            or provenance_value["source_sha256"] != receipt["source_sha256"] \
+            or provenance_value["cargo_lock_sha256"] != lock \
+            or provenance_value["independent_build"] is not True \
+            or not isinstance(builder, dict) or set(builder) != {"id", "run_id"} \
+            or not all(isinstance(builder[key], str) and 1 <= len(builder[key]) <= 200
+                       for key in builder):
+        raise PackageError(f"{platform_id} helper provenance contract is invalid")
     return observed
 
 
 def build(source, output, helpers, helper_receipts, helper_evidence, *, version, release_sequence,
-          owner_tokens=()):
+          source_commit, owner_tokens=()):
     source = loom_reliability._absolute(source, "plugin source", must_exist=True)
     output = loom_reliability._absolute(output, "plugin output")
+    if not re.fullmatch(r"[0-9a-f]{40}", str(source_commit)):
+        raise PackageError("source commit must be an exact lowercase Git object ID")
     if output.exists() or set(helpers) != set(PLATFORMS) \
             or set(helper_receipts) != set(PLATFORMS) \
             or set(helper_evidence) != set(PLATFORMS):
@@ -125,7 +190,7 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
                 raise PackageError(f"{platform_id} crypto helper is unsafe")
             verified_opaque.add(_verify_helper_receipt(
                 platform_id, helper, helper_receipts[platform_id],
-                helper_evidence[platform_id], source))
+                helper_evidence[platform_id], source, source_commit))
             runtime = Path(temporary) / platform_id
             shutil.copytree(public, runtime)
             binary = runtime / "bin" / binary_name
@@ -148,8 +213,8 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
                             "sha256": archive_info["sha256"], "bytes": archive_info["bytes"]})
         manifest = {
             "package": "loom", "release_sequence": release_sequence, "version": version,
-            "targets": targets, "schema_range": {"minimum": 1, "maximum": 1},
-            "migration_chain": ["legacy-0.8", "legacy-1.0", "vault-1"],
+            "targets": targets, "schema_range": {"minimum": 1, "maximum": 2},
+            "migration_chain": ["legacy-0.8", "legacy-1.0", "vault-1", "vault-2"],
             "adapter_range": {"minimum": 1, "maximum": 1},
         }
         release = output / "release"
@@ -180,6 +245,7 @@ def main(argv=None):
     parser.add_argument("output")
     parser.add_argument("--version", required=True)
     parser.add_argument("--release-sequence", required=True, type=int)
+    parser.add_argument("--source-commit", required=True)
     for platform_id in PLATFORMS:
         parser.add_argument(f"--helper-{platform_id}", required=True)
         parser.add_argument(f"--receipt-{platform_id}", required=True)
@@ -198,7 +264,8 @@ def main(argv=None):
         for platform_id in PLATFORMS}
     try:
         result = build(args.source, args.output, helpers, receipts, evidence,
-                       version=args.version, release_sequence=args.release_sequence)
+                       version=args.version, release_sequence=args.release_sequence,
+                       source_commit=args.source_commit)
     except (PackageError, loom_release.ReleaseError, OSError) as exc:
         print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True))
         return 2

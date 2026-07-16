@@ -2,21 +2,29 @@
 
 import datetime as dt
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import loom_plugin_package
 import loom_release_sign
-from v11_test_support import build_vault_helper
+import loom_reliability
+from v11_test_support import build_vault_helper, package_evidence, package_source_commit
 
 
 ROOT = Path(__file__).resolve().parents[1]
 CRATE = ROOT / "vault-helper"
+
+BOOTSTRAP_SPEC = importlib.util.spec_from_file_location(
+    "loom_bootstrap_under_test", ROOT / "scripts" / "loom_bootstrap.py")
+loom_bootstrap = importlib.util.module_from_spec(BOOTSTRAP_SPEC)
+BOOTSTRAP_SPEC.loader.exec_module(loom_bootstrap)
 
 
 class BootstrapIntegrationTests(unittest.TestCase):
@@ -27,28 +35,14 @@ class BootstrapIntegrationTests(unittest.TestCase):
     def test_signed_fresh_package_activates_and_stable_launcher_verifies_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            digest = hashlib.sha256(self.helper.read_bytes()).hexdigest()
-            sbom = root / "sbom.json"
-            sbom.write_text('{"components":[]}', encoding="utf-8")
-            provenance = root / "provenance.json"
-            provenance.write_text('{"builder":"integration-fixture"}', encoding="utf-8")
             helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
-            evidence = {platform: {
-                "rebuild": self.helper, "sbom": sbom, "provenance": provenance,
-            } for platform in loom_plugin_package.PLATFORMS}
-            receipts = {platform: {
-                "platform": platform, "binary_sha256": digest,
-                "rebuild_sha256": digest,
-                "source_sha256": loom_plugin_package._source_digest(ROOT),
-                "cargo_lock_sha256": hashlib.sha256(
-                    (ROOT / "vault-helper" / "Cargo.lock").read_bytes()).hexdigest(),
-                "sbom_sha256": hashlib.sha256(sbom.read_bytes()).hexdigest(),
-                "provenance_sha256": hashlib.sha256(provenance.read_bytes()).hexdigest(),
-            } for platform in loom_plugin_package.PLATFORMS}
+            receipts, evidence = package_evidence(
+                ROOT, self.helper, root / "evidence", loom_plugin_package.PLATFORMS)
             package = root / "plugin-cache" / "loom" / "1.1.0"
             loom_plugin_package.build(
                 ROOT, package, helpers, receipts, evidence,
-                version="1.1.0", release_sequence=2)
+                version="1.1.0", release_sequence=2,
+                source_commit=package_source_commit(ROOT))
             ceremony = loom_release_sign.create_root_authority(
                 self.helper, root / "offline-keys",
                 ["bootstrap authority one", "bootstrap authority two",
@@ -74,6 +68,63 @@ class BootstrapIntegrationTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=30, check=False)
             self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
             self.assertEqual("1.1.0", json.loads(probe.stdout)["version"])
+
+    def test_failed_first_legacy_migration_never_activates_blank_vault_and_retry_resumes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home" / ".loom"
+            runtime = root / "runtime"
+            runtime.mkdir()
+            (runtime / ".loom-instance-id").write_text(
+                "00000000-0000-4000-8000-000000000111\n", encoding="utf-8")
+
+            class FakeVault:
+                def semantic_inventory(self):
+                    return {"sha256": "a" * 64}
+
+                def online_backup(self, destination):
+                    Path(destination).write_bytes(b"complete migrated vault")
+
+            vault = FakeVault()
+
+            class FakeOwner:
+                @staticmethod
+                def initialize_owner_vault(staged_home, _helper):
+                    path = Path(staged_home) / "vault" / "owner.sqlite3"
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(b"staged vault")
+                    return {"vault": vault, "crypto": object()}
+
+                @staticmethod
+                def open_owner_vault(open_home, _helper):
+                    if not (Path(open_home) / "vault" / "owner.sqlite3").is_file():
+                        raise AssertionError("active vault is absent")
+                    return vault, object()
+
+            migrate = mock.Mock()
+            migrate.migrate_v1.side_effect = [RuntimeError("injected migration failure"), None]
+
+            with self.assertRaisesRegex(RuntimeError, "injected migration failure"):
+                loom_bootstrap._migrate_legacy_staged(
+                    home, "helper", runtime,
+                    "00000000-0000-4000-8000-000000000111",
+                    owner_module=FakeOwner, migrate_module=migrate,
+                    reliability_module=loom_reliability)
+            self.assertFalse((home / "vault" / "owner.sqlite3").exists())
+            self.assertTrue((home / "vault" / "bootstrap-journal.json").is_file())
+
+            migrated, _crypto = loom_bootstrap._migrate_legacy_staged(
+                home, "helper", runtime,
+                "00000000-0000-4000-8000-000000000111",
+                owner_module=FakeOwner, migrate_module=migrate,
+                reliability_module=loom_reliability)
+
+            self.assertIs(vault, migrated)
+            self.assertEqual(b"complete migrated vault", (
+                home / "vault" / "owner.sqlite3").read_bytes())
+            journal = json.loads((home / "vault" / "bootstrap-journal.json").read_text(
+                encoding="utf-8"))
+            self.assertEqual("complete", journal["state"])
 
 
 if __name__ == "__main__":

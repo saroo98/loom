@@ -1,0 +1,65 @@
+name: verify-and-attest-draft-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable-version draft release tag
+        required: true
+        type: string
+      confirm_draft_only:
+        description: Type DRAFT-ONLY. This workflow never publishes.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loom-release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: inputs.confirm_draft_only == 'DRAFT-ONLY'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    environment: loom-release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+      - name: Require clean exact signed tag on default branch
+        shell: bash
+        run: |
+          test "${{ inputs.tag }}" = "v$(cat VERSION)"
+          test "$(git rev-parse '${{ inputs.tag }}^{commit}')" = "${GITHUB_SHA}"
+          git verify-tag "${{ inputs.tag }}"
+      - name: Download existing draft assets without publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release download "${{ inputs.tag }}" --dir release-assets
+      - name: Verify canonical archive and checksums
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum --check SHA256SUMS
+          cd ../tools
+          python -B loom_release_verify.py "../release-assets/loom-plugin-${{ inputs.tag }}.zip"
+      - uses: actions/attest@f6bf1532d7d6793fce74eac584813a8eee607999 # v4
+        with:
+          subject-checksums: release-assets/SHA256SUMS
+      - name: Prove the release is still a draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: test "$(gh release view '${{ inputs.tag }}' --json isDraft --jq .isDraft)" = "true"

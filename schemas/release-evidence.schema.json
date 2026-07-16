@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-evidence.schema.json",
+  "title": "Exact Loom canonical release evidence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "repository", "commit", "tag", "version", "release_sequence", "source_tree_sha256", "public_cut_sha256", "plugin", "sbom", "helpers", "test_matrix", "capability_coverage", "firewall", "threshold_signer_key_ids", "attestations", "limitations"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "repository": {"const": "https://github.com/saroo98/loom"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "release_sequence": {"type": "integer", "minimum": 1},
+    "source_tree_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "public_cut_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "plugin": {"$ref": "#/$defs/artifact"},
+    "sbom": {"$ref": "#/$defs/artifact"},
+    "helpers": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/artifact"}},
+    "test_matrix": {"type": "object"},
+    "capability_coverage": {"type": "object"},
+    "firewall": {"type": "object"},
+    "threshold_signer_key_ids": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"type": "string", "minLength": 8}},
+    "attestations": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "bytes"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    }
+  }
+}
