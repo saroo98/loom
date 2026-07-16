@@ -6,45 +6,31 @@
   "additionalProperties": false,
   "required": [
     "id", "scope", "category", "statement", "provenance", "evidence_count",
-    "confidence", "domain", "project_id", "created_at", "last_confirmed",
-    "expires_at", "status", "supersedes", "preference_key", "preference_value",
-    "last_selected", "last_applied", "last_helped", "last_hurt",
-    "selection_count", "application_count", "helped_count", "hurt_count",
-    "evidence_projects", "utility_score", "verify_by"
+    "confidence", "domain", "project_id", "created_at", "status",
+    "preference_key", "preference_value"
   ],
   "properties": {
     "id": { "type": "string", "format": "uuid" },
-    "scope": { "enum": ["global", "domain", "project", "temporary"] },
-    "category": { "enum": ["preference", "calibration", "process", "domain"] },
+    "scope": { "enum": ["general", "global", "domain", "project", "component", "temporary", "device"] },
+    "category": { "enum": ["preference", "calibration", "process", "domain", "owner-preference", "communication", "workflow-calibration", "decision-economics", "domain-invariant", "technical-fact"] },
     "statement": { "type": "string", "minLength": 1, "maxLength": 1000 },
     "provenance": { "enum": ["stated", "observed", "inferred"] },
     "evidence_count": { "type": "integer", "minimum": 1 },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "domain": { "type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$" },
     "project_id": { "type": ["string", "null"], "pattern": "^p-[0-9a-f]{32}$" },
+    "component_id": { "type": ["string", "null"], "pattern": "^c-[0-9a-f]{32}$" },
+    "device_id": { "type": ["string", "null"], "format": "uuid" },
     "created_at": { "type": "string", "format": "date-time" },
-    "last_confirmed": { "type": "string", "format": "date-time" },
     "expires_at": { "type": ["string", "null"], "format": "date-time" },
-    "status": { "enum": ["active", "dormant", "stale", "archived", "forgotten", "superseded"] },
-    "supersedes": { "type": "array", "items": { "type": "string", "format": "uuid" } },
+    "status": { "enum": ["candidate", "active", "dormant", "revalidation-required", "archived", "superseded", "quarantined", "forgotten"] },
     "preference_key": { "type": ["string", "null"] },
     "preference_value": { "type": ["string", "null"] },
-    "last_selected": { "type": ["string", "null"], "format": "date-time" },
-    "last_applied": { "type": ["string", "null"], "format": "date-time" },
-    "last_helped": { "type": ["string", "null"], "format": "date-time" },
-    "last_hurt": { "type": ["string", "null"], "format": "date-time" },
-    "selection_count": { "type": "integer", "minimum": 0 },
-    "application_count": { "type": "integer", "minimum": 0 },
-    "helped_count": { "type": "integer", "minimum": 0 },
-    "hurt_count": { "type": "integer", "minimum": 0 },
-    "evidence_projects": { "type": "array", "maxItems": 64, "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" } },
-    "utility_score": { "type": "number", "minimum": -1, "maximum": 1 },
     "verify_by": { "type": ["string", "null"], "format": "date-time" }
   },
   "allOf": [
     {
-      "if": { "properties": { "scope": { "const": "global" } } },
+      "if": { "properties": { "scope": { "enum": ["general", "global"] } } },
       "then": {
         "properties": {
           "category": { "enum": ["preference", "calibration", "process"] },
@@ -70,6 +56,32 @@
           "project_id": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" }
         }
       }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "component" } }, "required": ["scope"] },
+      "then": {
+        "required": ["component_id"],
+        "properties": {
+          "domain": { "type": "string" },
+          "project_id": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" },
+          "component_id": { "type": "string", "pattern": "^c-[0-9a-f]{32}$" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "temporary" } }, "required": ["scope"] },
+      "then": { "required": ["expires_at"] }
+    },
+    {
+      "if": { "properties": { "scope": { "const": "device" } }, "required": ["scope"] },
+      "then": {
+        "required": ["device_id"],
+        "properties": { "domain": { "type": "null" }, "project_id": { "type": "null" } }
+      }
+    },
+    {
+      "if": { "properties": { "category": { "const": "technical-fact" } }, "required": ["category"] },
+      "then": { "required": ["verify_by"] }
     },
     {
       "if": {

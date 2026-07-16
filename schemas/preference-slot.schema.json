@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/preference-slot.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["slot_id", "key", "value", "scope", "domain", "project_id", "component_id", "source", "status", "evidence_projects", "evidence_domains"],
+  "properties": {
+    "slot_id": {"type": "string", "format": "uuid"},
+    "key": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "value": {"type": "string", "minLength": 1, "maxLength": 240},
+    "scope": {"enum": ["general", "domain", "project", "component", "temporary", "device"]},
+    "domain": {"type": ["string", "null"]},
+    "project_id": {"type": ["string", "null"]},
+    "component_id": {"type": ["string", "null"]},
+    "source": {"enum": ["owner-stated", "confirmed-inference", "inferred", "default"]},
+    "status": {"enum": ["active", "candidate", "superseded", "quarantined", "forgotten"]},
+    "evidence_projects": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string"}},
+    "evidence_domains": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string"}}
+  }
+}

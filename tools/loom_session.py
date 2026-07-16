@@ -325,7 +325,7 @@ def _validate_handler_result(value):
         "applied_memory_ids", "verified_memory_ids", "rejected_memory_ids",
     }
     optional_structures = {
-        "preference_observations", "artifact_usage", "usage", "user_message"}
+        "preference_observations", "artifact_usage", "memory_effects", "usage", "user_message"}
     allowed = required | optional_id_lists | optional_structures
     if not isinstance(value, dict) or set(value) - allowed or not required.issubset(value):
         raise SessionBlocked(
@@ -396,6 +396,44 @@ def _validate_handler_result(value):
             raise SessionBlocked("HANDLER_RESULT_INVALID", "artifact usage entry is invalid")
         normalized_usage.append(dict(usage))
     normalized["artifact_usage"] = normalized_usage
+    effects = value.get("memory_effects", [])
+    if not isinstance(effects, list) or len(effects) > 16:
+        raise SessionBlocked("HANDLER_RESULT_INVALID", "memory effects are invalid")
+    normalized_effects = []
+    seen_effects = set()
+    for effect in effects:
+        required_effect = {
+            "memory_id", "status", "decision_target", "intended_effect",
+            "evidence_id", "serious_harm",
+        }
+        if not isinstance(effect, dict):
+            raise SessionBlocked("HANDLER_RESULT_INVALID", "memory effect is invalid")
+        try:
+            memory_id = str(uuid.UUID(effect.get("memory_id")))
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise SessionBlocked("HANDLER_RESULT_INVALID", "memory effect id is invalid") from exc
+        if set(effect) != required_effect \
+                or memory_id != effect["memory_id"] or memory_id in seen_effects \
+                or effect["status"] not in {
+                    "selected-only", "applied-unverified", "verified-helped", "verified-hurt",
+                    "verified-neutral", "outcome-ambiguous", "rejected-before-use"} \
+                or not isinstance(effect["decision_target"], str) \
+                or not SAFE_ID_RE.fullmatch(effect["decision_target"]) \
+                or not isinstance(effect["intended_effect"], str) \
+                or not 1 <= len(effect["intended_effect"]) <= 240 \
+                or type(effect["serious_harm"]) is not bool:
+            raise SessionBlocked("HANDLER_RESULT_INVALID", "memory effect is invalid")
+        verified = effect["status"] in {
+            "verified-helped", "verified-hurt", "verified-neutral"}
+        if verified != (isinstance(effect["evidence_id"], str)
+                        and bool(SAFE_ID_RE.fullmatch(effect["evidence_id"]))):
+            raise SessionBlocked(
+                "HANDLER_RESULT_INVALID", "verified memory effect needs exact evidence")
+        if effect["serious_harm"] and effect["status"] != "verified-hurt":
+            raise SessionBlocked("HANDLER_RESULT_INVALID", "serious harm must be verified hurt")
+        seen_effects.add(memory_id)
+        normalized_effects.append(dict(effect))
+    normalized["memory_effects"] = normalized_effects
     user_message = value.get("user_message", "")
     if not isinstance(user_message, str) or len(user_message) > 1000:
         raise SessionBlocked("HANDLER_RESULT_INVALID", "user message is invalid")
@@ -413,7 +451,8 @@ def _validate_handler_result(value):
     learning_payload = bool(
         normalized["metrics"] or normalized["applied_memory_ids"]
         or normalized["verified_memory_ids"] or normalized["rejected_memory_ids"]
-        or normalized["preference_observations"] or normalized["artifact_usage"])
+        or normalized["preference_observations"] or normalized["artifact_usage"]
+        or normalized["memory_effects"])
     if learning_payload and not normalized["evidence_ids"]:
         raise SessionBlocked(
             "HANDLER_RESULT_INVALID",

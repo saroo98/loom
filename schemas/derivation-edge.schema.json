@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/derivation-edge.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["parent_id", "child_id", "relation"],
+  "properties": {
+    "parent_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "child_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "relation": {"enum": ["derived-from", "summarizes", "evaluates", "supersedes"]}
+  }
+}

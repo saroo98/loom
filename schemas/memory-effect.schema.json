@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/memory-effect.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["memory_id", "status", "decision_target", "intended_effect", "evidence_id", "serious_harm"],
+  "properties": {
+    "memory_id": {"type": "string", "format": "uuid"},
+    "status": {"enum": ["selected-only", "applied-unverified", "verified-helped", "verified-hurt", "verified-neutral", "outcome-ambiguous", "rejected-before-use"]},
+    "decision_target": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "intended_effect": {"type": "string", "minLength": 1, "maxLength": 240},
+    "evidence_id": {"type": ["string", "null"], "pattern": "^[a-zA-Z0-9._:-]{8,256}$"},
+    "serious_harm": {"type": "boolean"}
+  }
+}

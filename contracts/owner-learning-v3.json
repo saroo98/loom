@@ -1,0 +1,81 @@
+{
+  "schema_version": 3,
+  "payload_schema_version": 3,
+  "authority": "owner-vault-sqlite",
+  "scopes": ["general", "domain", "project", "component", "temporary", "device"],
+  "legacy_scope_aliases": {"global": "general"},
+  "categories": [
+    "owner-preference", "communication", "workflow-calibration", "decision-economics",
+    "process", "domain-invariant", "technical-fact"
+  ],
+  "lifecycle_states": [
+    "candidate", "active", "dormant", "revalidation-required", "archived",
+    "superseded", "quarantined", "forgotten"
+  ],
+  "attribution_states": [
+    "selected-only", "applied-unverified", "verified-helped", "verified-hurt",
+    "verified-neutral", "outcome-ambiguous", "rejected-before-use"
+  ],
+  "evidence_states": [
+    "no-outcomes", "measurement-started", "associated-only",
+    "structural-counterfactual-only", "insufficient-paired-evidence",
+    "benefit-uncertain", "benefit-observed-local", "causal-local-evidence",
+    "regression-observed", "quarantined-harm", "owner-judgment",
+    "requires-independent-attestation"
+  ],
+  "transitions": {
+    "candidate": ["active", "dormant", "quarantined", "forgotten"],
+    "active": ["dormant", "revalidation-required", "archived", "superseded", "quarantined", "forgotten"],
+    "dormant": ["active", "revalidation-required", "archived", "quarantined", "forgotten"],
+    "revalidation-required": ["active", "archived", "quarantined", "forgotten"],
+    "archived": ["dormant", "revalidation-required", "forgotten"],
+    "superseded": ["archived", "forgotten"],
+    "quarantined": ["candidate", "forgotten"],
+    "forgotten": []
+  },
+  "promotion": {
+    "general": {"minimum_projects": 3, "minimum_domains": 2},
+    "domain": {"minimum_projects_or_components": 2},
+    "project": {"minimum_observations": 2},
+    "explicit_owner_statement": "immediate-narrowest-unambiguous-scope",
+    "forbidden_inferences": [
+      "autonomy-authority", "hard-stop", "privacy-authority", "deletion-authority",
+      "spending-authority", "destructive-action-authority", "legal-authority", "safety-authority"
+    ]
+  },
+  "bounds": {
+    "active_memory_items": 256,
+    "selected_records": 4,
+    "selected_characters": 4096,
+    "learning_candidates": 512,
+    "active_preference_slots": 128,
+    "recent_memory_effects": 4096,
+    "evidence_identities": 8192,
+    "events": 10000,
+    "checkpoint_events": 500,
+    "evaluation_partitions": 128,
+    "active_devices": 32,
+    "components_per_project": 256,
+    "active_components": 1024,
+    "quarantine_bytes": 67108864,
+    "learning_archive_bytes": 16777216,
+    "recovery_backups_bytes": 536870912,
+    "shadow_token_percent": 2
+  },
+  "claims": {
+    "one-outcome": "measurement-started",
+    "observational-only": "associated-only",
+    "shadow-only": "structural-counterfactual-only",
+    "randomized-eligible": "causal-local-evidence",
+    "severe-harm": "quarantined-harm",
+    "independent-proof": "requires-independent-attestation"
+  },
+  "privacy": {
+    "forbidden_payloads": [
+      "raw-request", "model-transcript", "source-file", "complete-plan", "secret",
+      "credential", "absolute-path", "arbitrary-tool-output", "executable-adaptation"
+    ],
+    "telemetry": false,
+    "cloud_account": false
+  }
+}

@@ -24,6 +24,15 @@ EVENT_KINDS = {
     "verification-catch", "guidance-waste", "lifecycle-outcome",
 }
 SCOPES = {"global", "domain", "project"}
+V3_SCOPES = {"general", "domain", "project", "component", "temporary", "device"}
+GENERALIZABLE_CATEGORIES = {
+    "communication", "workflow-calibration", "decision-economics", "process"}
+NEVER_GENERAL_CATEGORIES = {"domain-invariant", "technical-fact", "owner-preference"}
+FORBIDDEN_INFERRED_AUTHORITIES = {
+    "autonomy-authority", "hard-stop", "privacy-authority", "deletion-authority",
+    "spending-authority", "destructive-action-authority", "legal-authority",
+    "safety-authority",
+}
 POLARITIES = {"supports", "contradicts"}
 DECISION_TARGETS = {
     "confidence-calibration", "effort-calibration", "routing-strategy",
@@ -59,6 +68,79 @@ CANDIDATE_FIELDS = {
 
 class LearningError(RuntimeError):
     pass
+
+
+def admission_decision(observations, *, category, requested_scope, owner_stated=False):
+    """Return a deterministic, scope-safe v3 promotion decision."""
+    if category in FORBIDDEN_INFERRED_AUTHORITIES and not owner_stated:
+        return {"status": "rejected", "reason": "authority-cannot-be-inferred"}
+    if requested_scope not in V3_SCOPES or not isinstance(observations, list) \
+            or len(observations) > 512:
+        raise LearningError("learning admission inputs are invalid")
+    if owner_stated:
+        return {"status": "active", "scope": requested_scope,
+                "reason": "explicit-owner-statement"}
+    projects, domains, components, evidence = set(), set(), set(), set()
+    contradictions = 0
+    for observation in observations:
+        if not isinstance(observation, dict):
+            raise LearningError("learning observation is invalid")
+        if observation.get("project_id"):
+            projects.add(observation["project_id"])
+        if observation.get("domain"):
+            domains.add(observation["domain"])
+        if observation.get("component_id"):
+            components.add(observation["component_id"])
+        if observation.get("evidence_id"):
+            evidence.add(observation["evidence_id"])
+        contradictions += int(observation.get("contradicts") is True)
+    if contradictions:
+        return {"status": "quarantined", "scope": requested_scope,
+                "reason": "unresolved-contradiction"}
+    if len(evidence) != len(observations):
+        return {"status": "candidate", "scope": requested_scope,
+                "reason": "evidence-not-independent"}
+    if requested_scope == "general":
+        if category in NEVER_GENERAL_CATEGORIES or category not in GENERALIZABLE_CATEGORIES:
+            return {"status": "rejected", "scope": "domain" if domains else "project",
+                    "reason": "category-not-generalizable"}
+        eligible = len(observations) >= 5 and len(projects) >= 3 and len(domains) >= 2
+        reason = "cross-project-cross-domain-support" if eligible else "insufficient-diversity"
+    elif requested_scope == "domain":
+        eligible = len(observations) >= 3 and len(projects | components) >= 2 \
+            and len(domains) == 1
+        reason = "domain-diversity-threshold" if eligible else "insufficient-diversity"
+    elif requested_scope in {"project", "component"}:
+        eligible = len(observations) >= 2
+        reason = "local-repeat-support" if eligible else "insufficient-support"
+    else:
+        eligible = False
+        reason = "nontransferable-scope-requires-explicit-owner-statement"
+    return {"status": "active" if eligible else "candidate",
+            "scope": requested_scope, "reason": reason,
+            "projects": len(projects), "domains": len(domains),
+            "components": len(components), "observations": len(observations)}
+
+
+def resolve_preference(candidates):
+    """Resolve preference precedence without arbitrary last-write-wins behavior."""
+    if not isinstance(candidates, list) or len(candidates) > 128:
+        raise LearningError("preference candidates are invalid")
+    precedence = {"owner-stated": 4, "project-stated": 3,
+                  "confirmed-inference": 2, "inferred": 1, "default": 0}
+    valid = [item for item in candidates if isinstance(item, dict)
+             and item.get("source") in precedence and isinstance(item.get("value"), str)]
+    if not valid:
+        return {"status": "unset", "value": None, "source": None}
+    highest = max(precedence[item["source"]] for item in valid)
+    finalists = [item for item in valid if precedence[item["source"]] == highest]
+    stated = [item for item in finalists if item["source"] in {"owner-stated", "project-stated"}]
+    if len({item["value"] for item in stated if item.get("concurrent")}) > 1:
+        return {"status": "quarantined", "value": None,
+                "source": stated[0]["source"], "reason": "concurrent-owner-conflict"}
+    finalists.sort(key=lambda item: (item.get("sequence", 0), item["value"]), reverse=True)
+    return {"status": "active", "value": finalists[0]["value"],
+            "source": finalists[0]["source"]}
 
 
 def _canonical(value):

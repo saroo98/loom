@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/policy-evaluation.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evaluation_id", "partition", "evidence_state", "policy_version", "sample_count", "effect_lower", "effect_upper", "harm_upper", "token_cost", "elapsed_seconds"],
+  "properties": {
+    "evaluation_id": {"type": "string", "format": "uuid"},
+    "partition": {"type": "string", "minLength": 1, "maxLength": 256},
+    "evidence_state": {"enum": ["no-outcomes", "measurement-started", "associated-only", "structural-counterfactual-only", "insufficient-paired-evidence", "benefit-uncertain", "benefit-observed-local", "causal-local-evidence", "regression-observed", "quarantined-harm", "owner-judgment", "requires-independent-attestation"]},
+    "policy_version": {"type": "string", "minLength": 1, "maxLength": 64},
+    "sample_count": {"type": "integer", "minimum": 0},
+    "effect_lower": {"type": ["number", "null"]},
+    "effect_upper": {"type": ["number", "null"]},
+    "harm_upper": {"type": ["number", "null"]},
+    "token_cost": {"type": "integer", "minimum": 0},
+    "elapsed_seconds": {"type": "number", "minimum": 0}
+  }
+}

@@ -5,12 +5,16 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "applied_memory_ids", "verified_memory_ids",
-    "rejected_memory_ids", "metrics", "preference_observations", "artifact_usage"],
+    "rejected_memory_ids", "memory_effects", "metrics", "preference_observations", "artifact_usage"],
   "properties": {
     "schema_version": {"const": 1},
     "applied_memory_ids": {"$ref": "#/$defs/ids"},
     "verified_memory_ids": {"$ref": "#/$defs/ids"},
     "rejected_memory_ids": {"$ref": "#/$defs/ids"},
+    "memory_effects": {
+      "type": "array", "maxItems": 16,
+      "items": {"$ref": "memory-effect.schema.json"}
+    },
     "metrics": {
       "type": "object",
       "maxProperties": 64,

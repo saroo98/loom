@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/memory-observation.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["observation_id", "memory_id", "scope", "domain", "project_id", "component_id", "decision_target", "evidence_id", "observed_at"],
+  "properties": {
+    "observation_id": {"type": "string", "format": "uuid"},
+    "memory_id": {"type": ["string", "null"], "format": "uuid"},
+    "scope": {"enum": ["general", "domain", "project", "component", "temporary", "device"]},
+    "domain": {"type": ["string", "null"], "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "project_id": {"type": ["string", "null"], "pattern": "^p-[0-9a-f]{32}$"},
+    "component_id": {"type": ["string", "null"], "pattern": "^c-[0-9a-f]{32}$"},
+    "decision_target": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "evidence_id": {"type": "string", "pattern": "^[a-zA-Z0-9._:-]{8,256}$"},
+    "observed_at": {"type": "string", "format": "date-time"}
+  }
+}
