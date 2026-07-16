@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/domain-bundle.schema.json",
+  "title": "Content-bound discovered-domain authority bundle",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "route", "discovery", "target_fingerprint", "sources", "applicability", "invariants", "created_at", "bundle_digest"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "route": {"$ref": "domain-route.schema.json"},
+    "discovery": {"$ref": "domain-discovery-receipt.schema.json"},
+    "target_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "sources": {"type": "array", "maxItems": 20, "items": {"$ref": "domain-source.schema.json"}},
+    "applicability": {"type": "array", "maxItems": 64, "items": {"$ref": "domain-applicability.schema.json"}},
+    "invariants": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"$ref": "domain-invariant.schema.json"}},
+    "created_at": {"type": "string", "format": "date-time"},
+    "bundle_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

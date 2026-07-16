@@ -18,6 +18,10 @@ from pathlib import Path
 import loom_gate
 import loom_crypto
 import loom_domain
+import loom_domain_bundle
+import loom_domain_contract
+import loom_domain_invariants
+import loom_domain_learning
 import loom_install
 import loom_improvement
 import loom_lifecycle
@@ -32,7 +36,7 @@ import loom_vault_adapter
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 4
+ACTION_SCHEMA_VERSION = 5
 ACTION_FIELDS = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -40,13 +44,13 @@ ACTION_FIELDS = {
     "created_at", "expires_at", "attempts", "max_attempts", "session_id",
     "operation_id", "journal_path", "initial_pack_hash",
     "remove_pristine_pack", "work_order", "prepared", "context", "result",
-    "repair_plan", "host_result", "plan_contract", "context_manifest",
+    "repair_plan", "host_result", "plan_contract", "domain_contract", "context_manifest",
     "action_hash",
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
 MAX_ENCRYPTED_ACTION_BYTES = 384 * 1024
-PLAN_CONTRACT_SCHEMA_VERSION = 1
+PLAN_CONTRACT_SCHEMA_VERSION = 2
 ARTIFACT_ORDER = (
     "intake.md", "survey.md", "product.md", "architecture.md", "uiux.md",
     "contracts.md", "testing.md", "release-rollback.md", "security.md",
@@ -176,6 +180,15 @@ def _validate_action(value, path):
             or prepared.request_hash != loom_runtime._sha(
                 " ".join(value["request"].split())):
         raise OrchestratorError("ACTION_CORRUPT", "sealed preparation does not match action")
+    try:
+        loom_domain_contract.validate_route(value["domain_contract"])
+    except loom_domain_contract.DomainContractError as exc:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", f"sealed domain route is invalid: {exc}") from exc
+    if value["domain_contract"]["active_task_domains"] != value["domains"] \
+            and not (value["domains"] == ["unclassified"]
+                     and value["domain_contract"]["active_task_domains"] == ["unclassified"]):
+        raise OrchestratorError("ACTION_CORRUPT", "sealed domain route differs from action")
     contract_expected = value["intent"] == "plan" \
         and not prepared.route_contract["blocked"] \
         and value["initial_pack_hash"] is not None
@@ -445,6 +458,9 @@ def _make_plan_contract(action, prepared):
     required_invariants = []
     current_facts = []
     verification_media = []
+    normalized_invariants = []
+    route = action["domain_contract"]
+    instant = loom_runtime._parse_time(action["created_at"])
     for domain_id in domains:
         adapter = loom_domain.CATALOG.get(domain_id)
         if adapter is None:
@@ -455,6 +471,8 @@ def _make_plan_contract(action, prepared):
             ["domain-real-medium execution"],
         ))
         media = list(guidance[2])
+        normalized_invariants.extend(loom_domain_invariants.compile_shipped(
+            domain_id, adapter, guidance, now=instant))
         for index, invariant in enumerate(adapter["invariants"]):
             required_invariants.append({
                 "domain": domain_id,
@@ -488,6 +506,10 @@ def _make_plan_contract(action, prepared):
         "survey_hash": action["survey_hash"],
         "tier": tier,
         "domains": domains,
+        "domain_route": route,
+        "route_digest": route["route_digest"],
+        "composition_graph_digest": route["graph_digest"],
+        "target_fingerprint": action["survey_hash"],
         "pack_baseline_hash": action["initial_pack_hash"],
         "pack_root": "plans",
         "allowed_host_write_paths": ["plans/**"],
@@ -495,6 +517,14 @@ def _make_plan_contract(action, prepared):
             tier, domains, action["request"],
             prepared.route_contract["requires_domain_discovery"]),
         "required_domain_invariants": required_invariants,
+        "domain_invariants": normalized_invariants,
+        "domain_discovery": {
+            "required": route["coverage_state"] != "known",
+            "human_projection": "domain-discovery.md",
+            "machine_bundle": "domain-discovery.json",
+            "maximum_sources": 20, "maximum_invariants": 32,
+            "maximum_retrieval_rounds": 2,
+        },
         "current_facts_to_verify": current_facts,
         "verification_media": verification_media,
         "budget": {
@@ -549,7 +579,7 @@ def _validate_authored_plan(action):
         raise OrchestratorError(
             "PLAN_CONTRACT_MISMATCH", "work-order count is outside the sealed topology")
     if action["tier"] == "S":
-        return
+        return None
 
     manifest = pack / "MANIFEST.md"
     try:
@@ -601,6 +631,38 @@ def _validate_authored_plan(action):
             raise OrchestratorError(
                 "PLAN_CONTRACT_MISMATCH", "required domain invariants are not verified")
 
+    validated_domain_bundle = None
+    if contract["domain_discovery"]["required"]:
+        bundle_path = pack / contract["domain_discovery"]["machine_bundle"]
+        try:
+            bundle = json.loads(bundle_path.read_text(encoding="utf-8"))
+            validated_domain_bundle = loom_domain_bundle.validate(bundle)
+        except (OSError, UnicodeError, json.JSONDecodeError,
+                loom_domain_bundle.DomainBundleError) as exc:
+            raise OrchestratorError(
+                "DOMAIN_EVIDENCE_NOT_READY", f"domain discovery bundle is invalid: {exc}") \
+                from exc
+        if bundle["route"] != contract["domain_route"] \
+                or bundle["target_fingerprint"] != contract["target_fingerprint"]:
+            raise OrchestratorError(
+                "DOMAIN_EVIDENCE_CHANGED",
+                "domain evidence is bound to another route or target state")
+        try:
+            projection = (pack / contract["domain_discovery"]["human_projection"]).read_text(
+                encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise OrchestratorError(
+                "DOMAIN_PROJECTION_MISSING", f"domain projection cannot be read: {exc}") from exc
+        missing_bindings = [
+            item["invariant_id"] for item in bundle["invariants"]
+            if item["invariant_id"] not in projection
+            or item["canonical_digest"] not in projection]
+        if missing_bindings:
+            raise OrchestratorError(
+                "DOMAIN_PROJECTION_DIVERGED",
+                "domain projection omits sealed invariant IDs or digests: "
+                + ", ".join(missing_bindings[:8]))
+
     if contract["current_facts_to_verify"]:
         rows = table(pack / "intake.md", "Current facts to verify")
         observed = {(row.get("domain", "").strip(), row.get("fact", "").strip())
@@ -622,6 +684,32 @@ def _validate_authored_plan(action):
         if not required.issubset(observed):
             raise OrchestratorError(
                 "PLAN_CONTRACT_MISMATCH", "required verification media are not planned")
+    return validated_domain_bundle
+
+
+def _store_domain_bundle(memory, bundle):
+    if bundle is None or not isinstance(memory, loom_vault_adapter.VaultMemoryAdapter):
+        return []
+    stored = []
+    sequence = 1
+    for kind, values in (("source", bundle["sources"]),
+                         ("applicability", bundle["applicability"]),
+                         ("invariant", bundle["invariants"])):
+        for value in values:
+            stored.append(loom_domain_learning.store(
+                memory.vault, kind, value, source_sequence=sequence))
+            sequence += 1
+    adapter = {
+        "id": "adapter-" + bundle["bundle_digest"][7:31],
+        "domain_ids": bundle["route"]["active_task_domains"],
+        "invariant_ids": [item["invariant_id"] for item in bundle["invariants"]],
+        "status": "active",
+        "revalidate_by": min(
+            item["freshness"]["revalidate_by"] for item in bundle["invariants"]),
+    }
+    stored.append(loom_domain_learning.store(
+        memory.vault, "adapter", adapter, source_sequence=sequence))
+    return stored
 
 
 def _pack_hash(pack):
@@ -715,7 +803,8 @@ def _read_host_outcome(result_path, action):
         raise OrchestratorError("HOST_OUTCOME_INVALID", str(exc)) from exc
     fields = {
         "schema_version", "applied_memory_ids", "verified_memory_ids",
-        "rejected_memory_ids", "metrics", "preference_observations", "artifact_usage",
+        "rejected_memory_ids", "memory_effects", "metrics", "preference_observations",
+        "artifact_usage",
     }
     if not isinstance(value, dict) or frozenset(value) not in {frozenset(fields),
             frozenset(fields | {"replay_pair"})} or value["schema_version"] != 1:
@@ -728,6 +817,7 @@ def _read_host_outcome(result_path, action):
         "applied_memory_ids": value["applied_memory_ids"],
         "verified_memory_ids": value["verified_memory_ids"],
         "rejected_memory_ids": value["rejected_memory_ids"],
+        "memory_effects": value["memory_effects"],
         "preference_observations": value["preference_observations"],
         "artifact_usage": value["artifact_usage"],
     }
@@ -750,7 +840,8 @@ def _read_host_outcome(result_path, action):
                 if isinstance(item, dict)}
     referenced = set(normalized["applied_memory_ids"]) \
         | set(normalized["verified_memory_ids"]) \
-        | set(normalized["rejected_memory_ids"])
+        | set(normalized["rejected_memory_ids"]) \
+        | {item["memory_id"] for item in normalized["memory_effects"]}
     if not referenced.issubset(selected):
         raise OrchestratorError(
             "HOST_OUTCOME_INVALID", "host outcome references memory outside sealed context")
@@ -760,7 +851,8 @@ def _read_host_outcome(result_path, action):
     result = {"schema_version": 1, "learning": {
         key: normalized[key] for key in (
             "metrics", "evidence_ids", "applied_memory_ids", "verified_memory_ids",
-            "rejected_memory_ids", "preference_observations", "artifact_usage")}}
+            "rejected_memory_ids", "memory_effects", "preference_observations",
+            "artifact_usage")}}
     if "replay_pair" in value:
         result["replay_pair"] = _validated_replay_pair(
             value["replay_pair"], action, normalized["applied_memory_ids"])
@@ -1272,9 +1364,14 @@ def _vault_helper(install_root):
 def _memory_backend(home, install_root, project_root=None):
     helper = _vault_helper(install_root)
     if helper is None:
-        instance_id = loom_memory.initialize(home, install_root)
-        return instance_id, loom_session.LocalMemoryAdapter(
-            owner_home=home, instance_id=instance_id)
+        if os.environ.get("LOOM_TEST_ALLOW_LEGACY_BACKEND") == "1":
+            instance_id = loom_memory.initialize(home, install_root)
+            return instance_id, loom_session.LocalMemoryAdapter(
+                owner_home=home, instance_id=instance_id)
+        raise OrchestratorError(
+            "OWNER_VAULT_BACKEND_UNAVAILABLE",
+            "the verified owner-vault helper is unavailable; Loom refused to create a second "
+            "legacy learning authority")
     opened = loom_owner.initialize_owner_vault(home, helper)
     adapter = loom_vault_adapter.VaultMemoryAdapter(
         owner_home=home, vault=opened["vault"], project_root=project_root)
@@ -1346,6 +1443,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "work_order": None, "prepared": prepared.to_dict(),
         "context": context_capsule,
         "repair_plan": None, "host_result": None, "plan_contract": None,
+        "domain_contract": loom_domain.select_domains(
+            request, explicit=list(prepared.domains))["domain_contract"],
         "context_manifest": loom_performance.production_context_manifest(install_root),
         "result": None,
     }
@@ -1562,8 +1661,9 @@ def complete(action_path, usage_path, *, result_path=None, now=None,
             raise OrchestratorError(
                 "TARGET_DRIFT",
                 "target, project, or routed intent changed during delegated work")
+    validated_domain_bundle = None
     if action["intent"] == "plan":
-        _validate_authored_plan(action)
+        validated_domain_bundle = _validate_authored_plan(action)
     controller = _controller(action, usage=usage)
     try:
         receipt = controller.run(
@@ -1579,6 +1679,14 @@ def complete(action_path, usage_path, *, result_path=None, now=None,
         raise OrchestratorError(
             "HANDLER_INTERRUPTED", str(exc), status=action["status"]) from exc
     result = receipt.to_dict()
+    if result.get("status") == "completed":
+        stored_domain_records = _store_domain_bundle(
+            controller.memory, validated_domain_bundle)
+        if stored_domain_records:
+            result["domain_learning"] = {
+                "bundle_digest": validated_domain_bundle["bundle_digest"],
+                "stored_records": len(stored_domain_records),
+            }
     production_replay = _record_production_replay(action, controller.memory)
     if production_replay is not None:
         result["production_replay"] = production_replay

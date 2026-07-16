@@ -13,6 +13,7 @@ import loom_lint  # noqa: E402
 import loom_gate  # noqa: E402
 import loom_survey  # noqa: E402
 import loom_lifecycle  # noqa: E402
+import domain_test_support  # noqa: E402
 
 TODAY = dt.date.today().isoformat()
 
@@ -854,7 +855,11 @@ class DomainCoverageTests(unittest.TestCase):
             text)
         path.write_text(text, encoding="utf-8")
 
-    def write_discovery(self, domain_id, status="verified", row_status="verified"):
+    def write_discovery(self, domain_id, status="verified", row_status="verified",
+                        bundle=None):
+        invariant_id = (bundle["invariants"][0]["invariant_id"] if bundle else "inv-missing")
+        invariant_digest = (bundle["invariants"][0]["canonical_digest"]
+                            if bundle else "sha256:" + "0" * 64)
         write(self.pack, "domain-discovery.md", f"""---
 artifact: domain-discovery
 domain_id: {domain_id}
@@ -870,14 +875,35 @@ loom_version: "{loom_lint.current_version()}"
 |---|---|---|---|---|
 | governing standard | safety invariant | current edition | {TODAY} | one jurisdiction |
 ## Invariant ledger
-| Invariant | Evidence | Failure if wrong | Required real medium | Status |
-|---|---|---|---|---|
-| safe state | governing standard | unsafe operation | hardware review | {row_status} |
+| Invariant ID | Canonical digest | Invariant | Evidence | Failure if wrong | Required real medium | Status |
+|---|---|---|---|---|---|---|
+| {invariant_id} | {invariant_digest} | safe state | governing standard | unsafe operation | hardware review | {row_status} |
 ## Forbidden default transfers
 No web defaults.
 ## Artifact and gate adaptation
 Hardware review is the release medium.
 """)
+        if bundle is not None:
+            write(self.pack, "domain-discovery.json", json.dumps(bundle, sort_keys=True))
+            wo = self.pack / "work-orders" / "WO-001-build-ui.md"
+            wo.write_text(wo.read_text(encoding="utf-8").replace(
+                f"last_verified: {TODAY}",
+                "domain_invariants: ["
+                f"{invariant_id}@{invariant_digest}]\nlast_verified: {TODAY}", 1),
+                encoding="utf-8")
+            lifecycle_path = self.pack / "lifecycle.json"
+            lifecycle = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+            snapshot = loom_gate._work_order_plan_snapshot(self.pack)
+            g1 = lifecycle["events"][1]
+            g1["work_order_plans"] = snapshot
+            g1["work_order_plans_sha256"] = loom_gate._mapping_hash(snapshot)
+            g1["event_hash"] = loom_gate._event_hash(g1)
+            authorization = lifecycle["events"][2]
+            authorization["previous_event_hash"] = g1["event_hash"]
+            authorization["g1_event_hash"] = g1["event_hash"]
+            authorization["event_hash"] = loom_gate._event_hash(authorization)
+            lifecycle_path.write_text(
+                json.dumps(lifecycle, indent=2) + "\n", encoding="utf-8")
 
     def test_unknown_domain_cannot_pass_g1(self):
         self.set_manifest("marine-navigation", "unknown", "produce")
@@ -887,12 +913,20 @@ Hardware review is the release medium.
                             for item in report.errors), report.findings)
 
     def test_verified_custom_domain_requires_complete_discovery(self):
-        self.set_manifest("marine-navigation", "verified", "produce")
-        self.write_discovery("marine-navigation")
+        bundle = domain_test_support.gate_ready_bundle()
+        self.set_manifest("quantum-optics", "verified", "produce")
+        self.write_discovery("quantum-optics", bundle=bundle)
         report = loom_lint.lint(self.pack)
         self.assertEqual([], report.errors, report.findings)
         self.assertFalse(any(item["code"] == "E22" for item in report.errors),
                          report.findings)
+
+    def test_verified_markdown_without_machine_bundle_is_rejected(self):
+        self.set_manifest("marine-navigation", "verified", "produce")
+        self.write_discovery("marine-navigation")
+        report = loom_lint.lint(self.pack)
+        self.assertTrue(any(item["code"] == "E25" for item in report.errors),
+                        report.findings)
 
     def test_verified_status_is_reserved_for_domain_discovery(self):
         write(self.pack, "product.md", f"""---

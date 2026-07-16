@@ -53,6 +53,13 @@
       "type": "array",
       "items": { "type": "string", "pattern": "^A-[0-9]{3,}$" },
       "description": "Ledger ids this WO rests on (mirrors the Epistemic notes section)."
+    },
+    "domain_invariants": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^inv-[0-9a-f]{16,64}@sha256:[0-9a-f]{64}$"},
+      "description": "Content-bound domain invariants this work order consumes."
     }
   }
 }

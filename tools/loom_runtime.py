@@ -437,7 +437,7 @@ def _route(text, intent, match=None, *, code=None, **kwargs):
 
 
 _BUILD_REQUEST_RE = re.compile(
-    r"^(?:please\s+)?(?:build|create|make|implement|develop|write|design|add|generate|plan)\b")
+    r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|add|generate|plan)\b")
 _BUILD_CONTROL_RE = re.compile(
     r"^(?:please\s+)?(?:build|implement)\s+(?:the\s+)?(?:next|remaining|rest)\b")
 _QUESTION_BUILD_RE = re.compile(
@@ -480,6 +480,16 @@ def _high_consequence_match(text):
     match = _HIGH_CONSEQUENCE_RE.search(text)
     if match is None:
         return None
+    matched = match.group(0).casefold()
+    tail = text[match.end():].lstrip()
+    # In build requests, phrases such as "release engineering" and "publish pipeline"
+    # name the requested system. They are not authorization to perform the effect.
+    if _is_build_request(text) \
+            and re.search(r"\b(?:and|then)\s+(?:deploy|publish|release|ship)\b", matched) \
+            and re.match(
+                r"(?:engineering|plan(?:ning)?|pipeline|workflow|tool|system|feature|"
+                r"automation|process|documentation|docs|tests?|contract)\b", tail):
+        return None
     # A product noun such as "deploy tool" is a plan request, not an effect.
     if _is_build_request(text) and not re.search(
             r"\b(?:and|then)\s+(?:deploy|publish|release|ship|delete|drop|destroy|"
@@ -513,13 +523,14 @@ def resolve_intent(request, state=None):
         r"\bshow (?:me )?what you remember about me\b|"
         r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
         r"\bshow (?:me )?what you learned from this project\b|"
+        r"\binspect what (?:loom|you) learned\b|\bwhat did (?:loom|you) learn\b|"
         r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b",
         text))
     explicit_forget = bool(re.search(r"\bforget\b|\bstop remembering\b", text)) \
         and not build_request
     explicit_remember = bool(re.search(
         r"\bremember(?: that| this)?\b|\bbe more careful\b|\bfrom now on\b|\bprefer\b|"
-        r"\bbe less autonomous\b",
+        r"\bbe less autonomous\b|\bcorrect (?:that|my|the)\b",
         text)) and not build_request and not profile_query
     memory_direct = None
     if profile_query:
@@ -1356,7 +1367,10 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
         raise RuntimeBlocked(
             "DOMAIN_INDETERMINATE",
             f"cannot establish trustworthy domain evidence: {exc}") from exc
-    domains = domains_result["memory_domains"] or ["unclassified"]
+    # Preserve the named active domain even when no shipped adapter exists.  Memory
+    # selection remains limited to ``memory_domains`` inside the domain capsule; the
+    # planning route must not erase an unknown domain to ``unclassified``.
+    domains = domains_result["active_task_domains"] or ["unclassified"]
     tier = (pack_route["tier"] if pack_route is not None
             else loom_tier.classify(request, domains=domains)["tier"])
     if domains_result["requires_domain_discovery"] and tier == "S":

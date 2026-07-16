@@ -6,13 +6,14 @@
   "additionalProperties": false,
   "required": [
     "schema_version", "request_hash", "survey_hash", "tier", "domains",
+    "domain_route", "route_digest", "composition_graph_digest", "target_fingerprint",
     "pack_baseline_hash", "pack_root", "allowed_host_write_paths",
-    "artifact_matrix", "required_domain_invariants", "current_facts_to_verify",
+    "artifact_matrix", "required_domain_invariants", "domain_invariants", "domain_discovery", "current_facts_to_verify",
     "verification_media", "budget", "work_order_topology", "completion_gates",
     "contract_hash"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "request_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "survey_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "tier": {"enum": ["S", "M", "L", "XL"]},
@@ -20,6 +21,10 @@
       "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}
     },
+    "domain_route": {"$ref": "domain-route.schema.json"},
+    "route_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "composition_graph_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "target_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "pack_baseline_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "pack_root": {"const": "plans"},
     "allowed_host_write_paths": {
@@ -50,6 +55,22 @@
           "evidence_target": {"type": "string", "minLength": 1, "maxLength": 240},
           "required_real_medium": {"type": "string", "minLength": 1, "maxLength": 240}
         }
+      }
+    },
+    "domain_invariants": {
+      "type": "array", "maxItems": 128,
+      "items": {"$ref": "domain-invariant.schema.json"}
+    },
+    "domain_discovery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["required", "human_projection", "machine_bundle", "maximum_sources", "maximum_invariants", "maximum_retrieval_rounds"],
+      "properties": {
+        "required": {"type": "boolean"},
+        "human_projection": {"const": "domain-discovery.md"},
+        "machine_bundle": {"const": "domain-discovery.json"},
+        "maximum_sources": {"const": 20},
+        "maximum_invariants": {"const": 32},
+        "maximum_retrieval_rounds": {"const": 2}
       }
     },
     "current_facts_to_verify": {

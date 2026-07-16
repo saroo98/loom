@@ -9,7 +9,7 @@ import loom_domain
 
 
 class DomainUniversalityTests(unittest.TestCase):
-    def test_structural_evidence_detects_domain_without_domain_words(self):
+    def test_structural_evidence_is_ambient_without_active_request_words(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "package.json").write_text(json.dumps({
@@ -17,8 +17,8 @@ class DomainUniversalityTests(unittest.TestCase):
             (root / "room.glb").write_bytes(b"fixture")
             facts = loom_domain.inspect_project(root)
             result = loom_domain.select_domains("Improve this project", project_facts=facts)
-        self.assertEqual(result["memory_domains"], ["realtime-3d"])
-        self.assertTrue(result["adapters"][0]["structural_hits"])
+        self.assertEqual(result["memory_domains"], [])
+        self.assertIn("realtime-3d", result["ambient_domains"])
 
     def test_weak_generic_files_do_not_create_unrelated_adapters(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -41,7 +41,8 @@ class DomainUniversalityTests(unittest.TestCase):
             extension = loom_domain.select_domains(
                 "Improve this existing project",
                 project_facts=loom_domain.inspect_project(root))
-            self.assertIn("browser-extension", extension["memory_domains"])
+            self.assertNotIn("browser-extension", extension["memory_domains"])
+            self.assertIn("browser-extension", extension["ambient_domains"])
 
     def test_composite_domain_loads_only_matching_adapters(self):
         result = loom_domain.select_domains(
@@ -49,6 +50,22 @@ class DomainUniversalityTests(unittest.TestCase):
         self.assertEqual(set(result["memory_domains"]), {"accounting", "desktop"})
         self.assertNotIn("website", result["memory_domains"])
         self.assertNotIn("web-app", result["memory_domains"])
+
+    def test_evidence_path_and_nested_docs_site_do_not_override_agent_runtime_domain(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "plugin.json").write_text("{}", encoding="utf-8")
+            (root / "SKILL.md").write_text("# Agent skill\n", encoding="utf-8")
+            (root / "sitemap.xml").write_text("<urlset/>", encoding="utf-8")
+            facts = loom_domain.inspect_project(root)
+            result = loom_domain.select_domains(
+                "Now please implement C:\\Reports\\Deep Research\\release engineering.md",
+                project_facts=facts)
+
+        self.assertEqual([], result["memory_domains"])
+        self.assertIn("llm-agent", result["ambient_domains"])
+        self.assertNotIn("research", result["memory_domains"])
+        self.assertNotIn("website", result["memory_domains"])
 
     def test_unknown_domain_blocks_for_invariant_discovery_without_generic_defaults(self):
         result = loom_domain.select_domains("Plan an experimental quantum optics rig")

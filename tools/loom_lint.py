@@ -64,6 +64,7 @@ import loom_survey
 import loom_gate
 import loom_memory
 import loom_domain
+import loom_domain_bundle
 import loom_lifecycle
 
 ENUMS = {
@@ -238,27 +239,65 @@ def validate_schema(rep, path, value, schema_name):
                 f"cannot load governing schema {schema_name}: {exc}")
         return
 
-    def collect(instance, rule, location):
+    documents = {schema_name: schema}
+
+    def resolve_reference(reference, document):
+        if not isinstance(reference, str) or not reference:
+            raise ValueError("schema reference is invalid")
+        filename, separator, fragment = reference.partition("#")
+        target_document = document
+        if filename:
+            if Path(filename).name != filename or not filename.endswith(".json"):
+                raise ValueError("schema reference escapes the schema directory")
+            if filename not in documents:
+                documents[filename] = json.loads(
+                    (SCHEMA_DIR / filename).read_text(encoding="utf-8"))
+            target_document = documents[filename]
+        target = target_document
+        if separator and fragment:
+            if not fragment.startswith("/"):
+                raise ValueError("schema reference fragment is invalid")
+            for token in fragment[1:].split("/"):
+                token = token.replace("~1", "/").replace("~0", "~")
+                if not isinstance(target, dict) or token not in target:
+                    raise ValueError("schema reference fragment is unavailable")
+                target = target[token]
+        return target, target_document
+
+    def collect(instance, rule, location, document=None, depth=0):
         errors = []
+        document = schema if document is None else document
+        if depth > 64:
+            return [f"{location} schema reference depth exceeded"]
         if not isinstance(rule, dict):
             return errors if rule is not False else [f"{location} is not allowed"]
+        if "$ref" in rule:
+            try:
+                target, target_document = resolve_reference(rule["$ref"], document)
+            except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+                return [f"{location} schema reference failed: {exc}"]
+            errors.extend(collect(
+                instance, target, location, target_document, depth + 1))
+            rule = {key: item for key, item in rule.items() if key != "$ref"}
 
         for branch in rule.get("allOf", []):
-            errors.extend(collect(instance, branch, location))
+            errors.extend(collect(instance, branch, location, document, depth + 1))
         if "oneOf" in rule:
-            matches = sum(not collect(instance, branch, location)
+            matches = sum(not collect(instance, branch, location, document, depth + 1)
                           for branch in rule["oneOf"])
             if matches != 1:
                 errors.append(f"{location} must match exactly one oneOf branch")
         if "anyOf" in rule and not any(
-                not collect(instance, branch, location)
+                not collect(instance, branch, location, document, depth + 1)
                 for branch in rule["anyOf"]):
             errors.append(f"{location} must match at least one anyOf branch")
         if "if" in rule:
-            condition_matches = not collect(instance, rule["if"], location)
+            condition_matches = not collect(
+                instance, rule["if"], location, document, depth + 1)
             selected = rule.get("then") if condition_matches else rule.get("else")
             if selected is not None:
-                errors.extend(collect(instance, selected, location))
+                errors.extend(collect(
+                    instance, selected, location, document, depth + 1))
 
         expected = rule.get("type")
         expected_types = expected if isinstance(expected, list) else [expected]
@@ -327,14 +366,16 @@ def validate_schema(rep, path, value, schema_name):
                     errors.append(f"{location} contains duplicate items")
             prefix = rule.get("prefixItems", [])
             for index, child in enumerate(prefix[:len(instance)]):
-                errors.extend(collect(instance[index], child, f"{location}[{index}]"))
+                errors.extend(collect(
+                    instance[index], child, f"{location}[{index}]", document, depth + 1))
             remaining = instance[len(prefix):]
             item_rule = rule.get("items", {})
             if item_rule is False and remaining:
                 errors.append(f"{location} has disallowed additional items")
             elif isinstance(item_rule, dict):
                 for index, item in enumerate(remaining, start=len(prefix)):
-                    errors.extend(collect(item, item_rule, f"{location}[{index}]"))
+                    errors.extend(collect(
+                        item, item_rule, f"{location}[{index}]", document, depth + 1))
 
         if isinstance(instance, dict):
             if "minProperties" in rule and len(instance) < rule["minProperties"]:
@@ -349,13 +390,14 @@ def validate_schema(rep, path, value, schema_name):
             matched = set(properties) & set(instance)
             for key, child in properties.items():
                 if key in instance:
-                    errors.extend(collect(instance[key], child, f"{location}.{key}"))
+                    errors.extend(collect(
+                        instance[key], child, f"{location}.{key}", document, depth + 1))
             for pattern, child in pattern_properties.items():
                 for key in instance:
                     if re.search(pattern, key):
                         matched.add(key)
                         errors.extend(collect(
-                            instance[key], child, f"{location}.{key}"))
+                            instance[key], child, f"{location}.{key}", document, depth + 1))
             unknown = set(instance) - matched
             additional = rule.get("additionalProperties", {})
             if additional is False:
@@ -364,7 +406,7 @@ def validate_schema(rep, path, value, schema_name):
             elif isinstance(additional, dict):
                 for key in sorted(unknown):
                     errors.extend(collect(
-                        instance[key], additional, f"{location}.{key}"))
+                        instance[key], additional, f"{location}.{key}", document, depth + 1))
         return errors
 
     for message in collect(value, schema, "$"):
@@ -850,6 +892,7 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                         "release-rollback.md")
 
     discovery = pack / "domain-discovery.md"
+    discovery_bundle = pack / "domain-discovery.json"
     discovery_decision = artifact_decisions.get("domain-discovery.md")
     if domain_coverage == "unknown" and discovery_decision != "produce":
         rep.add("ERROR", "E22", manifest, 1,
@@ -858,6 +901,19 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
             and discovery_decision != "produce":
         rep.add("ERROR", "E22", manifest, 1,
                 "verified custom-domain coverage requires produced domain-discovery.md")
+    validated_bundle = None
+    if domain_coverage == "verified" and not historical:
+        try:
+            validated_bundle = json.loads(discovery_bundle.read_text(encoding="utf-8"))
+            loom_domain_bundle.validate(validated_bundle)
+        except (OSError, UnicodeError, json.JSONDecodeError,
+                loom_domain_bundle.DomainBundleError) as exc:
+            rep.add("ERROR", "E25", discovery_bundle, 1,
+                    f"verified domain coverage requires a valid machine bundle: {exc}")
+        else:
+            if validated_bundle["route"]["active_task_domains"] != domain_ids:
+                rep.add("ERROR", "E25", discovery_bundle, 1,
+                        "machine bundle active domains must match MANIFEST domain_ids")
     if discovery_decision == "produce" and discovery.is_file():
         discovery_text = discovery.read_text(encoding="utf-8", errors="replace")
         dfm, _ = parse_frontmatter(discovery_text)
@@ -891,8 +947,18 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                         f"verified domain coverage has non-verified invariant row {index}")
         if domain_coverage == "verified" and dfm \
                 and dfm.get("status") != "verified":
-            rep.add("ERROR", "E22", discovery, 1,
+                rep.add("ERROR", "E22", discovery, 1,
                     "verified domain coverage requires discovery status: verified")
+        if validated_bundle is not None:
+            projection = {(row.get("invariant id", "").strip(),
+                           row.get("canonical digest", "").strip())
+                          for row in invariant_rows}
+            required_projection = {
+                (item["invariant_id"], item["canonical_digest"])
+                for item in validated_bundle["invariants"]}
+            if not required_projection.issubset(projection):
+                rep.add("ERROR", "E25", discovery, 1,
+                        "Markdown projection omits a machine invariant ID or digest")
 
     frontier_rows = parse_markdown_table(manifest_text, "Work order frontier")
 
@@ -1101,6 +1167,7 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                 wos[wid] = {"deps": deps, "path": f, "status": fm.get("status", ""),
                             "routing": fm.get("routing", ""),
                             "touches": touches, "blocks": blocks,
+                            "domain_invariants": fm.get("domain_invariants", []),
                             "stale_ok": fm.get("status") in ("blocked", "done", "cancelled")}
                 if d and fm.get("status") in ("ready", "in-progress") and (today - d).days > window:
                     add_staleness(
@@ -1199,6 +1266,21 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                     rep.add("ERROR", "E19", f, 1,
                             f"{wid} is done without reproducible close-out evidence")
         check_wo_graph(rep, wos)
+
+        if validated_bundle is not None:
+            required_bindings = {
+                (item["invariant_id"], item["canonical_digest"])
+                for item in validated_bundle["invariants"]}
+            observed_bindings = set()
+            for wo in wos.values():
+                for binding in wo.get("domain_invariants", []):
+                    if isinstance(binding, str) and "@" in binding:
+                        observed_bindings.add(tuple(binding.split("@", 1)))
+            missing_bindings = sorted(required_bindings - observed_bindings)
+            if missing_bindings:
+                rep.add("ERROR", "E25", wo_dir, 1,
+                        "work orders do not bind every gate-ready domain invariant: "
+                        + ", ".join(item[0] for item in missing_bindings[:8]))
 
         if execution_mode == "build-first":
             executable_ids = sorted(

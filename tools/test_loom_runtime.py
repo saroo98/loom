@@ -353,9 +353,11 @@ class WorldFingerprintTests(RuntimeFixture):
             path.write_text(original, encoding="utf-8")
             self.assertEqual(
                 self.prepare().world_fingerprint, baseline.world_fingerprint)
+        future = dt.datetime.combine(
+            dt.date.today() + dt.timedelta(days=config["freshness_window_days"] + 1),
+            dt.time(12), tzinfo=dt.timezone.utc)
         self.assertNotEqual(
-            self.prepare(now="2026-07-28T12:00:00Z").world_fingerprint,
-            baseline.world_fingerprint)
+            self.prepare(now=future).world_fingerprint, baseline.world_fingerprint)
 
     def test_world_state_versions_cannot_be_supplied_by_a_caller(self):
         for field in (
@@ -622,7 +624,12 @@ class InvalidWorldStateTests(RuntimeFixture):
         pack = self.authorize_fixture_pack()
         current = loom_survey.repo_state(
             self.repo, exclude_prefixes=("plans",))
-        verified = dt.date.today()
+        # Gate timestamps are UTC.  Local midnight can precede UTC midnight, so deriving
+        # this boundary from ``date.today()`` made the release suite nondeterministic in
+        # positive-offset time zones.  Use the exact date the gate sealed into the pack.
+        manifest, _ = loom_lint.parse_frontmatter(
+            (pack / "MANIFEST.md").read_text(encoding="utf-8"))
+        verified = dt.date.fromisoformat(manifest["last_verified"])
 
         current_state = loom_runtime._inspect_lifecycle(
             pack, current.state_hash, today=verified + dt.timedelta(days=14))

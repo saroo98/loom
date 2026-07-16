@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/domain-source.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source_id", "title", "locator", "locator_visibility", "publisher", "source_class", "authority_claims", "trust_state", "document_id", "version", "published_at", "effective_at", "superseded_at", "accessed_at", "revalidate_by", "content_sha256", "retrieval_method", "retrieval_receipt_id", "jurisdiction", "product_class", "environment", "supported_invariant_ids", "contradicted_invariant_ids", "currentness", "ambiguity", "provenance_event_ids", "canonical_digest"],
+  "properties": {
+    "schema_version": {"const": 1}, "source_id": {"$ref": "#/$defs/id"},
+    "title": {"$ref": "#/$defs/text"}, "locator": {"type": "string", "minLength": 1, "maxLength": 512},
+    "locator_visibility": {"enum": ["public", "encrypted-private"]}, "publisher": {"$ref": "#/$defs/text"},
+    "source_class": {"enum": ["repository", "executed-observation", "official-law", "regulator", "official-vendor", "governing-standard", "primary-research", "qualified-reviewer", "owner-attestation", "secondary-discovery", "shipped-adapter"]},
+    "authority_claims": {"$ref": "#/$defs/strings"}, "trust_state": {"enum": ["trusted-local", "trusted-authority", "untrusted-data"]},
+    "document_id": {"$ref": "#/$defs/text"}, "version": {"$ref": "#/$defs/nullableText"},
+    "published_at": {"$ref": "#/$defs/nullableTime"}, "effective_at": {"$ref": "#/$defs/nullableTime"}, "superseded_at": {"$ref": "#/$defs/nullableTime"}, "accessed_at": {"$ref": "#/$defs/nullableTime"}, "revalidate_by": {"$ref": "#/$defs/nullableTime"},
+    "content_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "retrieval_method": {"$ref": "#/$defs/text"}, "retrieval_receipt_id": {"$ref": "#/$defs/text"},
+    "jurisdiction": {"$ref": "#/$defs/nullableText"}, "product_class": {"$ref": "#/$defs/nullableText"}, "environment": {"$ref": "#/$defs/nullableText"},
+    "supported_invariant_ids": {"$ref": "#/$defs/ids"}, "contradicted_invariant_ids": {"$ref": "#/$defs/ids"},
+    "currentness": {"enum": ["current", "stale", "superseded", "unknown"]}, "ambiguity": {"$ref": "#/$defs/nullableText"}, "provenance_event_ids": {"$ref": "#/$defs/strings"}, "canonical_digest": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}-[0-9a-f]{16,64}$"}, "ids": {"type": "array", "maxItems": 128, "uniqueItems": true, "items": {"$ref": "#/$defs/id"}}, "text": {"type": "string", "minLength": 1, "maxLength": 256}, "nullableText": {"type": ["string", "null"], "maxLength": 256}, "nullableTime": {"type": ["string", "null"], "format": "date-time"}, "strings": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}}
+}

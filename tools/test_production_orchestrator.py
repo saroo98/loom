@@ -3,6 +3,7 @@
 import datetime as dt
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -300,6 +301,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         cls.fixture_temp.cleanup()
 
     def setUp(self):
+        self.prior_legacy_test_backend = os.environ.get("LOOM_TEST_ALLOW_LEGACY_BACKEND")
+        os.environ["LOOM_TEST_ALLOW_LEGACY_BACKEND"] = "1"
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.installed = self.installed_fixture
@@ -318,6 +321,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.request = "Plan a financial double-entry accounting change to src/app.py"
 
     def tearDown(self):
+        if self.prior_legacy_test_backend is None:
+            os.environ.pop("LOOM_TEST_ALLOW_LEGACY_BACKEND", None)
+        else:
+            os.environ["LOOM_TEST_ALLOW_LEGACY_BACKEND"] = self.prior_legacy_test_backend
         self.temp.cleanup()
 
     def cli(self, *args):
@@ -339,7 +346,11 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("M", action["tier"])
         self.assertEqual(["accounting"], action["domains"])
         contract = action["plan_contract"]
-        self.assertEqual(1, contract["schema_version"])
+        self.assertEqual(2, contract["schema_version"])
+        self.assertEqual(contract["domain_route"]["route_digest"],
+                         contract["route_digest"])
+        self.assertEqual(contract["domain_route"]["graph_digest"],
+                         contract["composition_graph_digest"])
         self.assertEqual(15, len(contract["artifact_matrix"]))
         self.assertEqual(
             contract["contract_hash"],
@@ -443,6 +454,11 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "schema_version": 1,
             "applied_memory_ids": ["00000000-0000-4000-8000-000000000999"],
             "verified_memory_ids": [], "rejected_memory_ids": [],
+            "memory_effects": [{
+                "memory_id": "00000000-0000-4000-8000-000000000999",
+                "status": "applied-unverified", "decision_target": "host-outcome",
+                "intended_effect": "test invalid reference", "evidence_id": None,
+                "serious_harm": False}],
             "metrics": {}, "preference_observations": [], "artifact_usage": [],
         }), encoding="utf-8")
         refused = self.cli(
@@ -454,6 +470,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "schema_version": 1,
             "applied_memory_ids": [preference["id"]],
             "verified_memory_ids": [], "rejected_memory_ids": [],
+            "memory_effects": [{
+                "memory_id": preference["id"], "status": "applied-unverified",
+                "decision_target": "host-outcome", "intended_effect": "apply preference",
+                "evidence_id": None, "serious_harm": False}],
             "metrics": {}, "preference_observations": [], "artifact_usage": [],
         }), encoding="utf-8")
         completed = self.cli(
@@ -463,6 +483,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         recorded = loom_memory.inspect_record(
             self.home, instance_id, preference["id"])
         self.assertEqual(1, recorded["application_count"])
+        # This fixture explicitly exercises the test-only legacy adapter. The production vault
+        # path uses content-bound memory_effects and has separate Phase 2 regression coverage.
         self.assertEqual(1, recorded["helped_count"])
 
     def test_v11_action_envelope_hides_request_and_authenticates_owner_runtime(self):
@@ -508,6 +530,12 @@ class ProductionOrchestratorTests(unittest.TestCase):
         action = json.loads(opened.stdout)
         self.assertEqual("M", action["tier"])
         self.assertEqual(["unclassified"], action["domains"])
+        self.assertEqual("unknown", action["plan_contract"]["domain_route"]["coverage_state"])
+        self.assertTrue(action["plan_contract"]["domain_discovery"]["required"])
+        self.assertEqual("domain-discovery.json",
+                         action["plan_contract"]["domain_discovery"]["machine_bundle"])
+        self.assertEqual(action["plan_contract"]["survey_hash"],
+                         action["plan_contract"]["target_fingerprint"])
         self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
         self.assertFalse((self.repo / "plans" / ".loom-small-lifecycle.json").exists())
 
@@ -722,6 +750,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 "schema_version": 1,
                 "applied_memory_ids": [preference["id"]],
                 "verified_memory_ids": [], "rejected_memory_ids": [],
+                "memory_effects": [{
+                    "memory_id": preference["id"], "status": "applied-unverified",
+                    "decision_target": "host-outcome", "intended_effect": "apply preference",
+                    "evidence_id": None, "serious_harm": False}],
                 "metrics": {}, "preference_observations": [], "artifact_usage": [],
                 "replay_pair": pair,
             }), encoding="utf-8")
@@ -771,6 +803,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             outcome.write_text(json.dumps({
                 "schema_version": 1, "applied_memory_ids": [],
                 "verified_memory_ids": [], "rejected_memory_ids": [],
+                "memory_effects": [],
                 "metrics": {}, "preference_observations": [observation],
                 "artifact_usage": [],
             }), encoding="utf-8")

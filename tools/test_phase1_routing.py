@@ -127,6 +127,18 @@ class OneCommandRoutingTests(unittest.TestCase):
                 self.assertEqual(decision["code"], "HIGH_CONSEQUENCE_UNCERTAIN")
                 self.assertTrue(decision["needs_owner"])
 
+    def test_implementation_plan_request_is_not_misread_as_release_execution(self):
+        request = (
+            "Now please implement C:\\Users\\Owner\\Documents\\Engineering Research\\"
+            "Phase 1 - Tool Correctness and Release Engineering\\"
+            "LOOM-PHASE-1-IMPLEMENTATION-PLAN.md")
+
+        decision = loom_runtime.resolve_intent(request, {})
+
+        self.assertEqual("plan", decision["intent"])
+        self.assertFalse(decision["blocked"])
+        self.assertFalse(decision["needs_owner"])
+
     def test_effect_after_control_is_still_blocked(self):
         for request in ("Review this, then deploy it", "Show status and send email"):
             with self.subTest(request=request):

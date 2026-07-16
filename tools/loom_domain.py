@@ -9,7 +9,10 @@ import stat
 import sys
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+import loom_domain_composition
+import loom_domain_contract
+
+SCHEMA_VERSION = 2
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
 MAX_PROJECT_FILES = 4096
 MAX_MANIFEST_BYTES = 512 * 1024
@@ -111,7 +114,10 @@ CATALOG = {
                        "state migration", "review lead time", "rollback through store"],
     },
     "llm-agent": {
-        "keywords": [r"\bllm\b", r"\bai agent\b", r"\bchatbot\b", r"\bprompt pipeline\b"],
+        "keywords": [r"\bllm\b", r"\bai agent\b", r"\bchatbot\b", r"\bprompt pipeline\b",
+                     r"\bloom\b", r"\bowner[- ]specific learning\b",
+                     r"\bplanning (?:os|system|intelligence)\b",
+                     r"\bagent runtime\b"],
         "invariants": ["graded eval set", "prompt/model version", "tool blast radius",
                        "injection/exfiltration controls", "cost budget", "behavioral rollback"],
     },
@@ -160,6 +166,40 @@ STRUCTURAL_SIGNALS = {
     "llm-agent": {"files": {"promptfoo.yaml"}, "dependencies": {
         "openai", "anthropic", "langchain"}, "extensions": set()},
 }
+
+# Recognized consequence-bearing families that intentionally do not pretend to ship a
+# complete adapter. Matching one names the missing domain instead of collapsing to
+# ``unclassified``; G1 remains blocked until a discovered invariant bundle is sealed.
+DISCOVERY_CATALOG = {
+    "medical-clinical": [
+        r"\bmedical\b", r"\bclinical\b", r"\bpatient\b", r"\bdiagnos",
+        r"\btherapy\b", r"\bhealthcare\b",
+    ],
+    "legal-regulatory": [
+        r"\blegal\b", r"\bstatute\b", r"\bregulat(?:ion|ory)\b",
+        r"\bjurisdiction\b", r"\blicen[cs]ing\b",
+    ],
+    "wet-lab": [
+        r"\bwet[- ]lab\b", r"\bassay\b", r"\bcell culture\b",
+        r"\breagent\b", r"\bbiosafety\b",
+    ],
+    "mechanical-industrial": [
+        r"\bmechanical\b", r"\bindustrial\b", r"\bpressure vessel\b",
+        r"\bmachine guarding\b", r"\bload[- ]bearing\b",
+    ],
+    "marine-navigation": [
+        r"\bmarine navigation\b", r"\b(?:ship|boat|nautical) vessel\b",
+        r"\bcollision avoidance\b",
+        r"\bnautical\b",
+    ],
+    "quantum-optics": [
+        r"\bquantum optics\b", r"\boptical rig\b", r"\bphotonics\b",
+    ],
+}
+
+# A Codex plugin manifest plus an Agent Skill entry point is stronger evidence for an
+# agent system than a documentation website nested in the same repository.
+STRUCTURAL_SIGNALS["llm-agent"]["files"].update({"plugin.json", "skill.md"})
 
 GUIDANCE = {
     "cli": (["ambiguous exit semantics", "shell and encoding variance"],
@@ -375,13 +415,50 @@ def _adapter_result(domain_id, adapter, *, keyword_hits, structural_hits):
     }
 
 
-def select_domains(description, explicit=None, project_facts=None):
+def _unknown_result(domain_id, *, keyword_hits=None, source="request"):
+    return {
+        "id": domain_id, "coverage": "unknown",
+        "keyword_hits": list(keyword_hits or []), "structural_hits": [],
+        "required_invariants": [], "durable_invariants": [],
+        "risks": [], "release_criteria": [], "verification": [],
+        "current_facts_to_verify": [], "evidence_source": source,
+    }
+
+
+def _validate_host_proposal(value):
+    if value is None:
+        return None
+    fields = {"domains", "subsystems", "evidence", "provider", "model", "confidence"}
+    if not isinstance(value, dict) or set(value) != fields:
+        raise DomainError("host domain proposal fields are unknown or missing")
+    if not isinstance(value["domains"], list) or len(value["domains"]) > 16 \
+            or len(value["domains"]) != len(set(value["domains"])) \
+            or not all(isinstance(item, str) and ID_RE.fullmatch(item)
+                       for item in value["domains"]):
+        raise DomainError("host domain proposal domains are invalid")
+    if not isinstance(value["subsystems"], list) or len(value["subsystems"]) > 32 \
+            or not isinstance(value["evidence"], list) or len(value["evidence"]) > 16 \
+            or not all(isinstance(item, str) and 0 < len(item) <= 256
+                       for item in value["evidence"]):
+        raise DomainError("host domain proposal evidence is invalid or oversized")
+    if not all(isinstance(value[key], str) and 0 < len(value[key]) <= 128
+               for key in ("provider", "model")):
+        raise DomainError("host domain proposal identity is invalid")
+    confidence = value["confidence"]
+    if type(confidence) not in (int, float) or not 0 <= confidence <= 1:
+        raise DomainError("host proposal confidence is descriptive and must be in [0,1]")
+    return value
+
+
+def select_domains(description, explicit=None, project_facts=None, host_proposal=None):
     description = str(description or "").strip()
     explicit = [str(item).strip().lower() for item in (explicit or []) if str(item).strip()]
     if any(not ID_RE.fullmatch(item) for item in explicit):
         raise DomainError("explicit domain IDs must be safe lower-case local identifiers")
     facts = _validate_facts(project_facts)
+    host_proposal = _validate_host_proposal(host_proposal)
     matches = []
+    ambient = []
     if explicit:
         for domain_id in dict.fromkeys(explicit):
             adapter = CATALOG.get(domain_id)
@@ -389,14 +466,18 @@ def select_domains(description, explicit=None, project_facts=None):
                 matches.append(_adapter_result(
                     domain_id, adapter, keyword_hits=[], structural_hits=[]))
             else:
-                matches.append({"id": domain_id, "coverage": "unknown",
-                    "keyword_hits": [], "structural_hits": [],
-                    "required_invariants": [], "durable_invariants": [],
-                    "risks": [], "release_criteria": [], "verification": [],
-                    "current_facts_to_verify": []})
+                matches.append(_unknown_result(domain_id, source="owner"))
         source = "explicit"
     else:
-        low = description.casefold()
+        # Paths and report filenames identify evidence sources, not the requested target.
+        # Remove them before keyword scoring so e.g. "Deep Research Reports" or a docs site
+        # cannot silently redefine an agent-runtime engineering request.
+        low = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", description)
+        low = re.sub(
+            r"\b[a-z]:[\\/].*?\.(?:md|txt|json|yaml|yml|pdf)(?=\s|$)", " ", low,
+                     flags=re.IGNORECASE).casefold()
+        low = re.sub(r"(?:^|\s)/(?:[^\s]+/)+[^\s]+", " ", low)
+        low = re.sub(r"\b[^\s]+\.(?:md|txt|json|yaml|yml|pdf)\b", " ", low)
         scored = []
         for order, (domain_id, adapter) in enumerate(CATALOG.items()):
             hits = [pattern for pattern in adapter["keywords"]
@@ -410,26 +491,121 @@ def select_domains(description, explicit=None, project_facts=None):
             score = len(hits) * 2 + len(structural_hits) * 3
             if score:
                 scored.append((-score, order, domain_id, hits, structural_hits, adapter))
+            if structural_hits:
+                ambient.append(domain_id)
+        # Repository structure describes the surrounding world, not the owner's active request.
+        # It may support a domain already named by language, but can never introduce another
+        # active domain by itself.
+        scored = [item for item in scored if item[3]]
         ids = {item[2] for item in scored}
         if "android" in ids or "ios-macos" in ids:
             scored = [item for item in scored if item[2] != "mobile"
                       or not ("android" in ids or "ios-macos" in ids)]
+        if "llm-agent" in ids:
+            scored = [item for item in scored if item[2] != "website" or item[3]]
         for _, _, domain_id, hits, structural_hits, adapter in sorted(scored):
             matches.append(_adapter_result(
                 domain_id, adapter, keyword_hits=hits,
                 structural_hits=structural_hits))
-        source = "structural-and-language-evidence" if any(
-            item["structural_hits"] for item in matches) else "language-evidence"
+        for domain_id, patterns in DISCOVERY_CATALOG.items():
+            hits = [pattern for pattern in patterns if re.search(pattern, low, re.I)]
+            if hits:
+                matches.append(_unknown_result(domain_id, keyword_hits=hits))
+        source = "language-evidence" if matches else "no-active-task-evidence"
 
-    unknown = not matches or any(item["coverage"] == "unknown" for item in matches)
+    # Host/model judgment may rank alternatives, but it cannot activate a domain or memory
+    # without independent request/owner evidence.
+    host_candidates = []
+    if host_proposal:
+        active = {item["id"] for item in matches}
+        host_candidates = [{
+            "domain": domain_id,
+            "coverage": next((item["coverage"] for item in matches
+                              if item["id"] == domain_id), "unknown"),
+            "evidence": list(host_proposal["evidence"]),
+            "source": "host-proposal", "rank": index + 1,
+        } for index, domain_id in enumerate(host_proposal["domains"])
+         if domain_id not in active]
+
+    active_domains = list(dict.fromkeys(item["id"] for item in matches))
+    memory_domains = [item["id"] for item in matches if item["coverage"] == "adapter"]
+    coverage_by_domain = {item["id"]: (
+        "known" if item["coverage"] == "adapter" else "unknown") for item in matches}
+    if not active_domains:
+        coverage_state = "unknown"
+    elif all(value == "known" for value in coverage_by_domain.values()):
+        coverage_state = "known"
+    elif any(value == "known" for value in coverage_by_domain.values()):
+        coverage_state = "partial"
+    else:
+        coverage_state = "unknown"
+    graph_domains = active_domains or ["unclassified"]
+    graph_coverage = coverage_by_domain or {"unclassified": "unknown"}
+    try:
+        graph = loom_domain_composition.build_graph(
+            description, graph_domains, graph_coverage,
+            subsystems=(host_proposal["subsystems"] if host_proposal
+                        and host_proposal["subsystems"] else None))
+    except loom_domain_composition.DomainCompositionError as exc:
+        raise DomainError(str(exc)) from exc
+    candidates = []
+    for rank, item in enumerate(matches, 1):
+        evidence = [*item.get("keyword_hits", []), *item.get("structural_hits", [])]
+        if explicit:
+            evidence = [f"owner-explicit:{item['id']}"]
+        candidates.append({
+            "domain": item["id"],
+            "coverage": "known" if item["coverage"] == "adapter" else "unknown",
+            "evidence": evidence or [f"request-domain:{item['id']}"],
+            "source": "owner" if explicit else "request", "rank": rank,
+        })
+    candidates.extend(host_candidates)
+    missing = []
+    if coverage_state in {"unknown", "partial"}:
+        for domain_id, state in graph_coverage.items():
+            if state != "known":
+                missing.extend([
+                    f"{domain_id}: governing authority and applicability",
+                    f"{domain_id}: load-bearing invariants and failure modes",
+                    f"{domain_id}: real verification medium",
+                ])
+    route_body = {
+        "schema_version": loom_domain_contract.SCHEMA_VERSION,
+        "policy_version": loom_domain_contract.POLICY_VERSION,
+        "coverage_state": coverage_state,
+        "composition": len(graph_domains) > 1,
+        "active_task_domains": active_domains,
+        "memory_domains": memory_domains,
+        "ambient_domains": sorted(set(ambient if not explicit else [])),
+        "candidates": candidates,
+        "rejected_alternatives": [f"ambient-only:{item}"
+                                  for item in sorted(set(ambient) - set(active_domains))],
+        "missing_knowledge": missing[:32],
+        "consequence": graph["consequence"],
+        "subsystems": graph["nodes"],
+        "graph_digest": graph["graph_digest"],
+    }
+    route_contract = {**route_body, "route_digest": loom_domain_contract.digest(
+        "domain-route-v1", route_body)}
+    try:
+        loom_domain_contract.validate_route(route_contract)
+    except loom_domain_contract.DomainContractError as exc:
+        raise DomainError(str(exc)) from exc
+
+    unknown = coverage_state != "known"
     primary = matches[0]["id"] if matches else "unclassified"
     return {
         "schema_version": SCHEMA_VERSION,
         "source": source,
         "coverage": "unknown" if unknown else "adapter",
+        "coverage_state": coverage_state,
         "memory_domain": primary,
-        "memory_domains": [item["id"] for item in matches],
+        "memory_domains": memory_domains,
+        "active_task_domains": active_domains,
+        "ambient_domains": sorted(set(ambient if not explicit else [])),
         "adapters": matches,
+        "domain_contract": route_contract,
+        "composition_graph": graph,
         "requires_domain_discovery": unknown,
         "g1_status": "blocked" if unknown else "eligible-after-invariant-evidence",
         "required_artifact": "domain-discovery.md" if unknown else None,

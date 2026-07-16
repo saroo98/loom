@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "policy_version": "domain-intelligence-v1",
+  "variants_per_family": 20,
+  "families": [
+    {"id": "cli", "description": "Build a command-line CLI parser with stable exit codes", "expected_domains": ["cli"], "expected_coverage": "known", "hidden_cue": false},
+    {"id": "website", "description": "Create a static marketing website with SEO and accessible navigation", "expected_domains": ["website"], "expected_coverage": "known", "hidden_cue": false},
+    {"id": "data-etl", "description": "Design an ETL ingestion pipeline with schema drift and replay", "expected_domains": ["data-etl"], "expected_coverage": "known", "hidden_cue": false},
+    {"id": "accounting", "description": "Build a double-entry bookkeeping ledger with period close", "expected_domains": ["accounting"], "expected_coverage": "known", "hidden_cue": false},
+    {"id": "realtime-3d", "description": "Plan a real-time 3D room configurator rendering and asset pipeline", "expected_domains": ["realtime-3d"], "expected_coverage": "known", "hidden_cue": false},
+    {"id": "firmware-hardware", "description": "Implement firmware for a microcontroller sensor with a safe bootloader", "expected_domains": ["firmware-hardware"], "expected_coverage": "known", "hidden_cue": false},
+    {"id": "medical-clinical", "description": "Plan patient clinical decision workflow safety", "expected_domains": ["medical-clinical"], "expected_coverage": "unknown", "hidden_cue": true},
+    {"id": "legal-regulatory", "description": "Plan jurisdiction-specific regulatory licensing compliance", "expected_domains": ["legal-regulatory"], "expected_coverage": "unknown", "hidden_cue": true},
+    {"id": "wet-lab", "description": "Plan a wet-lab cell culture assay with biosafety controls", "expected_domains": ["wet-lab"], "expected_coverage": "unknown", "hidden_cue": true},
+    {"id": "mechanical-industrial", "description": "Plan an industrial pressure vessel machine-guarding change", "expected_domains": ["mechanical-industrial"], "expected_coverage": "unknown", "hidden_cue": true},
+    {"id": "marine-navigation", "description": "Plan vessel collision avoidance for marine navigation", "expected_domains": ["marine-navigation"], "expected_coverage": "unknown", "hidden_cue": true},
+    {"id": "quantum-optics", "description": "Plan a photonics quantum optics laboratory rig", "expected_domains": ["quantum-optics"], "expected_coverage": "unknown", "hidden_cue": true}
+  ]
+}

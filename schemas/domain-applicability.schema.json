@@ -1,0 +1,10 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema", "$id": "loom/schemas/domain-applicability.schema.json", "type": "object", "additionalProperties": false,
+  "required": ["schema_version", "applicability_id", "source_id", "invariant_id", "scope", "target_fingerprint", "decision", "evidence", "checked_at", "revalidate_on", "canonical_digest"],
+  "properties": {
+    "schema_version": {"const": 1}, "applicability_id": {"$ref": "#/$defs/id"}, "source_id": {"$ref": "#/$defs/id"}, "invariant_id": {"$ref": "#/$defs/id"},
+    "scope": {"$ref": "#/$defs/scope"}, "target_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "decision": {"enum": ["applicable", "inapplicable", "unknown"]},
+    "evidence": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}}, "checked_at": {"type": "string", "format": "date-time"}, "revalidate_on": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "canonical_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "$defs": {"id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}-[0-9a-f]{16,64}$"}, "scope": {"type": "object", "additionalProperties": false, "required": ["project_id", "component", "jurisdiction", "product_class", "environment", "version_range", "effective_period"], "properties": {"project_id": {"type": ["string", "null"], "maxLength": 128}, "component": {"type": ["string", "null"], "maxLength": 128}, "jurisdiction": {"type": ["string", "null"], "maxLength": 128}, "product_class": {"type": ["string", "null"], "maxLength": 128}, "environment": {"type": ["string", "null"], "maxLength": 128}, "version_range": {"type": ["string", "null"], "maxLength": 128}, "effective_period": {"type": ["string", "null"], "maxLength": 128}}}}
+}

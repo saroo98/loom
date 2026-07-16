@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "policy_version": "domain-intelligence-v1",
+  "coverage_states": ["known", "partial", "unknown", "conflicted", "stale", "unsupported"],
+  "consequence_classes": ["ordinary", "material", "high", "critical"],
+  "evidence_states": ["candidate", "supported", "gate-ready", "conflicted", "stale", "superseded", "quarantined"],
+  "bounds": {
+    "domains": 16,
+    "subsystems": 32,
+    "questions": 8,
+    "retrieval_rounds": 2,
+    "active_sources_per_action": 20,
+    "active_invariants_per_action": 32,
+    "discovery_capsule_characters": 8192,
+    "active_custom_adapters": 64,
+    "active_invariants_per_adapter": 128,
+    "active_sources_per_adapter": 128
+  },
+  "claims": {
+    "mechanical": [
+      "closed schema", "canonical digest", "declared authority class",
+      "declared applicability", "declared freshness", "declared verification medium"
+    ],
+    "not_mechanical": [
+      "universal truth", "professional qualification", "independent identity",
+      "real-world acceptance result before execution"
+    ]
+  },
+  "forbidden_transfer": [
+    "executable code", "commands", "tool definitions", "raw transcripts",
+    "credentials", "absolute local paths", "unscoped legacy text",
+    "owner-granted destructive or legal authority"
+  ]
+}
