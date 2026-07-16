@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "version": "1.1.0",
+  "version": "1.3.0",
   "capabilities": [
     {"id":"one-request-routing","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_runtime.py","tools/loom_session.py"],"tests":["tools/test_production_orchestrator.py","tools/test_loom_runtime.py","tools/test_loom_session.py"]},
     {"id":"complete-world-fingerprint","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_survey.py"],"tests":["tools/test_loom_runtime.py"]},
@@ -9,9 +9,15 @@
     {"id":"loom-executed-repair-verification","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_lifecycle.py"],"tests":["tools/test_production_orchestrator.py"]},
     {"id":"pack-integrity","kind":"mechanical","enforcement":["tools/loom_lint.py"],"tests":["tools/test_loom_lint.py"]},
     {"id":"domain-routing-and-discovery-gate","kind":"mechanical","enforcement":["tools/loom_domain.py","tools/loom_runtime.py","tools/loom_lint.py","tools/loom_gate.py"],"tests":["tools/test_domain_universality.py","tools/test_production_orchestrator.py","tools/test_loom_lint.py","tools/test_loom_gate.py"]},
-    {"id":"scoped-memory","kind":"mechanical","enforcement":["tools/loom_memory.py"],"tests":["tools/test_memory_lifecycle.py","tools/test_domain_rehydration.py"]},
-    {"id":"bounded-learning","kind":"mechanical","enforcement":["tools/loom_learning.py","tools/loom_memory.py"],"tests":["tools/test_loom_learning.py","tools/test_memory_lifecycle.py"]},
-    {"id":"preference-evolution","kind":"mechanical","enforcement":["tools/loom_preferences.py"],"tests":["tools/test_preference_evolution.py"]},
+    {"id":"content-bound-unknown-domain-authority","kind":"mechanical","enforcement":["tools/loom_domain_bundle.py","tools/loom_domain_evidence.py","tools/loom_domain_invariants.py","schemas/domain-bundle.schema.json"],"tests":["tools/test_domain_evidence.py","tools/test_domain_discovery.py"]},
+    {"id":"claim-specific-domain-regating","kind":"mechanical","enforcement":["tools/loom_domain_freshness.py","tools/loom_lint.py","tools/loom_orchestrator.py"],"tests":["tools/test_domain_freshness.py","tools/test_loom_lint.py"]},
+    {"id":"bounded-unknown-domain-evaluation","kind":"mechanical","enforcement":["tools/loom_domain_benchmark.py","benchmarks/domain-intelligence/corpus.json"],"tests":["tools/test_domain_benchmark.py","tools/test_unknown_domain_learning.py"]},
+    {"id":"scoped-memory","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_domain.py","contracts/owner-learning-v3.json"],"tests":["tools/test_owner_learning_phase2.py","tools/test_domain_universality.py"]},
+    {"id":"bounded-learning","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_learning.py","tools/loom_learning_contract.py"],"tests":["tools/test_owner_learning_phase2.py","tools/test_memory_lifecycle.py"]},
+    {"id":"preference-evolution","kind":"mechanical","enforcement":["tools/loom_vault_adapter.py","tools/loom_learning.py"],"tests":["tools/test_owner_learning_phase2.py","tools/test_loom_vault_adapter_v11.py"]},
+    {"id":"content-bound-memory-attribution","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_vault_adapter.py","schemas/memory-effect.schema.json"],"tests":["tools/test_owner_learning_phase2.py"]},
+    {"id":"derived-forgetting-floor","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_transfer.py"],"tests":["tools/test_owner_learning_phase2.py","tools/test_loom_transfer_v11.py"]},
+    {"id":"uncertainty-aware-learning-evidence","kind":"mechanical","enforcement":["tools/loom_learning_stats.py","tools/loom_shadow_eval.py"],"tests":["tools/test_owner_learning_phase2.py"]},
     {"id":"all-file-privacy-scan","kind":"mechanical","enforcement":["tools/loom_privacy.py"],"tests":["tools/test_privacy_excellence.py"]},
     {"id":"offline-production-runtime","kind":"mechanical","enforcement":["tools/loom_privacy.py"],"tests":["tools/test_privacy_excellence.py"]},
     {"id":"durable-reversible-state","kind":"mechanical","enforcement":["tools/loom_reliability.py"],"tests":["tools/test_reliability_excellence.py"]},
@@ -27,6 +33,11 @@
     {"id":"encrypted-transfer-and-recovery","kind":"mechanical","enforcement":["tools/loom_transfer.py","tools/loom_crypto.py"],"tests":["tools/test_loom_transfer_v11.py"]},
     {"id":"deterministic-device-merge","kind":"mechanical","enforcement":["tools/loom_vault.py"],"tests":["tools/test_loom_merge_v11.py"]},
     {"id":"receipt-owned-shared-agent-adapters","kind":"mechanical","enforcement":["tools/loom_adapters.py","tools/loom_launcher.py"],"tests":["tools/test_loom_plugin_adapters_v11.py"]},
+    {"id":"semantic-native-helper-evidence","kind":"mechanical","enforcement":["tools/loom_sbom.py","tools/loom_plugin_package.py"],"tests":["tools/test_loom_plugin_package_v11.py"]},
+    {"id":"deterministic-canonical-plugin-asset","kind":"mechanical","enforcement":["tools/loom_plugin_package.py","tools/loom_release_verify.py"],"tests":["tools/test_release_asset.py"]},
+    {"id":"sequential-threshold-root-rotation","kind":"mechanical","enforcement":["tools/loom_release_sign.py","tools/loom_update.py"],"tests":["tools/test_loom_release_sign_v11.py"]},
+    {"id":"cross-platform-capability-aggregation","kind":"mechanical","enforcement":["tools/loom_test.py","tools/loom_capability.py"],"tests":["tools/test_test_runner.py","tools/test_loom_capability.py"]},
+    {"id":"maintenance-cli-contract-inventory","kind":"mechanical","enforcement":["tools/loom_cli_contract.py","schemas/tool-contract.schema.json"],"tests":["tools/test_tool_contracts.py"]},
     {"id":"human-judgment-remains-owner-controlled","kind":"advisory","enforcement":[],"tests":[]}
   ]
 }

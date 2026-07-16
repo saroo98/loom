@@ -1,4 +1,4 @@
-# Loom 1.1.0 advanced architecture
+# Loom 1.3.0 advanced architecture
 
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.
@@ -44,34 +44,37 @@ cross-checkout plan semantics and cannot create false drift after an otherwise i
 
 ## Memory boundaries
 
-`loom_memory` separates install, global, domain, and project partitions. Selection has a hard byte
-budget and exact domain/project filters. Lifecycle maintenance archives closed project material,
-makes domain material dormant on utility-sensitive 7/14/30/90/365-day inactivity bands, reports
-the next automatic review, and admits it again only through bounded exact-domain rehydration.
-Content-erased tombstones prevent forgotten semantics from silent readmission.
+The encrypted owner vault is the only mutable production learning authority. Schema v3 normalizes
+memory items, observations, per-memory effects, preference slots, derivation edges, deletion
+commitments, policy evaluations, and scope aliases. Legacy JSON modules are import/test
+compatibility only; a missing verified crypto helper blocks production learning instead of
+silently creating a second store.
 
-`loom_preferences` separates transferable preferences from domain stacks and task/risk autonomy.
-Observed preferences require repeated cross-project evidence; a stated preference takes precedence.
-`loom_learning` keeps bounded events and evidence-linked candidates. It is local state, not a
-network contribution mechanism. Its storage boundary admits only the controlled transferable
-general pairs for confidence calibration, delegation strategy, and question batching; domain
-semantics cannot be relabeled as global. Composite sessions write separate outcomes, utility,
-signals, and stack observations for every active domain, and reject ambiguous stack attribution
-before any learning write.
+Selection is capped at 4 records and 4,096 characters. Active-task domains are derived from the
+request; repository structure is recorded only as ambient evidence and cannot activate domain
+memory. General, domain, project, component, temporary, and device scopes have exact filters.
+Selection is not application and does not refresh usefulness. Technical facts become
+`revalidation-required` at their currentness deadline; inactive ordinary learning becomes dormant
+and then archived from actual application/effect history.
+
+Admission requires distinct evidence. General inference needs at least 5 observations spanning
+3 projects and 2 domains and is limited to transferable categories. Domain inference needs repeat
+support across projects or components. Explicit owner statements apply immediately at the narrowest
+unambiguous scope, while concurrent stated conflicts quarantine. Autonomy, hard stops, privacy,
+deletion, spending, destructive action, legal authority, and safety authority are never inferred.
 
 ## Comparative Improvement Proof
 
-`loom_improvement` records controlled measurements automatically from sealed sessions. It keeps
-8 early and 8 recent samples per exact metric/domain partition, caps active records, partitions,
-evidence identities, and serialized bytes, and never combines domains. Evidence identifiers are
-bound permanently to a canonical measurement hash even after the active record is compacted.
-Legacy stores whose compacted identities cannot be reconstructed are reset as untrusted proof and
-their discarded count is retained; old evidence is never silently credited. A reproducible local
-comparison needs 16 longitudinal samples plus 8 paired memory-enabled and memory-disabled replays.
-`loom_improvement_audit` independently reimplements the calculation, checks the evidence hash, and
-rejects altered claims. Regressions raise an alarm; accumulation alone never qualifies as
-improvement. Local evidence is always labeled `local-unattested` and cannot authorize a production
-improvement claim; only the independently signed release evidence contract can cross that boundary.
+Production attribution records selected-only, applied-unverified, verified-helped, verified-hurt,
+verified-neutral, ambiguous, and rejected-before-use separately for each memory. Session success
+never credits every selected record. Severe verified harm quarantines immediately.
+
+Improvement reports use explicit evidence states and time-uniform confidence sequences. One outcome
+is `measurement-started`; observational history is `associated-only`; shadow-only comparison is
+`structural-counterfactual-only`; randomized evidence requires a prelogged nonzero propensity.
+Every calculation requires all five token categories plus elapsed time. Missing cost or uncertainty
+blocks the claim rather than producing a partial “total.” Accumulation alone never qualifies as
+improvement, and independent attestation remains a separate release boundary.
 
 ## Release Boundary
 
@@ -97,7 +100,7 @@ guidance files, while session receipts can retain provider/model/response/hash p
 five token categories. Neither a caller total nor a local provider receipt substitutes for the
 separate independently attested production-performance or production-memory-replay records.
 
-## Loom 1.1 runtime and owner vault
+## Loom 1.3 runtime and owner vault
 
 The stable launcher under `~/.loom/bin` verifies one immutable runtime manifest and pins a session
 to that runtime generation. Marketplace payloads stage beside the active runtime; threshold-signed
@@ -109,7 +112,7 @@ Mutable owner intelligence lives in an encrypted SQLite vault outside the plugin
 device, runtime, and project identities are separate. Memory bodies, preferences, outcomes,
 receipts, private adaptations, transfer payloads, and session-journal details are authenticated
 ciphertext. Clear database fields are bounded operational indexes and opaque identifiers. A stable
-blind-index key keeps scope and permanent-forgetting commitments comparable when the data key is
+blind-index key keeps scope and deletion-floor commitments comparable when the data key is
 rotated. Device revocation stages a complete re-encrypted vault generation, commits the discarded
 event history, changes secure-key slots, and activates atomically; an old data key cannot decrypt
 the new generation.
@@ -129,7 +132,7 @@ regenerated from repository inventory so changing counts cannot leave hand-autho
 
 `tools/loom_adaptation_eval.py` runs disposable, deterministic longitudinal scenarios for domain
 switches, aging, project alternation, preference drift, scale bounds, interruption, concurrency,
-corruption, identity errors, disabled memory, permanent forgetting, and domain coverage. Its
+corruption, identity errors, disabled memory, application-level forgetting, and domain coverage. Its
 improvement result includes a minimum-sample longitudinal comparison, paired memory replay, and an
 independent reproduction, not an assertion that accumulated state helped. Production host outcomes
 may attach a same-request/same-world enabled/disabled pair with distinct provider-response receipts

@@ -17,6 +17,8 @@ For source changes:
    allowlist. Never use `public-release` to publish private-owner source.
 6. Do not claim production certification while `docs/limitations.md` contains unresolved external
    evidence requirements.
+7. Run `python -B tools/loom_version.py .`, `python -B tools/loom_cli_contract.py . --verify`, and
+   `python -B tools/loom_release_verify.py <canonical-zip>` before a release candidate is attested.
 
 For this public repository, run
 `python -B tools/loom_release.py verify . --source-classification public-release` first. This keeps
@@ -24,9 +26,11 @@ the owner-token claim explicitly not applicable while the all-file secret firewa
 After building this already-public source, run `python -B tools/loom_release.py verify-cut <cut>`.
 When a cut is built from a private-owner source, pass every real owner token with `--forbid`;
 private-source local verification refuses to proceed without them.
-for every real private/owner scan token. This verifies the manifest, rejects undeclared files, runs
-the cut's suite and offline/docs audits, and repeats the firewall after validation. Publish only the
-unchanged verified cut.
+This verifies the manifest, rejects undeclared files, runs the cut's suite and offline/docs audits,
+and repeats the firewall after validation. The finalized signed directory is archived with
+`loom_plugin_package.archive_finalized`; only the unchanged `loom-plugin-vX.Y.Z.zip` is canonical.
+The release workflow verifies an existing draft, checks the signed tag and checksums, attests exact
+assets, and deliberately refuses to publish it.
 
 Issues and pull requests should include a reproduction, expected behavior, observed behavior, and
 the smallest evidence needed to evaluate the change. Do not attach private Loom state.

@@ -1,11 +1,20 @@
-# Loom 1.1.0 Limitations
+# Loom 1.3.0 Limitations
 
 Loom fails closed around evidence it does not possess.
 
-- Cross-platform behavior is **[UNVERIFIED]** until the current revision passes the exact 12-job
-  matrix: Windows, macOS, and Linux on Python 3.10, 3.11, 3.12, and 3.13. The certificate requires
-  unique bound job IDs/URLs and all 12 successful conclusions; a workflow definition or Linux-only
-  run cannot satisfy it.
+- Actual improvement for a particular owner is **[UNVERIFIED]** until that owner's exact task,
+  domain, tier, and risk partition accumulates valid evidence whose uncertainty clears the declared
+  material threshold. Memory count, selection count, one outcome, and shadow-only comparison do not
+  prove benefit.
+- “Forget complete” means Loom removed active and reachable derived state, checkpointed the deletion
+  floor, and obtained required active-device acknowledgements. It does not mean physical sanitization
+  of unreachable external ciphertext, copied media, or plaintext already observed by a compromised
+  device.
+
+- Cross-platform behavior is **[UNVERIFIED]** until the current revision passes the native x64 and
+  ARM64 Windows, macOS, and Linux helper matrix plus Python 3.10 through 3.14. A workflow
+  definition or one-machine run cannot satisfy it. Capability skips are certified only when the
+  same test passes in another bound matrix job.
 - Fresh-install usability is **[UNVERIFIED]** until at least 1 person unfamiliar with Loom uses a
   clean environment, installs the exact public-build hash, and completes a real request without
   maintainer coaching. The certificate requires distinct study/install/request receipt bundles and
@@ -30,6 +39,10 @@ Loom fails closed around evidence it does not possess.
   observations and 8 controlled memory-enabled versus memory-disabled production replay pairs.
 - Domain guidance is not current legal, tax, medical, safety, or regulatory advice. Loom must verify
   present rules and target-environment facts before those claims become load-bearing.
+- The 240-case unknown-domain corpus is deterministic, templated regression evidence. Its observed
+  zero unsafe authorizations and perfect routing metrics do not establish a population error rate,
+  professional correctness, or universal domain coverage. Independent, naturally sampled holdout
+  evaluation remains **[UNVERIFIED]**.
 - Verification commands run in a disposable target snapshot, but the Python standard library does
   not provide a portable host-level filesystem/network sandbox. Loom protects the original target
   from relative-path mutation and detects target drift; command authority outside that snapshot is
@@ -38,6 +51,14 @@ Loom fails closed around evidence it does not possess.
   builds, their second reproducible builds, SBOMs, provenance statements, and the final signed
   package all pass the package builder. The builder opens and hashes every claimed evidence
   artifact; local source tests do not substitute for those release inputs.
+- The canonical deterministic ZIP builder, independent receipt verifier, semantic Cargo.lock SBOM
+  reconciliation, and provenance schema are implemented and locally tested. GitHub attestations,
+  native A/B helper rebuilds, a signed tag, and an immutable draft asset remain **[UNVERIFIED]**
+  until the release workflow runs against the exact `v1.3.0` bytes.
+- Fresh marketplace installation trusts the Codex host as the initial delivery authority. Loom can
+  detect internal corruption on first install, but cannot prove independence from a malicious host
+  using a verifier delivered by that same host. Subsequent updates use the existing verified
+  launcher before executing new payload code.
 - Automatic host delivery is **[UNVERIFIED]** because Codex marketplace refresh behavior is owned
   by Codex. Once a newer plugin payload is present, Loom's verification, migration, activation,
   and rollback are automatic and offline.

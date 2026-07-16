@@ -1,4 +1,4 @@
-# Loom 1.1 security definitions
+# Loom 1.3 security definitions
 
 This document freezes Loom's security boundary before the owner-vault runtime is activated. It is
 a living engineering artifact, not a certification. A fully compromised operating-system account
@@ -11,7 +11,7 @@ but it does not claim confidentiality from the account that is actively decrypti
 ```mermaid
 flowchart LR
   Owner[Owner] -->|one authorization| Pair[Pairing or recovery]
-  Marketplace[Codex marketplace cache] -->|signed immutable payload| Launcher[Stable launcher]
+  Marketplace[Codex marketplace cache] -->|host-delivered payload| Launcher[Stable launcher]
   Agents[Local agent adapters] -->|local invocation| Launcher
   Launcher -->|pinned runtime and generation| Runtime[Verified Loom runtime]
   Runtime -->|stdin/stdout only| Crypto[Rust loom-vault helper]
@@ -24,6 +24,16 @@ flowchart LR
 Marketplace delivery crosses a distribution trust boundary. Agent adapters cross an execution
 boundary. The Rust helper is the only component permitted to receive unwrapped cryptographic key
 material. Backup media and paired-device transport are untrusted storage and transport.
+
+On a fresh installation, the Codex marketplace and host are the initial delivery trust anchor. A
+verifier delivered inside that same package cannot prove the package was non-malicious before it
+runs. Loom therefore claims internal consistency and corruption detection at first install, not
+independence from a malicious marketplace bootstrap. Every later update is verified as passive
+data by the already-installed stable launcher before any new Python or native code executes.
+
+Trusted-root rotation is sequential. A candidate root advances exactly one version and its one
+transition envelope must satisfy the old root threshold and the new root threshold. Old-only,
+new-only, skipped, expired, and rolled-back transitions fail closed.
 
 ## SD1: hostile or stale update replaces the runtime
 
@@ -45,8 +55,9 @@ material. Backup media and paired-device transport are untrusted storage and tra
 
 ### Accepted Goal Status
 
-- Goal is **not met** until the staged updater, threshold metadata verifier, crash probes, and
-  copied-cache regression tests pass against the release artifact.
+- Source-level hostile regressions now cover staged receipts, copied-cache substitution, ordinary
+  crash rollback, and sequential threshold rotation. The goal remains **not met for release** until
+  the exact canonical artifact passes every native platform gate.
 
 ## SD2: migration loses, widens, or resurrects owner learning
 
@@ -91,8 +102,8 @@ material. Backup media and paired-device transport are untrusted storage and tra
 
 ### Accepted Goal Status
 
-- Goal is **not met** until delivery-order, duplicate, replay, stale-device, and revoked-device
-  simulations converge or fail closed deterministically.
+- Deterministic source-level delivery-order, duplicate, replay, stale-device, and revoked-device
+  simulations now converge or fail closed. Native multi-device artifact evidence remains required.
 
 ## SD4: passive visibility leaks owner data
 
@@ -116,7 +127,7 @@ material. Backup media and paired-device transport are untrusted storage and tra
 
 - Goal is **partially met**: the 1.0 public firewall and no-telemetry audit are mechanical. Full
   vault encryption, stdin-only helper handoff, binary-package scanning, and recovery probes remain
-  required before 1.1 activation.
+  required before release activation.
 
 ## SD5: hostile adapter causes split-brain execution
 
@@ -154,3 +165,22 @@ material. Backup media and paired-device transport are untrusted storage and tra
 
 No status becomes "met" from source inspection. It requires the named behavior test against the
 exact artifact. Independent cryptographic review and hostile systems review remain external gates.
+
+## Phase 3 unknown-domain threats
+
+| Threat | Required fail-closed behavior | Mechanical evidence |
+|---|---|---|
+| Confident wrong-domain route | preserve ambiguity; host proposal cannot activate memory | route-v2 contract and routing tests |
+| Hidden multi-domain boundary | every material subsystem is known or explicitly blocked | composition graph and branch-closure tests |
+| Source-authority spoofing | source self-claims and URL shape mint no authority | source-class policy and hostile evidence tests |
+| Wrong jurisdiction/product/version | exact-target applicability receipt is required | bundle target and applicability tests |
+| Stale or superseded evidence | claim-specific currentness blocks and re-gates | time-gap freshness tests |
+| Prompt or tool-description injection | retrieved instructions remain inert data | host-source injection tests |
+| Fabricated/circular sources | content IDs and duplicate-content rejection | bundle inventory tests |
+| Owner assertion as external authority | owner authority is a separate class | authority-policy tests |
+| Conflict suppression | supporting and contradicting edges cannot be gate-ready together | conflict validation tests |
+| Semantic mutation under reused ID | canonical digest mismatch blocks completion | mutation tests |
+| Cross-project/domain contamination | exact scope predicate and bounded encrypted views | 100,000 scope traces and vault tests |
+| Unbounded discovery/state | hard question/source/invariant/event/materializer limits | bound tests |
+| Offline expiry | expired required evidence remains blocked | offline freshness test |
+| Markdown/machine divergence | projection IDs/digests must equal the sealed bundle | lint and orchestrator tests |

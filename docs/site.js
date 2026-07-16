@@ -148,4 +148,22 @@ document.documentElement.classList.add("js");
       selectDomain(tabs[nextIndex], true);
     });
   });
+
+  const evidenceFields = [...document.querySelectorAll("[data-evidence-key]")];
+  if (evidenceFields.length) {
+    fetch("generated-evidence.json", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("evidence inventory unavailable");
+        return response.json();
+      })
+      .then((evidence) => {
+        evidenceFields.forEach((element) => {
+          const value = evidence[element.dataset.evidenceKey];
+          element.textContent = Number.isInteger(value) ? String(value) : "unverified";
+        });
+      })
+      .catch(() => evidenceFields.forEach((element) => {
+        element.textContent = "unverified";
+      }));
+  }
 })();

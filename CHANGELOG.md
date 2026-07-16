@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.3.0
+
+- Add evidence-aware known, partial, unknown, and composite routing with consequence-aware
+  subsystem isolation.
+- Replace custom-domain `verified` prose with content-bound source, applicability, invariant,
+  discovery, plan-contract v2, work-order, freshness, and G1 enforcement.
+- Add bounded encrypted unknown-domain learning, idempotent v1 projection receipts, a 240-case
+  locked regression corpus, 100,000 scope-firewall traces, and trust-critical mutation gates.
+
+## 1.2.0
+
+- Harden owner-vault convergence, migration activation, recovery freshness, and runtime rollback.
+- Add deterministic canonical plugin assets, semantic SBOM/provenance validation, root rotation, and native release gates.
+- Make capability skips, CLI contracts, and release evidence mechanically explicit.
+
 ## 1.1.0
 
 - Separated immutable Loom runtimes from a stable encrypted owner vault and explicit owner,

@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Loom 1.1.0 · Planning intelligence for AI coding agents.</strong><br>
+  <strong>Loom 1.3.0 · Planning intelligence for AI coding agents.</strong><br>
   One request in. A release-ready, evidence-backed execution plan out.
 </p>
 
@@ -67,8 +67,8 @@ execution.
 | Produces only artifacts with a consumer and decision | No | No | Sealed 15-row artifact contract |
 | Refuses stale or mutated plans | Rarely | Partly | Freshness, drift, and selective re-gating |
 | Learns without mixing projects and domains | No | No | Scoped, bounded, local memory |
-| Can forget permanently | No | No | Content-erased tombstones |
-| Proves “better over time” instead of counting notes | No | No | Longitudinal and memory-on/off evidence contract |
+| Can reject forgotten state from active use | No | No | Derived-state deletion, checkpointed deletion floor, and replay rejection |
+| Distinguishes evidence from “better over time” | No | No | Explicit uncertainty states; counts never become improvement claims |
 | Ships owner data anywhere | Depends | Depends | No telemetry; local-first by construction |
 
 ## The extraordinary machinery behind one command
@@ -85,13 +85,19 @@ The plan contract accounts for all 15 candidate artifacts. Each one is either pr
 consumer making a named decision, or explicitly skipped with a reason. More documents are not
 mistaken for more rigor.
 
-### Domain reality changes the plan
+### Unknown domains cannot borrow confidence
 
 Accounting receives balanced-posting, precision, reconciliation, audit-trail, and period-close
 concerns. Real-time 3D receives spatial interaction, asset-pipeline, frame-time, and device-medium
 concerns. Firmware, research, data, ML, mobile, desktop, web, and security-sensitive work receive
-their own invariants and verification media. If Loom lacks the domain, it says so and blocks until
-discovery has evidence.
+their own invariants and verification media. If Loom lacks coverage, it preserves the named domain,
+classifies the consequence separately, and discovers only the affected subsystem rules. G1 remains
+blocked until a content-bound machine bundle proves authority, exact-target applicability,
+freshness, absence of unresolved contradiction, and a real verification medium. A Markdown status
+word cannot satisfy that gate.
+
+The release benchmark expands 12 sanitized families into 240 deterministic cases, including 120
+outside shipped adapters. It is regression evidence, not proof that Loom knows every domain.
 
 ### Planning must precede implementation
 
@@ -166,6 +172,8 @@ The repository distinguishes mechanical capabilities from advisory judgment in
 [`docs/capabilities.json`](./docs/capabilities.json). Generated repository inventory lives in
 [`docs/generated-evidence.json`](./docs/generated-evidence.json); it does not claim tests passed.
 Current external evidence gaps remain explicit in [`docs/limitations.md`](./docs/limitations.md).
+The unknown-domain state machine and non-claims are specified in
+[`docs/unknown-domain-intelligence.md`](./docs/unknown-domain-intelligence.md).
 
 Production certification requires all of the following against the exact release:
 
@@ -199,6 +207,13 @@ This runs the release suite, adaptation scenarios, all-file privacy firewall, of
 reproducibility check, installer cycle, performance contracts, documentation audit, and bounded
 longitudinal checks. Local verification is necessary, but it does not replace the external
 certification evidence above.
+
+The installable release asset is `loom-plugin-vX.Y.Z.zip`, not GitHub's generated source archive.
+Verify its exact receipt-bound bytes before installation:
+
+```powershell
+python -B tools/loom_release_verify.py loom-plugin-vX.Y.Z.zip
+```
 
 ---
 
