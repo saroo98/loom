@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/deletion-commitment.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["commitment_id", "record_id", "deletion_epoch", "status", "checkpoint_id", "pending_devices", "created_at"],
+  "properties": {
+    "commitment_id": {"type": "string", "format": "uuid"},
+    "record_id": {"type": "string", "format": "uuid"},
+    "deletion_epoch": {"type": "integer", "minimum": 1},
+    "status": {"enum": ["pending-checkpoint", "pending-devices", "complete"]},
+    "checkpoint_id": {"type": ["string", "null"], "format": "uuid"},
+    "pending_devices": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "format": "uuid"}},
+    "created_at": {"type": "string", "format": "date-time"}
+  }
+}

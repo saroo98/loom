@@ -60,12 +60,15 @@ class TransferTests(unittest.TestCase):
         receiver = loom_transfer.new_device(self.helper)
         bundle = self.root / "pair.loom-pair"
         created = loom_transfer.create_pair_bundle(
-            self.vault, self.crypto, receiver["pairing_payload"], bundle)
+            self.vault, self.crypto, receiver["pairing_payload"], bundle,
+            owner_authorized=True)
         self.assertEqual("created", created["status"])
         self.assertNotIn(b"private frame budget", bundle.read_bytes())
         destination = self.root / "receiver" / "owner.sqlite3"
         accepted = loom_transfer.accept_pair_bundle(
-            self.helper, bundle, receiver["private_material"], destination)
+            self.helper, bundle, receiver["private_material"], destination,
+            expected_sender_fingerprint=created["sender_fingerprint"],
+            expected_sas=created["sas"])
         self.assertEqual("validated-not-activated", accepted["status"])
         restored = loom_vault.OwnerVault.open(destination, crypto=accepted["crypto"])
         self.assertEqual(self.vault.identity()["owner_vault_id"],
@@ -79,13 +82,15 @@ class TransferTests(unittest.TestCase):
     def test_pairing_activates_secure_key_material_or_leaves_no_vault(self):
         receiver = loom_transfer.new_device(self.helper)
         bundle = self.root / "secure-pair.loom-pair"
-        loom_transfer.create_pair_bundle(
-            self.vault, self.crypto, receiver["pairing_payload"], bundle)
+        created = loom_transfer.create_pair_bundle(
+            self.vault, self.crypto, receiver["pairing_payload"], bundle,
+            owner_authorized=True)
         store = MemoryKeyStore()
         destination = self.root / "secure-receiver" / "owner.sqlite3"
         result = loom_transfer.accept_pair_bundle(
             self.helper, bundle, receiver["private_material"], destination,
-            key_store=store)
+            expected_sender_fingerprint=created["sender_fingerprint"],
+            expected_sas=created["sas"], key_store=store)
         self.assertTrue(result["key_stored"])
         self.assertEqual(128, len(store.values[result["key_slot_id"]]))
 
@@ -93,26 +98,91 @@ class TransferTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "key store refusal"):
             loom_transfer.accept_pair_bundle(
                 self.helper, bundle, receiver["private_material"], failed_destination,
+                expected_sender_fingerprint=created["sender_fingerprint"],
+                expected_sas=created["sas"],
                 key_store=MemoryKeyStore(fail=True))
         self.assertFalse(failed_destination.exists())
+
+    def test_pairing_requires_owner_authorized_sender_fingerprint(self):
+        receiver = loom_transfer.new_device(self.helper)
+        bundle = self.root / "sender-pinned.loom-pair"
+        created = loom_transfer.create_pair_bundle(
+            self.vault, self.crypto, receiver["pairing_payload"], bundle,
+            owner_authorized=True)
+
+        with self.assertRaisesRegex(loom_transfer.TransferError, "sender"):
+            loom_transfer.accept_pair_bundle(
+                self.helper, bundle, receiver["private_material"],
+                self.root / "wrong-sender" / "owner.sqlite3",
+                expected_sender_fingerprint="0" * 64,
+                expected_sas=created["sas"])
+
+        self.assertFalse((self.root / "wrong-sender" / "owner.sqlite3").exists())
+
+    def test_pairing_v2_requires_receiver_authorization_sas_and_fresh_challenge(self):
+        issued = dt.datetime(2026, 7, 16, 12, 0, tzinfo=dt.timezone.utc)
+        receiver = loom_transfer.new_device(self.helper, now=issued)
+        bundle = self.root / "pair-v2.loom-pair"
+        with self.assertRaisesRegex(loom_transfer.TransferError, "authorization"):
+            loom_transfer.create_pair_bundle(
+                self.vault, self.crypto, receiver["pairing_payload"], bundle,
+                owner_authorized=False, now=issued)
+        created = loom_transfer.create_pair_bundle(
+            self.vault, self.crypto, receiver["pairing_payload"], bundle,
+            owner_authorized=True, now=issued)
+        destination = self.root / "pair-v2-home" / "owner.sqlite3"
+        with self.assertRaisesRegex(loom_transfer.TransferError, "SAS"):
+            loom_transfer.accept_pair_bundle(
+                self.helper, bundle, receiver["private_material"], destination,
+                expected_sender_fingerprint=created["sender_fingerprint"],
+                expected_sas="0000-0000-0000", now=issued)
+        self.assertFalse(destination.exists())
+        with self.assertRaisesRegex(loom_transfer.TransferError, "addressed|expiry"):
+            loom_transfer.accept_pair_bundle(
+                self.helper, bundle, receiver["private_material"], destination,
+                expected_sender_fingerprint=created["sender_fingerprint"],
+                expected_sas=created["sas"],
+                now=issued + dt.timedelta(seconds=loom_transfer.PAIR_TTL_SECONDS + 1))
+
+    def test_pairing_v2_replay_receipt_blocks_second_destination(self):
+        receiver = loom_transfer.new_device(self.helper)
+        bundle = self.root / "replay.loom-pair"
+        created = loom_transfer.create_pair_bundle(
+            self.vault, self.crypto, receiver["pairing_payload"], bundle,
+            owner_authorized=True)
+        receipt_store = self.root / "pair-receipts.json"
+        loom_transfer.accept_pair_bundle(
+            self.helper, bundle, receiver["private_material"],
+            self.root / "first" / "owner.sqlite3",
+            expected_sender_fingerprint=created["sender_fingerprint"],
+            expected_sas=created["sas"], receipt_store=receipt_store)
+        with self.assertRaisesRegex(loom_transfer.TransferError, "replay"):
+            loom_transfer.accept_pair_bundle(
+                self.helper, bundle, receiver["private_material"],
+                self.root / "second" / "owner.sqlite3",
+                expected_sender_fingerprint=created["sender_fingerprint"],
+                expected_sas=created["sas"], receipt_store=receipt_store)
 
     def test_recovery_phrase_requires_backup_and_wrong_phrase_fails(self):
         recovery = loom_transfer.generate_recovery(self.helper)
         backup = self.root / "backups" / "owner.loom-backup"
+        anchor = self.root / "recovery-anchor.json"
         loom_transfer.create_recovery_backup(
-            self.vault, self.crypto, recovery["phrase"], backup, sequence=1)
+            self.vault, self.crypto, recovery["phrase"], backup, sequence=1,
+            recovery_anchor=anchor)
         self.assertNotIn(b"private frame budget", backup.read_bytes())
         with self.assertRaisesRegex(loom_transfer.TransferError, "phrase|authentication"):
             loom_transfer.restore_recovery_backup(
                 self.helper, backup, "abandon " * 23 + "about",
-                self.root / "wrong" / "owner.sqlite3")
+                self.root / "wrong" / "owner.sqlite3", recovery_anchor=anchor)
         with self.assertRaisesRegex(loom_transfer.TransferError, "backup.*required"):
             loom_transfer.restore_recovery_backup(
                 self.helper, self.root / "missing.loom-backup", recovery["phrase"],
-                self.root / "missing" / "owner.sqlite3")
+                self.root / "missing" / "owner.sqlite3", recovery_anchor=anchor)
         restored_path = self.root / "recovered" / "owner.sqlite3"
         result = loom_transfer.restore_recovery_backup(
-            self.helper, backup, recovery["phrase"], restored_path)
+            self.helper, backup, recovery["phrase"], restored_path,
+            recovery_anchor=anchor)
         self.assertEqual("validated-not-activated", result["status"])
         restored = loom_vault.OwnerVault.open(restored_path, crypto=result["crypto"])
         self.assertEqual(1, len(restored.select_memory(domain="three-d", project_id=None)))
@@ -122,17 +192,21 @@ class TransferTests(unittest.TestCase):
         with self.assertRaisesRegex(loom_transfer.TransferError, "deletion epoch"):
             loom_transfer.restore_recovery_backup(
                 self.helper, backup, recovery["phrase"],
-                self.root / "stale" / "owner.sqlite3", minimum_sequence=2)
+                self.root / "stale" / "owner.sqlite3", minimum_sequence=2,
+                recovery_anchor=anchor)
 
     def test_recovery_activates_secure_key_material_or_leaves_no_vault(self):
         recovery = loom_transfer.generate_recovery(self.helper)
         backup = self.root / "secure-recovery.loom-backup"
+        anchor = self.root / "secure-recovery-anchor.json"
         loom_transfer.create_recovery_backup(
-            self.vault, self.crypto, recovery["phrase"], backup, sequence=1)
+            self.vault, self.crypto, recovery["phrase"], backup, sequence=1,
+            recovery_anchor=anchor)
         store = MemoryKeyStore()
         destination = self.root / "secure-recovery" / "owner.sqlite3"
         result = loom_transfer.restore_recovery_backup(
-            self.helper, backup, recovery["phrase"], destination, key_store=store)
+            self.helper, backup, recovery["phrase"], destination,
+            recovery_anchor=anchor, key_store=store)
         self.assertTrue(result["key_stored"])
         self.assertEqual(128, len(store.values[result["key_slot_id"]]))
 
@@ -140,8 +214,28 @@ class TransferTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "key store refusal"):
             loom_transfer.restore_recovery_backup(
                 self.helper, backup, recovery["phrase"], failed_destination,
+                recovery_anchor=anchor,
                 key_store=MemoryKeyStore(fail=True))
         self.assertFalse(failed_destination.exists())
+
+    def test_backup_before_permanent_forget_cannot_activate_against_current_anchor(self):
+        recovery = loom_transfer.generate_recovery(self.helper)
+        backup = self.root / "pre-forget.loom-backup"
+        anchor = self.root / "current-recovery-anchor.json"
+        loom_transfer.create_recovery_backup(
+            self.vault, self.crypto, recovery["phrase"], backup, sequence=1,
+            recovery_anchor=anchor)
+        self.vault.forget_memory(
+            "00000000-0000-4000-8000-000000003301", reason="owner-request")
+        loom_transfer.write_recovery_anchor(self.vault, self.crypto, anchor)
+
+        destination = self.root / "must-not-resurrect" / "owner.sqlite3"
+        with self.assertRaisesRegex(loom_transfer.TransferError, "deletion epoch"):
+            loom_transfer.restore_recovery_backup(
+                self.helper, backup, recovery["phrase"], destination,
+                recovery_anchor=anchor)
+
+        self.assertFalse(destination.exists())
 
     def test_managed_backup_retention_is_bounded_and_never_deletes_unowned_files(self):
         recovery = loom_transfer.generate_recovery(self.helper)
@@ -177,11 +271,14 @@ class TransferTests(unittest.TestCase):
 
         recovery = loom_transfer.generate_recovery(self.helper)
         backup = self.root / "large.loom-backup"
+        anchor = self.root / "large-recovery-anchor.json"
         loom_transfer.create_recovery_backup(
-            self.vault, self.crypto, recovery["phrase"], backup, sequence=1)
+            self.vault, self.crypto, recovery["phrase"], backup, sequence=1,
+            recovery_anchor=anchor)
         restored = self.root / "large-restored.sqlite3"
         result = loom_transfer.restore_recovery_backup(
-            self.helper, backup, recovery["phrase"], restored)
+            self.helper, backup, recovery["phrase"], restored,
+            recovery_anchor=anchor)
         opened = loom_vault.OwnerVault.open(restored, crypto=result["crypto"])
         self.assertEqual(2, len(opened.list_entities("fixture")))
 
@@ -194,6 +291,7 @@ class TransferTests(unittest.TestCase):
             "schema_version": 1,
             "entries": [{"name": "../outside.txt", "sha256": "0" * 64,
                          "created_at": "2026-01-01T00:00:00Z", "sequence": 1,
+                         "deletion_epoch": 0,
                          "owner_vault_id": self.vault.identity()["owner_vault_id"]}]
         }), encoding="utf-8")
         recovery = loom_transfer.generate_recovery(self.helper)

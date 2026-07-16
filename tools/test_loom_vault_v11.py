@@ -92,6 +92,74 @@ class OwnerVaultTests(unittest.TestCase):
         second_runtime = loom_vault.runtime_install_id("1.1.1", "b" * 64)
         self.assertNotEqual(first_runtime, second_runtime)
 
+    def test_v1_schema_migrates_from_a_staged_copy_with_receipt_and_provenance(self):
+        record = self.vault.put_memory(self.record())
+        self.vault.put_entity("preference", "editor", {"value": "compact"})
+        connection = sqlite3.connect(self.path)
+        try:
+            connection.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
+            for table in ("memory_records", "tombstones", "state_entities"):
+                connection.execute(f"ALTER TABLE {table} DROP COLUMN source_event_id")
+                connection.execute(f"ALTER TABLE {table} DROP COLUMN source_device_id")
+            connection.commit()
+        finally:
+            connection.close()
+
+        migrated = loom_vault.OwnerVault.open(
+            self.path, crypto=self.crypto, allow_test_crypto=True)
+        self.assertEqual(3, migrated.identity()["schema_version"])
+        self.assertEqual(1, migrated.schema_migration_receipt()["from"])
+        self.assertEqual(3, migrated.schema_migration_receipt()["to"])
+        self.assertEqual("migrated", migrated.schema_migration_receipt()["status"])
+        rollback = Path(str(self.path) + ".schema-v1.rollback")
+        self.assertTrue(rollback.is_file())
+        connection = sqlite3.connect(rollback)
+        try:
+            self.assertEqual("1", connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0])
+        finally:
+            connection.close()
+        connection = sqlite3.connect(self.path)
+        try:
+            provenance = connection.execute(
+                "SELECT source_event_id,source_device_id FROM memory_records "
+                "WHERE record_id=?", (record["id"],)).fetchone()
+            self.assertEqual(("legacy-v1", "legacy-v1"), provenance)
+        finally:
+            connection.close()
+        self.assertEqual(record["id"], migrated.select_memory(
+            domain="accounting", project_id=None)[0]["id"])
+
+    def test_v1_schema_pointer_switch_failure_restores_the_original(self):
+        connection = sqlite3.connect(self.path)
+        try:
+            connection.execute("UPDATE metadata SET value='1' WHERE key='schema_version'")
+            connection.commit()
+        finally:
+            connection.close()
+        real_replace = loom_vault.os.replace
+        calls = 0
+
+        def fail_activation(source, destination):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("injected activation failure")
+            return real_replace(source, destination)
+
+        with mock.patch.object(loom_vault.os, "replace", side_effect=fail_activation):
+            with self.assertRaisesRegex(loom_vault.VaultError, "failed safely"):
+                loom_vault.OwnerVault.open(
+                    self.path, crypto=self.crypto, allow_test_crypto=True)
+        connection = sqlite3.connect(self.path)
+        try:
+            self.assertEqual("1", connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0])
+            self.assertEqual("ok", connection.execute("PRAGMA integrity_check").fetchone()[0])
+        finally:
+            connection.close()
+        self.assertFalse(Path(str(self.path) + ".schema-v1.rollback").exists())
+
     def test_encrypted_record_never_appears_in_database_bytes_and_selection_is_scoped(self):
         accounting = self.vault.put_memory(self.record())
         three_d = self.vault.put_memory(self.record(
@@ -117,7 +185,7 @@ class OwnerVaultTests(unittest.TestCase):
     def test_forgetting_dominates_replayed_earlier_record(self):
         record = self.vault.put_memory(self.record())
         forgotten = self.vault.forget_memory(record["id"], reason="owner-request")
-        self.assertEqual("forgotten", forgotten["status"])
+        self.assertEqual("complete", forgotten["status"])
         replay = self.vault.import_memory(self.record(
             record_id=record["id"], statement="Private accounting invariant"),
             source_sequence=1)

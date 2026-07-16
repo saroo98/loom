@@ -1,0 +1,43 @@
+[package]
+name = "loom-vault-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+loom-vault = { path = ".." }
+
+[[bin]]
+name = "helper_request"
+path = "fuzz_targets/helper_request.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "crypto_envelope"
+path = "fuzz_targets/crypto_envelope.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "learning_event_v3"
+path = "fuzz_targets/learning_event_v3.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "legacy_learning_import"
+path = "fuzz_targets/legacy_learning_import.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]
+members = ["."]

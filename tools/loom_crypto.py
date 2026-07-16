@@ -145,20 +145,24 @@ def recovery_open(helper, *, phrase, ciphertext, aad, runner=subprocess.run):
     return base64.b64decode(result["plaintext"], validate=True)
 
 
-def passphrase_wrap(helper, *, passphrase, plaintext, aad, runner=subprocess.run):
-    result = _invoke(helper, {
+def passphrase_wrap(helper, *, passphrase, plaintext, aad, kdf=None,
+                    runner=subprocess.run):
+    payload = {
         "op": "passphrase-wrap", "passphrase": passphrase,
-        "plaintext": _b64(plaintext), "aad": _b64(aad)}, runner=runner)
-    if set(result) != {"salt", "ciphertext"}:
+        "plaintext": _b64(plaintext), "aad": _b64(aad)}
+    if kdf is not None:
+        payload["kdf"] = kdf
+    result = _invoke(helper, payload, runner=runner)
+    if set(result) != {"kdf", "salt", "ciphertext"}:
         raise CryptoError("passphrase-wrap response is invalid")
     return result
 
 
-def passphrase_open(helper, *, passphrase, salt, ciphertext, aad,
+def passphrase_open(helper, *, passphrase, salt, ciphertext, aad, kdf,
                     runner=subprocess.run):
     result = _invoke(helper, {
         "op": "passphrase-open", "passphrase": passphrase, "salt": salt,
-        "ciphertext": ciphertext, "aad": _b64(aad)}, runner=runner)
+        "ciphertext": ciphertext, "aad": _b64(aad), "kdf": kdf}, runner=runner)
     if set(result) != {"plaintext"}:
         raise CryptoError("passphrase-open response is invalid")
     return base64.b64decode(result["plaintext"], validate=True)

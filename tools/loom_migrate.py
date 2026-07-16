@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only Loom 0.8/1.0 importer into the Loom 1.1 owner vault."""
+"""Read-only Loom 0.8/1.0 importer into the current owner vault."""
 
 import hashlib
 import json
@@ -178,13 +178,44 @@ def _migrate_v1_into(home, install_root, vault, *, expected_instance_id,
     for index, outcome in enumerate(outcome_records, 1):
         entity_id = str(outcome.get("id") or f"legacy-outcome-{index}")
         vault.put_entity("outcome", entity_id, outcome, source_sequence=index)
-    for name in ("learning-events.json", "learning-candidates.json",
-                 "preference-evolution.json", "artifact-utility.json",
-                 "improvement-evidence.json", "reversible-actions.json", "usage.json"):
+    recognized = {
+        "learning-events.json": "memory-observation",
+        "learning-candidates.json": "learning-candidate",
+        "preference-evolution.json": "preference-slot",
+        "artifact-utility.json": "artifact-utility",
+        "improvement-evidence.json": "policy-evaluation",
+        "reversible-actions.json": "reversible-action",
+        "usage.json": "usage-observation",
+    }
+    for name, entity_type in recognized.items():
         path = source / name
         if path.is_file():
             value = _read_json(path, None)
-            vault.put_entity("legacy-store", name, value, source_sequence=1)
+            records_value = []
+            if isinstance(value, list):
+                records_value = value
+            elif isinstance(value, dict):
+                for key in ("records", "events", "candidates", "entries", "actions"):
+                    if isinstance(value.get(key), list):
+                        records_value = value[key]
+                        break
+            if records_value:
+                for index, item in enumerate(records_value, 1):
+                    entity_id = str(uuid.uuid5(
+                        MIGRATION_NAMESPACE, f"{migration_id}:{name}:{index}"))
+                    vault.put_entity(entity_type, entity_id, item, source_sequence=index)
+                    reconciliation.append({
+                        "source_id": f"{name}:{index}", "target_id": entity_id,
+                        "action": "preserved-inactive" if entity_type == "learning-candidate"
+                        else "typed-import",
+                        "reason": f"recognized-{entity_type}",
+                    })
+            else:
+                vault.quarantine_import(name, value)
+                reconciliation.append({
+                    "source_id": name, "target_id": None, "action": "quarantined",
+                    "reason": "recognized-file-with-unknown-shape",
+                })
 
     after = dict(before)
     receipt = {

@@ -139,6 +139,28 @@ class MergeTests(unittest.TestCase):
             {item["id"] for item in self.a.list_entities("bounded-evidence")},
             {item["id"] for item in self.b.list_entities("bounded-evidence")})
 
+    def test_sequential_same_id_update_materializes_latest_value_and_truthful_receipt(self):
+        record_id = "00000000-0000-4000-8000-000000002241"
+        self.a.put_memory(preference(record_id, "concise"))
+        self.a.put_memory(preference(record_id, "detailed"))
+
+        receipt = self.b.merge_events(self.a.export_events())
+
+        selected = self.b.select_memory(domain="accounting", project_id=None)
+        self.assertEqual(["detailed"], [item["preference_value"] for item in selected])
+        self.assertEqual(1, receipt["added"])
+        self.assertEqual(1, receipt["updated"])
+
+    def test_reverse_id_bound_converges_between_local_and_remote_materializations(self):
+        for index in reversed(range(300)):
+            self.a.put_entity("reverse-bound", f"entity-{index:04d}", {"index": index})
+
+        self.b.merge_events(self.a.export_events())
+
+        self.assertEqual(
+            {item["id"] for item in self.a.list_entities("reverse-bound")},
+            {item["id"] for item in self.b.list_entities("reverse-bound")})
+
 
 if __name__ == "__main__":
     unittest.main()

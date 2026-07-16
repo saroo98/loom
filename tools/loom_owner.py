@@ -276,12 +276,25 @@ def health_summary(home, vault):
         migration = connection.execute(
             "SELECT created_at FROM receipts WHERE kind='legacy-migration' "
             "ORDER BY created_at DESC LIMIT 1").fetchone()
+        commitments = {row["status"]: row["count"] for row in connection.execute(
+            "SELECT status,COUNT(*) AS count FROM deletion_commitments GROUP BY status")}
+        active_memory = connection.execute(
+            "SELECT COUNT(*) FROM memory_records WHERE status='active'").fetchone()[0]
+        effect_count = connection.execute("SELECT COUNT(*) FROM memory_effects").fetchone()[0]
     backup_entries = backup.get("entries", []) if isinstance(backup, dict) else []
     last_backup = max((item.get("created_at", "") for item in backup_entries), default=None)
     identity = vault.identity()
     return {
         "runtime_version": pointer.get("version") if isinstance(pointer, dict) else None,
         "state_schema": identity["schema_version"],
+        "backend_authority": "owner-vault-sqlite",
+        "deletion_epoch": vault.deletion_epoch(),
+        "pending_deletion_commitments": (
+            commitments.get("pending-checkpoint", 0) + commitments.get("pending-devices", 0)),
+        "active_memory_records": active_memory,
+        "active_memory_bound": loom_vault.MAX_ACTIVE_RECORDS,
+        "recent_memory_effects": effect_count,
+        "learning_evidence_state": vault.improvement_summary()["evidence_state"],
         "last_verified_backup": last_backup,
         "connected_agents": connected,
         "paired_devices": devices.get("active", 0),

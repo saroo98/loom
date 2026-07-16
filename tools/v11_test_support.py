@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import tempfile
+import shutil
 from pathlib import Path
 
 
@@ -53,3 +54,72 @@ def build_vault_helper(root):
             "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
         }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
     return binary
+
+
+def package_evidence(root, helper, directory, platforms):
+    """Create standards-valid, isolated package evidence fixtures for every platform."""
+    import loom_plugin_package
+    import loom_reliability
+    import loom_sbom
+
+    root = Path(root).resolve()
+    helper = Path(helper).resolve()
+    directory = Path(directory).resolve()
+    directory.mkdir(parents=True, exist_ok=True)
+    commit = package_source_commit(root)
+    source_digest = loom_plugin_package._source_digest(root)
+    lock_digest = loom_reliability.file_sha256(root / "vault-helper" / "Cargo.lock")
+    binary_digest = loom_reliability.file_sha256(helper)
+    evidence = {}
+    receipts = {}
+    for platform_id in platforms:
+        rebuild = directory / f"{platform_id}-rebuild" / helper.name
+        rebuild.parent.mkdir(parents=True)
+        shutil.copyfile(helper, rebuild)
+        sbom = directory / f"{platform_id}.spdx.json"
+        loom_sbom.generate(
+            root, helper, platform_id, sbom, namespace_seed=source_digest)
+        provenance = directory / f"{platform_id}.provenance.json"
+        provenance.write_text(json.dumps({
+            "schema_version": 1,
+            "repository": "https://github.com/saroo98/loom",
+            "commit": commit,
+            "platform": platform_id,
+            "binary_sha256": binary_digest,
+            "source_sha256": source_digest,
+            "cargo_lock_sha256": lock_digest,
+            "independent_build": True,
+            "builder": {"id": "test-independent-build", "run_id": platform_id},
+        }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        evidence[platform_id] = {
+            "rebuild": rebuild, "sbom": sbom, "provenance": provenance}
+        receipts[platform_id] = {
+            "platform": platform_id,
+            "binary_sha256": binary_digest,
+            "rebuild_sha256": loom_reliability.file_sha256(rebuild),
+            "source_sha256": source_digest,
+            "cargo_lock_sha256": lock_digest,
+            "sbom_sha256": loom_reliability.file_sha256(sbom),
+            "provenance_sha256": loom_reliability.file_sha256(provenance),
+        }
+    return receipts, evidence
+
+
+def package_source_commit(root):
+    """Return the real commit or a deterministic test identity for a Git-free public cut."""
+    root = Path(root).resolve()
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+            text=True, timeout=10, check=False)
+        candidate = result.stdout.strip()
+        if result.returncode == 0 and len(candidate) == 40 \
+                and all(character in "0123456789abcdef" for character in candidate):
+            return candidate
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    digest = hashlib.sha256(b"loom-git-free-test-fixture-v1")
+    for path in [root / "VERSION", root / "vault-helper" / "Cargo.lock"]:
+        raw = path.read_bytes()
+        digest.update(len(raw).to_bytes(8, "big") + raw)
+    return digest.hexdigest()[:40]

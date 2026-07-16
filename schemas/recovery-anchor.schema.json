@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/recovery-anchor.schema.json",
+  "title": "Signed Loom recovery freshness anchor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["body", "signature"],
+  "properties": {
+    "body": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "owner_vault_id", "deletion_epoch", "signing_public", "created_at"],
+      "properties": {
+        "kind": {"const": "loom-recovery-anchor-v1"},
+        "owner_vault_id": {"type": "string", "format": "uuid"},
+        "deletion_epoch": {"type": "integer", "minimum": 0},
+        "signing_public": {"type": "string", "contentEncoding": "base64"},
+        "created_at": {"type": "string", "format": "date-time"}
+      }
+    },
+    "signature": {"type": "string", "contentEncoding": "base64"}
+  }
+}

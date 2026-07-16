@@ -75,7 +75,10 @@ class OwnerBootstrapTests(unittest.TestCase):
         summary = loom_owner.health_summary(self.home, result["vault"])
         self.assertEqual("1.1.0", summary["runtime_version"])
         self.assertFalse(summary["telemetry"])
-        self.assertNotIn("memory", json.dumps(summary).casefold())
+        self.assertEqual(0, summary["active_memory_records"])
+        self.assertEqual(0, summary["recent_memory_effects"])
+        self.assertNotIn("statement", json.dumps(summary).casefold())
+        self.assertNotIn("ciphertext", json.dumps(summary).casefold())
 
     def test_revocation_rotates_data_key_preserves_semantics_and_keeps_rollback(self):
         initialized = loom_owner.initialize_owner_vault(

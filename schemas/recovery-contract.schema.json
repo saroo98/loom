@@ -4,12 +4,13 @@
   "title": "Chunked encrypted Loom recovery backup",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kind", "backup_id", "owner_vault_id", "sequence", "checkpoint_sha256", "envelope", "chunks"],
+  "required": ["kind", "backup_id", "owner_vault_id", "sequence", "deletion_epoch", "checkpoint_sha256", "envelope", "chunks"],
   "properties": {
-    "kind": {"const": "loom-recovery-v1"},
+    "kind": {"const": "loom-recovery-v2"},
     "backup_id": {"type": "string", "format": "uuid"},
     "owner_vault_id": {"type": "string", "format": "uuid"},
     "sequence": {"type": "integer", "minimum": 1},
+    "deletion_epoch": {"type": "integer", "minimum": 0},
     "checkpoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "envelope": {"type": "string", "minLength": 24, "maxLength": 1048576, "contentEncoding": "base64"},
     "chunks": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"type": "object", "additionalProperties": false, "required": ["index", "sha256", "ciphertext"], "properties": {"index": {"type": "integer", "minimum": 0}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "ciphertext": {"type": "string", "minLength": 24, "maxLength": 1048576, "contentEncoding": "base64"}}}}

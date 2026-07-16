@@ -43,12 +43,18 @@ class VaultAdapterTests(unittest.TestCase):
         result = self.adapter.record_outcome(self.context, {
             "success": True, "metrics": {}, "evidence_ids": ["test-evidence"],
             "applied_memory_ids": [record["id"]], "rejected_memory_ids": [],
+            "memory_effects": [{
+                "memory_id": record["id"], "status": "verified-helped",
+                "decision_target": "balanced-postings",
+                "intended_effect": "prevent unbalanced journal entries",
+                "evidence_id": "test-evidence", "serious_harm": False,
+            }],
             "reversible_action_ids": [],
         })
         self.assertEqual(1, len(result["outcome_ids"]))
         summary = self.vault.improvement_summary()
         self.assertEqual(1, summary["memory_helped_count"])
-        self.assertTrue(summary["measurable"])
+        self.assertEqual("measurement-started", summary["evidence_state"])
         self.assertIn("balanced journal entries", self.adapter.profile_summary())
 
     def test_session_journal_encrypts_owner_statements_and_replays_receipt(self):
@@ -113,7 +119,7 @@ class VaultAdapterTests(unittest.TestCase):
         self.assertIn(record["id"], outcome["message"])
         self.assertTrue(self.vault.is_forgotten(record["id"]))
 
-    def test_repeated_evidence_activates_domain_learning_and_general_calibration(self):
+    def test_repeated_single_project_evidence_activates_domain_only(self):
         for index in range(3):
             self.context.operation_id = str(uuid.uuid4())
             self.context.selected_memory = ()
@@ -126,12 +132,12 @@ class VaultAdapterTests(unittest.TestCase):
             domain="accounting", project_id=self.context.project_id)
         statements = [item["statement"] for item in accounting]
         self.assertTrue(any("verification medium" in item for item in statements))
-        self.assertTrue(any("owner-specific calibration" in item for item in statements))
+        self.assertFalse(any("owner-specific calibration" in item for item in statements))
         unrelated = self.vault.select_memory(
             domain="three-d", project_id="p-" + "2" * 32)
         self.assertFalse(any("For accounting" in item["statement"] for item in unrelated))
-        self.assertTrue(any("owner-specific calibration" in item["statement"]
-                            for item in unrelated))
+        self.assertFalse(any("owner-specific calibration" in item["statement"]
+                             for item in unrelated))
 
     def test_inferred_preferences_need_repetition_and_newer_drift_wins(self):
         self.context.selected_memory = ()
@@ -152,7 +158,7 @@ class VaultAdapterTests(unittest.TestCase):
             "reversible_action_ids": [],
         })
         selected = self.adapter.select_preferences(self.context)
-        self.assertEqual("concise", selected[0]["effective_value"])
+        self.assertEqual([], selected)
         for _ in range(3):
             self.context.operation_id = str(uuid.uuid4())
             self.adapter.record_outcome(self.context, {
@@ -161,8 +167,7 @@ class VaultAdapterTests(unittest.TestCase):
                 "applied_memory_ids": [], "rejected_memory_ids": [],
                 "reversible_action_ids": [],
             })
-        self.assertEqual("detailed", self.adapter.select_preferences(
-            self.context)[0]["effective_value"])
+        self.assertEqual([], self.adapter.select_preferences(self.context))
 
 
 if __name__ == "__main__":

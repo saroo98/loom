@@ -1,4 +1,4 @@
-use argon2::Argon2;
+use argon2::{Algorithm, Argon2, Params, Version};
 use base64::{engine::general_purpose::STANDARD as B64, Engine};
 use bip39::{Language, Mnemonic};
 use chacha20poly1305::{
@@ -17,7 +17,75 @@ use x25519_dalek::{PublicKey as ExchangePublicKey, StaticSecret};
 use zeroize::Zeroize;
 
 type HmacSha256 = Hmac<Sha256>;
-const MAX_INPUT: u64 = 2 * 1024 * 1024;
+const MAX_INPUT: u64 = loom_vault::MAX_INPUT as u64;
+const LEGACY_KDF_M_COST: u32 = 19 * 1024;
+const LEGACY_KDF_T_COST: u32 = 2;
+const CURRENT_KDF_M_COST: u32 = 64 * 1024;
+const CURRENT_KDF_T_COST: u32 = 3;
+const KDF_P_COST: u32 = 1;
+const KDF_OUTPUT_BYTES: usize = 32;
+
+fn kdf_value(memory_kib: u32, iterations: u32) -> Value {
+    json!({
+        "algorithm": "argon2id",
+        "version": 19,
+        "memory_kib": memory_kib,
+        "iterations": iterations,
+        "parallelism": KDF_P_COST,
+        "output_bytes": KDF_OUTPUT_BYTES,
+    })
+}
+
+fn kdf_params(value: &Value) -> Result<(u32, u32), String> {
+    exact_fields(
+        value,
+        &[
+            "algorithm",
+            "version",
+            "memory_kib",
+            "iterations",
+            "parallelism",
+            "output_bytes",
+        ],
+    )?;
+    let algorithm = field(value, "algorithm")?;
+    let version = value.get("version").and_then(Value::as_u64);
+    let memory = value.get("memory_kib").and_then(Value::as_u64);
+    let iterations = value.get("iterations").and_then(Value::as_u64);
+    let parallelism = value.get("parallelism").and_then(Value::as_u64);
+    let output = value.get("output_bytes").and_then(Value::as_u64);
+    let candidate = (
+        u32::try_from(memory.unwrap_or(0)).unwrap_or(0),
+        u32::try_from(iterations.unwrap_or(0)).unwrap_or(0),
+    );
+    let allowed = candidate == (LEGACY_KDF_M_COST, LEGACY_KDF_T_COST)
+        || candidate == (CURRENT_KDF_M_COST, CURRENT_KDF_T_COST);
+    if algorithm != "argon2id"
+        || version != Some(19)
+        || parallelism != Some(u64::from(KDF_P_COST))
+        || output != Some(KDF_OUTPUT_BYTES as u64)
+        || !allowed
+    {
+        return Err("passphrase KDF descriptor is unsupported or exceeds bounds".to_string());
+    }
+    Ok(candidate)
+}
+
+fn derive_passphrase_key(
+    passphrase: &str,
+    salt: &[u8],
+    memory_kib: u32,
+    iterations: u32,
+) -> Result<[u8; 32], String> {
+    let params = Params::new(memory_kib, iterations, KDF_P_COST, Some(KDF_OUTPUT_BYTES))
+        .map_err(|_| "passphrase KDF parameters are invalid".to_string())?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut key = [0u8; 32];
+    argon
+        .hash_password_into(passphrase.as_bytes(), salt, &mut key)
+        .map_err(|_| "passphrase derivation failed".to_string())?;
+    Ok(key)
+}
 
 fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str, String> {
     value
@@ -367,25 +435,34 @@ fn execute(value: &Value) -> Result<Value, String> {
             Ok(output)
         }
         "passphrase-wrap" => {
-            exact_fields(value, &["op", "passphrase", "plaintext", "aad"])?;
+            let supplied_kdf = value.get("kdf");
+            if supplied_kdf.is_some() {
+                exact_fields(value, &["op", "passphrase", "plaintext", "aad", "kdf"])?;
+            } else {
+                exact_fields(value, &["op", "passphrase", "plaintext", "aad"])?;
+            }
             let passphrase = field(value, "passphrase")?;
             if passphrase.len() < 12 || passphrase.len() > 1024 {
                 return Err("passphrase length is invalid".to_string());
             }
             let mut salt = [0u8; 16];
             OsRng.fill_bytes(&mut salt);
-            let mut key = [0u8; 32];
-            Argon2::default()
-                .hash_password_into(passphrase.as_bytes(), &salt, &mut key)
-                .map_err(|_| "passphrase derivation failed".to_string())?;
+            let kdf = supplied_kdf
+                .cloned()
+                .unwrap_or_else(|| kdf_value(CURRENT_KDF_M_COST, CURRENT_KDF_T_COST));
+            let (memory_kib, iterations) = kdf_params(&kdf)?;
+            let key = derive_passphrase_key(passphrase, &salt, memory_kib, iterations)?;
             let mut plaintext = decoded(value, "plaintext", 1024 * 1024)?;
             let aad = decoded(value, "aad", 64 * 1024)?;
             let sealed = seal_with_key(key, &plaintext, &aad)?;
             plaintext.zeroize();
-            Ok(json!({"salt": B64.encode(salt), "ciphertext": B64.encode(sealed)}))
+            Ok(json!({"kdf": kdf, "salt": B64.encode(salt), "ciphertext": B64.encode(sealed)}))
         }
         "passphrase-open" => {
-            exact_fields(value, &["op", "passphrase", "salt", "ciphertext", "aad"])?;
+            exact_fields(
+                value,
+                &["op", "passphrase", "salt", "ciphertext", "aad", "kdf"],
+            )?;
             let passphrase = field(value, "passphrase")?;
             if passphrase.len() < 12 || passphrase.len() > 1024 {
                 return Err("passphrase length is invalid".to_string());
@@ -394,10 +471,12 @@ fn execute(value: &Value) -> Result<Value, String> {
             if salt.len() != 16 {
                 return Err("passphrase salt is invalid".to_string());
             }
-            let mut key = [0u8; 32];
-            Argon2::default()
-                .hash_password_into(passphrase.as_bytes(), &salt, &mut key)
-                .map_err(|_| "passphrase derivation failed".to_string())?;
+            let (memory_kib, iterations) = kdf_params(
+                value
+                    .get("kdf")
+                    .ok_or_else(|| "missing KDF descriptor".to_string())?,
+            )?;
+            let key = derive_passphrase_key(passphrase, &salt, memory_kib, iterations)?;
             let ciphertext = decoded(value, "ciphertext", 1024 * 1024 + 40)?;
             let aad = decoded(value, "aad", 64 * 1024)?;
             let mut plaintext = open_with_key(key, &ciphertext, &aad)?;
@@ -419,8 +498,8 @@ fn main() {
         if input.len() as u64 > MAX_INPUT {
             return Err("request exceeds bound".to_string());
         }
-        let request: Value =
-            serde_json::from_str(&input).map_err(|_| "request is not valid JSON".to_string())?;
+        let request = loom_vault::parse_bounded_request(input.as_bytes())?;
+        loom_vault::validate_crypto_envelope(&request)?;
         execute(&request)
     })();
     let mut output = Map::new();

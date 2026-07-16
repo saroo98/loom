@@ -1,33 +1,47 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "loom/schemas/transfer-bundle.schema.json",
-  "title": "Receiver-bound chunked encrypted Loom transfer",
+  "title": "Expiring receiver-bound Loom pairing v2 bundle",
   "type": "object",
   "additionalProperties": false,
-  "required": ["kind", "bundle_id", "owner_vault_id", "sender_device_id", "receiver_device_id", "sequence", "checkpoint_sha256", "envelope", "chunks"],
+  "required": ["kind", "bundle_id", "owner_vault_id", "sender_device_id", "receiver_device_id", "sequence", "deletion_epoch", "checkpoint_sha256", "request_sha256", "receiver_challenge", "expires_at", "owner_vault_commitment", "envelope", "chunks"],
   "properties": {
-    "kind": {"const": "loom-pair-v1"},
+    "kind": {"const": "loom-pair-v2"},
     "bundle_id": {"type": "string", "format": "uuid"},
     "owner_vault_id": {"type": "string", "format": "uuid"},
     "sender_device_id": {"type": "string", "format": "uuid"},
     "receiver_device_id": {"type": "string", "format": "uuid"},
     "sequence": {"type": "integer", "minimum": 1},
+    "deletion_epoch": {"type": "integer", "minimum": 0},
     "checkpoint_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "receiver_challenge": {"type": "string", "minLength": 40, "maxLength": 64, "contentEncoding": "base64"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "owner_vault_commitment": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "envelope": {"$ref": "#/$defs/pairCiphertext"},
-    "chunks": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"type": "object", "additionalProperties": false, "required": ["index", "sha256", "ciphertext", "sender_exchange_public", "sender_signing_public", "signature"], "properties": {"index": {"type": "integer", "minimum": 0}, "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "ciphertext": {"type": "string", "minLength": 24, "maxLength": 1048576, "contentEncoding": "base64"}, "sender_exchange_public": {"type": "string", "contentEncoding": "base64"}, "sender_signing_public": {"type": "string", "contentEncoding": "base64"}, "signature": {"type": "string", "contentEncoding": "base64"}}}}
+    "chunks": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"$ref": "#/$defs/pairChunk"}}
   },
   "$defs": {
     "pairCiphertext": {
-      "type": "object",
-      "additionalProperties": false,
+      "type": "object", "additionalProperties": false,
       "required": ["ciphertext", "sender_exchange_public", "sender_signing_public", "signature"],
       "properties": {
         "ciphertext": {"type": "string", "minLength": 24, "maxLength": 1048576, "contentEncoding": "base64"},
         "sender_exchange_public": {"type": "string", "contentEncoding": "base64"},
         "sender_signing_public": {"type": "string", "contentEncoding": "base64"},
-        "signature": {"type": "string", "contentEncoding": "base64"},
+        "signature": {"type": "string", "contentEncoding": "base64"}
+      }
+    },
+    "pairChunk": {
+      "type": "object", "additionalProperties": false,
+      "required": ["index", "sha256", "ciphertext", "sender_exchange_public", "sender_signing_public", "signature"],
+      "properties": {
         "index": {"type": "integer", "minimum": 0},
-        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "ciphertext": {"type": "string", "minLength": 24, "maxLength": 1048576, "contentEncoding": "base64"},
+        "sender_exchange_public": {"type": "string", "contentEncoding": "base64"},
+        "sender_signing_public": {"type": "string", "contentEncoding": "base64"},
+        "signature": {"type": "string", "contentEncoding": "base64"}
       }
     }
   }

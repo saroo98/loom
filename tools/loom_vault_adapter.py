@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Session-controller adapter backed only by the Loom 1.1 owner vault."""
+"""Session-controller adapter backed only by the current Loom owner vault."""
 
 import json
 import re
@@ -98,7 +98,7 @@ class VaultMemoryAdapter:
         for domain in context.prepared.domains:
             records = self.vault.select_memory(
                 domain=domain, project_id=project_id,
-                max_records=max(1, policy["max_records"] - len(selected)),
+                max_records=min(4, max(1, policy["max_records"] - len(selected))),
                 max_chars=max(256, remaining))
             for record in records:
                 if record["id"] not in {item["id"] for item in selected}:
@@ -130,14 +130,24 @@ class VaultMemoryAdapter:
                     value.get("task_class") != context.intent
                     or value.get("risk_class") != risk):
                 continue
+            if value.get("key") == "autonomy":
+                # Authority and safety posture are never inferred from behavior.
+                continue
             slot = (value.get("key"), value.get("domain"), value.get("task_class"),
                     value.get("risk_class"), value.get("value"))
             grouped.setdefault(slot, []).append(item)
         by_preference = {}
         for slot, evidence in grouped.items():
-            if len(evidence) < 3:
-                continue
             key, domain, task_class, risk_class, effective = slot
+            projects = {item["value"].get("project_id") for item in evidence
+                        if item["value"].get("project_id")}
+            domains = {domain_id for item in evidence
+                       for domain_id in item["value"].get("domains", [])}
+            if domain is not None:
+                if len(projects) < 2:
+                    continue
+            elif len(projects) < 3 or len(domains) < 2:
+                continue
             identity = (key, domain, task_class, risk_class)
             candidate = (max(item["value"].get("observation_order", 0)
                              for item in evidence), len(evidence), effective)
@@ -185,12 +195,36 @@ class VaultMemoryAdapter:
         rejected = set(result.get("rejected_memory_ids", []))
         if not applied <= set(selected) or not rejected <= set(selected):
             raise VaultAdapterError("outcome references memory outside the sealed context")
-        harmful = any(float(result.get("metrics", {}).get(key, 0)) > 0 for key in (
-            "rework-observed", "verification-escape", "guidance-wasted-work"))
-        helped = applied if result.get("success") and not harmful else set()
-        hurt = applied if harmful else rejected
-        outcome = self.vault.record_memory_outcome(
-            selected, helped_ids=sorted(helped), hurt_ids=sorted(hurt))
+        provided_effects = result.get("memory_effects", [])
+        if not isinstance(provided_effects, list):
+            raise VaultAdapterError("memory effects must be a bounded list")
+        by_id = {item.get("memory_id"): item for item in provided_effects
+                 if isinstance(item, dict)}
+        if len(by_id) != len(provided_effects) or not set(by_id) <= set(selected):
+            raise VaultAdapterError("memory effects reference memory outside the sealed context")
+        effects = []
+        for memory_id in selected:
+            if memory_id in by_id:
+                effects.append(dict(by_id[memory_id]))
+            elif memory_id in rejected:
+                effects.append({
+                    "memory_id": memory_id, "status": "rejected-before-use",
+                    "decision_target": "host-outcome", "intended_effect": "not applied",
+                    "evidence_id": None, "serious_harm": False,
+                })
+            elif memory_id in applied:
+                effects.append({
+                    "memory_id": memory_id, "status": "applied-unverified",
+                    "decision_target": "host-outcome", "intended_effect": "host reported use",
+                    "evidence_id": None, "serious_harm": False,
+                })
+            else:
+                effects.append({
+                    "memory_id": memory_id, "status": "selected-only",
+                    "decision_target": "host-outcome", "intended_effect": "context candidate",
+                    "evidence_id": None, "serious_harm": False,
+                })
+        outcome = self.vault.record_memory_effects(context.operation_id, effects)
         outcome_id = str(uuid.uuid5(
             uuid.UUID(self.instance_id), f"outcome:{context.operation_id}"))
         self.vault.put_entity("session-outcome", outcome_id, {
@@ -229,7 +263,11 @@ class VaultMemoryAdapter:
     def _learn_from_outcome(self, context, result):
         evidence = list(result.get("evidence_ids", []))
         outcomes = self.vault.list_entities("session-outcome", limit=256)
-        if len(outcomes) >= 3:
+        projects = {item["value"].get("project_id") for item in outcomes
+                    if item["value"].get("project_id")}
+        outcome_domains = {domain for item in outcomes
+                           for domain in item["value"].get("domains", [])}
+        if len(outcomes) >= 3 and len(projects) >= 3 and len(outcome_domains) >= 2:
             successes = sum(bool(item["value"].get("success")) for item in outcomes)
             rate = successes / len(outcomes)
             self._upsert_inferred_memory(
@@ -243,6 +281,8 @@ class VaultMemoryAdapter:
             evidence = []
         risk = {"S": "low", "M": "medium", "L": "high", "XL": "high"}[
             context.prepared.route_contract["tier"]]
+        if not evidence and result.get("preference_observations"):
+            return
         for index, observation in enumerate(result.get("preference_observations", [])):
             key = observation.get("key")
             domain = observation.get("domain") if key == "stack" else None
@@ -256,8 +296,18 @@ class VaultMemoryAdapter:
                 "task_class": context.intent if key == "autonomy" else None,
                 "risk_class": risk if key == "autonomy" else None,
                 "project_id": context.project_id,
+                "domains": list(context.prepared.domains),
                 "evidence_ids": evidence,
                 "observation_order": len(outcomes),
+            })
+            self.vault.record_observation({
+                "observation_id": entity_id, "memory_id": None,
+                "scope": "project", "domain": domain,
+                "project_id": context.project_id, "component_id": None,
+                "decision_target": f"preference-{key}", "evidence_id": evidence[0],
+                "observed_at": context.prepared.prepared_at,
+                "value": {"key": key, "value": observation.get("value"),
+                          "domains": list(context.prepared.domains)},
             })
         if not evidence:
             return
@@ -291,6 +341,14 @@ class VaultMemoryAdapter:
                 self.vault.put_entity("learning-observation", observation_id, {
                     "key": key, "domain": domain, "metric": metric,
                     "project_id": context.project_id, "evidence_ids": evidence})
+                self.vault.record_observation({
+                    "observation_id": observation_id, "memory_id": None,
+                    "scope": "domain", "domain": domain,
+                    "project_id": context.project_id, "component_id": None,
+                    "decision_target": target, "evidence_id": evidence[0],
+                    "observed_at": context.prepared.prepared_at,
+                    "value": {"metric": metric, "guidance": guidance},
+                })
                 count = len(observations) + 1
                 self._upsert_inferred_memory(
                     key=key, scope="domain", domain=domain, project_id=None,
@@ -301,15 +359,81 @@ class VaultMemoryAdapter:
         compaction = self.vault.compact_acknowledged()
         return {"checkpoint": checkpoint, "compaction": compaction}
 
+    def record_replay(self, replay, project_id):
+        if not isinstance(replay, dict) or not isinstance(project_id, str):
+            raise VaultAdapterError("production replay contract is invalid")
+        replay_id = replay.get("replay_id")
+        if not isinstance(replay_id, str) or not replay_id:
+            raise VaultAdapterError("production replay identity is invalid")
+        record_ids = []
+        for cohort in ("enabled", "disabled"):
+            item = replay.get(cohort)
+            if not isinstance(item, dict):
+                raise VaultAdapterError("production replay cohort is invalid")
+            entity_id = str(uuid.uuid5(
+                uuid.UUID(self.instance_id), f"policy-evaluation:{replay_id}:{cohort}"))
+            self.vault.record_policy_evaluation({
+                "evaluation_id": entity_id,
+                "partition": f"{replay.get('domain')}:{project_id}:{cohort}",
+                "evidence_state": "structural-counterfactual-only",
+                "policy_version": str(replay.get("policy_version", "shadow-v1")),
+                "sample_count": 1,
+                "effect_lower": None, "effect_upper": None, "harm_upper": None,
+                "token_cost": int(item.get("token_cost", 0)),
+                "elapsed_seconds": float(item.get("elapsed_seconds", 0.0)),
+            })
+            record_ids.append(entity_id)
+        summary_id = str(uuid.uuid5(
+            uuid.UUID(self.instance_id), f"policy-evaluation:{replay_id}:summary"))
+        self.vault.record_policy_evaluation({
+            "evaluation_id": summary_id,
+            "partition": f"{replay.get('domain')}:{project_id}:summary",
+            "evidence_state": "structural-counterfactual-only",
+            "policy_version": str(replay.get("policy_version", "shadow-v1")),
+            "sample_count": 1,
+            "effect_lower": None, "effect_upper": None, "harm_upper": None,
+            "token_cost": sum(int(replay.get(cohort, {}).get("token_cost", 0))
+                              for cohort in ("enabled", "disabled")),
+            "elapsed_seconds": sum(float(replay.get(cohort, {}).get("elapsed_seconds", 0.0))
+                                   for cohort in ("enabled", "disabled")),
+        })
+        for parent_id in record_ids:
+            self.vault.add_derivation(parent_id, summary_id, relation="evaluates")
+        for memory_id in replay.get("enabled", {}).get("memory_ids", []):
+            self.vault.add_derivation(memory_id, summary_id, relation="evaluates")
+        return [*record_ids, summary_id]
+
     def remember(self, context, statement):
+        if not isinstance(statement, str) or not statement.strip() or len(statement) > 1000:
+            raise VaultAdapterError("Memory must be a bounded declarative statement.")
+        executable = re.search(
+            r"(?im)^\s*(?:sudo|curl|wget|powershell|pwsh|cmd(?:\.exe)?|bash|sh|python|node|"
+            r"rm\s|del\s|remove-item|invoke-expression|start-process)\b|"
+            r"(?:&&|\|\||`[^`]+`|\$\([^)]*\))", statement)
+        secret = re.search(
+            r"(?i)\b(?:api[_ -]?key|access[_ -]?token|password|private[_ -]?key|secret)\s*[:=]",
+            statement)
+        if executable or secret:
+            raise VaultAdapterError(
+                "Executable commands and secret-bearing text cannot become active memory; "
+                "state the non-executable invariant instead.")
         domain = context.prepared.domains[0]
+        lowered = statement.casefold()
+        preference_key = preference_value = None
+        if re.search(r"\b(?:less autonomous|careful review|ask me before|review first)\b", lowered):
+            preference_key, preference_value = "autonomy_default", "careful-review"
+        elif re.search(r"\b(?:prefer|use)\s+(?:a\s+)?concise\b", lowered):
+            preference_key, preference_value = "report_style", "concise"
+        elif re.search(r"\b(?:prefer|use)\s+(?:a\s+)?detailed\b", lowered):
+            preference_key, preference_value = "report_style", "detailed"
         record = {
             "id": str(uuid.uuid4()), "scope": "project", "domain": domain,
-            "project_id": context.project_id, "category": "process",
+            "project_id": context.project_id,
+            "category": "preference" if preference_key else "process",
             "statement": statement, "provenance": "stated", "status": "active",
             "confidence": 1.0, "evidence_count": 1,
             "created_at": context.prepared.prepared_at,
-            "preference_key": None, "preference_value": None,
+            "preference_key": preference_key, "preference_value": preference_value,
         }
         return self.vault.put_memory(record)
 
@@ -324,7 +448,13 @@ class VaultMemoryAdapter:
         if len(matching) != 1:
             raise VaultAdapterError("Name exactly one selected memory ID to forget permanently.")
         forgotten = self.vault.forget_memory(matching[0]["id"], reason="owner-request")
-        return {"message": f"Forgotten permanently: {forgotten['id']}."}
+        if forgotten["status"] == "complete":
+            message = (f"Forgotten from active Loom state: {forgotten['record_id']}. "
+                       f"Deletion floor {forgotten['deletion_epoch']} is checkpointed.")
+        else:
+            message = (f"Forget is pending for {forgotten.get('record_id', forgotten['id'])}: "
+                       f"{forgotten['status']}.")
+        return {"message": message, "receipt": forgotten}
 
     def profile_summary(self):
         records = self.vault.list_memory(statuses={"active", "dormant"}, limit=32)
@@ -366,19 +496,3 @@ class VaultMemoryAdapter:
 
     def undo_latest(self):
         raise VaultAdapterError("No reversible owner adaptation is available.")
-
-    def record_replay(self, replay, project_id):
-        records = []
-        for cohort in ("enabled", "disabled"):
-            record_id = str(uuid.uuid5(
-                uuid.UUID(self.instance_id),
-                f"replay:{replay['replay_id']}:{cohort}"))
-            self.vault.put_entity("production-replay", record_id, {
-                "replay_id": replay["replay_id"], "cohort": cohort,
-                "metric": replay["metric"], "domain": replay["domain"],
-                "project_id": project_id, "value": replay[cohort]["value"],
-                "evidence_id": replay[cohort]["evidence_id"],
-                "provider_receipt": replay[cohort]["provider_receipt"],
-            })
-            records.append(record_id)
-        return records

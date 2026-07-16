@@ -12,7 +12,8 @@ class LoomV11ContractTests(unittest.TestCase):
     CONTRACTS = {
         "runtime-api.schema.json": {"request", "runtime", "vault", "session"},
         "owner-vault.schema.json": {
-            "owner_vault_id", "schema_version", "generation", "devices", "bounds"
+            "owner_vault_id", "schema_version", "generation", "deletion_epoch",
+            "devices", "bounds"
         },
         "event-envelope.schema.json": {
             "event_id", "owner_vault_id", "device_id", "device_counter",
@@ -28,10 +29,11 @@ class LoomV11ContractTests(unittest.TestCase):
         },
         "transfer-bundle.schema.json": {
             "kind", "bundle_id", "owner_vault_id", "sender_device_id",
-            "receiver_device_id", "sequence", "checkpoint_sha256", "envelope", "chunks"
+            "receiver_device_id", "sequence", "deletion_epoch", "checkpoint_sha256", "request_sha256",
+            "receiver_challenge", "expires_at", "owner_vault_commitment", "envelope", "chunks"
         },
         "recovery-contract.schema.json": {
-            "kind", "backup_id", "owner_vault_id", "sequence",
+            "kind", "backup_id", "owner_vault_id", "sequence", "deletion_epoch",
             "checkpoint_sha256", "envelope", "chunks"
         },
         "migration-receipt.schema.json": {
@@ -40,11 +42,11 @@ class LoomV11ContractTests(unittest.TestCase):
         },
     }
 
-    def test_version_and_every_entry_point_are_1_1(self):
-        self.assertEqual("1.1.0", (ROOT / "VERSION").read_text(encoding="utf-8").strip())
+    def test_version_and_every_entry_point_are_current(self):
+        self.assertEqual("1.3.0", (ROOT / "VERSION").read_text(encoding="utf-8").strip())
         for path in (ROOT / "README.md", ROOT / "START-HERE.md",
                      ROOT / "skill" / "loom" / "SKILL.md"):
-            self.assertIn("1.1.0", path.read_text(encoding="utf-8"), path)
+            self.assertIn("1.3.0", path.read_text(encoding="utf-8"), path)
 
     def test_contracts_are_closed_bounded_and_have_required_fields(self):
         for name, required in self.CONTRACTS.items():

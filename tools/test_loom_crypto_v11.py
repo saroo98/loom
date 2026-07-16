@@ -106,11 +106,27 @@ class RustCryptoHelperTests(unittest.TestCase):
         aad = b"loom-release-root-key-v1"
         wrapped = loom_crypto.passphrase_wrap(
             self.helper, passphrase="correct horse battery", plaintext=secret, aad=aad)
+        self.assertEqual({
+            "algorithm": "argon2id", "version": 19, "memory_kib": 64 * 1024,
+            "iterations": 3, "parallelism": 1, "output_bytes": 32,
+        }, wrapped["kdf"])
         self.assertEqual(secret, loom_crypto.passphrase_open(
             self.helper, passphrase="correct horse battery", aad=aad, **wrapped))
         with self.assertRaisesRegex(loom_crypto.CryptoError, "authentication"):
             loom_crypto.passphrase_open(
                 self.helper, passphrase="wrong horse battery!", aad=aad, **wrapped)
+        hostile = dict(wrapped)
+        hostile["kdf"] = {**wrapped["kdf"], "memory_kib": 1024 * 1024}
+        with self.assertRaisesRegex(loom_crypto.CryptoError, "KDF|bounds|unsupported"):
+            loom_crypto.passphrase_open(
+                self.helper, passphrase="correct horse battery", aad=aad, **hostile)
+        legacy = loom_crypto.passphrase_wrap(
+            self.helper, passphrase="correct horse battery", plaintext=secret, aad=aad,
+            kdf={"algorithm": "argon2id", "version": 19,
+                 "memory_kib": 19 * 1024, "iterations": 2,
+                 "parallelism": 1, "output_bytes": 32})
+        self.assertEqual(secret, loom_crypto.passphrase_open(
+            self.helper, passphrase="correct horse battery", aad=aad, **legacy))
 
 
 if __name__ == "__main__":

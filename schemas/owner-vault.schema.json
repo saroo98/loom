@@ -4,11 +4,12 @@
   "title": "Opaque Loom owner-vault metadata",
   "type": "object",
   "additionalProperties": false,
-  "required": ["owner_vault_id", "schema_version", "generation", "devices", "bounds"],
+  "required": ["owner_vault_id", "schema_version", "generation", "deletion_epoch", "devices", "bounds"],
   "properties": {
     "owner_vault_id": {"type": "string", "format": "uuid"},
-    "schema_version": {"type": "integer", "minimum": 1},
+    "schema_version": {"const": 3},
     "generation": {"type": "integer", "minimum": 1},
+    "deletion_epoch": {"type": "integer", "minimum": 0},
     "devices": {
       "type": "array", "maxItems": 32, "uniqueItems": true,
       "items": {"type": "string", "format": "uuid"}
