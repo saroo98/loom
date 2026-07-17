@@ -45,6 +45,12 @@ class _SiteParser(HTMLParser):
 
 
 class DocumentationCoherenceTests(unittest.TestCase):
+    def test_every_published_schema_is_valid_json(self):
+        for path in sorted((ROOT / "schemas").glob("*.json")):
+            with self.subTest(schema=path.name):
+                value = json.loads(path.read_text(encoding="utf-8"))
+                self.assertIsInstance(value, dict)
+
     def test_public_website_is_self_contained_accessible_and_share_ready(self):
         docs = ROOT / "docs"
         index = docs / "index.html"

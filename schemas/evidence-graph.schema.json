@@ -11,7 +11,7 @@
     "subject_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "evaluated_at": {"type": "string", "format": "date-time"},
     "active": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string"}},
-    "inactive": {"type": "array", "maxItems": 4096, "items": {"type": "object", "additionalProperties": false, "required": ["evidence_id", "reason"], "properties": {"evidence_id": {"type": "string"}, "reason": {"enum": ["expired", "revoked", "verification-failed", "dependency-inactive"]}}},
+    "inactive": {"type": "array", "maxItems": 4096, "items": {"type": "object", "additionalProperties": false, "required": ["evidence_id", "reason"], "properties": {"evidence_id": {"type": "string"}, "reason": {"enum": ["expired", "revoked", "verification-failed", "dependency-inactive"]}}}},
     "predicates": {"type": "object", "maxProperties": 4096, "additionalProperties": {"type": "array", "items": {"type": "string"}}},
     "graph_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   }
