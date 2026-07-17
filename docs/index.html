@@ -3,28 +3,28 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111210">
-  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#121311">
+  <meta name="color-scheme" content="dark light">
   <meta name="loom-version" content="1.6.0">
-  <meta name="description" content="Loom turns one request into an evidence-backed execution plan for an AI coding agent, then learns locally without mixing projects or leaking owner data.">
+  <meta name="description" content="Loom turns one request into a current, domain-aware, evidence-backed execution plan for an AI coding agent. It learns locally, stays bounded, and fails closed.">
   <meta name="robots" content="index,follow,max-image-preview:large">
   <link rel="canonical" href="https://saroo98.github.io/loom/">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="site.css">
+  <link rel="stylesheet" href="site.css?v=1.6.0">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Loom">
-  <meta property="og:title" content="Loom — evidence before execution">
-  <meta property="og:description" content="One request becomes a release-ready plan that has earned the right to execute.">
+  <meta property="og:title" content="Loom — plan before the agent builds">
+  <meta property="og:description" content="One command turns a request into a scoped execution contract, with current state, domain rules, work orders, verification, and a receipt.">
   <meta property="og:url" content="https://saroo98.github.io/loom/">
   <meta property="og:image" content="https://saroo98.github.io/loom/social-card.svg">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Loom: one request, evidence before execution">
+  <meta property="og:image:alt" content="Loom: plan before the agent builds">
   <meta name="twitter:card" content="summary_large_image">
-  <meta name="twitter:title" content="Loom — evidence before execution">
-  <meta name="twitter:description" content="Planning intelligence for AI coding agents. One request in. A plan that has earned execution out.">
+  <meta name="twitter:title" content="Loom — plan before the agent builds">
+  <meta name="twitter:description" content="A local-first planning runtime for AI coding agents.">
   <meta name="twitter:image" content="https://saroo98.github.io/loom/social-card.svg">
-  <title>Loom — Evidence Before Execution</title>
+  <title>Loom — Plan Before the Agent Builds</title>
   <script type="application/ld+json">
   {
     "@context": "https://schema.org",
@@ -37,7 +37,7 @@
     "programmingLanguage": "Python"
   }
   </script>
-  <script src="site.js" defer></script>
+  <script src="site.js?v=1.6.0" defer></script>
 </head>
 <body>
   <!-- Public command contract required by the documentation audit: /loom <request> -->
@@ -46,173 +46,172 @@
 
   <header class="site-header">
     <div class="frame header-inner">
-      <a class="brand" href="#top">
+      <a class="brand" href="#top" aria-label="Loom home">
         <svg class="brand-mark" viewBox="0 0 36 36" aria-hidden="true">
           <path d="M6 4v28M15 4v28M24 4v28M33 4v28" class="warp"></path>
           <path d="M3 10h30M3 18h30M3 26h30" class="weft"></path>
         </svg>
         <span>Loom</span>
-        <span class="version">1.0</span>
+        <span class="version" data-loom-version="1.6.0">1.6.0</span>
       </a>
       <nav class="desktop-nav" aria-label="Primary navigation">
-        <a href="#difference">Difference</a>
-        <a href="#method">Method</a>
-        <a href="#memory">Memory</a>
-        <a href="#proof">Proof</a>
+        <a href="#runtime">How it works</a>
+        <a href="#memory">Learning</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#install">Install</a>
       </nav>
-      <a class="header-link" href="https://github.com/saroo98/loom" rel="noopener">View source</a>
+      <a class="header-link" href="https://github.com/saroo98/loom" rel="noopener">GitHub</a>
     </div>
   </header>
 
   <main id="main">
     <section class="hero" id="top">
-      <div class="hero-thread" aria-hidden="true"></div>
-      <div class="frame hero-layout">
+      <div class="hero-threads" aria-hidden="true">
+        <i></i><i></i><i></i><i></i>
+      </div>
+      <div class="frame hero-grid">
         <div class="hero-copy reveal">
-          <p class="kicker"><span class="signal"></span> Planning intelligence for AI coding agents</p>
-          <h1>One request.<br><span>A plan that has earned the right to execute.</span></h1>
-          <p class="hero-lede">Loom turns what a person wants into a release-ready plan an agent can execute safely. It reads the real project, adapts to the domain, proves the plan before implementation, and learns locally without carrying the wrong project into the next one.</p>
+          <p class="eyebrow"><span class="signal"></span> Local-first planning runtime</p>
+          <h1>Your agent should not build from a guess.</h1>
+          <p class="hero-lede">Loom turns one plain-language request into a scoped execution contract: the real project state, the right domain rules, exact work orders, real verification, and a receipt.</p>
+
+          <div class="command-line" aria-label="The Loom command">
+            <span aria-hidden="true">$</span>
+            <code>/loom &lt;request&gt;</code>
+            <button class="copy-control" type="button" data-copy="/loom &lt;request&gt;" aria-describedby="hero-copy-feedback">Copy</button>
+          </div>
+          <p class="copy-feedback" id="hero-copy-feedback" aria-live="polite">This is the entire owner-facing surface.</p>
+
           <div class="hero-actions">
             <a class="primary-action" href="#install">Install Loom</a>
-            <a class="text-action" href="#difference">See why it is different</a>
+            <a class="text-action" href="#runtime">See the runtime</a>
           </div>
+
           <dl class="hero-facts" aria-label="Loom fundamentals">
-            <div><dt>Surface</dt><dd>one command</dd></div>
-            <div><dt>Memory</dt><dd>local + scoped</dd></div>
-            <div><dt>Failure mode</dt><dd>fail closed</dd></div>
+            <div><dt>Visible commands</dt><dd>1</dd></div>
+            <div><dt>Telemetry</dt><dd>none</dd></div>
+            <div><dt>Unknown state</dt><dd>blocks</dd></div>
           </dl>
         </div>
 
-        <div class="instrument reveal" aria-label="Loom execution contract preview">
-          <div class="instrument-topline">
-            <span>LIVE CONTRACT</span>
-            <span class="instrument-state"><i></i> READY FOR A REQUEST</span>
+        <aside class="request-lab reveal" aria-label="How Loom routes different requests">
+          <div class="lab-header">
+            <span>REQUEST ROUTER</span>
+            <span class="lab-live"><i></i> LOCAL</span>
           </div>
-          <div class="command-block">
-            <span class="command-prompt" aria-hidden="true">$</span>
-            <code>/loom &lt;request&gt;</code>
-            <button class="copy-control" type="button" data-copy="/loom &lt;request&gt;" aria-describedby="copy-feedback">Copy</button>
+          <div class="lab-tabs" role="tablist" aria-label="Request examples">
+            <button role="tab" aria-selected="true" aria-controls="request-panel" id="request-small" data-request="small">Small</button>
+            <button role="tab" aria-selected="false" aria-controls="request-panel" id="request-system" data-request="system" tabindex="-1">System</button>
+            <button role="tab" aria-selected="false" aria-controls="request-panel" id="request-unknown" data-request="unknown" tabindex="-1">Unknown</button>
           </div>
-          <p class="copy-feedback" id="copy-feedback" aria-live="polite">The entire owner-facing interface.</p>
-          <div class="contract-weave" aria-hidden="true">
-            <svg viewBox="0 0 520 220" preserveAspectRatio="none">
-              <path class="thread thread-a" d="M0 22 C118 22 94 66 205 66 S350 22 520 22"></path>
-              <path class="thread thread-b" d="M0 72 C122 72 108 118 226 118 S364 72 520 72"></path>
-              <path class="thread thread-c" d="M0 122 C120 122 98 170 218 170 S372 122 520 122"></path>
-              <path class="thread thread-d" d="M0 172 C130 172 111 207 243 207 S383 172 520 172"></path>
-              <path class="cross" d="M92 0v220M198 0v220M304 0v220M410 0v220"></path>
-            </svg>
-            <span class="weave-label label-request">REQUEST</span>
-            <span class="weave-label label-world">WORLD</span>
-            <span class="weave-label label-domain">DOMAIN</span>
-            <span class="weave-label label-plan">PLAN</span>
-            <span class="weave-label label-proof">PROOF</span>
+          <div class="request-panel" id="request-panel" role="tabpanel" aria-labelledby="request-small" tabindex="0">
+            <p class="lab-prompt" id="lab-prompt">/loom Fix the CSV export header typo.</p>
+            <div class="route-line">
+              <span>ROUTE</span>
+              <strong id="lab-route">TIER S</strong>
+              <em id="lab-state">READY</em>
+            </div>
+            <ol class="route-stages" aria-label="Selected planning route">
+              <li><span>01</span><div><strong id="lab-step-one">Current file state</strong><small id="lab-step-one-note">fingerprinted</small></div></li>
+              <li><span>02</span><div><strong id="lab-step-two">One compact work order</strong><small id="lab-step-two-note">bounded plan</small></div></li>
+              <li><span>03</span><div><strong id="lab-step-three">Targeted real check</strong><small id="lab-step-three-note">acceptance evidence</small></div></li>
+            </ol>
+            <div class="lab-output">
+              <span>OUTPUT</span>
+              <p id="lab-output">A small plan for a small change. No architecture ceremony.</p>
+            </div>
           </div>
-          <div class="contract-output">
-            <div><span>ROUTE</span><strong>S / M / L / XL</strong></div>
-            <div><span>OUTPUT</span><strong>SEALED PLAN</strong></div>
-            <div><span>NEXT</span><strong>EVIDENCE</strong></div>
-          </div>
-        </div>
-      </div>
-      <div class="frame trust-ribbon" aria-label="Loom trust properties">
-        <span>No telemetry</span><span>Consumer-driven artifacts</span><span>Real-medium verification</span><span>Reversible local learning</span>
-      </div>
-    </section>
-
-    <section class="section difference" id="difference">
-      <div class="frame">
-        <div class="section-heading reveal">
-          <p class="section-number">01 / THE DIFFERENCE</p>
-          <h2>Not another agent.<br><span>The intelligence between intent and execution.</span></h2>
-        </div>
-        <div class="comparison reveal">
-          <div class="comparison-head" aria-hidden="true">
-            <span></span><span>Prompt</span><span>Task runner</span><span>Loom</span>
-          </div>
-          <div class="comparison-row">
-            <strong>Reads the real project state</strong><span>sometimes</span><span>partly</span><span class="loom-answer">fingerprinted</span>
-          </div>
-          <div class="comparison-row">
-            <strong>Adapts depth to consequence</strong><span>prompted</span><span>fixed</span><span class="loom-answer">automatic</span>
-          </div>
-          <div class="comparison-row">
-            <strong>Changes with the domain</strong><span>fragile</span><span>no</span><span class="loom-answer">invariant-led</span>
-          </div>
-          <div class="comparison-row">
-            <strong>Blocks stale execution</strong><span>rarely</span><span>partly</span><span class="loom-answer">fail closed</span>
-          </div>
-          <div class="comparison-row">
-            <strong>Learns without cross-project leakage</strong><span>no</span><span>no</span><span class="loom-answer">scoped + bounded</span>
-          </div>
-        </div>
-        <aside class="difference-note reveal">
-          <p>Loom does not make an agent more confident. It makes confidence answer to state, scope, domain truth, and evidence.</p>
         </aside>
       </div>
+
+      <div class="frame trust-strip" aria-label="Loom trust properties">
+        <span>Current world fingerprint</span>
+        <span>Domain-aware planning</span>
+        <span>Plan-before-build chain</span>
+        <span>Bounded owner memory</span>
+      </div>
     </section>
 
-    <section class="section method" id="method">
-      <div class="frame method-layout">
-        <div class="method-sticky reveal">
-          <p class="section-number">02 / ONE REQUEST, FULL SYSTEM</p>
-          <h2>The surface stays small.<br><span>The reasoning does not.</span></h2>
-          <p>Every stage is internal. The owner asks once. Loom decides what rigor the work deserves and exposes only consequential uncertainty.</p>
-          <a class="text-action" href="https://github.com/saroo98/loom/blob/main/START-HERE.md" rel="noopener">Read the agent kernel</a>
+    <section class="section runtime" id="runtime">
+      <div class="frame split-heading reveal">
+        <p class="section-number">01 / WHAT ACTUALLY HAPPENS</p>
+        <div>
+          <h2>One request in.<br><span>Six decisions behind it.</span></h2>
+          <p class="section-intro">The owner does not operate this pipeline. Loom does. It asks only when a consequential unknown cannot be resolved safely.</p>
         </div>
-        <ol class="method-track">
-          <li class="method-step reveal">
-            <span class="step-index">01</span>
-            <div><p class="step-label">RESOLVE</p><h3>Find the actual target.</h3><p>Project identity, configuration, installation, lifecycle, and authority are established before planning begins.</p></div>
-          </li>
-          <li class="method-step reveal">
-            <span class="step-index">02</span>
-            <div><p class="step-label">SURVEY</p><h3>Bind the plan to the present.</h3><p>Committed, staged, unstaged, untracked, ignored runtime, and time-drifted state become one sealed input.</p></div>
-          </li>
-          <li class="method-step reveal">
-            <span class="step-index">03</span>
-            <div><p class="step-label">ROUTE</p><h3>Spend rigor where consequence lives.</h3><p>Tier S stays compact. Larger work receives only the plans, work orders, and gates its consumers need.</p></div>
-          </li>
-          <li class="method-step reveal">
-            <span class="step-index">04</span>
-            <div><p class="step-label">DISCOVER</p><h3>Use the domain's invariants.</h3><p>Loom never substitutes web conventions for an unknown field. Authority, applicability, freshness, contradiction state, and real proof remain separate machine checks.</p></div>
-          </li>
-          <li class="method-step reveal">
-            <span class="step-index">05</span>
-            <div><p class="step-label">SEAL</p><h3>Make planning precede building.</h3><p>The exact artifact set, work-order topology, G1 review, touches, and acceptance evidence become tamper-evident.</p></div>
-          </li>
-          <li class="method-step reveal">
-            <span class="step-index">06</span>
-            <div><p class="step-label">VERIFY</p><h3>Close the loop in reality.</h3><p>Real-medium evidence, drift detection, bounded retries, and compact receipts replace “looks good” completion.</p></div>
-          </li>
+      </div>
+
+      <div class="frame runtime-layout">
+        <div class="runtime-sticky reveal">
+          <div class="runtime-diagram" aria-hidden="true">
+            <span>request</span>
+            <i></i>
+            <span>world</span>
+            <i></i>
+            <span>domain</span>
+            <i></i>
+            <span>plan</span>
+            <i></i>
+            <span>proof</span>
+          </div>
+          <p>The output is not a longer prompt. It is a content-bound plan that can become stale, fail review, or be refused.</p>
+          <a class="text-action" href="https://github.com/saroo98/loom/blob/main/START-HERE.md" rel="noopener">Read the compact kernel</a>
+        </div>
+
+        <ol class="runtime-steps">
+          <li class="reveal"><span>01</span><div><p>RESOLVE</p><h3>Find the real project.</h3><p>Identity, installation, repository root, lifecycle, and authority are established before planning begins.</p></div></li>
+          <li class="reveal"><span>02</span><div><p>SURVEY</p><h3>Bind to the current world.</h3><p>Committed, staged, unstaged, untracked, runtime, and time-drifted state become one planning baseline.</p></div></li>
+          <li class="reveal"><span>03</span><div><p>ROUTE</p><h3>Match rigor to consequence.</h3><p>A tiny edit stays compact. A risky migration receives the artifacts, gates, and dependency-aware work orders it needs.</p></div></li>
+          <li class="reveal"><span>04</span><div><p>DISCOVER</p><h3>Use the domain's rules.</h3><p>If Loom lacks coverage, it says so, finds the affected invariants and current facts, and blocks authorization until the evidence applies.</p></div></li>
+          <li class="reveal"><span>05</span><div><p>SEAL</p><h3>Make planning precede building.</h3><p>The artifact set, G1 review, work-order topology, touched paths, and acceptance evidence become tamper-evident.</p></div></li>
+          <li class="reveal"><span>06</span><div><p>VERIFY</p><h3>Close the loop in the real medium.</h3><p>Target-device, browser, ledger, pipeline, hardware, or other real evidence replaces a host-authored “passed” claim.</p></div></li>
         </ol>
       </div>
     </section>
 
-    <section class="section domains" id="domains">
+    <section class="section refusals" id="refusals">
       <div class="frame">
-        <div class="section-heading reveal">
-          <p class="section-number">03 / DOMAIN REALITY</p>
-          <h2>Any request does not mean<br><span>one template for everything.</span></h2>
-          <p class="section-intro">Choose a domain. The plan changes because the failures, invariants, and proof media change.</p>
+        <div class="refusal-heading reveal">
+          <p class="section-number">02 / THE USEFUL PART</p>
+          <h2>Loom knows when<br><span>not to continue.</span></h2>
+          <p>Planning is trustworthy only when uncertainty changes behavior. These are stops, not warnings hidden in a report.</p>
         </div>
-        <div class="domain-explorer reveal">
-          <div class="domain-tabs" role="tablist" aria-label="Example Loom domains">
-            <button role="tab" aria-selected="true" aria-controls="domain-panel" id="tab-accounting" data-domain="accounting">Accounting</button>
-            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-three-d" data-domain="three-d" tabindex="-1">Real-time 3D</button>
-            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-firmware" data-domain="firmware" tabindex="-1">Firmware</button>
-            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-research" data-domain="research" tabindex="-1">Research</button>
-            <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-unknown" data-domain="unknown" tabindex="-1">Unknown domain</button>
+
+        <div class="refusal-ledger reveal">
+          <div class="refusal-row refusal-header"><span>IF</span><span>LOOM DOES</span><span>WHY</span></div>
+          <div class="refusal-row"><strong>The repository changed during planning</strong><b>BLOCKS G1</b><p>The sealed plan no longer describes the same world.</p></div>
+          <div class="refusal-row"><strong>The domain or governing rule is unknown</strong><b>DISCOVERS, THEN RE-GATES</b><p>Generic software habits cannot stand in for domain authority.</p></div>
+          <div class="refusal-row"><strong>The work-order plan changed after approval</strong><b>REFUSES EXECUTION</b><p>Approval belongs to exact content, not a filename.</p></div>
+          <div class="refusal-row"><strong>Nothing changed or real evidence is missing</strong><b>REFUSES COMPLETION</b><p>Pre-existing work and host-authored status cannot receive plan credit.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section domains" id="domains">
+      <div class="frame split-heading reveal">
+        <p class="section-number">03 / DOMAIN REALITY</p>
+        <div>
+          <h2>The template changes<br><span>when the failure changes.</span></h2>
+          <p class="section-intro">Choose a domain. Loom changes the invariants and the proof medium instead of forcing every project into a web-app plan.</p>
+        </div>
+      </div>
+
+      <div class="frame domain-explorer reveal">
+        <div class="domain-tabs" role="tablist" aria-label="Example Loom domains">
+          <button role="tab" aria-selected="true" aria-controls="domain-panel" id="tab-accounting" data-domain="accounting">Accounting</button>
+          <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-three-d" data-domain="three-d" tabindex="-1">Real-time 3D</button>
+          <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-firmware" data-domain="firmware" tabindex="-1">Firmware</button>
+          <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-research" data-domain="research" tabindex="-1">Research</button>
+          <button role="tab" aria-selected="false" aria-controls="domain-panel" id="tab-unknown" data-domain="unknown" tabindex="-1">Unknown</button>
+        </div>
+        <div class="domain-panel" id="domain-panel" role="tabpanel" aria-labelledby="tab-accounting" tabindex="0">
+          <div class="domain-titleline"><span id="domain-code">DOMAIN / ACCOUNTING</span><span id="domain-status">COVERAGE KNOWN</span></div>
+          <h3 id="domain-title">Correct books before convenient screens.</h3>
+          <div class="domain-grid">
+            <div><span>INVARIANTS</span><p id="domain-invariants">Balanced postings · currency precision · immutable audit trail · reconciliation · period close</p></div>
+            <div><span>REAL PROOF</span><p id="domain-medium">Double-entry property tests · migration rehearsal · ledger reconciliation</p></div>
           </div>
-          <div class="domain-panel" id="domain-panel" role="tabpanel" aria-labelledby="tab-accounting" tabindex="0">
-            <div class="domain-titleline"><span id="domain-code">DOMAIN / ACCOUNTING</span><span id="domain-status">COVERAGE KNOWN</span></div>
-            <h3 id="domain-title">Correct books before convenient screens.</h3>
-            <div class="domain-grid">
-              <div><span>INVARIANTS</span><p id="domain-invariants">Balanced postings · currency precision · immutable audit trail · reconciliation · period close</p></div>
-              <div><span>REAL PROOF</span><p id="domain-medium">Double-entry property tests · migration rehearsal · ledger reconciliation</p></div>
-            </div>
-            <p class="domain-rule" id="domain-rule">A responsive dashboard cannot compensate for an unbalanced ledger.</p>
-          </div>
+          <p class="domain-rule" id="domain-rule">A responsive dashboard cannot compensate for an unbalanced ledger.</p>
         </div>
       </div>
     </section>
@@ -220,67 +219,70 @@
     <section class="section memory" id="memory">
       <div class="frame memory-layout">
         <div class="memory-copy reveal">
-          <p class="section-number">04 / MEMORY WITH BOUNDARIES</p>
-          <h2>It learns what matters.<br><span>It also learns what to leave behind.</span></h2>
-          <p>Loom's adaptation is not one growing prompt. General judgment, domain rules, project state, and installation state live in separate partitions with exact loading rules and hard caps.</p>
+          <p class="section-number">04 / LEARNING WITH AN EXIT</p>
+          <h2>Useful knowledge stays.<br><span>Dead weight leaves.</span></h2>
+          <p>Loom does not keep one growing prompt. It separates transferable judgment, domain knowledge, project facts, and installation state. Each partition has its own loading and retirement rules.</p>
           <ul class="memory-principles">
-            <li><span>TRANSFER</span> calibration and decision economics that survive a domain switch</li>
-            <li><span>PARK</span> domain knowledge when that work stops</li>
-            <li><span>ISOLATE</span> project facts and preferences to their exact owner</li>
-            <li><span>FORGET</span> with a durable content-erased tombstone</li>
+            <li><span>GENERAL</span><p>Calibration and decision habits can transfer when evidence says they do.</p></li>
+            <li><span>DOMAIN</span><p>3D, accounting, firmware, and other rules load only for matching work.</p></li>
+            <li><span>PROJECT</span><p>Repo facts remain with the exact project lineage.</p></li>
+            <li><span>FORGOTTEN</span><p>Content is erased; a bounded tombstone prevents resurrection.</p></li>
           </ul>
         </div>
-        <div class="memory-map reveal" aria-label="How Loom memory changes over time">
-          <div class="memory-axis"><span>WEEK 1</span><span>PROJECT CLOSED</span><span>MONTH 6</span></div>
-          <div class="memory-lane transferable">
-            <span class="lane-name">GENERAL JUDGMENT</span>
-            <div class="lane-line"><i></i><i></i><i></i></div>
-            <strong>retained when evidence says it transfers</strong>
+
+        <div class="memory-machine reveal" aria-label="A domain memory lifecycle">
+          <div class="memory-machine-head"><span>3D DOMAIN MEMORY</span><span>AUTOMATIC LIFECYCLE</span></div>
+          <div class="memory-timeline">
+            <div class="memory-event active"><span>WEEK 1</span><strong>ACTIVE</strong><p>Frame-time, asset, and spatial rules are selected for the room configurator.</p></div>
+            <div class="memory-join" aria-hidden="true"></div>
+            <div class="memory-event dormant"><span>PROJECT CLOSED</span><strong>DORMANT</strong><p>The rules leave active context. General calibration may remain.</p></div>
+            <div class="memory-join" aria-hidden="true"></div>
+            <div class="memory-event return"><span>MONTH 6</span><strong>RETURN OR RETIRE</strong><p>Exact-domain evidence can reactivate useful rules. Low-utility records expire.</p></div>
           </div>
-          <div class="memory-lane domain-lane">
-            <span class="lane-name">3D DOMAIN</span>
-            <div class="lane-line"><i></i><i class="dormant"></i><i class="return"></i></div>
-            <strong>active → dormant → exact-domain return</strong>
-          </div>
-          <div class="memory-lane project-lane">
-            <span class="lane-name">PROJECT FACTS</span>
-            <div class="lane-line"><i></i><i class="archived"></i></div>
-            <strong>archived when the project closes</strong>
-          </div>
-          <div class="memory-bound">ACTIVE CONTEXT NEVER GROWS WITHOUT BOUND</div>
+          <div class="memory-cap"><span>ACTIVE CAPS</span><strong>16 records / 8 KB context capsule</strong></div>
         </div>
       </div>
     </section>
 
-    <section class="section proof" id="proof">
-      <div class="frame">
-        <div class="proof-header reveal">
-          <div>
-            <p class="section-number">05 / CLAIMS WITH TEETH</p>
-            <h2>“Trust me” is not<br><span>a verification strategy.</span></h2>
+    <section class="section evidence" id="evidence">
+      <div class="frame evidence-heading reveal">
+        <div>
+          <p class="section-number">05 / EVIDENCE, NOT ADJECTIVES</p>
+          <h2>What is proven<br><span>stays separate from what is not.</span></h2>
+        </div>
+        <p>Repository counts come from the live tree. They are inventory, not a claim that tests passed. External proof stays visibly unverified until someone independent reproduces it.</p>
+      </div>
+
+      <div class="frame evidence-grid">
+        <div class="evidence-proven reveal">
+          <div class="evidence-label"><span>EXACT PUBLIC SOURCE</span><b>MECHANICAL INVENTORY</b></div>
+          <div class="inventory" aria-label="Generated repository inventory, not a test result">
+            <div><strong data-evidence-key="capability_claims">…</strong><span>capability claims</span></div>
+            <div><strong data-evidence-key="production_tool_modules">…</strong><span>tool modules</span></div>
+            <div><strong data-evidence-key="schema_documents">…</strong><span>schemas</span></div>
+            <div><strong data-evidence-key="discovered_test_methods">…</strong><span>test methods found</span></div>
           </div>
-          <p>Loom keeps mechanical claims tied to code and tests, privacy tied to every shipped byte, and the 100 label blocked until independent evidence exists.</p>
+          <p class="inventory-note">Generated from this repository. Open the source record before treating a number as proof.</p>
+          <div class="evidence-links">
+            <a href="capabilities.json">Capability registry</a>
+            <a href="generated-evidence.json">Generated inventory</a>
+            <a href="unknown-domain-intelligence.md">Unknown-domain contract</a>
+          </div>
         </div>
-        <div class="evidence-ledger reveal">
-          <div class="ledger-row ledger-header"><span>MECHANISM</span><span>WHAT IT REFUSES</span><span>STATE</span></div>
-          <div class="ledger-row"><strong>Plan-before-build chain</strong><span>pre-existing work receiving plan credit</span><b>MECHANICAL</b></div>
-          <div class="ledger-row"><strong>All-file privacy firewall</strong><span>owner tokens, secrets, opaque containers</span><b>MECHANICAL</b></div>
-          <div class="ledger-row"><strong>Five-category usage ledger</strong><span>partial token counts posing as totals</span><b>MECHANICAL</b></div>
-          <div class="ledger-row"><strong>Evidence-gated release</strong><span>self-attested or wrong-build certification</span><b>MECHANICAL</b></div>
-          <div class="ledger-row"><strong>Production 100 label</strong><span>local proof replacing independent proof</span><b class="blocked">BLOCKED BY DESIGN</b></div>
-        </div>
-        <div class="inventory reveal" aria-label="Generated repository inventory, not a test result">
-          <div><strong data-evidence-key="capability_claims">…</strong><span>capability claims</span></div>
-          <div><strong data-evidence-key="production_tool_modules">…</strong><span>production tool modules</span></div>
-          <div><strong data-evidence-key="schema_documents">…</strong><span>schema documents</span></div>
-          <div><strong data-evidence-key="discovered_test_methods">…</strong><span>discovered test methods</span></div>
-          <p>Generated repository inventory. This does not claim the tests passed.</p>
-        </div>
-        <div class="proof-links reveal">
-          <a href="capabilities.json">Inspect the capability registry</a>
-          <a href="generated-evidence.json">Open generated inventory</a>
-          <a href="limitations.md">Read what remains unverified</a>
-        </div>
+
+        <aside class="evidence-open reveal">
+          <div class="evidence-label"><span>PRODUCTION CERTIFICATION</span><b>NOT YET EARNED</b></div>
+          <p>Loom intentionally withholds the 100 label. The remaining proof is external or real-host work:</p>
+          <ol>
+            <li>complete hosted OS and architecture matrix;</li>
+            <li>real disposable runs through every supported agent;</li>
+            <li>provider-attested token and latency receipts;</li>
+            <li>independent unfamiliar-user and hostile audits;</li>
+            <li>measured longitudinal owner benefit.</li>
+          </ol>
+          <a class="secondary-action" href="https://github.com/saroo98/loom/tree/main/benchmarks/competitive/2026-07-17" rel="noopener">Open the sourced comparison</a>
+          <a class="quiet-link" href="limitations.md">Read every current limitation</a>
+        </aside>
       </div>
     </section>
 
@@ -288,17 +290,22 @@
       <div class="frame install-layout">
         <div class="install-copy reveal">
           <p class="section-number">06 / INSTALL ONCE</p>
-          <h2>Give your agent<br><span>a planning conscience.</span></h2>
-          <p>Install Loom as a Codex skill. After that, every project uses the same one-request surface while the internal plan adapts to the work.</p>
-          <a class="primary-action light" href="https://github.com/saroo98/loom" rel="noopener">Open the repository</a>
+          <h2>Then ask for<br><span>the work you actually want.</span></h2>
+          <p>Install Loom as a Codex skill. Normal use remains one plain-language request; the runtime handles tiering, domain discovery, planning, gates, learning, and receipts.</p>
+          <p class="install-requirement">Requires Python 3.10+ and a clean checkout.</p>
+          <a class="primary-action dark-action" href="https://github.com/saroo98/loom" rel="noopener">Open GitHub</a>
         </div>
+
         <div class="install-terminal reveal">
-          <div class="terminal-bar"><span>INSTALL / POWERSHELL</span><span>PYTHON 3.10+</span></div>
+          <div class="terminal-bar"><span>POWERSHELL</span><span>LOCAL INSTALL</span></div>
           <pre><code>git clone https://github.com/saroo98/loom.git
 cd loom
 python tools/loom_install.py install . "$HOME/.codex/skills/loom"</code></pre>
-          <button class="copy-control light-copy" type="button" data-copy="git clone https://github.com/saroo98/loom.git&#10;cd loom&#10;python tools/loom_install.py install . &quot;$HOME/.codex/skills/loom&quot;" aria-describedby="install-feedback">Copy install</button>
-          <p class="copy-feedback" id="install-feedback" aria-live="polite">Receipt-proven install. All-or-nothing uninstall.</p>
+          <div class="terminal-actions">
+            <button class="copy-control" type="button" data-copy="git clone https://github.com/saroo98/loom.git&#10;cd loom&#10;python tools/loom_install.py install . &quot;$HOME/.codex/skills/loom&quot;" aria-describedby="install-feedback">Copy install</button>
+            <code>/loom &lt;request&gt;</code>
+          </div>
+          <p class="copy-feedback" id="install-feedback" aria-live="polite">Receipt-owned install. Checkable and all-or-nothing to remove.</p>
         </div>
       </div>
     </section>
@@ -311,7 +318,7 @@ python tools/loom_install.py install . "$HOME/.codex/skills/loom"</code></pre>
           <svg class="brand-mark" viewBox="0 0 36 36" aria-hidden="true"><path d="M6 4v28M15 4v28M24 4v28M33 4v28" class="warp"></path><path d="M3 10h30M3 18h30M3 26h30" class="weft"></path></svg>
           <span>Loom</span>
         </a>
-        <p>One request. The right plan. Evidence before execution.</p>
+        <p>Plan from the current world. Verify in the real one.</p>
       </div>
       <nav aria-label="Repository links">
         <a href="https://github.com/saroo98/loom/blob/main/README.md">Readme</a>
@@ -320,7 +327,7 @@ python tools/loom_install.py install . "$HOME/.codex/skills/loom"</code></pre>
         <a href="https://github.com/saroo98/loom/blob/main/CONTRIBUTING.md">Contribute</a>
         <a href="https://github.com/saroo98/loom/blob/main/LICENSE">Apache-2.0</a>
       </nav>
-      <p class="footer-meta">Local-first · Standard-library tooling · No telemetry</p>
+      <p class="footer-meta">Local-first · no telemetry · standard-library Python · version <span data-loom-version="1.6.0">1.6.0</span></p>
     </div>
   </footer>
 </body>

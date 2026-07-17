@@ -11,7 +11,11 @@ from pathlib import Path
 
 
 PUBLIC_SURFACE = ("README.md", "START-HERE.md", "skill/loom/SKILL.md", "docs/index.html")
-VERSION_SURFACE = PUBLIC_SURFACE + ("docs/architecture.md", "docs/capabilities.json")
+VERSION_SURFACE = PUBLIC_SURFACE + (
+    "docs/architecture.md", "docs/capabilities.json",
+    "docs/readme-hero.svg", "docs/social-card.svg",
+)
+VERSION_BADGE_SURFACE = ("docs/index.html",)
 FORBIDDEN_PUBLIC_COMMANDS = (
     "/loom plan", "/loom resume", "/loom gate", "/loom wo", "/loom retro",
     "/loom profile", "/loom contribute", "subcommand",
@@ -27,6 +31,10 @@ LEGACY_PATTERNS = (
 )
 LINK_RE = re.compile(r"\[[^\]]+\]\(([^)]+)\)")
 REPO_DOC_RE = re.compile(r"(?<![A-Za-z0-9_./-])(loom/[A-Za-z0-9_./-]+\.md)\b")
+VERSION_BADGE_RE = re.compile(
+    r"<[^>]+\bdata-loom-version=[\"']([^\"']+)[\"'][^>]*>([^<]+)</",
+    re.I,
+)
 
 
 class DocsError(RuntimeError):
@@ -96,6 +104,21 @@ def check_version_coherence(root, version):
         path = _safe_relative(root, relative)
         if not path.is_file() or not marker.search(path.read_text(encoding="utf-8")):
             findings.append({"code": "VERSION_DRIFT", "path": relative, "expected": version})
+    for relative in VERSION_BADGE_SURFACE:
+        path = _safe_relative(root, relative)
+        if not path.is_file():
+            continue
+        badges = VERSION_BADGE_RE.findall(path.read_text(encoding="utf-8", errors="strict"))
+        if not badges:
+            findings.append({
+                "code": "VERSION_BADGE_MISSING", "path": relative, "expected": version})
+            continue
+        for attribute, label in badges:
+            if attribute != version or label.strip() != version:
+                findings.append({
+                    "code": "VERSION_BADGE_DRIFT", "path": relative,
+                    "expected": version, "attribute": attribute, "label": label.strip(),
+                })
     return findings
 
 

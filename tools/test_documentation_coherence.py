@@ -55,7 +55,7 @@ class DocumentationCoherenceTests(unittest.TestCase):
         self.assertTrue(parser.has_nav)
         self.assertTrue(parser.has_skip_link)
         self.assertEqual(len(parser.ids), len(set(parser.ids)), "duplicate HTML id")
-        self.assertEqual(["site.js"], parser.scripts)
+        self.assertEqual(["site.js"], [urlparse(path).path for path in parser.scripts])
         self.assertIn("description", parser.meta)
         self.assertIn("og:title", parser.meta)
         self.assertIn("og:image", parser.meta)
@@ -176,6 +176,22 @@ class DocumentationCoherenceTests(unittest.TestCase):
         version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")
         self.assertEqual([], loom_docs.check_version_coherence(ROOT, version))
+
+    def test_visible_version_badge_cannot_hide_a_stale_short_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            index = root / "docs" / "index.html"
+            index.parent.mkdir(parents=True)
+            index.write_text(
+                '<span data-loom-version="1.6.0">1.0</span>',
+                encoding="utf-8",
+            )
+            findings = loom_docs.check_version_coherence(root, "1.6.0")
+            self.assertEqual(
+                ["VERSION_BADGE_DRIFT"],
+                [item["code"] for item in findings
+                 if item["code"].startswith("VERSION_BADGE")],
+            )
 
 
 if __name__ == "__main__":
