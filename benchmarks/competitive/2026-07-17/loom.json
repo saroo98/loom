@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "project_id": "loom",
+  "project_name": "Loom",
+  "canonical_repository": "https://github.com/saroo98/loom",
+  "revision": "a0628bae76abc3e33ae22824ef40b2e77b595cfc",
+  "accessed_at": "2026-07-17T03:42:16Z",
+  "expires_at": "2026-08-16T03:42:16Z",
+  "rubric_id": "loom-cross-cutting-v1",
+  "categories": [
+    {
+      "category_id": "architecture-structure",
+      "applicability": "applicable",
+      "score": 80,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/docs/architecture.md",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_orchestrator.py"
+      ],
+      "rationale": "The public cut has explicit runtime, state, domain, adapter, and evidence boundaries. Independent architecture review remains absent, so this does not receive a perfect score."
+    },
+    {
+      "category_id": "tool-correctness",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_test.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_tool_contracts.py"
+      ],
+      "rationale": "Closed CLI contracts and fail-closed paths are mechanically tested. The exact public-cut run passed 589 tests with seven Windows capability skips reproduced on WSL, leaving the cross-platform category short of full matrix proof."
+    },
+    {
+      "category_id": "planning-guidance",
+      "applicability": "applicable",
+      "score": 70,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/START-HERE.md",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/loom/intake/artifact-matrix.md"
+      ],
+      "rationale": "Epistemic labels, consumer-driven artifacts, sealed plan contracts, and verification requirements are concrete. No independent outcome study has shown that the guidance improves real projects."
+    },
+    {
+      "category_id": "lifecycle-enforcement",
+      "applicability": "applicable",
+      "score": 80,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_gate.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_automatic_lifecycle.py"
+      ],
+      "rationale": "Causal plan-before-build checks, G1 sealing, work-order invariants, drift checks, and completion evidence are machine enforced. A multi-month live-pack study is still missing."
+    },
+    {
+      "category_id": "adaptability-universality",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/docs/unknown-domain-intelligence.md",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_domain_universality.py"
+      ],
+      "rationale": "Known-domain routing and an authority-gated unknown-domain discovery path are tested. Independent natural-domain holdouts have not yet been run."
+    },
+    {
+      "category_id": "token-efficiency",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_usage.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/contracts/performance-accounting-v3.json"
+      ],
+      "rationale": "Loom records five token categories and enforces bounded Tier-S context. No provider-attested production token corpus exists, so provider-budget points remain withheld."
+    },
+    {
+      "category_id": "speed-friction",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_performance.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_tier_s_fast_path.py"
+      ],
+      "rationale": "The fast gate and local performance corpus are bounded and tested. Production provider p95 latency is not attested."
+    },
+    {
+      "category_id": "surface-simplicity",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/skill/loom/SKILL.md",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_orchestrator.py"
+      ],
+      "rationale": "One /loom surface routes planning, repair, learning, forgetting, health, and transfer intents. Unfamiliar-user completion studies are absent."
+    },
+    {
+      "category_id": "owner-learning",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/contracts/owner-learning-v3.json",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_owner_learning_phase2.py"
+      ],
+      "rationale": "Admission, scope, effect attribution, confidence, dormancy, compaction, and forgetting are mechanical. Measured longitudinal owner benefit is not yet proven."
+    },
+    {
+      "category_id": "memory-isolation-bounds",
+      "applicability": "applicable",
+      "score": 100,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_memory.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_loom_merge_v11.py"
+      ],
+      "rationale": "The public implementation contains an encrypted owner-vault contract, project and domain isolation, bounded active selection, deterministic merge rules, and forgetting/replay tests."
+    },
+    {
+      "category_id": "integration-ecosystem",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/contracts/adapter-protocol-v2.json",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_adapter_conformance_v2.py"
+      ],
+      "rationale": "A bounded protocol and transactional shared-adapter ownership model are tested. Actual disposable invocations across the advertised host matrix remain unverified."
+    },
+    {
+      "category_id": "robustness-safety",
+      "applicability": "applicable",
+      "score": 70,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_loom_crash_recovery.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/test_loom_mutation.py"
+      ],
+      "rationale": "Freshness, crash, replay, mutation, and failure-injection paths are exercised. Host-level containment across the complete platform matrix is not proven."
+    },
+    {
+      "category_id": "privacy-sovereignty",
+      "applicability": "applicable",
+      "score": 100,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_privacy.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_publish.py"
+      ],
+      "rationale": "The exact public cut passed the all-file allowlist/firewall, explicit private-token scans, offline/no-telemetry checks, and content-bound cut verification."
+    },
+    {
+      "category_id": "testing-release-engineering",
+      "applicability": "applicable",
+      "score": 60,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_test.py",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_release.py"
+      ],
+      "rationale": "The local suite and trust-critical mutation gate pass. A complete hosted OS matrix and reproducible signed public release remain unproven."
+    },
+    {
+      "category_id": "documentation-onboarding",
+      "applicability": "applicable",
+      "score": 80,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/README.md",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/docs/limitations.md"
+      ],
+      "rationale": "Documentation is generated/audited for version and capability coherence and states limitations. No unfamiliar-user onboarding study exists."
+    },
+    {
+      "category_id": "observability-claim-honesty",
+      "applicability": "applicable",
+      "score": 70,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/docs/capabilities.json",
+        "https://github.com/saroo98/loom/blob/a0628bae76abc3e33ae22824ef40b2e77b595cfc/tools/loom_scorecard.py"
+      ],
+      "rationale": "Capability claims, usage receipts, score evidence, stale-source rejection, and exact-subject binding are mechanical. Independent claim audit is absent."
+    },
+    {
+      "category_id": "adoption-external-validation",
+      "applicability": "applicable",
+      "score": 20,
+      "status": "verified",
+      "sources": [
+        "https://github.com/saroo98/loom"
+      ],
+      "rationale": "A public installable repository exists. Current adoption is minimal and there is no independent user study or hostile external audit."
+    }
+  ]
+}
+

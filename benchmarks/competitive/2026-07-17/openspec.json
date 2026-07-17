@@ -1,0 +1,196 @@
+{
+  "schema_version": 1,
+  "project_id": "openspec",
+  "project_name": "OpenSpec",
+  "canonical_repository": "https://github.com/Fission-AI/OpenSpec",
+  "revision": "0a99f410457271aa773d8b106f03f637f7c6b3c0",
+  "accessed_at": "2026-07-17T03:42:16Z",
+  "expires_at": "2026-08-16T03:42:16Z",
+  "rubric_id": "loom-cross-cutting-v1",
+  "categories": [
+    {
+      "category_id": "architecture-structure",
+      "applicability": "applicable",
+      "score": 80,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/package.json"
+      ],
+      "rationale": "The TypeScript CLI, artifact graph, templates, commands, and tests have clear boundaries. No independent architecture review was found."
+    },
+    {
+      "category_id": "tool-correctness",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/.github/workflows/ci.yml",
+        "https://github.com/Fission-AI/OpenSpec/tree/0a99f410457271aa773d8b106f03f637f7c6b3c0/test"
+      ],
+      "rationale": "[UNVERIFIED] Validation, status, schema, and workflow behavior have a large Vitest suite and a Linux/macOS/Windows CI matrix, but this audit did not execute OpenSpec."
+    },
+    {
+      "category_id": "planning-guidance",
+      "applicability": "applicable",
+      "score": 60,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/docs/workflows.md"
+      ],
+      "rationale": "Specs, changes, proposals, designs, tasks, verification, and archives form a coherent change workflow. OpenSpec explicitly favors flexibility over rigid gates, so causal plan integrity is weaker than Loom's contract."
+    },
+    {
+      "category_id": "lifecycle-enforcement",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/docs/workflows.md"
+      ],
+      "rationale": "Change creation, application, verification, sync, and archive stages are real. The system does not enforce an immutable plan-before-build chain or independent G1-style gate."
+    },
+    {
+      "category_id": "adaptability-universality",
+      "applicability": "applicable",
+      "score": 70,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/tree/0a99f410457271aa773d8b106f03f637f7c6b3c0/src/core/templates/workflows"
+      ],
+      "rationale": "Artifact workflows and schemas are flexible and broad across software projects. No explicit authority gate for an unknown non-software domain or external domain holdout was found."
+    },
+    {
+      "category_id": "token-efficiency",
+      "applicability": "applicable",
+      "score": 15,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/package.json"
+      ],
+      "rationale": "The workflow is delta-oriented, but no complete token/cache/retry accounting or provider-attested budget was found."
+    },
+    {
+      "category_id": "speed-friction",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/docs/workflows.md"
+      ],
+      "rationale": "[UNVERIFIED] The core flow is relatively small and includes fast-forward paths, but no timing run, local performance corpus, or production p95 receipt was obtained."
+    },
+    {
+      "category_id": "surface-simplicity",
+      "applicability": "applicable",
+      "score": 55,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md"
+      ],
+      "rationale": "The documented core uses five commands and expanded workflows add more. It is simpler than many frameworks but not a single intent-routed command."
+    },
+    {
+      "category_id": "owner-learning",
+      "applicability": "not-applicable",
+      "score": null,
+      "status": "not-applicable",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md"
+      ],
+      "rationale": "Not applicable to OpenSpec's stated scope: it manages project specifications and change artifacts, not evolving per-owner judgment."
+    },
+    {
+      "category_id": "memory-isolation-bounds",
+      "applicability": "not-applicable",
+      "score": null,
+      "status": "not-applicable",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md"
+      ],
+      "rationale": "Not applicable to OpenSpec's stated scope: project specs and worksets are not presented as an encrypted owner-memory vault."
+    },
+    {
+      "category_id": "integration-ecosystem",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/tree/0a99f410457271aa773d8b106f03f637f7c6b3c0/src/core/templates"
+      ],
+      "rationale": "OpenSpec supplies workflows for many coding assistants and a shared CLI. The score stops short of full because this audit did not execute every host."
+    },
+    {
+      "category_id": "robustness-safety",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/.github/workflows/ci.yml",
+        "https://github.com/Fission-AI/OpenSpec/tree/0a99f410457271aa773d8b106f03f637f7c6b3c0/test/commands"
+      ],
+      "rationale": "[UNVERIFIED] Cross-platform tests and validation/doctor/status surfaces are substantial, but crash, hostile-update, replay, and containment behavior was not exercised."
+    },
+    {
+      "category_id": "privacy-sovereignty",
+      "applicability": "applicable",
+      "score": 20,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/openspec/specs/telemetry/spec.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/src/telemetry/config.ts"
+      ],
+      "rationale": "PostHog telemetry is enabled by default with opt-out controls and a random identifier. That is materially less sovereign than an offline-by-default local system, and no publication firewall exists."
+    },
+    {
+      "category_id": "testing-release-engineering",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/.github/workflows/ci.yml",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/.github/workflows/release-prepare.yml"
+      ],
+      "rationale": "The project has a large Vitest suite, a multi-OS matrix, type/lint/build gates, changesets, and npm OIDC publishing. Reproducible signed release rebuilds were not established."
+    },
+    {
+      "category_id": "documentation-onboarding",
+      "applicability": "applicable",
+      "score": 85,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/docs/README.md"
+      ],
+      "rationale": "The README, workflow documentation, CLI references, and examples are extensive. No independent unfamiliar-user onboarding study was found."
+    },
+    {
+      "category_id": "observability-claim-honesty",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/README.md",
+        "https://github.com/Fission-AI/OpenSpec/blob/0a99f410457271aa773d8b106f03f637f7c6b3c0/openspec/specs/telemetry/spec.md"
+      ],
+      "rationale": "Status, validation, JSON output, doctor-style flows, and documented telemetry provide operational visibility. There are no content-bound provider usage receipts or independent claim audit."
+    },
+    {
+      "category_id": "adoption-external-validation",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/Fission-AI/OpenSpec",
+        "https://github.com/Fission-AI/OpenSpec/releases"
+      ],
+      "rationale": "A widely adopted public package and current release stream exist. Independent user-study and hostile-audit evidence were not found."
+    }
+  ]
+}

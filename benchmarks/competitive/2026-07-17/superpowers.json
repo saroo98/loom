@@ -1,0 +1,197 @@
+{
+  "schema_version": 1,
+  "project_id": "superpowers",
+  "project_name": "Superpowers",
+  "canonical_repository": "https://github.com/obra/superpowers",
+  "revision": "d884ae04edebef577e82ff7c4e143debd0bbec99",
+  "accessed_at": "2026-07-17T03:42:16Z",
+  "expires_at": "2026-08-16T03:42:16Z",
+  "rubric_id": "loom-cross-cutting-v1",
+  "categories": [
+    {
+      "category_id": "architecture-structure",
+      "applicability": "applicable",
+      "score": 70,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md",
+        "https://github.com/obra/superpowers/tree/d884ae04edebef577e82ff7c4e143debd0bbec99/skills"
+      ],
+      "rationale": "A compact skill library, bootstrap layer, host adapters, and test harnesses are clearly separated. Multiple host-specific installation paths and no independent architecture review limit the score."
+    },
+    {
+      "category_id": "tool-correctness",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/docs/testing.md",
+        "https://github.com/obra/superpowers/tree/d884ae04edebef577e82ff7c4e143debd0bbec99/tests"
+      ],
+      "rationale": "[UNVERIFIED] The repository includes behavioral and explicit-skill tests, but the exact revision has no GitHub Actions workflows and this audit did not execute its external live-evaluation harness."
+    },
+    {
+      "category_id": "planning-guidance",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/brainstorming/SKILL.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/writing-plans/SKILL.md"
+      ],
+      "rationale": "Brainstorming, design approval, worktrees, plan review, TDD, implementation, code review, and verification form a strong agent methodology. Independent outcome evidence remains limited."
+    },
+    {
+      "category_id": "lifecycle-enforcement",
+      "applicability": "applicable",
+      "score": 80,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/executing-plans/SKILL.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/verification-before-completion/SKILL.md"
+      ],
+      "rationale": "The skill sequence strongly requires design, planning, test-first implementation, two-stage review, and evidence before completion. Enforcement depends on host skill compliance rather than a content-bound state machine."
+    },
+    {
+      "category_id": "adaptability-universality",
+      "applicability": "applicable",
+      "score": 60,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md",
+        "https://github.com/obra/superpowers/tree/d884ae04edebef577e82ff7c4e143debd0bbec99/skills"
+      ],
+      "rationale": "The methodology works across many software tasks and hosts. It does not provide an explicit unknown-domain authority/discovery gate for accounting, hardware, research, or other uncovered domains."
+    },
+    {
+      "category_id": "token-efficiency",
+      "applicability": "applicable",
+      "score": 25,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/subagent-driven-development/SKILL.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/docs/testing.md"
+      ],
+      "rationale": "Fresh subagent contexts and focused skill loading reduce context contamination, but no complete token accounting or provider-attested budget was found."
+    },
+    {
+      "category_id": "speed-friction",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/using-superpowers/SKILL.md"
+      ],
+      "rationale": "[UNVERIFIED] Automatic skill triggering reduces command friction, but no timing run or production p95 corpus was obtained; the full methodology can be heavy for small tasks."
+    },
+    {
+      "category_id": "surface-simplicity",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/using-superpowers/SKILL.md"
+      ],
+      "rationale": "Normal use relies on automatic skill discovery rather than requiring users to memorize a command suite. This is the strongest visible surface among the compared peers, short of an unfamiliar-user study."
+    },
+    {
+      "category_id": "owner-learning",
+      "applicability": "not-applicable",
+      "score": null,
+      "status": "not-applicable",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md"
+      ],
+      "rationale": "Not applicable to Superpowers' stated scope: it is a reusable methodology/skill library, not an evolving per-owner learning system."
+    },
+    {
+      "category_id": "memory-isolation-bounds",
+      "applicability": "not-applicable",
+      "score": null,
+      "status": "not-applicable",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md"
+      ],
+      "rationale": "Not applicable to Superpowers' stated scope: it does not claim an encrypted, scoped, bounded owner-memory vault."
+    },
+    {
+      "category_id": "integration-ecosystem",
+      "applicability": "applicable",
+      "score": 95,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/docs/porting-to-a-new-harness.md"
+      ],
+      "rationale": "Superpowers supports many agent harnesses and defines marker and live-acceptance expectations for ports. This audit did not reproduce every host."
+    },
+    {
+      "category_id": "robustness-safety",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/systematic-debugging/SKILL.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/verification-before-completion/SKILL.md"
+      ],
+      "rationale": "[UNVERIFIED] The guidance is defensively strong, but runtime safety is mostly methodological and this audit did not exercise crash, update, replay, or containment behavior."
+    },
+    {
+      "category_id": "privacy-sovereignty",
+      "applicability": "applicable",
+      "score": 30,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/skills/brainstorming/visual-companion.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md"
+      ],
+      "rationale": "Core skills are local, but the optional visual companion uses a remote service and version/logo telemetry unless disabled. There is no owner-vault firewall or exact-cut privacy proof."
+    },
+    {
+      "category_id": "testing-release-engineering",
+      "applicability": "applicable",
+      "score": 30,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/docs/testing.md",
+        "https://github.com/obra/superpowers/tree/d884ae04edebef577e82ff7c4e143debd0bbec99/tests"
+      ],
+      "rationale": "Behavioral test scripts and live-evaluation guidance exist, but the exact revision has no repository CI workflow and no reproducible signed release pipeline."
+    },
+    {
+      "category_id": "documentation-onboarding",
+      "applicability": "applicable",
+      "score": 85,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/docs/porting-to-a-new-harness.md"
+      ],
+      "rationale": "The README, host instructions, methodology descriptions, and porting guide are clear. No independent onboarding study was found."
+    },
+    {
+      "category_id": "observability-claim-honesty",
+      "applicability": "applicable",
+      "score": 20,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/docs/testing.md",
+        "https://github.com/obra/superpowers/blob/d884ae04edebef577e82ff7c4e143debd0bbec99/README.md"
+      ],
+      "rationale": "Testing expectations and host-port evidence are documented, but there is no capability truth registry, content-bound usage receipt, or fixed score provenance."
+    },
+    {
+      "category_id": "adoption-external-validation",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/obra/superpowers",
+        "https://github.com/obra/superpowers/releases"
+      ],
+      "rationale": "A very widely adopted public repository and active releases exist. Independent study and hostile-audit evidence under this rubric were not found."
+    }
+  ]
+}

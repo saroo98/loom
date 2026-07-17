@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "project_id": "gsd-core",
+  "project_name": "GSD Core",
+  "canonical_repository": "https://github.com/open-gsd/gsd-core",
+  "revision": "a30fb75b51544359a546b8a833d52e31a702bbd8",
+  "accessed_at": "2026-07-17T03:42:16Z",
+  "expires_at": "2026-08-16T03:42:16Z",
+  "rubric_id": "loom-cross-cutting-v1",
+  "categories": [
+    {
+      "category_id": "architecture-structure",
+      "applicability": "applicable",
+      "score": 85,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/ARCHITECTURE.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/package.json"
+      ],
+      "rationale": "GSD Core has explicit runtime, command, skill, workflow, state, capability, installer, and adapter boundaries with generated-drift checks. Its size and multiple compatibility seams add complexity, and no independent architecture review was found."
+    },
+    {
+      "category_id": "tool-correctness",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/package.json",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/.github/workflows/test.yml"
+      ],
+      "rationale": "[UNVERIFIED] Closed command checks, generated-sync guards, security/install/integration suites, property tests, coverage floors, and a multi-OS matrix are present, but this audit did not rerun the full Node matrix."
+    },
+    {
+      "category_id": "planning-guidance",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/README.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/ARCHITECTURE.md"
+      ],
+      "rationale": "Hierarchical planning, research, plan checking, execution waves, review, verification, UAT, and milestone closure form a deep method. Independent outcome studies remain absent."
+    },
+    {
+      "category_id": "lifecycle-enforcement",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/ARCHITECTURE.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/reference/planning-artifacts.md"
+      ],
+      "rationale": "Persistent state, plan checkers, drift gates, verification debt, phase transitions, and atomic commits create a strong lifecycle. It is not bound to Loom's exact causal-credit and G1 contract."
+    },
+    {
+      "category_id": "adaptability-universality",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/README.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/FEATURES.md"
+      ],
+      "rationale": "Profiles, quick/full modes, workspaces, specialist flows, and capabilities adapt broadly across software development. An explicit authority-gated unknown non-software domain discovery flow was not found."
+    },
+    {
+      "category_id": "token-efficiency",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/explanation/context-engineering.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/research/2026-05-12-skill-surface-budget.md"
+      ],
+      "rationale": "Fresh subagent contexts, namespace meta-skills, headroom tracking, and measured skill-byte budgets directly address context cost. The docs call headroom heuristic, and complete provider token/cache/retry receipts are absent."
+    },
+    {
+      "category_id": "speed-friction",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/skills/gsd-quick/SKILL.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/how-to/handle-quick-and-fast-tasks.md"
+      ],
+      "rationale": "[UNVERIFIED] A quick path removes optional phase overhead, but no timing run or provider-attested production p95 corpus was obtained; the command ecosystem remains large."
+    },
+    {
+      "category_id": "surface-simplicity",
+      "applicability": "applicable",
+      "score": 40,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/README.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/COMMANDS.md"
+      ],
+      "rationale": "Namespace meta-skills reduce eager skill listings, but users still navigate dozens of distinct commands. This is capable rather than minimal."
+    },
+    {
+      "category_id": "owner-learning",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/gsd-core/workflows/profile-user.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/gsd-core/workflows/graduation.md"
+      ],
+      "rationale": "Consent-gated session profiling, questionnaire fallback, context-dependent splits, phase learning extraction, and HITL graduation are real. They are explicit workflows, not automatic bounded effect attribution with forgetting and measured benefit."
+    },
+    {
+      "category_id": "memory-isolation-bounds",
+      "applicability": "applicable",
+      "score": 40,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/gsd-core/workflows/extract-learnings.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/proposals/mempalace-capability-prd-adr.md"
+      ],
+      "rationale": "Project learnings and profiles are scoped, and an optional local-first memory capability is designed. The core does not provide Loom's encrypted owner vault, deterministic device merge, bounded active memory, or deletion-floor semantics."
+    },
+    {
+      "category_id": "integration-ecosystem",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/README.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/how-to/install-on-your-runtime.md"
+      ],
+      "rationale": "The active successor supports a very broad set of runtimes with installers, generated registries, hooks, and adapter-specific guidance. A full independent live-host reproduction was not performed here."
+    },
+    {
+      "category_id": "robustness-safety",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/.github/workflows/security-scan.yml",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/.github/workflows/mutation.yml"
+      ],
+      "rationale": "[UNVERIFIED] Security scans, mutation tests, install tests, drift checks, state locks, and defensive hooks are extensive, but crash, power-loss, replay, and hostile-host containment were not reproduced."
+    },
+    {
+      "category_id": "privacy-sovereignty",
+      "applicability": "applicable",
+      "score": 60,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/gsd-core/workflows/profile-user.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/adr/0174-retire-gsd-sdk-package-boundary.md"
+      ],
+      "rationale": "GSD states that profiling stays local, ships no usage telemetry today, and keeps audit arguments opt-in. It lacks an all-file public-cut firewall and encrypted sovereign owner-vault proof."
+    },
+    {
+      "category_id": "testing-release-engineering",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/package.json",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/.github/workflows/release.yml"
+      ],
+      "rationale": "Unit, integration, install, security, slow, coverage, property, and mutation suites combine with multi-OS CI and npm OIDC provenance. Deterministic clean-room release reproduction was not established, so this is not 100."
+    },
+    {
+      "category_id": "documentation-onboarding",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/README.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/README.md"
+      ],
+      "rationale": "Architecture, features, configuration, commands, how-to guides, references, and translations are extensive. The system's breadth raises onboarding cost and no independent study was found."
+    },
+    {
+      "category_id": "observability-claim-honesty",
+      "applicability": "applicable",
+      "score": 60,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/registries/capability-registry.md",
+        "https://github.com/open-gsd/gsd-core/blob/a30fb75b51544359a546b8a833d52e31a702bbd8/docs/CONFIGURATION.md"
+      ],
+      "rationale": "Generated capability registries, state files, health checks, and opt-in dispatch auditing provide strong visibility. Provider-bound usage receipts and an independent claim audit are absent."
+    },
+    {
+      "category_id": "adoption-external-validation",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/open-gsd/gsd-core",
+        "https://github.com/gsd-build/get-shit-done"
+      ],
+      "rationale": "The active successor is public and the archived predecessor redirects users to it, with substantial combined adoption. No independent user study or hostile audit satisfying this rubric was found."
+    }
+  ]
+}

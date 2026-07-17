@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "project_id": "spec-kit",
+  "project_name": "Spec Kit",
+  "canonical_repository": "https://github.com/github/spec-kit",
+  "revision": "7bdf6c50416c2e7ea96d8398b569a78808adc6e9",
+  "accessed_at": "2026-07-17T03:42:16Z",
+  "expires_at": "2026-08-16T03:42:16Z",
+  "rubric_id": "loom-cross-cutting-v1",
+  "categories": [
+    {
+      "category_id": "architecture-structure",
+      "applicability": "applicable",
+      "score": 80,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md",
+        "https://github.com/github/spec-kit/tree/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/src/specify_cli"
+      ],
+      "rationale": "Python package boundaries, templates, presets, extensions, and integration assets are clearly separated. No independent architecture review was found."
+    },
+    {
+      "category_id": "tool-correctness",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/.github/workflows/test.yml",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/tests/test_upgrade.py"
+      ],
+      "rationale": "[UNVERIFIED] The repository has substantial CLI and upgrade tests plus Linux, macOS, and Windows CI, but this audit did not execute Spec Kit. The documented force-upgrade overwrite hazard is a confirmed source-level risk."
+    },
+    {
+      "category_id": "planning-guidance",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/templates/plan-template.md"
+      ],
+      "rationale": "Constitution, specification, plan, tasks, analysis, and implementation stages provide strong planning discipline. The repository does not mechanically prove causal plan-before-build integrity or independent planning outcomes."
+    },
+    {
+      "category_id": "lifecycle-enforcement",
+      "applicability": "applicable",
+      "score": 45,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/templates/tasks-template.md"
+      ],
+      "rationale": "The documented workflow places specification and planning before implementation, but it is primarily command-guided and lacks Loom-style sealed gates, causal baselines, and longitudinal drift receipts."
+    },
+    {
+      "category_id": "adaptability-universality",
+      "applicability": "applicable",
+      "score": 60,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/extensions/README.md",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/presets/ARCHITECTURE.md"
+      ],
+      "rationale": "Presets, extensions, and bundles make Spec Kit highly configurable within software development. No authority-gated unknown-domain discovery or independent domain holdout was found."
+    },
+    {
+      "category_id": "token-efficiency",
+      "applicability": "applicable",
+      "score": 20,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/presets/lean/README.md",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md"
+      ],
+      "rationale": "A lean preset reduces workflow surface, but no complete provider token accounting, cache-read receipt, or attested production budget was found."
+    },
+    {
+      "category_id": "speed-friction",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/presets/lean/README.md",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md"
+      ],
+      "rationale": "[UNVERIFIED] Initialization and the lean preset support smaller flows, but no timing run, content-bound performance corpus, or production p95 evidence was obtained."
+    },
+    {
+      "category_id": "surface-simplicity",
+      "applicability": "applicable",
+      "score": 40,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md"
+      ],
+      "rationale": "The workflow is understandable, but normal use exposes several sequential slash commands rather than one intent-routed surface."
+    },
+    {
+      "category_id": "owner-learning",
+      "applicability": "not-applicable",
+      "score": null,
+      "status": "not-applicable",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md"
+      ],
+      "rationale": "Not applicable to Spec Kit's stated scope: it manages project constitutions and specifications, not evolving per-owner learning."
+    },
+    {
+      "category_id": "memory-isolation-bounds",
+      "applicability": "not-applicable",
+      "score": null,
+      "status": "not-applicable",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md"
+      ],
+      "rationale": "Not applicable to Spec Kit's stated scope: its project memory is not presented as an encrypted, cross-device owner vault."
+    },
+    {
+      "category_id": "integration-ecosystem",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/integrations/README.md"
+      ],
+      "rationale": "Spec Kit publishes broad agent integration support and generated assets. It does not use one transactional shared-runtime adapter topology, so the score is below full."
+    },
+    {
+      "category_id": "robustness-safety",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/tests/test_extension_update_hardening.py",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/docs/upgrade.md"
+      ],
+      "rationale": "[UNVERIFIED] Update and extension hardening tests exist, but this audit did not run hostile or crash probes. The upgrade documentation confirms a force path that can overwrite customized files and requires manual backup."
+    },
+    {
+      "category_id": "privacy-sovereignty",
+      "applicability": "applicable",
+      "score": 55,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/pyproject.toml",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md"
+      ],
+      "rationale": "Core assets are local and no default telemetry client was found in the inspected source. There is no all-file publication firewall or sovereign owner-state proof."
+    },
+    {
+      "category_id": "testing-release-engineering",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/.github/workflows/test.yml",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/.github/workflows/release.yml"
+      ],
+      "rationale": "The source includes broad tests, pinned workflow actions, and a multi-OS Python matrix. Reproducible signed release artifacts were not established from the inspected release workflow."
+    },
+    {
+      "category_id": "documentation-onboarding",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md",
+        "https://github.github.com/spec-kit/index.html"
+      ],
+      "rationale": "Documentation, quick starts, reference material, and upgrade guidance are extensive and coherent. No independent unfamiliar-user completion study was found."
+    },
+    {
+      "category_id": "observability-claim-honesty",
+      "applicability": "applicable",
+      "score": 35,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/README.md",
+        "https://github.com/github/spec-kit/blob/7bdf6c50416c2e7ea96d8398b569a78808adc6e9/docs/upgrade.md"
+      ],
+      "rationale": "The project documents commands and upgrade limitations clearly, but it has no content-bound usage receipts or fixed evidence-derived score system."
+    },
+    {
+      "category_id": "adoption-external-validation",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/github/spec-kit"
+      ],
+      "rationale": "A widely adopted public artifact exists. The rubric's independent user-validation and hostile-audit requirements were not evidenced."
+    }
+  ]
+}

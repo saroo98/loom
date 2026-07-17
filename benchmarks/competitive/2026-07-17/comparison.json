@@ -1,0 +1,82 @@
+{
+  "comparison_sha256": "82be93aca0ac95a9a5e62dce7ac2d917604afd2c5cb6c7d8c38e7eb7e4fcc803",
+  "evaluated_at": "2026-07-17T03:45:00Z",
+  "projects": [
+    {
+      "evidence_coverage": 100.0,
+      "known_score": 71.6,
+      "lower_bound": 71.6,
+      "project_id": "loom",
+      "project_name": "Loom",
+      "unverified_categories": [],
+      "upper_bound": 71.6
+    },
+    {
+      "evidence_coverage": 78.16,
+      "known_score": 56.47,
+      "lower_bound": 44.14,
+      "project_id": "spec-kit",
+      "project_name": "Spec Kit",
+      "unverified_categories": [
+        "robustness-safety",
+        "speed-friction",
+        "tool-correctness"
+      ],
+      "upper_bound": 65.98
+    },
+    {
+      "evidence_coverage": 78.16,
+      "known_score": 56.18,
+      "lower_bound": 43.91,
+      "project_id": "openspec",
+      "project_name": "OpenSpec",
+      "unverified_categories": [
+        "robustness-safety",
+        "speed-friction",
+        "tool-correctness"
+      ],
+      "upper_bound": 65.75
+    },
+    {
+      "evidence_coverage": 78.16,
+      "known_score": 59.34,
+      "lower_bound": 46.38,
+      "project_id": "superpowers",
+      "project_name": "Superpowers",
+      "unverified_categories": [
+        "robustness-safety",
+        "speed-friction",
+        "tool-correctness"
+      ],
+      "upper_bound": 68.22
+    },
+    {
+      "evidence_coverage": 81.0,
+      "known_score": 58.77,
+      "lower_bound": 47.6,
+      "project_id": "bmad-method",
+      "project_name": "BMAD Method",
+      "unverified_categories": [
+        "robustness-safety",
+        "speed-friction",
+        "tool-correctness"
+      ],
+      "upper_bound": 66.6
+    },
+    {
+      "evidence_coverage": 81.0,
+      "known_score": 66.67,
+      "lower_bound": 54.0,
+      "project_id": "gsd-core",
+      "project_name": "GSD Core",
+      "unverified_categories": [
+        "robustness-safety",
+        "speed-friction",
+        "tool-correctness"
+      ],
+      "upper_bound": 73.0
+    }
+  ],
+  "rubric_id": "loom-cross-cutting-v1",
+  "schema_version": 1
+}

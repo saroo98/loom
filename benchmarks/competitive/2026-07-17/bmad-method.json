@@ -1,0 +1,199 @@
+{
+  "schema_version": 1,
+  "project_id": "bmad-method",
+  "project_name": "BMAD Method",
+  "canonical_repository": "https://github.com/bmad-code-org/BMAD-METHOD",
+  "revision": "717479bc3f50f38119fd958b9e577a8bde2e0184",
+  "accessed_at": "2026-07-17T03:42:16Z",
+  "expires_at": "2026-08-16T03:42:16Z",
+  "rubric_id": "loom-cross-cutting-v1",
+  "categories": [
+    {
+      "category_id": "architecture-structure",
+      "applicability": "applicable",
+      "score": 75,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/tree/717479bc3f50f38119fd958b9e577a8bde2e0184/src"
+      ],
+      "rationale": "Core skills, method modules, agents, workflows, installer tooling, and documentation are deliberately separated. The surface is large and no independent architecture review was found."
+    },
+    {
+      "category_id": "tool-correctness",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/.github/workflows/quality.yaml",
+        "https://github.com/bmad-code-org/BMAD-METHOD/tree/717479bc3f50f38119fd958b9e577a8bde2e0184/test"
+      ],
+      "rationale": "[UNVERIFIED] Installer, rendering, validation, skill, and script tests exist, but this audit did not execute them. The primary quality workflow is Ubuntu-only."
+    },
+    {
+      "category_id": "planning-guidance",
+      "applicability": "applicable",
+      "score": 95,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/docs/reference/workflow-map.md"
+      ],
+      "rationale": "BMAD provides unusually deep product, architecture, UX, testing, implementation, review, and retrospective guidance with specialized roles. It is less mechanically evidence-bound than Loom but broader in authored method."
+    },
+    {
+      "category_id": "lifecycle-enforcement",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/docs/reference/workflow-map.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/bmm-skills/4-implementation/bmad-retrospective/SKILL.md"
+      ],
+      "rationale": "Analysis, planning, solutioning, implementation, QA, and retrospective form a strong lifecycle. Compliance is workflow-driven rather than sealed by a causal repository state chain."
+    },
+    {
+      "category_id": "adaptability-universality",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/bmm-skills/4-implementation/bmad-quick-dev/workflow.md"
+      ],
+      "rationale": "Quick flows through enterprise-scale planning and many specialist roles adapt well to software project size and shape. Unknown non-software domain authority discovery is not explicit."
+    },
+    {
+      "category_id": "token-efficiency",
+      "applicability": "applicable",
+      "score": 25,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/docs/reference/workflow-map.md"
+      ],
+      "rationale": "Fresh-chat workflow guidance limits some context carryover, but the method exposes many agents and artifacts and has no complete provider token accounting."
+    },
+    {
+      "category_id": "speed-friction",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/bmm-skills/4-implementation/bmad-quick-dev/workflow.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md"
+      ],
+      "rationale": "[UNVERIFIED] Quick Dev offers a smaller route, but no timing run, local performance corpus, or production p95 evidence was obtained."
+    },
+    {
+      "category_id": "surface-simplicity",
+      "applicability": "applicable",
+      "score": 35,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/docs/reference/workflow-map.md"
+      ],
+      "rationale": "bmad-help assists discovery, but users still navigate a broad command/agent ecosystem rather than one intent-routed surface."
+    },
+    {
+      "category_id": "owner-learning",
+      "applicability": "applicable",
+      "score": 35,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/scripts/memlog.py",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/bmm-skills/4-implementation/bmad-retrospective/SKILL.md"
+      ],
+      "rationale": "Per-workspace memlog and retrospectives preserve decisions and lessons, and static user skill preferences alter guidance. There is no automatic cross-project effect attribution, scoped forgetting, or measured owner benefit."
+    },
+    {
+      "category_id": "memory-isolation-bounds",
+      "applicability": "applicable",
+      "score": 25,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/scripts/memlog.py",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/scripts/tests/test_memlog.py"
+      ],
+      "rationale": "Memlog is local, append-only, and workspace-scoped, but it is intentionally not editable/deletable and is not an encrypted, bounded, cross-device owner vault."
+    },
+    {
+      "category_id": "integration-ecosystem",
+      "applicability": "applicable",
+      "score": 65,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/tree/717479bc3f50f38119fd958b9e577a8bde2e0184/tools/installer"
+      ],
+      "rationale": "BMAD supports multiple AI development environments through installer-generated skills and workflows. This audit did not execute a real-host matrix or verify one shared runtime authority."
+    },
+    {
+      "category_id": "robustness-safety",
+      "applicability": "applicable",
+      "score": null,
+      "status": "unverified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/.github/workflows/quality.yaml",
+        "https://github.com/bmad-code-org/BMAD-METHOD/tree/717479bc3f50f38119fd958b9e577a8bde2e0184/test/adversarial-review-tests"
+      ],
+      "rationale": "[UNVERIFIED] Validation and adversarial review assets are present, but this audit did not exercise fail-closed runtime, update, crash, replay, or containment behavior."
+    },
+    {
+      "category_id": "privacy-sovereignty",
+      "applicability": "applicable",
+      "score": 60,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/scripts/memlog.py"
+      ],
+      "rationale": "No telemetry client was found in the inspected source and project memory is local. There is no all-file publication firewall, encryption contract, or sovereign exact-cut proof."
+    },
+    {
+      "category_id": "testing-release-engineering",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/.github/workflows/quality.yaml",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/.github/workflows/publish.yaml"
+      ],
+      "rationale": "The project has quality gates and npm OIDC provenance publishing. CI platform breadth, mutation testing, and reproducible release verification are weaker than the strongest peers."
+    },
+    {
+      "category_id": "documentation-onboarding",
+      "applicability": "applicable",
+      "score": 90,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/docs/reference/workflow-map.md"
+      ],
+      "rationale": "Documentation, multilingual material, workflow maps, role guidance, and testing references are extensive. No independent unfamiliar-user study was found."
+    },
+    {
+      "category_id": "observability-claim-honesty",
+      "applicability": "applicable",
+      "score": 25,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/README.md",
+        "https://github.com/bmad-code-org/BMAD-METHOD/blob/717479bc3f50f38119fd958b9e577a8bde2e0184/src/scripts/memlog.py"
+      ],
+      "rationale": "Work state and retrospectives are visible, but no complete capability registry, provider usage receipt, or evidence-derived score system was found."
+    },
+    {
+      "category_id": "adoption-external-validation",
+      "applicability": "applicable",
+      "score": 50,
+      "status": "verified",
+      "sources": [
+        "https://github.com/bmad-code-org/BMAD-METHOD",
+        "https://github.com/bmad-code-org/BMAD-METHOD/releases"
+      ],
+      "rationale": "A widely adopted public artifact and active releases exist. Independent user-study and hostile-audit evidence under this rubric were not found."
+    }
+  ]
+}
