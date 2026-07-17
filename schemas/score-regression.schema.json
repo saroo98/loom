@@ -1,0 +1,9 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema","$id":"loom/schemas/score-regression.schema.json",
+  "type":"object","additionalProperties":false,"required":["schema_version","rubric_id","baseline_subject","current_subject","status","decreases","blocking_decreases","regression_sha256"],
+  "properties":{
+    "schema_version":{"const":1},"rubric_id":{"type":"string"},"baseline_subject":{"type":"object"},"current_subject":{"type":"object"},"status":{"enum":["passed","blocked"]},
+    "decreases":{"type":"array","maxItems":32,"items":{"$ref":"#/$defs/decrease"}},"blocking_decreases":{"type":"array","maxItems":32,"items":{"$ref":"#/$defs/decrease"}},"regression_sha256":{"type":"string","pattern":"^[0-9a-f]{64}$"}
+  },
+  "$defs":{"decrease":{"type":"object","additionalProperties":false,"required":["category_id","baseline","current","delta","trust_critical"],"properties":{"category_id":{"type":"string"},"baseline":{"type":"number"},"current":{"type":"number"},"delta":{"type":"number"},"trust_critical":{"type":"boolean"}}}}
+}

@@ -12,6 +12,21 @@ from pathlib import Path
 
 
 MUTATIONS = (
+    ("usage-openai-double-cache", "tools/loom_usage.py",
+     "if cached > input_total or reasoning > output:\n        raise UsageError(\"OpenAI subset counter exceeds its containing total\")\n    processed = input_total + output",
+     "if cached > input_total or reasoning > output:\n        raise UsageError(\"OpenAI subset counter exceeds its containing total\")\n    processed = input_total + cached + output",
+     "test_token_accounting_v3.TokenAccountingV3Tests."
+     "test_openai_cache_and_reasoning_are_subsets_not_additive"),
+    ("usage-anthropic-omit-write", "tools/loom_usage.py",
+     "input_total = fresh + read + write",
+     "input_total = fresh + read",
+     "test_token_accounting_v3.TokenAccountingV3Tests."
+     "test_anthropic_cache_writes_are_disjoint_and_included"),
+    ("usage-generic-false-complete", "tools/loom_usage.py",
+     'state = "provider-partial" if profile == "generic-host-v1" else "provider-complete"',
+     'state = "provider-complete"',
+     "test_token_accounting_v3.TokenAccountingV3Tests."
+     "test_unknown_provider_is_partial_and_never_guesses_total"),
     ("event-rank-order", "tools/loom_vault.py",
      "rank = (device_counter << 32) | tie_breaker",
      "rank = (device_counter << 31) | tie_breaker",
@@ -73,6 +88,49 @@ MUTATIONS = (
      'if False and claimed != digest("domain-invariant-v1", body):',
      "test_domain_evidence.DomainEvidenceTests."
      "test_invariant_digest_rejects_semantic_mutation_directly"),
+    ("adapter-protocol-overlap", "tools/loom_adapter_protocol.py",
+     "or minimum > maximum or not minimum <= PROTOCOL_VERSION <= maximum:",
+     "or minimum > maximum or False:",
+     "test_adapter_protocol_v2.AdapterProtocolV2Tests."
+     "test_protocol_mismatch_invalid_depth_and_oversize_fail_closed"),
+    ("adapter-host-truth", "tools/loom_host_registry.py",
+     '"connectable": contract["evidence_status"] in CONNECTABLE,',
+     '"connectable": True,',
+     "test_adapter_protocol_v2.AdapterProtocolV2Tests."
+     "test_host_registry_never_calls_experimental_or_unsupported_supported"),
+    ("adapter-capability-binding", "tools/loom_adapters.py",
+     'if version == 2 and (not capability_path.is_file()\n'
+     '                         or receipt.get("capability_receipt_sha256") != _sha(\n'
+     '                             capability_path.read_bytes())):',
+     'if version == 2 and (not capability_path.is_file()\n'
+     '                         or False):',
+     "test_loom_plugin_adapters_v11.AdapterTests."
+     "test_changed_capability_receipt_blocks_adapter_upgrade"),
+    ("score-claimed-only", "tools/loom_scorecard.py",
+     'and record["evidence_class"] != "claimed-only":',
+     'and True:',
+     "test_scorecard_phase6.ScorecardPhase6Tests."
+     "test_claimed_only_never_earns_points"),
+    ("score-stale-evidence", "tools/loom_scorecard.py",
+     'and _time(record["expires_at"], "evidence expires_at") <= evaluated:',
+     'and False:',
+     "test_scorecard_phase6.ScorecardPhase6Tests."
+     "test_tamper_duplicate_wrong_subject_and_stale_evidence_fail_closed"),
+    ("score-duplicate-requirement", "tools/loom_scorecard.py",
+     'if record["requirement_id"] in seen_requirements:',
+     'if False and record["requirement_id"] in seen_requirements:',
+     "test_scorecard_phase6.ScorecardPhase6Tests."
+     "test_tamper_duplicate_wrong_subject_and_stale_evidence_fail_closed"),
+    ("score-trust-regression", "tools/loom_scorecard.py",
+     '"status": "blocked" if blocking else "passed",',
+     '"status": "passed",',
+     "test_scorecard_phase6.ScorecardPhase6Tests."
+     "test_trust_regression_blocks_while_adoption_decrease_is_informational"),
+    ("score-external-authority", "tools/loom_scorecard.py",
+     'if trusted is None or not loom_release._signature_valid(record, trusted):',
+     'if False:',
+     "test_scorecard_phase6.ScorecardPhase6Tests."
+     "test_self_asserted_external_evidence_cannot_inflate_a_score"),
 )
 
 

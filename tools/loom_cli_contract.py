@@ -18,12 +18,14 @@ class ContractError(RuntimeError):
 
 
 WRITE_CLASS = {
-    "loom_adaptation_eval": "explicit-destination", "loom_docs": "explicit-destination",
+    "loom_adaptation_eval": "explicit-destination", "loom_adapter_conformance": "explicit-destination",
+    "loom_docs": "explicit-destination",
     "loom_gate": "explicit-destination", "loom_install": "runtime-state",
     "loom_kickoff": "explicit-destination", "loom_launcher": "runtime-state",
     "loom_lifecycle": "explicit-destination", "loom_memory": "owner-state",
     "loom_orchestrator": "owner-state", "loom_plugin_package": "explicit-destination",
     "loom_preferences": "owner-state", "loom_release": "explicit-destination",
+    "loom_scorecard": "explicit-destination",
     "loom_survey": "explicit-destination", "loom_test": "explicit-destination",
 }
 RUNTIME = {"loom_launcher", "loom_orchestrator"}

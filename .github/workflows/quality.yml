@@ -40,11 +40,34 @@ jobs:
       - name: Run bounded trust-critical gate
         working-directory: tools
         run: python -B loom_test.py fast --max-seconds 30 --output fast-test-timings.json
+      - name: Validate the fixed evidence score rubric
+        working-directory: tools
+        run: python -B loom_scorecard.py validate-rubric
+      - name: Run deterministic local performance micro-corpus
+        working-directory: tools
+        run: python -B loom_benchmark.py --iterations 3 --warmups 1 --output performance-micro.json
+      - name: Run simulated adapter protocol conformance
+        working-directory: tools
+        run: python -B loom_adapter_conformance.py --root .. --output adapter-conformance.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: fast-test-timings-${{ matrix.os }}-py${{ matrix.python }}
           path: tools/fast-test-timings.json
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: adapter-conformance-${{ matrix.os }}-py${{ matrix.python }}
+          path: tools/adapter-conformance.json
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: performance-micro-${{ matrix.os }}-py${{ matrix.python }}
+          path: tools/performance-micro.json
           retention-days: 7
           if-no-files-found: error
 
@@ -147,6 +170,9 @@ jobs:
           test_loom_update_v11.py
           test_loom_transfer_v11.py
           test_loom_plugin_adapters_v11.py
+          test_adapter_protocol_v2.py
+          test_adapter_conformance_v2.py
+          test_scorecard_phase6.py
           test_loom_owner_v11.py
           test_loom_release_sign_v11.py
           test_owner_learning_phase2.py

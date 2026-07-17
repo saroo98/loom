@@ -21,6 +21,25 @@ CONTAINMENT_FAST_TEST = (
 
 
 FAST_TESTS = (
+    "test_scorecard_phase6.ScorecardPhase6Tests."
+    "test_tamper_duplicate_wrong_subject_and_stale_evidence_fail_closed",
+    "test_adapter_protocol_v2.AdapterProtocolV2Tests."
+    "test_protocol_mismatch_invalid_depth_and_oversize_fail_closed",
+    "test_adapter_conformance_v2.AdapterConformanceV2Tests."
+    "test_disposable_profiles_share_one_runtime_and_touch_no_project",
+    "test_token_accounting_v3.TokenAccountingV3Tests."
+    "test_openai_cache_and_reasoning_are_subsets_not_additive",
+    "test_token_accounting_v3.TokenAccountingV3Tests."
+    "test_anthropic_cache_writes_are_disjoint_and_included",
+    "test_token_accounting_v3.TokenAccountingV3Tests."
+    "test_gemini_provider_total_governs_thought_and_tool_inclusion",
+    "test_token_accounting_v3.TokenAccountingV3Tests."
+    "test_unknown_provider_is_partial_and_never_guesses_total",
+    "test_token_accounting_v3.TokenAccountingV3Tests."
+    "test_missing_attempt_duplicate_identity_and_impossible_subset_fail",
+    "test_tier_s_fast_path.TierSFastPathTests.test_deceptive_small_consequences_promote",
+    "test_tier_s_fast_path.TierSFastPathTests.test_ordinary_small_work_stays_tier_s",
+    "test_tier_s_fast_path.TierSFastPathTests.test_small_wording_never_overrides_observed_scope",
     "test_privacy_excellence.PrivacyExcellenceTests."
     "test_firewall_rejects_common_provider_and_high_entropy_credentials",
     "test_privacy_excellence.PrivacyExcellenceTests."

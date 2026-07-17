@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "rubric_id": "loom-cross-cutting-v1",
+  "title": "Loom evidence-bound cross-cutting score",
+  "evidence_classes": [
+    "mechanical-local",
+    "matrix-reproduced",
+    "real-host",
+    "provider-attested",
+    "longitudinal-local",
+    "independent-external",
+    "public-adoption",
+    "claimed-only"
+  ],
+  "categories": [
+    {"id":"architecture-structure","label":"Architecture and structure","weight":5,"requirements":[
+      {"id":"architecture-boundaries","points":45,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"single-runtime-state-authority","points":35,"allowed_evidence_classes":["mechanical-local","real-host","independent-external"]},
+      {"id":"architecture-independent-review","points":20,"allowed_evidence_classes":["independent-external"]}]},
+    {"id":"tool-correctness","label":"Tool correctness","weight":8,"requirements":[
+      {"id":"closed-cli-contracts","points":35,"allowed_evidence_classes":["mechanical-local","matrix-reproduced"]},
+      {"id":"fail-closed-tool-behavior","points":40,"allowed_evidence_classes":["mechanical-local","matrix-reproduced","independent-external"]},
+      {"id":"cross-platform-tool-correctness","points":25,"allowed_evidence_classes":["matrix-reproduced","independent-external"]}]},
+    {"id":"planning-guidance","label":"Planning and guidance quality","weight":8,"requirements":[
+      {"id":"epistemic-artifact-discipline","points":30,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"plan-integrity-enforcement","points":40,"allowed_evidence_classes":["mechanical-local","matrix-reproduced","independent-external"]},
+      {"id":"independent-guidance-outcomes","points":30,"allowed_evidence_classes":["independent-external"]}]},
+    {"id":"lifecycle-enforcement","label":"Lifecycle enforcement","weight":7,"requirements":[
+      {"id":"causal-plan-before-build","points":35,"allowed_evidence_classes":["mechanical-local","matrix-reproduced"]},
+      {"id":"gates-work-orders-verification","points":45,"allowed_evidence_classes":["mechanical-local","matrix-reproduced","independent-external"]},
+      {"id":"longitudinal-live-pack","points":20,"allowed_evidence_classes":["longitudinal-local","independent-external"]}]},
+    {"id":"adaptability-universality","label":"Adaptability and universality","weight":6,"requirements":[
+      {"id":"known-domain-routing","points":25,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"unknown-domain-authority-gate","points":50,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"natural-domain-holdout","points":25,"allowed_evidence_classes":["independent-external"]}]},
+    {"id":"token-efficiency","label":"Token efficiency","weight":6,"requirements":[
+      {"id":"complete-token-accounting","points":35,"allowed_evidence_classes":["mechanical-local","provider-attested","independent-external"]},
+      {"id":"bounded-tier-s-context","points":30,"allowed_evidence_classes":["mechanical-local","provider-attested","independent-external"]},
+      {"id":"provider-attested-token-budget","points":35,"allowed_evidence_classes":["provider-attested","independent-external"]}]},
+    {"id":"speed-friction","label":"Speed and friction","weight":5,"requirements":[
+      {"id":"bounded-fast-gate","points":35,"allowed_evidence_classes":["mechanical-local","matrix-reproduced"]},
+      {"id":"local-performance-corpus","points":30,"allowed_evidence_classes":["mechanical-local","matrix-reproduced"]},
+      {"id":"production-p95-budget","points":35,"allowed_evidence_classes":["provider-attested","independent-external"]}]},
+    {"id":"surface-simplicity","label":"Surface simplicity","weight":5,"requirements":[
+      {"id":"one-command-surface","points":40,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"intent-routing-without-command-sprawl","points":35,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"unfamiliar-user-success","points":25,"allowed_evidence_classes":["independent-external"]}]},
+    {"id":"owner-learning","label":"Owner-specific learning","weight":8,"requirements":[
+      {"id":"scoped-learning-admission","points":30,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"effect-attribution-forgetting","points":35,"allowed_evidence_classes":["mechanical-local","longitudinal-local","independent-external"]},
+      {"id":"measured-owner-benefit","points":35,"allowed_evidence_classes":["longitudinal-local","independent-external"]}]},
+    {"id":"memory-isolation-bounds","label":"Memory isolation and bounds","weight":5,"requirements":[
+      {"id":"encrypted-owner-vault","points":35,"allowed_evidence_classes":["mechanical-local","matrix-reproduced","independent-external"]},
+      {"id":"project-domain-isolation","points":40,"allowed_evidence_classes":["mechanical-local","longitudinal-local","independent-external"]},
+      {"id":"bounded-merge-forgetting","points":25,"allowed_evidence_classes":["mechanical-local","matrix-reproduced","independent-external"]}]},
+    {"id":"integration-ecosystem","label":"Integration ecosystem","weight":6,"requirements":[
+      {"id":"bounded-adapter-protocol","points":30,"allowed_evidence_classes":["mechanical-local","real-host","independent-external"]},
+      {"id":"transactional-shared-adapters","points":35,"allowed_evidence_classes":["mechanical-local","real-host","independent-external"]},
+      {"id":"real-host-matrix","points":35,"allowed_evidence_classes":["real-host","independent-external"]}]},
+    {"id":"robustness-safety","label":"Robustness and safety","weight":6,"requirements":[
+      {"id":"complete-world-freshness","points":30,"allowed_evidence_classes":["mechanical-local","matrix-reproduced","independent-external"]},
+      {"id":"failure-injection-mutation","points":40,"allowed_evidence_classes":["mechanical-local","matrix-reproduced","independent-external"]},
+      {"id":"host-containment","points":30,"allowed_evidence_classes":["matrix-reproduced","independent-external"]}]},
+    {"id":"privacy-sovereignty","label":"Privacy and sovereignty","weight":5,"requirements":[
+      {"id":"all-file-publication-firewall","points":35,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"offline-no-telemetry-runtime","points":35,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"sovereign-cut-verification","points":30,"allowed_evidence_classes":["mechanical-local","independent-external"]}]},
+    {"id":"testing-release-engineering","label":"Testing and release engineering","weight":7,"requirements":[
+      {"id":"complete-local-suite","points":30,"allowed_evidence_classes":["mechanical-local","matrix-reproduced"]},
+      {"id":"trust-critical-mutation-gate","points":30,"allowed_evidence_classes":["mechanical-local","matrix-reproduced"]},
+      {"id":"required-platform-matrix","points":25,"allowed_evidence_classes":["matrix-reproduced","independent-external"]},
+      {"id":"reproducible-signed-release","points":15,"allowed_evidence_classes":["matrix-reproduced","independent-external"]}]},
+    {"id":"documentation-onboarding","label":"Documentation and onboarding","weight":4,"requirements":[
+      {"id":"coherent-documentation","points":50,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"honest-install-limitations","points":30,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"unfamiliar-onboarding-study","points":20,"allowed_evidence_classes":["independent-external"]}]},
+    {"id":"observability-claim-honesty","label":"Observability and claim honesty","weight":5,"requirements":[
+      {"id":"capability-truth-registry","points":35,"allowed_evidence_classes":["mechanical-local","independent-external"]},
+      {"id":"content-bound-usage-receipts","points":35,"allowed_evidence_classes":["mechanical-local","provider-attested","independent-external"]},
+      {"id":"independent-claim-audit","points":30,"allowed_evidence_classes":["independent-external"]}]},
+    {"id":"adoption-external-validation","label":"Adoption and external validation","weight":4,"requirements":[
+      {"id":"public-installable-artifact","points":20,"allowed_evidence_classes":["mechanical-local","public-adoption","independent-external"]},
+      {"id":"current-public-adoption","points":30,"allowed_evidence_classes":["public-adoption","independent-external"]},
+      {"id":"independent-user-validation","points":25,"allowed_evidence_classes":["independent-external"]},
+      {"id":"independent-hostile-audit","points":25,"allowed_evidence_classes":["independent-external"]}]}
+  ]
+}
