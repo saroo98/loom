@@ -1,148 +1,47 @@
 <p align="center">
   <a href="https://saroo98.github.io/loom/">
-    <img src="./docs/readme-hero.svg" alt="Loom — one request, a plan that has earned the right to execute" width="100%">
+    <img src="./docs/readme-hero.svg" alt="Loom turns one request into a current, domain-aware execution contract" width="100%">
   </a>
 </p>
 
 <p align="center">
   <strong>Loom 1.6.0 · Planning intelligence for AI coding agents.</strong><br>
-  One request in. A release-ready, evidence-backed execution plan out.
+  Plan from the current world. Verify in the real one.
 </p>
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="#install-once">Install</a> ·
-  <a href="#what-makes-loom-different">Why Loom</a> ·
-  <a href="./docs/architecture.md">Architecture</a> ·
-  <a href="./docs/limitations.md">Limitations</a>
+  <a href="#install">Install</a> ·
+  <a href="#what-happens-after-one-request">How it works</a> ·
+  <a href="#how-learning-works">Learning</a> ·
+  <a href="#evidence-and-current-limits">Evidence</a>
 </p>
 
 ---
 
-## Loom does one thing
+## What Loom is
 
-Loom turns a plain-language request into a plan an AI coding agent can execute safely.
+Loom is a planning runtime for AI coding agents.
+
+You describe the work once:
 
 ```text
 /loom <request>
 ```
 
-That one interaction hides a complete planning runtime. Loom resolves the real project, reads its
-current state, chooses planning depth from consequence and uncertainty, discovers domain
-invariants, selects only useful owner memory, seals the plan before implementation, verifies work
-in the medium where it actually runs, and returns a compact receipt.
+Loom resolves the real project, fingerprints its current state, chooses the planning depth, applies
+the domain's rules, selects only relevant owner memory, seals the plan before implementation, and
+defines how the result must be verified.
 
-It is not a chatbot, a project-management board, a template dump, or a second agent harness. Loom
-is the layer between **what someone asks for** and **what an agent is allowed to build**.
+The output is not a longer prompt. It is an execution contract that can be reviewed, become stale,
+or be refused.
 
-```text
-request
-   │
-   ▼
-real project state ── domain invariants ── bounded owner memory
-   │                         │                       │
-   └─────────────────────────┼───────────────────────┘
-                             ▼
-                   sealed execution plan
-                             │
-                      independent G1 gate
-                             │
-                  atomic, evidence-bound work
-                             │
-                             ▼
-                       compact receipt
-```
+Loom is not another coding agent, a project board, or a template collection. It sits between what a
+person asks for and what an agent is allowed to build.
 
-## What makes Loom different
+## Install
 
-Most agents can write a plausible plan. Loom asks whether that plan has earned the right to guide
-execution.
-
-| | A prompt or checklist | A task runner | Loom |
-|---|---|---|---|
-| Understands committed, staged, unstaged, and untracked state | Sometimes | Partly | Mechanically fingerprinted |
-| Changes planning depth with real consequence | Rarely | No | S / M / L / XL routing |
-| Knows accounting is not a website | Prompt-dependent | No | Domain adapters plus discovery gate |
-| Prevents build-first work receiving planning credit | No | No | Content-bound lifecycle chain |
-| Produces only artifacts with a consumer and decision | No | No | Sealed 15-row artifact contract |
-| Refuses stale or mutated plans | Rarely | Partly | Freshness, drift, and selective re-gating |
-| Learns without mixing projects and domains | No | No | Scoped, bounded, local memory |
-| Can reject forgotten state from active use | No | No | Derived-state deletion, checkpointed deletion floor, and replay rejection |
-| Distinguishes evidence from “better over time” | No | No | Explicit uncertainty states; counts never become improvement claims |
-| Ships owner data anywhere | Depends | Depends | No telemetry; local-first by construction |
-
-## The extraordinary machinery behind one command
-
-### Plans scale to the work
-
-Loom classifies every request as **S, M, L, or XL**. A tiny change gets one bounded work order.
-A cross-system release gets a dependency-aware plan. Unknown domain coverage automatically leaves
-the small path instead of pretending confidence.
-
-### Every artifact must earn its place
-
-The plan contract accounts for all 15 candidate artifacts. Each one is either produced for a named
-consumer making a named decision, or explicitly skipped with a reason. More documents are not
-mistaken for more rigor.
-
-### Unknown domains cannot borrow confidence
-
-Accounting receives balanced-posting, precision, reconciliation, audit-trail, and period-close
-concerns. Real-time 3D receives spatial interaction, asset-pipeline, frame-time, and device-medium
-concerns. Firmware, research, data, ML, mobile, desktop, web, and security-sensitive work receive
-their own invariants and verification media. If Loom lacks coverage, it preserves the named domain,
-classifies the consequence separately, and discovers only the affected subsystem rules. G1 remains
-blocked until a content-bound machine bundle proves authority, exact-target applicability,
-freshness, absence of unresolved contradiction, and a real verification medium. A Markdown status
-word cannot satisfy that gate.
-
-The release benchmark expands 12 sanitized families into 240 deterministic cases, including 120
-outside shipped adapters. It is regression evidence, not proof that Loom knows every domain.
-
-### Planning must precede implementation
-
-The lifecycle binds the planning baseline, exact G1 review, authorization, work-order plan, target
-changes, and acceptance evidence into one tamper-evident chain. Pre-existing deliverables and
-build-first history cannot receive causal plan credit.
-
-### Verification happens in reality
-
-Work orders declare exact `touches`, checkable acceptance criteria, and a real verification medium.
-Loom refuses no-op completion, changes outside declared scope, missing evidence, mutated plans,
-stale authorization, and host-authored “passed” claims that it did not execute.
-
-### Memory transfers only when it should
-
-Loom separates:
-
-- **general judgment** that may transfer across projects, such as calibration and decision batching;
-- **domain knowledge** that loads only for the matching domain;
-- **project state** that belongs only to one project;
-- **installation state** that never crosses Loom instances.
-
-Inactive domain memory becomes dormant automatically. Useful knowledge can return when that exact
-domain returns. Harmful or unused rules retire faster. Stated preferences supersede older ones.
-`why`, `undo`, and durable `forget` remain available through the same plain-language surface.
-
-### Privacy is a build property
-
-The public builder starts from a positive allowlist, scans every filename and every file byte,
-detects owner tokens and secret signatures across text and binary content, rejects unsupported
-opaque containers, and emits a reproducible manifest. Owner memory and project content never
-become contributions automatically.
-
-### Numbers cannot outrun evidence
-
-Token accounting records every genuine provider response attempt under a versioned formula. Cache,
-reasoning, tool, and retry fields are never blindly added. Missing host telemetry is reported as
-`unavailable` without blocking work; contradictory supplied data is rejected. Tier S keeps small
-work to one bounded contract while consequential or uncertain work promotes automatically. Loom
-does not call itself improved because a log grew, and it does not call itself production-certified
-because local tests passed. Missing independent evidence stays visible.
-
-## Install once
-
-Requirements: a clean checkout and Python 3.10 or newer.
+Requirements: Python 3.10 or newer and a clean checkout.
 
 ```powershell
 git clone https://github.com/saroo98/loom.git
@@ -150,69 +49,198 @@ cd loom
 python tools/loom_install.py install . "$HOME/.codex/skills/loom"
 ```
 
-Then use Loom from a project:
+Then open a project and ask for the work you want:
 
 ```text
-/loom Design and implement the safest migration from SQLite to Postgres.
+/loom Migrate local authentication to passkeys without locking out existing users.
 ```
 
-The installer accepts only a new target, hashes every owned file, creates a unique installation
-identity, and verifies the installed copy immediately.
+Check the installed copy at any time:
 
 ```powershell
 python tools/loom_install.py check "$HOME/.codex/skills/loom"
 ```
 
-Uninstall is all-or-nothing: it requires the exact installation ID and refuses to remove anything
-if an owned file changed.
+The installer writes only to a new target, hashes every owned file, records an installation
+identity, and verifies the copy. Removal is all-or-nothing: if an owned file changed, Loom refuses
+to delete it.
 
-## The trust contract
+This repository is directly installable. A public Codex marketplace listing is not claimed until
+submission and approval actually happen.
 
-Loom fails closed when project state, lifecycle state, freshness, identity, memory integrity, or
-required evidence cannot be proven.
+## What happens after one request
 
-The repository distinguishes mechanical capabilities from advisory judgment in
-[`docs/capabilities.json`](./docs/capabilities.json). Generated repository inventory lives in
-[`docs/generated-evidence.json`](./docs/generated-evidence.json); it does not claim tests passed.
-Current external evidence gaps remain explicit in [`docs/limitations.md`](./docs/limitations.md).
-The unknown-domain state machine and non-claims are specified in
-[`docs/unknown-domain-intelligence.md`](./docs/unknown-domain-intelligence.md).
+| Stage | Loom decides | What this prevents |
+|---|---|---|
+| Resolve | Which project, installation, lifecycle, and authority are real | Planning the wrong folder or Loom instance |
+| Survey | What is committed, staged, unstaged, untracked, runtime-only, or time-drifted | A plan based on an incomplete world |
+| Route | Whether the work is S, M, L, or XL from consequence and uncertainty | Spending a migration-sized process on a typo, or a typo-sized process on a migration |
+| Discover | Which domain invariants, current facts, and proof medium apply | Web-shaped planning in accounting, 3D, firmware, research, or an unknown field |
+| Seal | Which artifacts, work orders, touched paths, gate records, and evidence are authorized | Implementation changing the plan after approval |
+| Verify | Which real-medium checks must pass before completion | “Looks good” or a host-authored status replacing evidence |
 
-Production certification requires all of the following against the exact release:
+The owner sees one command. The machinery stays behind it.
 
-1. the complete cross-platform CI matrix;
-2. a clean install and real request by someone unfamiliar with Loom;
-3. an independent hostile review with no Critical or High findings;
-4. provider-attested token and latency measurements;
-5. independently reproduced production memory-on/off improvement evidence.
+## Small work stays small
 
-Until all five exist, Loom refuses the 100 label.
+A small, low-consequence change receives one compact contract and one bounded work order. Loom has
+hard Tier-S budgets and automatically promotes the task when uncertainty, scope, domain coverage,
+or consequence makes the small path unsafe.
 
-## Explore the system
+Examples:
 
-| Start here | Purpose |
+| Request | Route | Planning result |
+|---|---|---|
+| Fix a CSV header typo | S | Current file state, one compact work order, one targeted real check |
+| Replace local auth with passkeys | L | Architecture, security, migration, rollback, testing, rollout, and recovery plans |
+| Plan a laboratory calibration procedure | Promoted | Domain discovery first; authorization stays blocked until authority and proof apply |
+
+No extra document is produced merely because a template exists. Loom accounts for all 15 candidate
+artifacts. Each one is either produced for a named consumer making a named decision, or skipped with
+a reason.
+
+## The useful part is what Loom refuses
+
+Loom fails closed when trust-critical state is unknown.
+
+| If this happens | Loom does this | Reason |
+|---|---|---|
+| The repository changes during planning | Blocks G1 | The plan no longer describes the same world |
+| Domain authority or a current governing fact is missing | Discovers and re-gates | Generic defaults cannot stand in for domain truth |
+| The work-order plan changes after approval | Refuses execution | Approval belongs to exact content, not a filename |
+| A deliverable already existed before planning | Refuses causal plan credit | Planning cannot take credit for build-first work |
+| No declared target changed | Refuses completion | A no-op is not an implemented work order |
+| Real-medium evidence is absent | Refuses completion | A written “passed” flag is not proof |
+| A repo-local adapter conflicts with the shared runtime | Refuses split-brain operation | One request must reach one runtime and one state authority |
+
+## Domain-aware does not mean “knows everything”
+
+Loom ships adapters for known domains and a separate discovery gate for unknown ones.
+
+An accounting plan can require balanced postings, currency precision, reconciliation, audit trails,
+and period-close behavior. A real-time 3D plan can require coordinate-system discipline, asset
+provenance, spatial interaction states, frame-time budgets, and target-device profiling. Firmware
+can require timing, power, interrupt, recovery, and hardware-in-loop evidence. Research can require
+source quality, method, uncertainty, and reproducibility.
+
+When Loom does not know a domain, it says so. It identifies the affected subsystem, finds governing
+invariants and current facts, records contradictions, defines a real verification medium, and keeps
+the execution gate closed until the evidence is applicable and fresh.
+
+The deterministic domain benchmark is regression evidence. It is not proof that Loom knows every
+field.
+
+## How learning works
+
+Loom's memory is not one growing prompt.
+
+| Scope | What belongs there | When it loads |
+|---|---|---|
+| General | Calibration, decision batching, review preferences, and judgment that has earned transfer | Across projects when evidence supports transfer |
+| Domain | Accounting, 3D, firmware, mobile, data, or other domain rules | Only for matching domain work |
+| Project | Repository facts, decisions, outcomes, and local preferences | Only for the exact project lineage |
+| Installation | Device/runtime state and adapter ownership | Only inside that installation boundary |
+
+Learning admission is evidence-based. Loom records where a candidate came from, whether it helped or
+hurt, confidence, utility, scope, and future use. Active context remains capped at 16 records and
+8 KB.
+
+When a domain stops being useful, its active records become dormant. They can return for the exact
+domain or expire when utility and evidence no longer justify keeping them. Project facts archive
+with the project. A durable forget operation erases content and keeps only the bounded deletion
+commitment needed to stop an old device or backup from resurrecting it.
+
+Counts do not become “improvement.” Loom reports measured benefit only when a valid comparison
+design and evidence support it.
+
+## Privacy is a build property
+
+Loom is local-first and has no Loom telemetry.
+
+The public builder:
+
+- starts from a positive allowlist;
+- scans every filename and every file byte;
+- checks text and binary content for owner tokens and secret signatures;
+- rejects redirected files, unsupported opaque containers, and dangerous paths;
+- emits a content-bound build manifest;
+- refuses publication when a claimed protection would protect nothing.
+
+Owner memory, project content, credentials, transcripts, local paths, and executable private
+adaptations are not public-release material.
+
+Read the exact boundary in [PRIVACY.md](./PRIVACY.md).
+
+## Evidence and current limits
+
+Loom separates source inventory, local behavior, real-host evidence, provider receipts,
+longitudinal outcomes, independent review, and public adoption. One class cannot silently stand in
+for another.
+
+Current records:
+
+- [Capability registry](./docs/capabilities.json): each mechanical claim names enforcement code and tests.
+- [Generated repository inventory](./docs/generated-evidence.json): live counts, explicitly not a test-pass claim.
+- [Competitive evidence snapshot](./benchmarks/competitive/2026-07-17/README.md): one rubric, exact peer revisions, N/A normalization, and visible **[UNVERIFIED]** cells.
+- [Current limitations](./docs/limitations.md): proof Loom does not yet have.
+- [Unknown-domain contract](./docs/unknown-domain-intelligence.md): what the discovery gate proves and does not prove.
+
+Loom does not claim a perfect score or production certification. Those require a complete hosted
+platform matrix, real disposable host runs, provider-attested token and latency measurements,
+independent unfamiliar-user and hostile audits, and measured longitudinal owner benefit against
+the exact release.
+
+## Architecture in one view
+
+```text
+/loom <request>
+       |
+       v
+project identity + complete world fingerprint
+       |
+       +---- relevant owner memory (bounded by scope)
+       |
+       +---- domain route
+                |
+                +---- known: apply exact invariants
+                |
+                +---- unknown: discover authority, facts, conflicts, proof
+       |
+       v
+content-bound plan contract
+       |
+       v
+independent G1 gate -> atomic work orders -> real-medium verification
+       |
+       v
+compact receipt + scoped outcome evidence
+```
+
+Start with:
+
+| File | Purpose |
 |---|---|
-| [`START-HERE.md`](./START-HERE.md) | The compact agent kernel |
-| [`skill/loom/SKILL.md`](./skill/loom/SKILL.md) | The installed one-command bridge |
-| [`docs/architecture.md`](./docs/architecture.md) | Runtime, trust, memory, and release architecture |
-| [`loom/intake/artifact-matrix.md`](./loom/intake/artifact-matrix.md) | Consumer-driven planning depth |
-| [`loom/core/epistemics.md`](./loom/core/epistemics.md) | Fact, assumption, speculation, unknown, and decision discipline |
-| [`PRIVACY.md`](./PRIVACY.md) | Local-state and publication boundaries |
-| [`CONTRIBUTING.md`](./CONTRIBUTING.md) | Public contribution and verification procedure |
+| [START-HERE.md](./START-HERE.md) | Compact agent kernel |
+| [skill/loom/SKILL.md](./skill/loom/SKILL.md) | One-command bridge |
+| [docs/architecture.md](./docs/architecture.md) | Runtime, state, memory, adapter, and release architecture |
+| [loom/intake/artifact-matrix.md](./loom/intake/artifact-matrix.md) | Consumer-driven artifact selection |
+| [loom/core/epistemics.md](./loom/core/epistemics.md) | Fact, assumption, speculation, unknown, and decision rules |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Public contribution and verification procedure |
 
-## Verify the public source
+## Verify this source
 
 ```powershell
 python -B tools/loom_release.py verify . --source-classification public-release
 ```
 
 This runs the release suite, adaptation scenarios, all-file privacy firewall, offline audit,
-reproducibility check, installer cycle, performance contracts, documentation audit, and bounded
-longitudinal checks. Local verification is necessary, but it does not replace the external
-certification evidence above.
+reproducibility checks, installer cycle, performance contracts, documentation audit, and bounded
+longitudinal checks.
 
-The installable release asset is `loom-plugin-vX.Y.Z.zip`, not GitHub's generated source archive.
-Verify its exact receipt-bound bytes before installation:
+Local verification is necessary. It is not independent certification.
+
+The installable artifact is `loom-plugin-vX.Y.Z.zip`, not GitHub's generated source archive.
+Verify its receipt-bound bytes before installation:
 
 ```powershell
 python -B tools/loom_release_verify.py loom-plugin-vX.Y.Z.zip
@@ -221,6 +249,6 @@ python -B tools/loom_release_verify.py loom-plugin-vX.Y.Z.zip
 ---
 
 <p align="center">
-  <strong>One request. The right plan. Evidence before execution.</strong><br>
-  Local-first · No telemetry · Standard-library tooling · Apache-2.0
+  <strong>Plan from the current world. Verify in the real one.</strong><br>
+  Local-first · no telemetry · standard-library Python · Apache-2.0
 </p>

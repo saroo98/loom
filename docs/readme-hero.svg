@@ -1,42 +1,47 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
-  <title id="title">Loom — evidence before execution</title>
-  <desc id="desc">A woven planning path turns one request into an evidence-backed execution plan.</desc>
+  <title id="title">Loom — plan before the agent builds</title>
+  <desc id="desc">One request becomes a current, domain-aware, evidence-backed execution contract.</desc>
   <defs>
     <pattern id="grid" width="68" height="68" patternUnits="userSpaceOnUse">
-      <path d="M68 0H0V68" fill="none" stroke="#eee9dc" stroke-opacity=".07"/>
+      <path d="M68 0H0V68" fill="none" stroke="#f0ecdf" stroke-opacity=".07"/>
     </pattern>
-    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#111210"/>
-      <stop offset="1" stop-color="#1b1d19"/>
+    <linearGradient id="fade" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#121311"/>
+      <stop offset="1" stop-color="#1d1f1b"/>
+    </linearGradient>
+    <linearGradient id="thread" x1="0" y1="0" x2="1" y2="0">
+      <stop stop-color="#d66d49" stop-opacity="0"/>
+      <stop offset=".45" stop-color="#d66d49"/>
+      <stop offset="1" stop-color="#d66d49" stop-opacity=".1"/>
     </linearGradient>
   </defs>
   <rect width="1200" height="420" rx="18" fill="url(#fade)"/>
   <rect width="1200" height="420" rx="18" fill="url(#grid)"/>
-  <g transform="translate(70 58)">
+  <g transform="translate(66 52)">
     <g fill="none" stroke-linecap="square" stroke-width="3">
-      <path d="M7 0v38M20 0v38M33 0v38M46 0v38" stroke="#eee9dc"/>
-      <path d="M0 9h53M0 20h53M0 31h53" stroke="#d86b45"/>
+      <path d="M7 0v38M20 0v38M33 0v38M46 0v38" stroke="#f0ecdf"/>
+      <path d="M0 9h53M0 20h53M0 31h53" stroke="#d66d49"/>
     </g>
-    <text x="70" y="31" fill="#eee9dc" font-family="Segoe UI Variable, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="-1">Loom</text>
-    <text x="158" y="29" fill="#9f9d94" font-family="Cascadia Code, monospace" font-size="12" letter-spacing="2">1.0</text>
+    <text x="70" y="31" fill="#f0ecdf" font-family="Segoe UI Variable, Arial, sans-serif" font-size="30" font-weight="700" letter-spacing="-1">Loom</text>
+    <text x="158" y="29" fill="#9e9c93" font-family="Cascadia Code, monospace" font-size="12" letter-spacing="1.6">1.6.0</text>
   </g>
-  <text x="70" y="170" fill="#d86b45" font-family="Cascadia Code, monospace" font-size="13" font-weight="700" letter-spacing="2.5">PLANNING INTELLIGENCE FOR AI CODING AGENTS</text>
-  <text x="70" y="230" fill="#eee9dc" font-family="Segoe UI Variable, Arial, sans-serif" font-size="52" font-weight="680" letter-spacing="-2.8">One request. A plan that has earned</text>
-  <text x="70" y="289" fill="#9f9d94" font-family="Segoe UI Variable, Arial, sans-serif" font-size="52" font-weight="520" letter-spacing="-2.8">the right to execute.</text>
-  <g transform="translate(70 338)">
-    <rect width="270" height="46" fill="#d86b45"/>
-    <text x="18" y="29" fill="#111210" font-family="Cascadia Code, monospace" font-size="14" font-weight="700">/loom &lt;request&gt;</text>
+  <text x="66" y="150" fill="#d66d49" font-family="Cascadia Code, monospace" font-size="13" font-weight="700" letter-spacing="2.5">PLAN BEFORE THE AGENT BUILDS</text>
+  <text x="66" y="215" fill="#f0ecdf" font-family="Segoe UI Variable, Arial, sans-serif" font-size="51" font-weight="680" letter-spacing="-2.7">One request becomes a current,</text>
+  <text x="66" y="273" fill="#9e9c93" font-family="Segoe UI Variable, Arial, sans-serif" font-size="51" font-weight="520" letter-spacing="-2.7">domain-aware execution contract.</text>
+  <g transform="translate(66 326)">
+    <rect width="268" height="46" fill="#d66d49"/>
+    <text x="18" y="29" fill="#121311" font-family="Cascadia Code, monospace" font-size="14" font-weight="700">/loom &lt;request&gt;</text>
   </g>
-  <g transform="translate(740 88)" fill="none">
-    <path d="M0 30C90 30 70 88 170 88S286 30 390 30" stroke="#eee9dc" stroke-opacity=".58" stroke-width="2" stroke-dasharray="10 7"/>
-    <path d="M0 100c96 0 82 56 186 56s114-56 204-56" stroke="#d86b45" stroke-width="2" stroke-dasharray="10 7"/>
-    <path d="M0 170c90 0 70 58 180 58s118-58 210-58" stroke="#eee9dc" stroke-opacity=".58" stroke-width="2" stroke-dasharray="10 7"/>
-    <path d="M64 0v270M160 0v270M256 0v270M352 0v270" stroke="#eee9dc" stroke-opacity=".12"/>
-    <g fill="#111210" stroke="#d86b45">
-      <rect x="28" y="14" width="72" height="30"/><rect x="126" y="140" width="76" height="30"/><rect x="222" y="74" width="82" height="30"/><rect x="320" y="154" width="70" height="30"/>
-    </g>
-    <g fill="#eee9dc" font-family="Cascadia Code, monospace" font-size="9" letter-spacing="1">
-      <text x="40" y="34">WORLD</text><text x="136" y="160">DOMAIN</text><text x="238" y="94">PLAN</text><text x="330" y="174">PROOF</text>
+  <g transform="translate(748 76)">
+    <path d="M0 44C92 44 78 90 172 90s112-46 214-46" fill="none" stroke="#f0ecdf" stroke-opacity=".55" stroke-width="2" stroke-dasharray="10 7"/>
+    <path d="M0 124c102 0 88 48 190 48s112-48 196-48" fill="none" stroke="#d66d49" stroke-width="2" stroke-dasharray="10 7"/>
+    <path d="M0 204c96 0 78 48 184 48s118-48 202-48" fill="none" stroke="#f0ecdf" stroke-opacity=".55" stroke-width="2" stroke-dasharray="10 7"/>
+    <path d="M48 0v284M146 0v284M244 0v284M342 0v284" fill="none" stroke="#f0ecdf" stroke-opacity=".12"/>
+    <g font-family="Cascadia Code, monospace" font-size="9" letter-spacing="1">
+      <g transform="translate(14 28)"><rect width="76" height="30" fill="#121311" stroke="#d66d49"/><text x="15" y="20" fill="#f0ecdf">WORLD</text></g>
+      <g transform="translate(112 155)"><rect width="82" height="30" fill="#121311" stroke="#d66d49"/><text x="14" y="20" fill="#f0ecdf">DOMAIN</text></g>
+      <g transform="translate(218 77)"><rect width="72" height="30" fill="#121311" stroke="#d66d49"/><text x="18" y="20" fill="#f0ecdf">PLAN</text></g>
+      <g transform="translate(314 232)"><rect width="72" height="30" fill="#121311" stroke="#d66d49"/><text x="15" y="20" fill="#f0ecdf">PROOF</text></g>
     </g>
   </g>
 </svg>
