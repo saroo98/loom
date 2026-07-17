@@ -559,7 +559,8 @@ class ReleaseStandardTests(unittest.TestCase):
         }
 
         report = loom_release.certification_report(
-            local_checks=local, external_evidence=fabricated)
+            local_checks=local, external_evidence=fabricated,
+            now=dt.datetime(2026, 7, 16, tzinfo=dt.timezone.utc))
 
         self.assertEqual("blocked", report["status"])
         self.assertFalse(report["claim_100_allowed"])
