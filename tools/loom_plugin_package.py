@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import stat
+import struct
 import tempfile
 import unicodedata
 import zipfile
@@ -33,6 +34,45 @@ WINDOWS_RESERVED = {
 
 class PackageError(RuntimeError):
     pass
+
+
+def _helper_platform(path):
+    """Identify a supported 64-bit helper from its executable header."""
+    try:
+        with Path(path).open("rb") as stream:
+            head = stream.read(4096)
+    except OSError as exc:
+        raise PackageError(f"crypto helper header cannot be read: {exc}") from exc
+    if head.startswith(b"MZ") and len(head) >= 0x40:
+        offset = struct.unpack_from("<I", head, 0x3C)[0]
+        if offset + 6 <= len(head) and head[offset:offset + 4] == b"PE\x00\x00":
+            machine = struct.unpack_from("<H", head, offset + 4)[0]
+            return {0x8664: "windows-x64", 0xAA64: "windows-arm64"}.get(machine)
+    if head.startswith(b"\x7fELF") and len(head) >= 20 \
+            and head[4] == 2 and head[5] in {1, 2}:
+        byte_order = "<" if head[5] == 1 else ">"
+        machine = struct.unpack_from(byte_order + "H", head, 18)[0]
+        return {62: "linux-x64", 183: "linux-arm64"}.get(machine)
+    macho = {
+        b"\xcf\xfa\xed\xfe": "<", b"\xfe\xed\xfa\xcf": ">",
+    }
+    if head[:4] in macho and len(head) >= 8:
+        cpu = struct.unpack_from(macho[head[:4]] + "I", head, 4)[0]
+        return {0x01000007: "macos-x64", 0x0100000C: "macos-arm64"}.get(cpu)
+    return None
+
+
+def _verify_helper_platform(platform_id, helper):
+    size = helper.stat().st_size
+    if size > loom_privacy.MAX_SCAN_FILE_BYTES:
+        raise PackageError(
+            f"{platform_id} crypto helper exceeds the publication scan limit "
+            f"({size} > {loom_privacy.MAX_SCAN_FILE_BYTES} bytes)")
+    observed = _helper_platform(helper)
+    if observed != platform_id:
+        raise PackageError(
+            f"{platform_id} crypto helper has wrong executable target: "
+            f"{observed or 'unknown'}")
 
 
 def _copy_helper_executable(source, destination):
@@ -188,6 +228,7 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
                 helpers[platform_id], f"{platform_id} crypto helper", must_exist=True)
             if not helper.is_file() or helper.is_symlink() or helper.stat().st_size <= 0:
                 raise PackageError(f"{platform_id} crypto helper is unsafe")
+            _verify_helper_platform(platform_id, helper)
             verified_opaque.add(_verify_helper_receipt(
                 platform_id, helper, helper_receipts[platform_id],
                 helper_evidence[platform_id], source, source_commit))

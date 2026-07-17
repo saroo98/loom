@@ -35,9 +35,9 @@ class BootstrapIntegrationTests(unittest.TestCase):
     def test_signed_fresh_package_activates_and_stable_launcher_verifies_it(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
-            receipts, evidence = package_evidence(
-                ROOT, self.helper, root / "evidence", loom_plugin_package.PLATFORMS)
+            helpers, receipts, evidence = package_evidence(
+                ROOT, root / "evidence", loom_plugin_package.PLATFORMS,
+                native_helper=self.helper)
             package = root / "plugin-cache" / "loom" / "1.1.0"
             loom_plugin_package.build(
                 ROOT, package, helpers, receipts, evidence,

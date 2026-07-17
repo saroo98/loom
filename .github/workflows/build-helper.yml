@@ -38,6 +38,9 @@ jobs:
       - name: Build locked native helper twice
         shell: bash
         run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=/Brepro"
+          fi
           CARGO_TARGET_DIR="$RUNNER_TEMP/loom-build-a" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
           CARGO_TARGET_DIR="$RUNNER_TEMP/loom-build-b" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
           cmp "$RUNNER_TEMP/loom-build-a/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
