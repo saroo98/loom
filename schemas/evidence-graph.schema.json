@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/evidence-graph.schema.json",
+  "title": "Bounded Loom evidence graph result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy_id", "subject_digest", "evaluated_at", "active", "inactive", "predicates", "graph_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-evidence-policy-v1"},
+    "subject_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "active": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string"}},
+    "inactive": {"type": "array", "maxItems": 4096, "items": {"type": "object", "additionalProperties": false, "required": ["evidence_id", "reason"], "properties": {"evidence_id": {"type": "string"}, "reason": {"enum": ["expired", "revoked", "verification-failed", "dependency-inactive"]}}},
+    "predicates": {"type": "object", "maxProperties": 4096, "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "graph_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "schema_version": 2,
+  "rubric_id": "loom-cross-cutting-v2",
+  "title": "Loom evidence-bound cross-cutting score",
+  "base_rubric": "score-rubric-v1.json",
+  "evidence_classes": [
+    "mechanical-local",
+    "ci-reproduced",
+    "real-host",
+    "provider-native",
+    "host-observed",
+    "longitudinal-local",
+    "independently-witnessed",
+    "independent-external",
+    "public-adoption",
+    "claimed-only"
+  ],
+  "class_renames": {
+    "matrix-reproduced": "ci-reproduced",
+    "provider-attested": "provider-native"
+  }
+}

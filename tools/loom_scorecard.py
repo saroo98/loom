@@ -23,11 +23,17 @@ import loom_test
 import loom_version
 
 
-DEFAULT_RUBRIC = Path(__file__).resolve().parents[1] / "contracts" / "score-rubric-v1.json"
-EVIDENCE_CLASSES = {
+DEFAULT_RUBRIC = Path(__file__).resolve().parents[1] / "contracts" / "score-rubric-v2.json"
+LEGACY_EVIDENCE_CLASSES = {
     "mechanical-local", "matrix-reproduced", "real-host", "provider-attested",
     "longitudinal-local", "independent-external", "public-adoption", "claimed-only",
 }
+CURRENT_EVIDENCE_CLASSES = {
+    "mechanical-local", "ci-reproduced", "real-host", "provider-native",
+    "host-observed", "longitudinal-local", "independently-witnessed",
+    "independent-external", "public-adoption", "claimed-only",
+}
+EVIDENCE_CLASSES = LEGACY_EVIDENCE_CLASSES | CURRENT_EVIDENCE_CLASSES
 MAX_EVIDENCE_BYTES = 2 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 512 * 1024
 SHA_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -91,7 +97,36 @@ def _now_text(now=None):
 
 
 def load_rubric(path=DEFAULT_RUBRIC):
+    path = Path(path).resolve()
     value = _read_json(path, MAX_SNAPSHOT_BYTES)
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        fields = {"schema_version", "rubric_id", "title", "base_rubric",
+                  "evidence_classes", "class_renames"}
+        if set(value) != fields or value.get("rubric_id") != "loom-cross-cutting-v2" \
+                or value.get("base_rubric") != "score-rubric-v1.json" \
+                or set(value.get("evidence_classes", [])) != CURRENT_EVIDENCE_CLASSES \
+                or value.get("evidence_classes") != list(dict.fromkeys(
+                    value.get("evidence_classes", []))) \
+                or value.get("class_renames") != {
+                    "matrix-reproduced": "ci-reproduced",
+                    "provider-attested": "provider-native"}:
+            raise ScoreError("score rubric v2 descriptor is invalid")
+        base_path = (path.parent / value["base_rubric"]).resolve()
+        if base_path.parent != path.parent or base_path.is_symlink():
+            raise ScoreError("score rubric v2 base escapes the contract directory")
+        base = load_rubric(base_path)
+        translated = []
+        for category in base["categories"]:
+            requirements = []
+            for requirement in category["requirements"]:
+                requirements.append({**requirement, "allowed_evidence_classes": [
+                    value["class_renames"].get(item, item)
+                    for item in requirement["allowed_evidence_classes"]]})
+            translated.append({**category, "requirements": requirements})
+        value = {"schema_version": 1, "rubric_id": value["rubric_id"],
+                 "title": value["title"],
+                 "evidence_classes": value["evidence_classes"],
+                 "categories": translated}
     if not isinstance(value, dict) or set(value) != {
             "schema_version", "rubric_id", "title", "evidence_classes", "categories"} \
             or value.get("schema_version") != 1 \
@@ -99,7 +134,8 @@ def load_rubric(path=DEFAULT_RUBRIC):
             or not isinstance(value.get("title"), str) \
             or value.get("evidence_classes") != list(dict.fromkeys(
                 value.get("evidence_classes", []))) \
-            or set(value.get("evidence_classes", [])) != EVIDENCE_CLASSES \
+            or frozenset(value.get("evidence_classes", [])) not in {
+                frozenset(LEGACY_EVIDENCE_CLASSES), frozenset(CURRENT_EVIDENCE_CLASSES)} \
             or not isinstance(value.get("categories"), list) \
             or not 1 <= len(value["categories"]) <= 32:
         raise ScoreError("score rubric shape is invalid")
@@ -130,7 +166,8 @@ def load_rubric(path=DEFAULT_RUBRIC):
                     or not requirement["allowed_evidence_classes"] \
                     or len(requirement["allowed_evidence_classes"]) != len(set(
                         requirement["allowed_evidence_classes"])) \
-                    or not set(requirement["allowed_evidence_classes"]) <= EVIDENCE_CLASSES:
+                    or not set(requirement["allowed_evidence_classes"]) <= set(
+                        value["evidence_classes"]):
                 raise ScoreError("score rubric requirement is invalid")
             requirements.add(requirement["id"])
             points += requirement["points"]
@@ -295,7 +332,7 @@ def validate_evidence(bundle, rubric, *, as_of=None, trust_policy=None):
                 "observed_at", "expires_at", "attestation", "digest"} \
                 or record.get("schema_version") != 1 \
                 or record.get("subject") != subject \
-                or record.get("evidence_class") not in EVIDENCE_CLASSES \
+                or record.get("evidence_class") not in set(rubric["evidence_classes"]) \
                 or record.get("status") not in {"passed", "failed", "unverified"} \
                 or record.get("requirement_id") not in requirement_map \
                 or record.get("digest") != _digest(_record_body(record)) \

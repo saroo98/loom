@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/current-fact-manifest.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy_id", "facts"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-evidence-policy-v1"},
+    "facts": {"type": "array", "maxItems": 256, "items": {"type": "object", "additionalProperties": false, "required": ["id", "claim", "source", "retrieved_at", "expires_at", "verification_owner", "status"], "properties": {
+      "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,95}$"},
+      "claim": {"type": "string", "minLength": 1, "maxLength": 512},
+      "source": {"type": ["string", "null"], "maxLength": 512},
+      "retrieved_at": {"type": ["string", "null"], "format": "date-time"},
+      "expires_at": {"type": ["string", "null"], "format": "date-time"},
+      "verification_owner": {"type": "string", "minLength": 1, "maxLength": 128},
+      "status": {"enum": ["verified", "observed", "unverified", "expired"]}
+    }}}
+  }
+}

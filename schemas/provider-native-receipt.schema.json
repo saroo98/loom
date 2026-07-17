@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/provider-native-receipt.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evidence_class", "provider", "models", "response_ids", "raw_response_digests", "raw_field_inventory", "privacy_mode", "region", "cache_condition", "retry_count", "processed_total_tokens", "limitations", "receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "evidence_class": {"enum": ["provider-native", "host-observed"]},
+    "provider": {"type": "string"},
+    "models": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "response_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "raw_response_digests": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "raw_field_inventory": {"type": "object", "maxProperties": 128},
+    "privacy_mode": {"type": "string"},
+    "region": {"type": ["string", "null"]},
+    "cache_condition": {"enum": ["cold", "warm", "mixed", "unknown"]},
+    "retry_count": {"type": "integer", "minimum": 0},
+    "processed_total_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "limitations": {"type": "array", "items": {"type": "string"}},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
