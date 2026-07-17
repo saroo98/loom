@@ -65,7 +65,7 @@ jobs:
           binary=Path('native-evidence/loom-vault' + ('.exe' if os.name=='nt' else ''));
           receipt={'schema_version':1,'platform':'${{ inputs.platform }}','commit':'${{ github.sha }}','binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cargo_lock_sha256':hashlib.sha256(Path('vault-helper/Cargo.lock').read_bytes()).hexdigest()};
           Path('native-evidence/receipt.json').write_text(json.dumps(receipt,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: native-helper-${{ inputs.platform }}-${{ github.sha }}
           path: native-evidence/
