@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Loom 1.3.0 turns a plain-language request into a safe, evidence-backed execution plan.
+description: Loom 1.6.0 turns a plain-language request into a safe, evidence-backed execution plan.
 ---
 
 # Loom
@@ -35,12 +35,11 @@ invisible to the owner:
    section. Loom, not the host, runs each command in a disposable target snapshot, captures the
    transcript and world hashes, and derives the immutable evidence ID. A host-authored `passed`
    flag, evidence file, or digest is invalid.
-4. Write the harness's complete five-category token measurement to a private temporary JSON file:
-   `input_tokens`, `cache_read_tokens`, `output_tokens`, `tool_tokens`, and `retry_tokens`. Never
-   estimate a missing category or label a subset as total. When the harness exposes the real
-   provider response receipt, wrap the five counts with its provider, model, response ID, capture
-   time, and raw-response SHA-256. Loom retains only that bounded provenance and labels it as still
-   requiring independent attestation; never fabricate a provider receipt.
+4. If the host exposes genuine usage, write every response attempt as a private usage-receipt-v3
+   event with the exact provider profile, response identity, raw counters, and capability receipt.
+   Never add cache, reasoning, tool, or retry fields unless the declared profile proves they are
+   disjoint. Never estimate a missing field or fabricate a provider receipt. If the host exposes no
+   trustworthy usage, omit `--usage`; Loom records `unavailable` without blocking the work.
    When selected memory, observed preferences, measured outcome metrics, or artifact-use facts
    affected the work, also write the private `schemas/host-outcome.schema.json` receipt. Report
    only selected memory IDs and observed facts. For each selected record, report exactly one
@@ -53,7 +52,7 @@ invisible to the owner:
    Never synthesize the disabled result, reuse a provider response, or label a test/simulation as
    production. Omit the pair when the harness did not perform it; never fabricate an empty receipt.
 5. Run `<absolute user home>/.loom/bin/loom --home <absolute user home>/.loom complete
-   --action <action_path> --usage <private usage JSON> [--result <private result JSON>]`.
+   --action <action_path> [--usage <private usage JSON>] [--result <private result JSON>]`.
    `--result` is required for
    repair and optional for an evidence-bearing host outcome. Return the sealed receipt.
    For partial or unknown coverage, never promote Markdown prose. Supply the exact

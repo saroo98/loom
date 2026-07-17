@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Loom 1.3.0 · Planning intelligence for AI coding agents.</strong><br>
+  <strong>Loom 1.6.0 · Planning intelligence for AI coding agents.</strong><br>
   One request in. A release-ready, evidence-backed execution plan out.
 </p>
 
@@ -133,9 +133,12 @@ become contributions automatically.
 
 ### Numbers cannot outrun evidence
 
-Token accounting requires input, cache-read, output, tool, and retry categories. A subset is never
-reported as a total. Loom does not call itself improved because a log grew, and it does not call
-itself production-certified because local tests passed. Missing independent evidence stays visible.
+Token accounting records every genuine provider response attempt under a versioned formula. Cache,
+reasoning, tool, and retry fields are never blindly added. Missing host telemetry is reported as
+`unavailable` without blocking work; contradictory supplied data is rejected. Tier S keeps small
+work to one bounded contract while consequential or uncertain work promotes automatically. Loom
+does not call itself improved because a log grew, and it does not call itself production-certified
+because local tests passed. Missing independent evidence stays visible.
 
 ## Install once
 

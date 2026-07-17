@@ -1,4 +1,4 @@
-# Loom 1.3.0 advanced architecture
+# Loom 1.6.0 advanced architecture
 
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.
@@ -100,7 +100,7 @@ guidance files, while session receipts can retain provider/model/response/hash p
 five token categories. Neither a caller total nor a local provider receipt substitutes for the
 separate independently attested production-performance or production-memory-replay records.
 
-## Loom 1.3 runtime and owner vault
+## Runtime and owner vault
 
 The stable launcher under `~/.loom/bin` verifies one immutable runtime manifest and pins a session
 to that runtime generation. Marketplace payloads stage beside the active runtime; threshold-signed
@@ -138,3 +138,65 @@ independent reproduction, not an assertion that accumulated state helped. Produc
 may attach a same-request/same-world enabled/disabled pair with distinct provider-response receipts
 and real-medium evidence. The orchestrator records it in the real improvement store but labels it
 as requiring independent attestation; deterministic evaluator pairs never cross that boundary.
+
+## Proportional-performance plane
+
+Usage receipt v3 treats each provider response attempt as an immutable event. The selected
+semantics profile determines whether cache, cache-write, reasoning, and tool counters are subsets,
+disjoint components, or governed by the provider total. Only formula-complete event sets produce a
+processed total. Retry is represented by multiple attempts, not by a second additive token bucket.
+The generic profile is partial by construction. Legacy five-field samples retain their prior claim
+but have no normalized total.
+
+Tier S keeps the complete plan contract inside the authenticated action and returns a separate
+decision-only projection to the host. The projection is digest-bound and capped at 4,096 bytes;
+completion still validates against the full artifact matrix, invariant set, facts, media, budget,
+and lifecycle. Static runtime prefix identity, volatile action capsules, owner selection, domain
+authority, and provider cache evidence have separate keys and invalidation rules. No cache is a
+freshness authority.
+
+The local span primitive uses `perf_counter_ns` and bounded numeric counters. Encrypted usage
+observations share the owner vault and project/domain scope of the session outcome. The offline
+corpus retains failures and environment facts, reports distributions, and never substitutes
+synthetic or local measurements for provider certification. Runtime-wide stage-span export and
+live host capability negotiation remain outside the mechanically certified surface.
+
+## Adapter protocol v2
+
+Every connected host receives a small, receipt-owned skill file. It contains no planning logic,
+memory, migration code, policy, or cached state. It points to the stable user launcher, and the
+launcher alone selects the verified runtime and owner vault. An unowned local Loom skill is treated
+as a split-brain condition and blocks connection instead of being overwritten or silently used.
+
+The local bridge uses newline-delimited JSON over standard input and output. The message vocabulary,
+field sets, depth, byte size, identifiers, protocol range, capabilities, and error codes are closed
+and bounded by `schemas/adapter-message.schema.json` and `contracts/adapter-protocol-v2.json`.
+Initialization must negotiate protocol 2 before an invocation can reach the launcher. The bridge
+does not listen on a network socket and does not expose vault operations.
+
+Host discovery records the exact executable or configuration marker observed. Discovery is not a
+support claim. Codex, Claude Code, Gemini CLI, OpenCode, and Copilot currently have
+`simulated-conformant` adapter evidence from disposable profiles. Cursor and generic Agent Skills
+locations are experimental; Factory Droid is unsupported. None may be described as real-host
+verified until an exact host/version invocation produces the required evidence bundle. The complete
+status matrix and evidence boundary are in [Integration ecosystem](integration-ecosystem.md).
+
+## Evidence-bound score plane
+
+`contracts/score-rubric-v1.json` is the only scoring authority. Its 17 category weights total
+exactly 100, every category's requirements total 100, and changing either is a rubric-version
+change. Evidence records contain no free-form points. They can satisfy only one known requirement
+using an allowed evidence class, and they bind the subject tree, source artifact, observation time,
+expiry, and canonical digest. Duplicate coverage, altered artifacts, wrong subjects, stale records,
+and incompatible evidence classes fail the score operation.
+
+Missing evidence is not an execution failure. It remains a named withheld requirement and lowers
+the category and overall result. A provided record that is stale, contradictory, or corrupt is an
+execution failure because silently ignoring it would make the result ambiguous. Claimed-only
+records never earn points. This keeps local deterministic proof separate from matrix reproduction,
+real-host use, provider receipts, longitudinal outcomes, independent review, and public adoption.
+
+Competitive snapshots use the same rubric and exact revisions. Unknown categories remain null and
+produce lower and upper score bounds; not-applicable categories are explicitly normalized out.
+A stale snapshot or a verified score without a primary source is refused. See
+[Cross-cutting scoring](cross-cutting-scoring.md).

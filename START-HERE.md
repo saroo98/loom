@@ -1,4 +1,4 @@
-# Loom 1.3.0 agent kernel
+# Loom 1.6.0 agent kernel
 
 The entire owner-facing interface is:
 
@@ -35,8 +35,9 @@ runtime below. Never read every Loom file into context.
    why, undo, and forget. The bridge validates the unchanged target, enforces the exact sealed plan
    contract, gates the authored pack,
    enforces deadline/retry/cancellation state, captures real-medium evidence, seals the receipt,
-   records outcomes, and runs bounded compaction. Do not estimate missing usage or claim a subset
-   as total.
+   records outcomes, and runs bounded compaction. Attach formula-bound usage-receipt-v3 events only
+   when the host exposes them. Missing telemetry records `unavailable` and never blocks completion;
+   contradictory supplied telemetry fails closed.
 6. Return the compact owner receipt: what Loom understood, did, changed, learned, archived, remains
    uncertain, needs owner input, and what happens next. Explain a prior decision with its receipt,
    evidence, and memory identifiers. Report forgetting as complete only after derived state is

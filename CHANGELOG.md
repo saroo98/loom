@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.6.0
+
+- Add a fixed 17-category, 100-point evidence rubric and deterministic scorer that refuses stale,
+  altered, duplicate, wrong-subject, or ineligible evidence instead of inflating a result.
+- Bind local score evidence to the exact source tree and observed tool artifacts; keep real-host,
+  provider, cross-platform, longitudinal, adoption, and independent-review gaps explicitly withheld.
+- Add freshness-bound competitive snapshots with unknown-cell score intervals and identical rubric
+  treatment for Loom and comparable projects.
+
+## 1.5.0
+
+- Replace host-specific integration assumptions with closed adapter protocol v2, one stable local
+  runtime bridge, exact capability receipts, and transactional adapter migration and rollback.
+- Classify five host templates as simulated-conformant while keeping experimental, unsupported,
+  real-host, provider, and MCP claims mechanically separate.
+- Add disposable multi-host conformance, split-brain refusal, capability-tamper checks, and hostile
+  mutations for protocol overlap, host-status inflation, and receipt binding.
+
+## 1.4.0
+
+- Replace the ambiguous five-counter token sum with formula-bound, per-response usage receipt v3
+  profiles for OpenAI Responses, Anthropic Messages, Gemini, and unknown hosts.
+- Make missing host telemetry honest and non-blocking while rejecting contradictory supplied usage;
+  migrate old samples as non-certifying `legacy-ambiguous` history.
+- Add a bounded Tier S host capsule, tighter single-work-order limits, deceptive-small promotion
+  fixtures, local content-free spans, encrypted performance observations, an offline 20-workload
+  corpus, CI performance evidence, and trust-critical accounting mutations.
+
 ## 1.3.0
 
 - Add evidence-aware known, partial, unknown, and composite routing with consequence-aware

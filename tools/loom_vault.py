@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loom 1.3 encrypted, transactional, owner-scoped state authority.
+"""Encrypted, transactional, owner-scoped state authority for Loom.
 
 The module owns SQLite structure and semantic validation. Cryptographic operations are delegated
 to an injected helper implementing the narrow loom-vault protocol; production callers cannot opt

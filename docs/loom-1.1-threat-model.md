@@ -1,4 +1,4 @@
-# Loom 1.3 security definitions
+# Loom security definitions
 
 This document freezes Loom's security boundary before the owner-vault runtime is activated. It is
 a living engineering artifact, not a certification. A fully compromised operating-system account

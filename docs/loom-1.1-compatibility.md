@@ -1,4 +1,4 @@
-# Loom 1.3 compatibility and migration contract
+# Loom compatibility and migration contract
 
 Loom software and owner intelligence have independent lifecycles. A runtime may be replaced in
 full; a verified owner vault is not replaced, implicitly merged, or reset.

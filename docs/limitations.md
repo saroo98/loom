@@ -1,4 +1,4 @@
-# Loom 1.3.0 Limitations
+# Loom 1.6.0 Limitations
 
 Loom fails closed around evidence it does not possess.
 
@@ -54,7 +54,7 @@ Loom fails closed around evidence it does not possess.
 - The canonical deterministic ZIP builder, independent receipt verifier, semantic Cargo.lock SBOM
   reconciliation, and provenance schema are implemented and locally tested. GitHub attestations,
   native A/B helper rebuilds, a signed tag, and an immutable draft asset remain **[UNVERIFIED]**
-  until the release workflow runs against the exact `v1.3.0` bytes.
+  until the release workflow runs against the exact `v1.6.0` bytes.
 - Fresh marketplace installation trusts the Codex host as the initial delivery authority. Loom can
   detect internal corruption on first install, but cannot prove independence from a malicious host
   using a verifier delivered by that same host. Subsequent updates use the existing verified
@@ -74,9 +74,31 @@ Loom fails closed around evidence it does not possess.
 - Adapter installation verifies the receipt-owned shared launcher and every written adapter, but
   real disposable invocations through every named third-party host/version are **[UNVERIFIED]**
   until the clean-machine agent matrix runs. Unsupported hosts must not be described as connected.
+- Adapter protocol v2 and the shared-runtime topology are mechanically exercised with disposable
+  simulated host profiles. This proves protocol negotiation, one-runtime routing, receipt ownership,
+  project non-mutation, and fail-closed conflicts. It does not prove that a third-party host parsed
+  the skill, invoked Loom, or returned provider usage. No MCP compatibility claim is made.
+- OpenAI, Anthropic, and Gemini profile arithmetic is locally tested against sanitized official-
+  shape fixtures. Live provider-host runs with complete response inventories remain
+  **[UNVERIFIED]** until content-bound usage receipt v3 bundles are captured from those hosts.
+- Provider prompt-cache availability and delivery are host-controlled. A matching local prefix hash
+  is not evidence of a provider cache hit; only the provider response receipt can establish one.
+- Runtime-wide stage-span export and live host capability negotiation are **[UNVERIFIED]**. Loom
+  provides bounded span and capability-receipt contracts, but the current agent adapters do not
+  yet prove that every host emits either record during a real invocation.
+- The historical 0.9-1.7M-token single-file UI report is `reported-unbound` because its original
+  provider receipts are unavailable. It is retained as an incident, not presented as a measured
+  baseline or used for release certification.
 
 `tools/loom_release.py certify` enforces the first 5 evidence contracts. Certification requires a
 separate trust policy whose independently provisioned RSA public keys authorize each evidence type;
 unsigned, self-asserted, duplicated, expired, irrelevant, tampered, or wrong-commit evidence fails.
 Missing evidence blocks production certification and the 100 score; documentation cannot override
 that result.
+
+- The cross-cutting scorecard reports only evidence supplied for its exact subject tree. Local
+  deterministic checks cannot award real-host, provider-attested, public-adoption, cross-platform,
+  independent usability, or hostile-review requirements. Those points stay withheld rather than
+  being inferred from source quality or a test inventory.
+- Competitive comparison snapshots expire. An unknown cell remains **[UNVERIFIED]** and widens the
+  reported score interval; it is never filled from memory, project popularity, or author intent.

@@ -1,6 +1,6 @@
 # Unknown-domain intelligence
 
-Loom 1.3 does not claim to know every domain. It makes the boundary machine-visible and blocks
+Loom does not claim to know every domain. It makes the boundary machine-visible and blocks
 only the branches whose load-bearing evidence is missing.
 
 ## State machine
