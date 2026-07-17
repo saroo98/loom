@@ -8,12 +8,12 @@
     "schema_version", "request_hash", "survey_hash", "tier", "domains",
     "domain_route", "route_digest", "composition_graph_digest", "target_fingerprint",
     "pack_baseline_hash", "pack_root", "allowed_host_write_paths",
-    "artifact_matrix", "required_domain_invariants", "domain_invariants", "domain_discovery", "current_facts_to_verify",
+    "artifact_matrix", "required_domain_invariants", "domain_invariants", "domain_discovery", "planning_intelligence", "current_facts_to_verify",
     "verification_media", "budget", "work_order_topology", "completion_gates",
     "contract_hash"
   ],
   "properties": {
-    "schema_version": {"const": 2},
+    "schema_version": {"const": 3},
     "request_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "survey_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "tier": {"enum": ["S", "M", "L", "XL"]},
@@ -73,6 +73,7 @@
         "maximum_retrieval_rounds": {"const": 2}
       }
     },
+    "planning_intelligence": {"$ref": "planning-intelligence.schema.json"},
     "current_facts_to_verify": {
       "type": "array", "maxItems": 64,
       "items": {

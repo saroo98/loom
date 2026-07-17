@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "policy_version": "planning-intelligence-v1",
+  "universal_lenses": [
+    "outcome", "scope", "epistemics", "consequence-reversibility",
+    "dependencies", "acceptance-medium", "release-rollback"
+  ],
+  "module_states": ["draft", "active", "deprecated", "superseded", "revoked"],
+  "atom_kinds": [
+    "constraint", "recommendation", "question", "alternative",
+    "current-fact-query", "unknown-blocker", "risk", "decision-requirement",
+    "artifact-requirement", "work-order-constraint", "verification-obligation",
+    "release-gate"
+  ],
+  "bounds": {
+    "modules": 7,
+    "active_modules_s": 2,
+    "active_modules_other": 7,
+    "atoms_per_module": 4,
+    "active_atoms_s": 8,
+    "active_atoms_other": 24,
+    "evidence_per_activation": 8,
+    "rendered_characters_s": 2048,
+    "rendered_characters_other": 8192
+  },
+  "claims_not_made": [
+    "professional qualification", "regulatory certification",
+    "current platform truth", "universal plan usefulness", "safe authority beyond the receipt"
+  ]
+}

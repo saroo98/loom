@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotent, receipt-bearing plan-contract v1 to v2 projection."""
+"""Idempotent, receipt-bearing plan-contract migrations."""
 
 import hashlib
 import json
@@ -7,6 +7,7 @@ import json
 import loom_domain
 import loom_domain_contract
 import loom_domain_invariants
+import loom_planning_intelligence
 
 
 class PlanContractMigrationError(ValueError):
@@ -76,3 +77,39 @@ def migrate_v1(value, *, route, created_at):
     return {"contract": migrated, "migration_receipt": {
         **receipt_body, "receipt_digest": loom_domain_contract.digest(
             "plan-contract-migration-v1-v2", receipt_body)}}
+
+
+def migrate_v2(value, *, request):
+    """Project a sealed v2 contract into v3 without changing its domain semantics."""
+    if not isinstance(value, dict) or value.get("schema_version") != 2 \
+            or "planning_intelligence" in value:
+        raise PlanContractMigrationError("v2 plan contract fields are invalid")
+    body = dict(value); claimed = body.pop("contract_hash", None)
+    if not isinstance(claimed, str) or claimed != _hash(body):
+        raise PlanContractMigrationError("v2 plan contract hash mismatch")
+    try:
+        intelligence = loom_planning_intelligence.compile_intelligence(
+            request, tier=value["tier"], route=value["domain_route"])
+    except loom_planning_intelligence.PlanningIntelligenceError as exc:
+        raise PlanContractMigrationError(str(exc)) from exc
+    migrated = {**body, "schema_version": 3,
+                "planning_intelligence": intelligence}
+    gates = list(migrated["completion_gates"])
+    if "planning-intelligence" not in gates:
+        gates.append("planning-intelligence")
+    migrated["completion_gates"] = gates
+    migrated["contract_hash"] = _hash(migrated)
+    receipt_body = {
+        "schema_version": 1, "source_contract_hash": claimed,
+        "target_contract_hash": migrated["contract_hash"],
+        "planning_intelligence_digest": intelligence["intelligence_digest"],
+        "status": "revalidation-required",
+        "semantic_changes": [
+            "added bounded specialist module activation",
+            "added provenance-bound planning atoms",
+            "requires affected plan obligations to be revalidated before execution",
+        ],
+    }
+    return {"contract": migrated, "migration_receipt": {
+        **receipt_body, "receipt_digest": loom_domain_contract.digest(
+            "plan-contract-migration-v2-v3", receipt_body)}}

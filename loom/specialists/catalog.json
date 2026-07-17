@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "policy_version": "planning-intelligence-v1",
+  "modules": [
+    {
+      "id": "outcomes-requirements",
+      "version": "1.0.0",
+      "state": "active",
+      "activation": {"always": false, "tiers": ["L", "XL"], "domains": [], "patterns": ["multiple outcomes", "requirements", "acceptance", "workflow", "success measure", "non-goal"]},
+      "limitations": ["does not invent product policy or user evidence"],
+      "atoms": [
+        {"id": "trace-outcomes", "kind": "work-order-constraint", "statement": "Map every requested outcome to one bounded work-order frontier and one observable acceptance route.", "gate_effect": "plan", "real_medium": "declared outcome evidence"},
+        {"id": "surface-unknown-outcome", "kind": "unknown-blocker", "statement": "Keep a material outcome ambiguity explicit instead of selecting product policy silently.", "gate_effect": "affected-branch", "real_medium": "owner decision receipt"}
+      ]
+    },
+    {
+      "id": "interaction-accessibility",
+      "version": "1.0.0",
+      "state": "active",
+      "activation": {"always": false, "tiers": [], "domains": ["android", "desktop", "ios-macos", "mobile", "realtime-3d", "web-app", "website"], "patterns": ["accessibility", "interaction", "keyboard", "screen reader", "visual", "audio", "spatial ux"]},
+      "limitations": ["does not certify accessibility or replace current platform standards"],
+      "atoms": [
+        {"id": "interaction-states", "kind": "constraint", "statement": "Define normal, loading, empty, error, recovery, and input-mode states that materially affect the requested interaction.", "gate_effect": "plan", "real_medium": "real interactive medium"},
+        {"id": "accessibility-current-facts", "kind": "current-fact-query", "statement": "Verify current accessibility standards and platform conventions for the declared target.", "gate_effect": "affected-branch", "real_medium": "authoritative current source plus real assistive interaction"}
+      ]
+    },
+    {
+      "id": "architecture-boundaries",
+      "version": "1.0.0",
+      "state": "active",
+      "activation": {"always": false, "tiers": ["L", "XL"], "domains": [], "patterns": ["architecture", "boundary", "protocol", "persistence", "topology", "multiple components", "integration"]},
+      "limitations": ["does not require an architecture artifact for a local reversible edit"],
+      "atoms": [
+        {"id": "bounded-decision", "kind": "decision-requirement", "statement": "For each consequential boundary change, compare retain-current and credible alternatives with evidence gaps and rollback cost.", "gate_effect": "plan", "real_medium": "decision record bound to repository evidence"},
+        {"id": "decision-reopen", "kind": "work-order-constraint", "statement": "Bind architecture decisions to affected work orders and explicit drift conditions that reopen them.", "gate_effect": "plan", "real_medium": "dependency and drift receipt"}
+      ]
+    },
+    {
+      "id": "security-privacy-safety",
+      "version": "1.0.0",
+      "state": "active",
+      "activation": {"always": false, "tiers": [], "domains": ["accounting", "automation", "browser-extension", "firmware-hardware", "high-risk", "web-app"], "patterns": ["credential", "certificate", "key rotation", "personal data", "privacy", "security", "destructive", "physical safety", "public exposure"]},
+      "limitations": ["does not certify compliance or infer authority for irreversible action"],
+      "atoms": [
+        {"id": "authority-boundary", "kind": "constraint", "statement": "Declare privilege, sensitive-data, external-effect, and destructive-action boundaries before authorization.", "gate_effect": "affected-branch", "real_medium": "authority and abuse-case verification"},
+        {"id": "fail-closed-harm", "kind": "release-gate", "statement": "Block exposure when a high-consequence safety or privacy control lacks real-medium evidence.", "gate_effect": "release", "real_medium": "independent real-medium verification"}
+      ]
+    },
+    {
+      "id": "verification-evidence",
+      "version": "1.0.0",
+      "state": "active",
+      "activation": {"always": true, "tiers": [], "domains": [], "patterns": []},
+      "limitations": ["does not treat a restated acceptance sentence as observation"],
+      "atoms": [
+        {"id": "observable-oracle", "kind": "verification-obligation", "statement": "Name the observation method, target environment, oracle, evidence artifact, and failure signal for each release-relevant risk.", "gate_effect": "acceptance", "real_medium": "domain-real execution"},
+        {"id": "negative-recovery", "kind": "verification-obligation", "statement": "Include a negative or recovery observation whenever failure can leave durable, external, or unsafe state.", "gate_effect": "acceptance", "real_medium": "failure and recovery probe"}
+      ]
+    },
+    {
+      "id": "reliability-operations",
+      "version": "1.0.0",
+      "state": "active",
+      "activation": {"always": false, "tiers": [], "domains": ["automation", "data-etl", "firmware-hardware", "ml", "web-app"], "patterns": ["incident", "outage", "recovery", "backup", "restore", "retry", "idempotency", "availability", "operational"]},
+      "limitations": ["does not invent service levels or operational ownership"],
+      "atoms": [
+        {"id": "failure-recovery", "kind": "risk", "statement": "Model partial failure, retry, degraded operation, restoration, and evidence preservation for durable or operated state.", "gate_effect": "plan", "real_medium": "failure injection and recovery evidence"},
+        {"id": "operating-owner", "kind": "question", "statement": "Keep operational ownership and recovery expectations unknown when no authority names them.", "gate_effect": "consequence-dependent", "real_medium": "owner or operator decision"}
+      ]
+    },
+    {
+      "id": "migration-release",
+      "version": "1.0.0",
+      "state": "active",
+      "activation": {"always": false, "tiers": [], "domains": [], "patterns": ["migration", "compatibility", "upgrade", "rollback", "release", "deploy", "backfill", "deprecation"]},
+      "limitations": ["does not authorize publishing, deployment, or destructive migration"],
+      "atoms": [
+        {"id": "compatibility-window", "kind": "constraint", "statement": "Declare compatibility, sequencing, rollback, and retained-state obligations for changed consumers or durable state.", "gate_effect": "plan", "real_medium": "upgrade and rollback rehearsal"},
+        {"id": "release-evidence", "kind": "release-gate", "statement": "Bind rollout and rollback decisions to the exact release subject and current verification evidence.", "gate_effect": "release", "real_medium": "exact-artifact release rehearsal"}
+      ]
+    }
+  ]
+}

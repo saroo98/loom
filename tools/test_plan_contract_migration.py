@@ -49,6 +49,32 @@ class PlanContractMigrationTests(unittest.TestCase):
             loom_plan_contract.migrate_v1(
                 legacy, route=route, created_at="2030-01-01T00:00:00Z")
 
+    def test_v2_to_v3_adds_content_bound_planning_intelligence(self):
+        route = loom_domain.select_domains("Build a CLI", explicit=["cli"])["domain_contract"]
+        version_two = loom_plan_contract.migrate_v1(
+            self.legacy(["cli"]), route=route,
+            created_at="2030-01-01T00:00:00Z")["contract"]
+        first = loom_plan_contract.migrate_v2(
+            version_two, request="Build a CLI")
+        second = loom_plan_contract.migrate_v2(
+            version_two, request="Build a CLI")
+        self.assertEqual(first, second)
+        self.assertEqual(3, first["contract"]["schema_version"])
+        self.assertIn("planning-intelligence", first["contract"]["completion_gates"])
+        self.assertEqual(
+            first["contract"]["planning_intelligence"]["intelligence_digest"],
+            first["migration_receipt"]["planning_intelligence_digest"])
+
+    def test_v2_semantic_mutation_is_rejected(self):
+        route = loom_domain.select_domains("Build a CLI", explicit=["cli"])["domain_contract"]
+        version_two = loom_plan_contract.migrate_v1(
+            self.legacy(["cli"]), route=route,
+            created_at="2030-01-01T00:00:00Z")["contract"]
+        version_two["tier"] = "L"
+        with self.assertRaisesRegex(
+                loom_plan_contract.PlanContractMigrationError, "hash mismatch"):
+            loom_plan_contract.migrate_v2(version_two, request="Build a CLI")
+
 
 if __name__ == "__main__":
     unittest.main()

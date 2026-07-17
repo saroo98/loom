@@ -22,6 +22,11 @@
       "type": "string",
       "description": "Loom version that produced the pack (CHANGELOG.md) — makes stale guidance traceable."
     },
+    "plan_contract_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Present on orchestrated packs whose sealed plan contract and obligation assignments lint must enforce."
+    },
     "execution_mode": {
       "enum": ["planned", "historical", "build-first"],
       "default": "planned",

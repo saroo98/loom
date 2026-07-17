@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/planning-obligations.schema.json",
+  "title": "Authored planning-obligation assignments",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "plan_contract_hash", "planning_intelligence_digest", "program_digest", "assignments", "assignment_digest"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "plan_contract_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "planning_intelligence_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "program_digest": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}]},
+    "assignments": {
+      "type": "array", "maxItems": 24,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["atom_id", "work_order", "milestone", "verification"],
+        "properties": {
+          "atom_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9:-]{0,127}$"},
+          "work_order": {"type": "string", "pattern": "^WO-[0-9]{3,}$"},
+          "milestone": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+          "verification": {"type": "object"}
+        }
+      }
+    },
+    "assignment_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
