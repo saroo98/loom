@@ -40,8 +40,9 @@ CATALOG = {
                        "physical rollback and safety boundary"],
     },
     "research": {
-        "keywords": [r"\bresearch\b", r"\bliterature review\b", r"\bwrite[- ]?up\b",
-                     r"\bpaper\b", r"\bstudy\b", r"\bmethodology\b"],
+        "keywords": [r"\bliterature review\b", r"\bresearch (?:paper|write[- ]?up|project|study)\b",
+                     r"\b(?:conduct|perform|produce|write|synthesize)\s+(?:a\s+)?research\b",
+                     r"\bpaper\b", r"\bstudy methodology\b"],
         "invariants": ["research question", "source provenance", "claims/evidence matrix",
                        "method reproducibility", "limitations", "review and publication ethics"],
     },
@@ -124,7 +125,9 @@ CATALOG = {
     "high-risk": {
         "keywords": [r"\bsecurity[- ]critical\b", r"\bfinancial workflow\b",
                      r"\bcredential rotation\b", r"\bproduction access\b",
-                     r"\bhigh[- ]risk\b", r"\bregulated workflow\b"],
+                     r"\bhigh[- ]risk\b", r"\bregulated workflow\b",
+                     r"\bproduction outage\b", r"\bincident response\b",
+                     r"\bsecurity breach\b"],
         "invariants": ["explicit authority boundary", "least privilege",
                        "complete audit trail", "two-person irreversible control",
                        "fail-closed recovery", "independent real-medium verification"],
@@ -483,6 +486,74 @@ def _positive_keyword_hits(patterns, text):
                    for match in re.finditer(pattern, text, flags=re.IGNORECASE))]
 
 
+def task_language(description):
+    """Return request language eligible to activate a task domain or specialist.
+
+    Paths, attachment labels, and clauses that only instruct Loom to read evidence are
+    source material.  They remain available to the host, but cannot become positive
+    routing evidence.
+    """
+    low = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", str(description or ""))
+    low = re.sub(
+        r"\b(?:report|research|source|example)\s+(?:says?|states?|contains?)\s+"
+        r"(?P<quote>['\"]).*?(?P=quote)", " source-material ", low,
+        flags=re.IGNORECASE)
+    low = re.sub(
+        r"\b[a-z]:[\\/].*?\.(?:md|txt|json|yaml|yml|pdf)(?=\s|$)", " ", low,
+        flags=re.IGNORECASE).casefold()
+    low = re.sub(r"(?:^|\s)/(?:[^\s]+/)+[^\s]+", " ", low)
+    low = re.sub(r"\b[^\s]+\.(?:md|txt|json|yaml|yml|pdf)\b", " ", low)
+    low = re.sub(
+        r"\b(?:read|review|inspect|use|based on|learn from)\b[^.!?;\n]{0,120}"
+        r"\b(?:research|report|study|paper|corpus|results?|files?|folders?)\b",
+        " source-material ", low, flags=re.IGNORECASE)
+    low = re.sub(
+        r"\bresearch\s+(?:is|was|has been)\s+(?:done|completed|finished)\b",
+        " source-material ", low, flags=re.IGNORECASE)
+    low = re.sub(
+        r"\b(?:do not|don't|never|exclude|avoid)\b.*?"
+        r"(?=\bbut\b|,\s*(?:build|create|implement|change|fix|design|produce|write|plan|"
+        r"migrate|upgrade|release|deploy|contain|restore|audit)\b|[.!?;]|$)",
+        " excluded ", low, flags=re.IGNORECASE)
+    return low
+
+
+def request_clause_roles(description):
+    """Classify bounded request clauses without persisting their potentially private text."""
+    text = str(description or "").strip()
+    clauses = [item.strip() for item in re.split(
+        r"(?<=[.!?;])\s+|[\r\n]+|\s+\bbut\b\s+", text,
+        flags=re.IGNORECASE)
+               if item.strip()][:32]
+    roles = []
+    for index, clause in enumerate(clauses):
+        low = clause.casefold()
+        source = bool(re.search(
+            r"\[[^\]]*\]\([^)]*\)|\b[a-z]:[\\/]|\b[^\s]+\.(?:md|txt|json|"
+            r"yaml|yml|pdf)\b|\b(?:read|review|inspect|based on|learn from)\b.*"
+            r"\b(?:research|report|study|paper|corpus|results?|files?|folders?)\b|"
+            r"\b(?:report|research|source|example)\s+(?:says?|states?|contains?)\b",
+            clause, re.IGNORECASE))
+        excluded = bool(re.search(
+            r"\b(?:do not|don't|never|without|exclude|omit|avoid)\b", low))
+        target = bool(re.search(
+            r"\b(?:build|create|implement|change|fix|design|produce|write|plan|migrate|"
+            r"upgrade|release|deploy|contain|restore|audit)\b", low))
+        constraint = bool(re.search(
+            r"\b(?:must|should|required|preserve|only|before|after|within|bounded|safe)\b",
+            low))
+        role = ("source-material" if source else "excluded" if excluded
+                else "target" if target else "constraint" if constraint else "context")
+        roles.append({
+            "index": index, "role": role,
+            "clause_digest": loom_domain_contract.digest("request-clause-v1", clause),
+            "evidence": ("source-marker" if source else "negation" if role == "excluded"
+                         else "action-verb" if role == "target"
+                         else "constraint-term" if role == "constraint" else "context-only"),
+        })
+    return roles
+
+
 def select_domains(description, explicit=None, project_facts=None, host_proposal=None):
     description = str(description or "").strip()
     explicit = [str(item).strip().lower() for item in (explicit or []) if str(item).strip()]
@@ -505,12 +576,7 @@ def select_domains(description, explicit=None, project_facts=None, host_proposal
         # Paths and report filenames identify evidence sources, not the requested target.
         # Remove them before keyword scoring so e.g. "Deep Research Reports" or a docs site
         # cannot silently redefine an agent-runtime engineering request.
-        low = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", description)
-        low = re.sub(
-            r"\b[a-z]:[\\/].*?\.(?:md|txt|json|yaml|yml|pdf)(?=\s|$)", " ", low,
-                     flags=re.IGNORECASE).casefold()
-        low = re.sub(r"(?:^|\s)/(?:[^\s]+/)+[^\s]+", " ", low)
-        low = re.sub(r"\b[^\s]+\.(?:md|txt|json|yaml|yml|pdf)\b", " ", low)
+        low = task_language(description)
         scored = []
         for order, (domain_id, adapter) in enumerate(CATALOG.items()):
             hits = _positive_keyword_hits(adapter["keywords"], low)
@@ -575,7 +641,7 @@ def select_domains(description, explicit=None, project_facts=None, host_proposal
     graph_coverage = coverage_by_domain or {"unclassified": "unknown"}
     try:
         graph = loom_domain_composition.build_graph(
-            description, graph_domains, graph_coverage,
+            task_language(description), graph_domains, graph_coverage,
             subsystems=(host_proposal["subsystems"] if host_proposal
                         and host_proposal["subsystems"] else None))
     except loom_domain_composition.DomainCompositionError as exc:

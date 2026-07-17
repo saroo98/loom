@@ -68,9 +68,27 @@ class UnknownDomainRoutingTests(unittest.TestCase):
 
         self.assertIn(tier["tier"], {"L", "XL"})
         self.assertIn("llm-agent", domains["active_task_domains"])
-        self.assertIn("research", domains["active_task_domains"])
+        self.assertNotIn("research", domains["active_task_domains"])
         self.assertNotIn("website", domains["active_task_domains"])
         self.assertIn("website", domains["ambient_domains"])
+
+    def test_multi_phase_research_inputs_route_to_target_and_promote(self):
+        request = (
+            "Phase 8 and 9 and 10 research is done and it's in the folders. "
+            "Read all of them, omit what is wrong, make a Loom plan for all three "
+            "phases separately and then start Phase 8's plan implementation."
+        )
+        domains = loom_domain.select_domains(request)
+        tier = loom_tier.classify(request, domains=domains["active_task_domains"])
+        self.assertEqual(["llm-agent"], domains["active_task_domains"])
+        self.assertEqual("L", tier["tier"])
+        self.assertTrue(tier["multi_phase_program"])
+        self.assertTrue(tier["plan_and_implement"])
+
+    def test_actual_research_deliverable_still_routes_to_research(self):
+        result = loom_domain.select_domains(
+            "Write a research paper and literature review with reproducible methodology")
+        self.assertIn("research", result["active_task_domains"])
 
     def test_negative_domain_mention_does_not_hide_separate_positive_clause(self):
         result = loom_domain.select_domains(

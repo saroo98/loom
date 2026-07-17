@@ -20,6 +20,14 @@ PROGRAM_RE = re.compile(
 PORTFOLIO_RE = re.compile(
     r"(?i)\b(year[- ]long|portfolio|organization[- ]wide|many teams|"
     r"multi[- ]program|multi[- ]product)\b")
+MULTI_PHASE_RE = re.compile(
+    r"(?i)\b(?:phase|stage)\s+\d+"
+    r"(?:\s*(?:,|and|&)\s*(?:(?:phase|stage)\s+)?\d+){1,}"
+    r"|\ball\s+(?:three|four|five|six|seven|eight|nine|ten|\d+)\s+phases?\b")
+PLAN_IMPLEMENT_RE = re.compile(
+    r"(?is)\b(?:write|make|create|produce)\b[^.!?]{0,180}\bplans?\b"
+    r"[^.!?]{0,180}\b(?:then|and)\b[^.!?]{0,100}\bimplement(?:ation)?\b"
+    r"|\bplans?\b[^.!?]{0,180}\b(?:then|and)\b[^.!?]{0,100}\bimplement(?:ation)?\b")
 DISCIPLINED_DELIVERABLE_RE = re.compile(
     r"(?i)\b(?:build|create|develop|produce|write)\s+"
     r"(?:(?:a|an|the|new|reproducible)\s+){0,4}"
@@ -36,7 +44,7 @@ WHOLE_DELIVERABLE_RE = re.compile(
     r"(?i)\b(?:build|create|develop|design|implement|produce|write)\b")
 DOMAIN_COMPLEXITY = {
     "accounting", "android", "cli", "data-etl", "desktop", "firmware-hardware",
-    "ios-macos", "ml", "mobile", "realtime-3d", "research", "web-app",
+    "ios-macos", "llm-agent", "ml", "mobile", "realtime-3d", "research", "web-app",
 }
 
 
@@ -53,6 +61,8 @@ def classify(description, *, files=None, days=None, new_components=0,
         match.group(0).lower() for match in PORTFOLIO_RE.finditer(text)))
     disciplined_hits = sorted(set(
         match.group(0).lower() for match in DISCIPLINED_DELIVERABLE_RE.finditer(text)))
+    multi_phase = bool(MULTI_PHASE_RE.search(text))
+    plan_and_implement = bool(PLAN_IMPLEMENT_RE.search(text))
     greenfield_unknown = bool(GREENFIELD_RE.search(text)) \
         and not disciplined_hits and not SMALL_RE.search(text)
     whole_deliverable = bool(WHOLE_DELIVERABLE_RE.search(text)) \
@@ -62,19 +72,23 @@ def classify(description, *, files=None, days=None, new_components=0,
     complex_single_domain = whole_deliverable and any(
         item in DOMAIN_COMPLEXITY for item in domain_ids)
     multi_subsystem_domain = complex_single_domain and subsystem_signals >= 3
+    consequential_domain = bool(set(domain_ids) & {
+        "accounting", "firmware-hardware", "high-risk", "medical-clinical",
+        "legal-regulatory", "mechanical-industrial"}) and not SMALL_RE.search(text)
     if portfolio_hits or (days is not None and days > 60) \
             or new_components >= 8 or new_boundaries >= 8 or implementers >= 6:
         tier = "XL"
         reasons.append("portfolio-scale duration, scope, or coordination requires milestone slices")
     elif program_hits or cross_domain or multi_subsystem_domain \
-            or ("realtime-3d" in domain_ids and whole_deliverable) \
+            or (multi_phase and plan_and_implement) \
+            or ("realtime-3d" in domain_ids and not SMALL_RE.search(text)) \
             or (days is not None and days > 10) \
             or new_components >= 3 or new_boundaries >= 3 or implementers >= 3:
         tier = "L"
         reasons.append(
             "product/subsystem, domain-boundary, or multi-implementer signals require a "
             "release pack")
-    elif risk_hits or irreversible or (days is not None and days > 1) \
+    elif risk_hits or consequential_domain or irreversible or (days is not None and days > 1) \
             or new_components > 0 or new_boundaries > 0 \
             or (files is not None and files > 5) or implementers > 1 \
             or greenfield_unknown or complex_single_domain:
@@ -109,6 +123,8 @@ def classify(description, *, files=None, days=None, new_components=0,
         "program_terms": program_hits,
         "portfolio_terms": portfolio_hits,
         "disciplined_deliverable_terms": disciplined_hits,
+        "multi_phase_program": multi_phase,
+        "plan_and_implement": plan_and_implement,
         "promotion_triggers": promotion,
         "policy": (
             "labels never promote; ties choose the lower tier; risk, observed scope, or an "
