@@ -5,10 +5,19 @@ import argparse
 import contextlib
 import io
 import json
+import os
 import sys
 import time
 import unittest
 from pathlib import Path
+
+
+CONTAINMENT_FAST_TEST = (
+    "test_automatic_lifecycle.AutomaticLifecycleTests."
+    + ("test_windows_detached_verifier_descendants_are_dead_before_evidence_is_sealed"
+       if os.name == "nt" else
+       "test_posix_verifier_descendants_are_dead_before_evidence_is_sealed")
+)
 
 
 FAST_TESTS = (
@@ -16,8 +25,7 @@ FAST_TESTS = (
     "test_firewall_rejects_common_provider_and_high_entropy_credentials",
     "test_privacy_excellence.PrivacyExcellenceTests."
     "test_firewall_scans_binary_content_and_every_filename",
-    "test_automatic_lifecycle.AutomaticLifecycleTests."
-    "test_detached_verifier_descendants_are_dead_before_evidence_is_sealed",
+    CONTAINMENT_FAST_TEST,
     "test_production_orchestrator.ProductionOrchestratorTests."
     "test_unknown_domain_is_promoted_out_of_the_small_lifecycle",
     "test_production_orchestrator.ProductionOrchestratorTests."
