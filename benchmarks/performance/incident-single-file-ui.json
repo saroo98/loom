@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "incident": "single-file-ui-planning-overhead",
+  "historical_token_range": {"minimum": 900000, "maximum": 1700000},
+  "evidence_status": "reported-unbound",
+  "reason": "The original provider response receipts and complete attempt inventory are unavailable.",
+  "certification_eligible": false,
+  "required_reproduction": "Run the controlled performance corpus with content-bound usage receipt v3 events."
+}

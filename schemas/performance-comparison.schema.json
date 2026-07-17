@@ -1,0 +1,12 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"loom/schemas/performance-comparison.schema.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","baseline_id","candidate_receipt","environment_match","regressions","status"],
+  "properties":{
+    "schema_version":{"const":1},"baseline_id":{"type":"string"},
+    "candidate_receipt":{"type":"string","pattern":"^[0-9a-f]{64}$"},
+    "environment_match":{"type":"boolean"},"regressions":{"type":"array"},
+    "status":{"enum":["passed","failed","incomparable"]}
+  }
+}

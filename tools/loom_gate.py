@@ -50,8 +50,8 @@ COMPLETION_FIELDS = {
 }
 SNAPSHOT_FILE_CAP = 100000
 WORK_ORDER_PLAN_CAP = 10000
-SMALL_WO_MAX_CHARS = 6000
-SMALL_WO_MAX_LINES = 80
+SMALL_WO_MAX_CHARS = 3000
+SMALL_WO_MAX_LINES = 40
 DIGEST_RE = re.compile(r"^[0-9a-f]{64}$")
 HEAD_RE = re.compile(r"^[0-9a-f]{40}(?:[0-9a-f]{24})?$")
 DOMAIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")

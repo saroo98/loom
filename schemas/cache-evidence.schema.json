@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/cache-evidence.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "source", "receipt_id", "cache_read_tokens", "cache_write_tokens", "evidence_status"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "source": {"enum": ["local-disk", "host-prompt", "provider-response"]},
+    "receipt_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "cache_read_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "cache_write_tokens": {"type": ["integer", "null"], "minimum": 0},
+    "evidence_status": {"enum": ["observed", "unavailable"]}
+  }
+}

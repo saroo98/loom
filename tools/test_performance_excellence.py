@@ -10,9 +10,51 @@ from types import SimpleNamespace
 import loom_performance
 import loom_memory
 import loom_session
+import loom_observe
+import loom_orchestrator
+import inspect
 
 
 class PerformanceExcellenceTests(unittest.TestCase):
+    def test_normal_completion_reuses_one_post_host_stable_preparation(self):
+        source = inspect.getsource(loom_orchestrator.complete)
+        self.assertEqual(1, source.count("loom_runtime.prepare_invocation("))
+
+    def test_static_prefix_and_dynamic_capsules_have_independent_authority_keys(self):
+        manifest = {"context_hash": "a" * 64}
+        first = loom_performance.static_prefix_key(
+            runtime_version="1.6.0", context_manifest=manifest,
+            policy_hashes=["b" * 64], host_adapter_version="1",
+            provider="openai", model="gpt-test")
+        second = loom_performance.static_prefix_key(
+            runtime_version="1.6.0", context_manifest=manifest,
+            policy_hashes=["b" * 64], host_adapter_version="1",
+            provider="openai", model="gpt-test")
+        self.assertEqual(first, second)
+        capsule = loom_performance.dynamic_capsule(
+            request_hash="c" * 64, route_digest="sha256:" + "d" * 64,
+            survey_hash="e" * 64, vault_generation=2,
+            domain_digest="sha256:" + "f" * 64, plan_digest="1" * 64,
+            payload={"decision": "bounded"})
+        self.assertLessEqual(capsule["capsule_bytes"], 4096)
+        changed = loom_performance.dynamic_capsule(
+            request_hash="c" * 64, route_digest="sha256:" + "d" * 64,
+            survey_hash="e" * 64, vault_generation=3,
+            domain_digest="sha256:" + "f" * 64, plan_digest="1" * 64,
+            payload={"decision": "bounded"})
+        self.assertNotEqual(capsule["capsule_hash"], changed["capsule_hash"])
+
+    def test_local_spans_are_bounded_monotonic_and_content_free(self):
+        recorder = loom_observe.SpanRecorder("a" * 64)
+        self.assertEqual("ok", recorder.measure("survey-a", lambda: "ok",
+                                                counters={"files": 2}))
+        receipt = recorder.receipt()
+        self.assertEqual(1, receipt["span_count"])
+        span = receipt["spans"][0]
+        self.assertGreaterEqual(span["duration_ns"], 0)
+        self.assertEqual({"files": 2}, span["counters"])
+        self.assertNotIn("prompt", __import__("json").dumps(receipt).casefold())
+
     def test_unchanged_context_is_read_once_then_served_from_hash_cache(self):
         with tempfile.TemporaryDirectory() as temp:
             path = Path(temp) / "context.md"
@@ -47,15 +89,17 @@ class PerformanceExcellenceTests(unittest.TestCase):
 
     def test_usage_never_labels_a_partial_measurement_total(self):
         unreported = loom_performance.normalize_usage(None)
-        self.assertEqual(unreported["measurement_status"], "unreported")
-        self.assertIsNone(unreported["total_tokens"])
+        self.assertEqual(unreported["measurement_status"], "unavailable")
+        self.assertIsNone(unreported["processed_total_tokens"])
         with self.assertRaisesRegex(loom_performance.PerformanceError, "all five"):
             loom_performance.normalize_usage({"input_tokens": 10})
         measured = loom_performance.normalize_usage({
             "input_tokens": 100, "cache_read_tokens": 20,
             "output_tokens": 30, "tool_tokens": 40, "retry_tokens": 10,
         })
-        self.assertEqual(measured["total_tokens"], 200)
+        self.assertEqual(measured["legacy_declared_total_tokens"], 200)
+        self.assertIsNone(measured["processed_total_tokens"])
+        self.assertEqual(measured["measurement_status"], "legacy-ambiguous")
         self.assertEqual(measured["measurement_source"], "caller-reported")
         with self.assertRaisesRegex(loom_performance.PerformanceError, "nonzero"):
             loom_performance.normalize_usage({
@@ -226,8 +270,9 @@ class PerformanceExcellenceTests(unittest.TestCase):
             receipt = controller.run(
                 "Build a command-line tool", invocation_id=str(uuid.uuid4()),
                 cwd=project, now="2026-07-14T12:00:00Z")
-            self.assertEqual(receipt.usage["measurement_status"], "measured")
-            self.assertEqual(receipt.usage["total_tokens"], 24)
+            self.assertEqual(receipt.usage["measurement_status"], "legacy-ambiguous")
+            self.assertEqual(receipt.usage["legacy_declared_total_tokens"], 24)
+            self.assertIsNone(receipt.usage["processed_total_tokens"])
 
     def test_session_receipt_preserves_provider_receipt_provenance(self):
         with tempfile.TemporaryDirectory() as temp:

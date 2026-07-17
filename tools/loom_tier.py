@@ -8,7 +8,9 @@ import sys
 
 RISK_RE = re.compile(
     r"(?i)\b(auth(?:entication|orization)?|payment|billing|tax|migration|delete|"
-    r"production|credential|firmware|hardware|medical|safety|financial|trading)\b")
+    r"production|credential|firmware|hardware|medical|safety|financial|trading|"
+    r"dependency|lockfile|public api|cryptograph(?:y|ic)|encryption|destructive|"
+    r"deploy(?:ment)?|database schema)\b")
 PROGRAM_RE = re.compile(
     r"(?i)\b(platform|multi[- ]service|multiple apps|migration program|enterprise|"
     r"full product|multi[- ]subsystem|cross[- ]service|cross[- ]platform|"

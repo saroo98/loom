@@ -494,7 +494,7 @@ def _make_plan_contract(action, prepared):
                 "decision": "prove a release-relevant domain invariant",
             })
     ceilings = {
-        "S": (6000, 1800), "M": (30000, 9000),
+        "S": (3000, 900), "M": (30000, 9000),
         "L": (75000, 22000), "XL": (150000, 45000),
     }
     topology = {
@@ -544,6 +544,42 @@ def _make_plan_contract(action, prepared):
         ],
     }
     return {**body, "contract_hash": _hash(body)}
+
+
+def _tier_s_host_capsule(contract):
+    """Project the full local contract into a bounded decision-only host capsule."""
+    if contract.get("tier") != "S":
+        return None
+    body = {
+        "schema_version": 1,
+        "plan_contract_hash": contract["contract_hash"],
+        "request_hash": contract["request_hash"],
+        "allowed_host_write_paths": contract["allowed_host_write_paths"],
+        "work_order": {"count": 1, "path": "plans/WO-001.md",
+                       "maximum_touches": 5, "maximum_outcomes": 1,
+                       "maximum_characters": 3000, "maximum_lines": 40,
+                       "maximum_lexical_tokens": 900,
+                       "required_sections": ["Intent", "Context", "Preconditions", "Task",
+                           "Acceptance criteria", "Out of scope", "Escalation triggers",
+                           "Epistemic notes", "Close-out"]},
+        "invariants": [{"id": item["invariant_id"], "statement": item["statement"],
+                        "verification_medium": item["verification"]["required_real_medium"]}
+                       for item in contract["domain_invariants"]],
+        "current_facts": [{"domain": item["domain"], "fact": item["fact"]}
+                          for item in contract["current_facts_to_verify"]],
+        "verification_media": sorted({item["medium"]
+                                      for item in contract["verification_media"]}),
+        "promotion_triggers": ["unknown-or-partial-coverage", "consequential-change",
+            "new-boundary", "more-than-five-touches", "irreversible-action",
+            "multiple-outcomes", "missing-real-medium", "budget-overflow"],
+        "completion": "loom complete --action <action_path> [--usage <usage-v3.json>]",
+    }
+    capsule = {**body, "capsule_hash": _hash(body)}
+    if len(_canonical_bytes(capsule)) > 4096:
+        raise OrchestratorError(
+            "TIER_PROMOTION_REQUIRED",
+            "complete Tier S decision context exceeds the 4096-byte host capsule bound")
+    return capsule
 
 
 def _validate_authored_plan(action):
@@ -950,7 +986,8 @@ def _validated_replay_pair(value, action, applied_memory_ids):
         except (loom_runtime.RuntimeError, loom_performance.PerformanceError) as exc:
             raise OrchestratorError("HOST_OUTCOME_INVALID", str(exc)) from exc
         if not created <= captured <= expires \
-                or usage["measurement_status"] != "measured":
+                or usage["measurement_status"] not in {
+                    "provider-complete", "legacy-ambiguous"}:
             raise OrchestratorError(
                 "HOST_OUTCOME_INVALID", "provider replay receipt is outside the action")
         normalized[cohort_name] = {
@@ -1545,7 +1582,9 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "domains": action["domains"], "expires_at": expires_at,
         "work_order": work_order_id if prepared.intent == "execute" else None,
         "repair_plan": action["repair_plan"],
-        "plan_contract": action["plan_contract"],
+        "plan_contract": (_tier_s_host_capsule(action["plan_contract"])
+                          if action["tier"] == "S" and action["plan_contract"] is not None
+                          else action["plan_contract"]),
         "context_manifest": action["context_manifest"],
         "context": {
             "memory": context_capsule["memory"],
@@ -1573,7 +1612,7 @@ def _reopen(action):
     return controller, opened
 
 
-def complete(action_path, usage_path, *, result_path=None, now=None,
+def complete(action_path, usage_path=None, *, result_path=None, now=None,
              owner_home=None, install_root=None):
     path, action, action_security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
@@ -1602,14 +1641,18 @@ def complete(action_path, usage_path, *, result_path=None, now=None,
         action["status"] = "expired"
         _write_action(path, action, action_security)
         raise OrchestratorError("ACTION_TIMEOUT", "action deadline expired", status="expired")
-    try:
-        usage = json.loads(_absolute(usage_path, "usage").read_text(encoding="utf-8"))
-        normalized = loom_performance.normalize_usage(usage)
-    except (OSError, UnicodeError, json.JSONDecodeError,
-            loom_performance.PerformanceError) as exc:
-        raise OrchestratorError("USAGE_INVALID", str(exc)) from exc
-    if normalized["measurement_status"] != "measured":
-        raise OrchestratorError("USAGE_REQUIRED", "production completion requires measured usage")
+    if usage_path is None:
+        usage = None
+        normalized = loom_performance.normalize_usage(None)
+    else:
+        try:
+            usage = json.loads(_absolute(usage_path, "usage").read_text(encoding="utf-8"))
+            normalized = loom_performance.normalize_usage(usage)
+        except (OSError, UnicodeError, json.JSONDecodeError,
+                loom_performance.PerformanceError) as exc:
+            raise OrchestratorError("USAGE_INVALID", str(exc)) from exc
+        if normalized["measurement_status"] == "invalid":
+            raise OrchestratorError("USAGE_INVALID", normalized["normalization_reason"])
     if action["intent"] == "repair":
         action["host_result"] = _read_repair_result(result_path, action)
     elif result_path is not None:
@@ -1727,7 +1770,7 @@ def main(argv=None):
     invoke_parser.add_argument("--timeout-seconds", type=int, default=900)
     complete_parser = commands.add_parser("complete")
     complete_parser.add_argument("--action", required=True)
-    complete_parser.add_argument("--usage", required=True)
+    complete_parser.add_argument("--usage")
     complete_parser.add_argument("--result")
     complete_parser.add_argument("--home")
     complete_parser.add_argument("--install-root")

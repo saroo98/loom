@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "workloads": [
+    {"id":"doc-typo","request":"Fix one documentation typo","files":1},
+    {"id":"cli-flag","request":"Rename one CLI flag","files":3},
+    {"id":"pure-bug","request":"Fix one pure function bug","files":3},
+    {"id":"ui-copy","request":"Change one UI label","files":5},
+    {"id":"config-key","request":"Rename one configuration key","files":5},
+    {"id":"non-git","request":"Fix one small non-Git script","files":5,"git":false},
+    {"id":"dirty-git","request":"Fix one dirty-tree bug","files":20,"dirty":true},
+    {"id":"warm-session","request":"Continue the same small task","files":20,"warm":true},
+    {"id":"project-switch","request":"Fix one flag in another project","files":20},
+    {"id":"stale-resume","request":"Resume work after two months","files":20},
+    {"id":"repo-1000","request":"Fix one documentation typo","files":1000},
+    {"id":"repo-10000","request":"Fix one documentation typo","files":10000},
+    {"id":"year-owner","request":"Fix one documentation typo with bounded owner state","files":20},
+    {"id":"unknown-domain","request":"Change one unknown-domain lab procedure","files":5},
+    {"id":"tax-small","request":"Change one-line tax rounding","files":5},
+    {"id":"auth-small","request":"Change one-line authentication logic","files":5},
+    {"id":"migration-small","request":"Change one-line database migration","files":5},
+    {"id":"firmware-small","request":"Change one firmware timing constant","files":5},
+    {"id":"tier-m-plan","request":"Build a command-line developer tool","files":50},
+    {"id":"single-ui-incident","request":"Plan a single-file UI change","files":1}
+  ]
+}

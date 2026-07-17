@@ -383,8 +383,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
         result = json.loads(completed.stdout)
         self.assertEqual("completed", result["status"])
         self.assertEqual("plan-complete", result["code"])
-        self.assertEqual("measured", result["usage"]["measurement_status"])
-        self.assertEqual(900, result["usage"]["total_tokens"])
+        self.assertEqual("legacy-ambiguous", result["usage"]["measurement_status"])
+        self.assertIsNone(result["usage"]["processed_total_tokens"])
+        self.assertEqual(900, result["usage"]["legacy_declared_total_tokens"])
+        self.assertIsNone(result["usage"]["processed_total_tokens"])
         self.assertEqual([], loom_gate.verify(
             self.repo / "plans", self.repo, require_authorized=True))
         self.assertTrue(result["outcome_ids"])
@@ -830,18 +832,20 @@ class ProductionOrchestratorTests(unittest.TestCase):
         action = json.loads(opened.stdout)
         self.assertEqual("S", action["tier"])
         self.assertEqual(["cli"], action["domains"])
+        self.assertEqual(1, action["plan_contract"]["schema_version"])
+        self.assertNotIn("artifact_matrix", action["plan_contract"])
+        self.assertLessEqual(len(json.dumps(
+            action["plan_contract"], sort_keys=True, separators=(",", ":")).encode()), 4096)
+        sealed = json.loads(Path(action["action_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(15, len(sealed["plan_contract"]["artifact_matrix"]))
         _author_small_wo(self.repo / "plans")
-        usage = self.root / "small-usage.json"
-        usage.write_text(json.dumps({
-            "input_tokens": 300, "cache_read_tokens": 50,
-            "output_tokens": 150, "tool_tokens": 50, "retry_tokens": 0,
-        }), encoding="utf-8")
         completed = self.cli(
-            "complete", "--action", action["action_path"], "--usage", usage)
+            "complete", "--action", action["action_path"])
         self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
         result = json.loads(completed.stdout)
         self.assertEqual("completed", result["status"])
         self.assertEqual("plan-complete", result["code"])
+        self.assertEqual("unavailable", result["usage"]["measurement_status"])
         self.assertEqual([], loom_gate.verify_small(
             self.repo / "plans" / ".loom-small-lifecycle.json"))
         self.assertFalse((self.repo / "plans" / "MANIFEST.md").exists())

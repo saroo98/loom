@@ -68,6 +68,20 @@ class RuntimeFixture(unittest.TestCase):
         return pack
 
 
+class StableSurveyCountTests(RuntimeFixture):
+    def test_each_authority_boundary_uses_exactly_two_complete_observations(self):
+        original = loom_survey.repo_state
+        calls = []
+
+        def counted(*args, **kwargs):
+            calls.append(1)
+            return original(*args, **kwargs)
+
+        with mock.patch.object(loom_survey, "repo_state", side_effect=counted):
+            self.prepare("Fix one documentation typo")
+        self.assertEqual(2, len(calls))
+
+
 class ProjectResolutionTests(RuntimeFixture):
     def test_explicit_target_wins_without_scanning_siblings(self):
         other = self.root / "other"

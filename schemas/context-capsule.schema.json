@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/context-capsule.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request_hash", "route_digest", "survey_hash", "vault_generation", "domain_digest", "plan_digest", "payload", "capsule_bytes", "capsule_hash"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "request_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "route_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "survey_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "vault_generation": {"type": "integer", "minimum": 0},
+    "domain_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "plan_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "payload": {"type": "object"},
+    "capsule_bytes": {"type": "integer", "minimum": 1, "maximum": 4096},
+    "capsule_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

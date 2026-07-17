@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "tier": "S",
+  "eligibility": {
+    "maximum_declared_touches": 5,
+    "maximum_atomic_outcomes": 1,
+    "maximum_owner_questions": 1,
+    "maximum_host_authoring_passes": 1,
+    "unknown_or_partial_domain_coverage": "promote",
+    "new_boundary": "promote",
+    "irreversible_or_consequential_change": "promote"
+  },
+  "work_order": {
+    "maximum_utf8_characters": 3000,
+    "maximum_lines": 40,
+    "maximum_loom_lexical_v1_tokens": 900,
+    "maximum_count": 1
+  },
+  "host_capsule": {
+    "maximum_utf8_bytes": 4096
+  },
+  "memory": {
+    "maximum_characters": 512,
+    "maximum_records": 3
+  }
+}
