@@ -22,14 +22,14 @@ Loom fails closed around evidence it does not possess.
 - Independent hostile review is **[UNVERIFIED]** until a reviewer independent of the implementation
   reports 0 Critical and 0 High findings against the exact reproduced build. The certificate
   requires complete-scope and independence flags plus distinct report/review-bundle hashes.
-- Production token and latency budgets are **[UNVERIFIED]** until an independent benchmark signs
-  provider-attested receipts for at least 20 successful samples across S, M, L, and XL workloads,
+- Production token and latency budgets are **[UNVERIFIED]** until current provider-native receipts
+  cover a preregistered successful sample across S, M, L, and XL workloads,
   including p50, p95, worst case, and explicit token and wall-time budgets.
 - Normal production sessions can retain the bounded provider/model/response/hash identity behind
   all five token categories, but that local receipt is still a host-supplied record. Even 20
-  receipts in every tier report `requires-independent-attestation`, never a certified total.
-- Cross-domain improvement is **[UNVERIFIED]** until an independent benchmark signs provider-
-  attested production sessions containing at least 16 memory-enabled versus memory-disabled replay
+  receipts in every tier remain host-observed, never a provider-native total.
+- Cross-domain improvement is **[UNVERIFIED]** until an independent benchmark witnesses production
+  sessions containing preregistered memory-enabled versus memory-disabled replay
   pairs: at least 8 for one exact domain and 8 for transferable general calibration. Simulations and
   deterministic adaptation fixtures do not satisfy this contract.
 - The production orchestrator can ingest a controlled pair into the local improvement store, but
@@ -97,7 +97,7 @@ Missing evidence blocks production certification and the 100 score; documentatio
 that result.
 
 - The cross-cutting scorecard reports only evidence supplied for its exact subject tree. Local
-  deterministic checks cannot award real-host, provider-attested, public-adoption, cross-platform,
+  deterministic checks cannot award real-host, provider-native, public-adoption, cross-platform,
   independent usability, or hostile-review requirements. Those points stay withheld rather than
   being inferred from source quality or a test inventory.
 - Competitive comparison snapshots expire. An unknown cell remains **[UNVERIFIED]** and widens the

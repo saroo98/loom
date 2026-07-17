@@ -1,50 +1,872 @@
 {
-  "schema_version": 1,
-  "version": "1.6.0",
   "capabilities": [
-    {"id":"one-request-routing","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_runtime.py","tools/loom_session.py"],"tests":["tools/test_production_orchestrator.py","tools/test_loom_runtime.py","tools/test_loom_session.py"]},
-    {"id":"complete-world-fingerprint","kind":"mechanical","enforcement":["tools/loom_runtime.py","tools/loom_survey.py"],"tests":["tools/test_loom_runtime.py"]},
-    {"id":"plan-before-implementation","kind":"mechanical","enforcement":["tools/loom_gate.py"],"tests":["tools/test_loom_gate.py"]},
-    {"id":"sealed-plan-contract","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","schemas/plan-contract.schema.json"],"tests":["tools/test_production_orchestrator.py"]},
-    {"id":"loom-executed-repair-verification","kind":"mechanical","enforcement":["tools/loom_orchestrator.py","tools/loom_lifecycle.py"],"tests":["tools/test_production_orchestrator.py"]},
-    {"id":"pack-integrity","kind":"mechanical","enforcement":["tools/loom_lint.py"],"tests":["tools/test_loom_lint.py"]},
-    {"id":"domain-routing-and-discovery-gate","kind":"mechanical","enforcement":["tools/loom_domain.py","tools/loom_runtime.py","tools/loom_lint.py","tools/loom_gate.py"],"tests":["tools/test_domain_universality.py","tools/test_production_orchestrator.py","tools/test_loom_lint.py","tools/test_loom_gate.py"]},
-    {"id":"content-bound-unknown-domain-authority","kind":"mechanical","enforcement":["tools/loom_domain_bundle.py","tools/loom_domain_evidence.py","tools/loom_domain_invariants.py","schemas/domain-bundle.schema.json"],"tests":["tools/test_domain_evidence.py","tools/test_domain_discovery.py"]},
-    {"id":"claim-specific-domain-regating","kind":"mechanical","enforcement":["tools/loom_domain_freshness.py","tools/loom_lint.py","tools/loom_orchestrator.py"],"tests":["tools/test_domain_freshness.py","tools/test_loom_lint.py"]},
-    {"id":"bounded-unknown-domain-evaluation","kind":"mechanical","enforcement":["tools/loom_domain_benchmark.py","benchmarks/domain-intelligence/corpus.json"],"tests":["tools/test_domain_benchmark.py","tools/test_unknown_domain_learning.py"]},
-    {"id":"scoped-memory","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_domain.py","contracts/owner-learning-v3.json"],"tests":["tools/test_owner_learning_phase2.py","tools/test_domain_universality.py"]},
-    {"id":"bounded-learning","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_learning.py","tools/loom_learning_contract.py"],"tests":["tools/test_owner_learning_phase2.py","tools/test_memory_lifecycle.py"]},
-    {"id":"preference-evolution","kind":"mechanical","enforcement":["tools/loom_vault_adapter.py","tools/loom_learning.py"],"tests":["tools/test_owner_learning_phase2.py","tools/test_loom_vault_adapter_v11.py"]},
-    {"id":"content-bound-memory-attribution","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_vault_adapter.py","schemas/memory-effect.schema.json"],"tests":["tools/test_owner_learning_phase2.py"]},
-    {"id":"derived-forgetting-floor","kind":"mechanical","enforcement":["tools/loom_vault.py","tools/loom_transfer.py"],"tests":["tools/test_owner_learning_phase2.py","tools/test_loom_transfer_v11.py"]},
-    {"id":"uncertainty-aware-learning-evidence","kind":"mechanical","enforcement":["tools/loom_learning_stats.py","tools/loom_shadow_eval.py"],"tests":["tools/test_owner_learning_phase2.py"]},
-    {"id":"all-file-privacy-scan","kind":"mechanical","enforcement":["tools/loom_privacy.py"],"tests":["tools/test_privacy_excellence.py"]},
-    {"id":"offline-production-runtime","kind":"mechanical","enforcement":["tools/loom_privacy.py"],"tests":["tools/test_privacy_excellence.py"]},
-    {"id":"durable-reversible-state","kind":"mechanical","enforcement":["tools/loom_reliability.py"],"tests":["tools/test_reliability_excellence.py"]},
-    {"id":"honest-usage-accounting","kind":"mechanical","enforcement":["tools/loom_usage.py","tools/loom_performance.py","contracts/performance-accounting-v3.json"],"tests":["tools/test_token_accounting_v3.py","tools/test_performance_excellence.py"]},
-    {"id":"proportional-tier-s-fast-path","kind":"mechanical","enforcement":["tools/loom_tier.py","tools/loom_orchestrator.py","tools/loom_gate.py","contracts/tier-s-fast-path-v1.json"],"tests":["tools/test_tier_s_fast_path.py","tools/test_production_orchestrator.py"]},
-    {"id":"bounded-offline-performance-evidence","kind":"mechanical","enforcement":["tools/loom_observe.py","tools/loom_benchmark.py","tools/loom_vault_adapter.py"],"tests":["tools/test_performance_excellence.py","tools/test_token_accounting_v3.py","tools/test_performance_end_to_end.py"]},
-    {"id":"owner-transparency","kind":"mechanical","enforcement":["tools/loom_transparency.py","tools/loom_session.py"],"tests":["tools/test_transparency_surface.py"]},
-    {"id":"longitudinal-adaptation-evaluation","kind":"mechanical","enforcement":["tools/loom_adaptation_eval.py"],"tests":["tools/test_adaptation_evaluation.py"]},
-    {"id":"comparative-improvement-proof","kind":"mechanical","enforcement":["tools/loom_improvement.py","tools/loom_improvement_audit.py","tools/loom_orchestrator.py"],"tests":["tools/test_improvement_proof.py","tools/test_production_orchestrator.py"]},
-    {"id":"receipt-proven-installer","kind":"mechanical","enforcement":["tools/loom_install.py","tools/loom_reliability.py"],"tests":["tools/test_release_standard.py"]},
-    {"id":"evidence-gated-release","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py"]},
-    {"id":"artifact-self-verification","kind":"mechanical","enforcement":["tools/loom_release.py","tools/loom_docs.py","tools/loom_privacy.py"],"tests":["tools/test_release_standard.py","tools/test_documentation_coherence.py"]},
-    {"id":"encrypted-owner-vault","kind":"mechanical","enforcement":["tools/loom_owner.py","tools/loom_vault.py","tools/loom_crypto.py"],"tests":["tools/test_loom_owner_v11.py","tools/test_loom_vault_v11.py","tools/test_loom_vault_adapter_v11.py"]},
-    {"id":"signed-atomic-runtime-updates","kind":"mechanical","enforcement":["tools/loom_update.py","tools/loom_launcher.py","tools/loom_release_sign.py"],"tests":["tools/test_loom_update_v11.py","tools/test_loom_bootstrap_v11.py","tools/test_loom_release_sign_v11.py"]},
-    {"id":"encrypted-transfer-and-recovery","kind":"mechanical","enforcement":["tools/loom_transfer.py","tools/loom_crypto.py"],"tests":["tools/test_loom_transfer_v11.py"]},
-    {"id":"deterministic-device-merge","kind":"mechanical","enforcement":["tools/loom_vault.py"],"tests":["tools/test_loom_merge_v11.py"]},
-    {"id":"receipt-owned-shared-agent-adapters","kind":"mechanical","enforcement":["tools/loom_adapters.py","tools/loom_launcher.py"],"tests":["tools/test_loom_plugin_adapters_v11.py"]},
-    {"id":"closed-bounded-adapter-protocol-v2","kind":"mechanical","enforcement":["tools/loom_adapter_protocol.py","tools/loom_adapter_bridge.py","schemas/adapter-message.schema.json","contracts/adapter-protocol-v2.json"],"tests":["tools/test_adapter_protocol_v2.py","tools/test_loom_mutation.py"]},
-    {"id":"simulated-shared-runtime-adapter-conformance","kind":"mechanical","enforcement":["tools/loom_adapter_conformance.py","tools/loom_host_registry.py","schemas/adapter-conformance.schema.json"],"tests":["tools/test_adapter_conformance_v2.py","tools/test_loom_plugin_adapters_v11.py"]},
-    {"id":"evidence-bound-cross-cutting-scorecard","kind":"mechanical","enforcement":["tools/loom_scorecard.py","contracts/score-rubric-v1.json","schemas/score-evidence.schema.json","schemas/scorecard.schema.json","schemas/score-trust-policy.schema.json"],"tests":["tools/test_scorecard_phase6.py","tools/test_loom_mutation.py"]},
-    {"id":"freshness-bound-competitive-comparison","kind":"mechanical","enforcement":["tools/loom_scorecard.py","schemas/competitor-snapshot.schema.json","schemas/score-comparison.schema.json"],"tests":["tools/test_scorecard_phase6.py"]},
-    {"id":"trust-critical-score-regression-gate","kind":"mechanical","enforcement":["tools/loom_scorecard.py","schemas/score-regression.schema.json"],"tests":["tools/test_scorecard_phase6.py","tools/test_loom_mutation.py"]},
-    {"id":"semantic-native-helper-evidence","kind":"mechanical","enforcement":["tools/loom_sbom.py","tools/loom_plugin_package.py"],"tests":["tools/test_loom_plugin_package_v11.py"]},
-    {"id":"deterministic-canonical-plugin-asset","kind":"mechanical","enforcement":["tools/loom_plugin_package.py","tools/loom_release_verify.py"],"tests":["tools/test_release_asset.py"]},
-    {"id":"sequential-threshold-root-rotation","kind":"mechanical","enforcement":["tools/loom_release_sign.py","tools/loom_update.py"],"tests":["tools/test_loom_release_sign_v11.py"]},
-    {"id":"cross-platform-capability-aggregation","kind":"mechanical","enforcement":["tools/loom_test.py","tools/loom_capability.py"],"tests":["tools/test_test_runner.py","tools/test_loom_capability.py"]},
-    {"id":"maintenance-cli-contract-inventory","kind":"mechanical","enforcement":["tools/loom_cli_contract.py","schemas/tool-contract.schema.json"],"tests":["tools/test_tool_contracts.py"]},
-    {"id":"human-judgment-remains-owner-controlled","kind":"advisory","enforcement":[],"tests":[]}
-  ]
+    {
+      "enforcement": [
+        "tools/loom_orchestrator.py",
+        "tools/loom_runtime.py",
+        "tools/loom_session.py"
+      ],
+      "evidence_ids": [],
+      "id": "one-request-routing",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_production_orchestrator.py",
+        "tools/test_loom_runtime.py",
+        "tools/test_loom_session.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_runtime.py",
+        "tools/loom_survey.py"
+      ],
+      "evidence_ids": [],
+      "id": "complete-world-fingerprint",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_runtime.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_gate.py"
+      ],
+      "evidence_ids": [],
+      "id": "plan-before-implementation",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_gate.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_orchestrator.py",
+        "schemas/plan-contract.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "sealed-plan-contract",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_production_orchestrator.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_orchestrator.py",
+        "tools/loom_lifecycle.py"
+      ],
+      "evidence_ids": [],
+      "id": "loom-executed-repair-verification",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_production_orchestrator.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_lint.py"
+      ],
+      "evidence_ids": [],
+      "id": "pack-integrity",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_lint.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_domain.py",
+        "tools/loom_runtime.py",
+        "tools/loom_lint.py",
+        "tools/loom_gate.py"
+      ],
+      "evidence_ids": [],
+      "id": "domain-routing-and-discovery-gate",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_domain_universality.py",
+        "tools/test_production_orchestrator.py",
+        "tools/test_loom_lint.py",
+        "tools/test_loom_gate.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_domain_bundle.py",
+        "tools/loom_domain_evidence.py",
+        "tools/loom_domain_invariants.py",
+        "schemas/domain-bundle.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "content-bound-unknown-domain-authority",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_domain_evidence.py",
+        "tools/test_domain_discovery.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_domain_freshness.py",
+        "tools/loom_lint.py",
+        "tools/loom_orchestrator.py"
+      ],
+      "evidence_ids": [],
+      "id": "claim-specific-domain-regating",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_domain_freshness.py",
+        "tools/test_loom_lint.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_domain_benchmark.py",
+        "benchmarks/domain-intelligence/corpus.json"
+      ],
+      "evidence_ids": [],
+      "id": "bounded-unknown-domain-evaluation",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_domain_benchmark.py",
+        "tools/test_unknown_domain_learning.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_domain.py",
+        "contracts/owner-learning-v3.json"
+      ],
+      "evidence_ids": [],
+      "id": "scoped-memory",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_domain_universality.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_learning.py",
+        "tools/loom_learning_contract.py"
+      ],
+      "evidence_ids": [],
+      "id": "bounded-learning",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_memory_lifecycle.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_vault_adapter.py",
+        "tools/loom_learning.py"
+      ],
+      "evidence_ids": [],
+      "id": "preference-evolution",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_loom_vault_adapter_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_vault_adapter.py",
+        "schemas/memory-effect.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "content-bound-memory-attribution",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_learning_phase2.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_transfer.py"
+      ],
+      "evidence_ids": [],
+      "id": "derived-forgetting-floor",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_loom_transfer_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_learning_stats.py",
+        "tools/loom_shadow_eval.py"
+      ],
+      "evidence_ids": [],
+      "id": "uncertainty-aware-learning-evidence",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_learning_phase2.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_privacy.py"
+      ],
+      "evidence_ids": [],
+      "id": "all-file-privacy-scan",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_privacy_excellence.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_privacy.py"
+      ],
+      "evidence_ids": [],
+      "id": "offline-production-runtime",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_privacy_excellence.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_reliability.py"
+      ],
+      "evidence_ids": [],
+      "id": "durable-reversible-state",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_reliability_excellence.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_usage.py",
+        "tools/loom_performance.py",
+        "contracts/performance-accounting-v3.json"
+      ],
+      "evidence_ids": [],
+      "id": "honest-usage-accounting",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_token_accounting_v3.py",
+        "tools/test_performance_excellence.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_tier.py",
+        "tools/loom_orchestrator.py",
+        "tools/loom_gate.py",
+        "contracts/tier-s-fast-path-v1.json"
+      ],
+      "evidence_ids": [],
+      "id": "proportional-tier-s-fast-path",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_tier_s_fast_path.py",
+        "tools/test_production_orchestrator.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_observe.py",
+        "tools/loom_benchmark.py",
+        "tools/loom_vault_adapter.py"
+      ],
+      "evidence_ids": [],
+      "id": "bounded-offline-performance-evidence",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_performance_excellence.py",
+        "tools/test_token_accounting_v3.py",
+        "tools/test_performance_end_to_end.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_transparency.py",
+        "tools/loom_session.py"
+      ],
+      "evidence_ids": [],
+      "id": "owner-transparency",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_transparency_surface.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_adaptation_eval.py"
+      ],
+      "evidence_ids": [],
+      "id": "longitudinal-adaptation-evaluation",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_adaptation_evaluation.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_improvement.py",
+        "tools/loom_improvement_audit.py",
+        "tools/loom_orchestrator.py"
+      ],
+      "evidence_ids": [],
+      "id": "comparative-improvement-proof",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_improvement_proof.py",
+        "tools/test_production_orchestrator.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_install.py",
+        "tools/loom_reliability.py"
+      ],
+      "evidence_ids": [],
+      "id": "receipt-proven-installer",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_release_standard.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_release.py",
+        "tools/loom_privacy.py"
+      ],
+      "evidence_ids": [],
+      "id": "evidence-gated-release",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_release_standard.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_release.py",
+        "tools/loom_docs.py",
+        "tools/loom_privacy.py"
+      ],
+      "evidence_ids": [],
+      "id": "artifact-self-verification",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_release_standard.py",
+        "tools/test_documentation_coherence.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_owner.py",
+        "tools/loom_vault.py",
+        "tools/loom_crypto.py"
+      ],
+      "evidence_ids": [],
+      "id": "encrypted-owner-vault",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_owner_v11.py",
+        "tools/test_loom_vault_v11.py",
+        "tools/test_loom_vault_adapter_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_update.py",
+        "tools/loom_launcher.py",
+        "tools/loom_release_sign.py"
+      ],
+      "evidence_ids": [],
+      "id": "signed-atomic-runtime-updates",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_update_v11.py",
+        "tools/test_loom_bootstrap_v11.py",
+        "tools/test_loom_release_sign_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_transfer.py",
+        "tools/loom_crypto.py"
+      ],
+      "evidence_ids": [],
+      "id": "encrypted-transfer-and-recovery",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_transfer_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_vault.py"
+      ],
+      "evidence_ids": [],
+      "id": "deterministic-device-merge",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_merge_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_adapters.py",
+        "tools/loom_launcher.py"
+      ],
+      "evidence_ids": [],
+      "id": "receipt-owned-shared-agent-adapters",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_plugin_adapters_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_adapter_protocol.py",
+        "tools/loom_adapter_bridge.py",
+        "schemas/adapter-message.schema.json",
+        "contracts/adapter-protocol-v2.json"
+      ],
+      "evidence_ids": [],
+      "id": "closed-bounded-adapter-protocol-v2",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_adapter_protocol_v2.py",
+        "tools/test_loom_mutation.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_adapter_conformance.py",
+        "tools/loom_host_registry.py",
+        "schemas/adapter-conformance.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "simulated-shared-runtime-adapter-conformance",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_adapter_conformance_v2.py",
+        "tools/test_loom_plugin_adapters_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_scorecard.py",
+        "contracts/score-rubric-v1.json",
+        "schemas/score-evidence.schema.json",
+        "schemas/scorecard.schema.json",
+        "schemas/score-trust-policy.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "evidence-bound-cross-cutting-scorecard",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_scorecard_phase6.py",
+        "tools/test_loom_mutation.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_scorecard.py",
+        "schemas/competitor-snapshot.schema.json",
+        "schemas/score-comparison.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "freshness-bound-competitive-comparison",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_scorecard_phase6.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_scorecard.py",
+        "schemas/score-regression.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "trust-critical-score-regression-gate",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_scorecard_phase6.py",
+        "tools/test_loom_mutation.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_sbom.py",
+        "tools/loom_plugin_package.py"
+      ],
+      "evidence_ids": [],
+      "id": "semantic-native-helper-evidence",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_plugin_package_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_plugin_package.py",
+        "tools/loom_release_verify.py"
+      ],
+      "evidence_ids": [],
+      "id": "deterministic-canonical-plugin-asset",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_release_asset.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_release_sign.py",
+        "tools/loom_update.py"
+      ],
+      "evidence_ids": [],
+      "id": "sequential-threshold-root-rotation",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_release_sign_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_test.py",
+        "tools/loom_capability.py"
+      ],
+      "evidence_ids": [],
+      "id": "cross-platform-capability-aggregation",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_test_runner.py",
+        "tools/test_loom_capability.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_cli_contract.py",
+        "schemas/tool-contract.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "maintenance-cli-contract-inventory",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_tool_contracts.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_domain.py",
+        "tools/loom_tier.py"
+      ],
+      "evidence_ids": [],
+      "id": "negated-domain-routing-isolation",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_unknown_domain_routing.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_evidence_graph.py",
+        "contracts/evidence-policy-v1.json",
+        "schemas/evidence-envelope.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "expiring-revocable-evidence-graph",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_evidence_graph_phase7.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_capability_registry.py",
+        "schemas/capability-registry.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "generated-evidence-capability-status",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_capability_registry_phase7.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_release_subject.py",
+        "tools/loom_release_verify.py",
+        "schemas/release-subject.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "unified-exact-release-subject",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_release_subject_phase7.py",
+        "tools/test_release_asset.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_platform_probe.py",
+        ".github/workflows/compatibility.yml",
+        ".github/workflows/build-helper.yml"
+      ],
+      "evidence_ids": [],
+      "id": "native-platform-capability-receipts",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_platform_probe_phase7.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_provider_evidence.py",
+        "tools/loom_usage.py",
+        "schemas/provider-native-receipt.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "provider-native-evidence-boundary",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_provider_tier_clean_phase7.py",
+        "tools/test_token_accounting_v3.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_clean_room.py",
+        "tools/loom_current_facts.py",
+        "docs/phase-7-validation.md"
+      ],
+      "evidence_ids": [],
+      "id": "clean-room-and-external-validation-boundary",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_phase7_protocols.py"
+      ]
+    },
+    {
+      "enforcement": [],
+      "evidence_ids": [],
+      "id": "human-judgment-remains-owner-controlled",
+      "kind": "advisory",
+      "limitations": [
+        "Human judgment is not machine-enforced."
+      ],
+      "status": "unsupported",
+      "tests": []
+    }
+  ],
+  "evaluated_at": null,
+  "evidence_policy": "loom-evidence-policy-v1",
+  "generated_by": "tools/loom_capability_registry.py",
+  "schema_version": 2,
+  "subject_digest": null,
+  "version": "1.6.0"
 }
