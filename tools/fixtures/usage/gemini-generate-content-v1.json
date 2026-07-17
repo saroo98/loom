@@ -1,0 +1,1 @@
+{"profile":"gemini-generate-content-v1","raw_counters":{"prompt_token_count":100,"cached_content_token_count":80,"candidates_token_count":20,"thoughts_token_count":40,"tool_use_prompt_token_count":10,"total_token_count":160},"expected_processed_total_tokens":160}

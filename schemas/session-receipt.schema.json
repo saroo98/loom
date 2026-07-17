@@ -52,11 +52,18 @@
     "usage": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["measurement_status", "measurement_source", "input_tokens", "cache_read_tokens",
-        "output_tokens", "tool_tokens", "retry_tokens", "total_tokens"],
+      "required": ["schema_version", "measurement_status", "measurement_source",
+        "processed_total_tokens", "normalization_reason"],
       "properties": {
-        "measurement_status": {"enum": ["measured", "unreported"]},
-        "measurement_source": {"enum": ["caller-reported", "provider-receipt", null]},
+        "schema_version": {"const": 3},
+        "measurement_status": {"enum": ["provider-complete", "provider-partial",
+          "host-complete", "host-partial", "unavailable", "invalid", "legacy-ambiguous"]},
+        "measurement_source": {"type": ["string", "null"]},
+        "capability_receipt_id": {"type": ["string", "null"]},
+        "event_count": {"type": "integer", "minimum": 0, "maximum": 128},
+        "events": {"type": "array", "maxItems": 128, "items": {"type": "object"}},
+        "processed_total_tokens": {"type": ["integer", "null"], "minimum": 0},
+        "normalization_reason": {"type": "string", "minLength": 1, "maxLength": 256},
         "receipt": {
           "type": ["object", "null"],
           "additionalProperties": false,
@@ -76,7 +83,7 @@
         "output_tokens": {"type": ["integer", "null"], "minimum": 0},
         "tool_tokens": {"type": ["integer", "null"], "minimum": 0},
         "retry_tokens": {"type": ["integer", "null"], "minimum": 0},
-        "total_tokens": {"type": ["integer", "null"], "minimum": 0}
+        "legacy_declared_total_tokens": {"type": ["integer", "null"], "minimum": 0}
       }
     }
   }

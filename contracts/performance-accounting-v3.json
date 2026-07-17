@@ -1,0 +1,45 @@
+{
+  "schema_version": 3,
+  "profiles": {
+    "openai-responses-v1": {
+      "processed_formula": "input_tokens + output_tokens",
+      "cache_read": "subset-of-input",
+      "reasoning": "subset-of-output",
+      "retry": "response-event-dimension"
+    },
+    "anthropic-messages-v1": {
+      "processed_formula": "input_tokens + cache_read_input_tokens + cache_creation_input_tokens + output_tokens",
+      "cache_read": "disjoint-input",
+      "cache_write": "disjoint-input",
+      "retry": "response-event-dimension"
+    },
+    "gemini-generate-content-v1": {
+      "processed_formula": "provider-total-governed",
+      "cache_read": "subset-of-prompt",
+      "reasoning": "provider-total-governed",
+      "tool": "provider-total-governed",
+      "retry": "response-event-dimension"
+    },
+    "gemini-interactions-v1": {
+      "processed_formula": "provider-total-governed",
+      "cache_read": "subset-of-prompt",
+      "reasoning": "provider-total-governed",
+      "tool": "provider-total-governed",
+      "retry": "response-event-dimension"
+    },
+    "generic-host-v1": {
+      "processed_formula": null,
+      "unknown_inclusion": "partial-only"
+    }
+  },
+  "measurement_states": [
+    "provider-complete",
+    "provider-partial",
+    "host-complete",
+    "host-partial",
+    "unavailable",
+    "invalid",
+    "legacy-ambiguous"
+  ],
+  "certification_rule": "Only provider-complete receipts may support provider performance certification."
+}

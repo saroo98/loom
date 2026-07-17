@@ -12,6 +12,8 @@ import uuid
 import datetime as dt
 from pathlib import Path
 
+import loom_usage
+
 
 MAX_CONTEXT_BYTES = 2 * 1024 * 1024
 USAGE_FIELDS = (
@@ -31,6 +33,7 @@ PROVIDER_RECEIPT_FIELDS = {
     "raw_response_sha256", "usage",
 }
 TIER_BUDGETS = {"S": 2000, "M": 6000, "L": 16000, "XL": 40000}
+MAX_DYNAMIC_CAPSULE_BYTES = 4096
 
 
 class PerformanceError(RuntimeError):
@@ -108,15 +111,14 @@ def _provider_receipt(value):
 
 
 def normalize_usage(value):
-    """Accept only a complete five-part token measurement or an honest unknown."""
+    """Normalize v3 provider events; preserve old five-field claims as ambiguous history."""
     if value is None:
-        return {
-            "measurement_status": "unreported",
-            "measurement_source": None,
-            "receipt": None,
-            **{field: None for field in USAGE_FIELDS},
-            "total_tokens": None,
-        }
+        return loom_usage.unavailable()
+    if isinstance(value, dict) and value.get("schema_version") == 3:
+        try:
+            return loom_usage.normalize_bundle(value)
+        except loom_usage.UsageError as exc:
+            raise PerformanceError(str(exc)) from exc
     if isinstance(value, dict) and set(value) == PROVIDER_RECEIPT_FIELDS:
         receipt, normalized = _provider_receipt(value)
         source = "provider-receipt"
@@ -124,18 +126,34 @@ def normalize_usage(value):
         receipt, normalized = None, _normalize_counts(value)
         source = "caller-reported"
     return {
-        "measurement_status": "measured",
+        "schema_version": 3,
+        "measurement_status": "legacy-ambiguous",
         "measurement_source": source,
         "receipt": receipt,
         **normalized,
-        "total_tokens": sum(normalized.values()),
+        "legacy_declared_total_tokens": sum(normalized.values()),
+        "processed_total_tokens": None,
+        "normalization_reason": "legacy fields did not record overlap semantics",
     }
 
 
 def measured_usage_payload(normalized):
     """Recover the canonical persisted input from a normalized measurement."""
-    if not isinstance(normalized, dict) \
-            or normalized.get("measurement_status") != "measured":
+    if not isinstance(normalized, dict):
+        return None
+    if normalized.get("schema_version") == 3 \
+            and normalized.get("measurement_status") in {
+                "provider-complete", "provider-partial", "host-complete", "host-partial"} \
+            and isinstance(normalized.get("events"), list) and normalized["events"]:
+        return {
+            "schema_version": 3,
+            "measurement_source": normalized["measurement_source"],
+            "expected_event_count": normalized["event_count"],
+            "events": [{name: event[name] for name in loom_usage.EVENT_FIELDS}
+                       for event in normalized["events"]],
+            "capability_receipt_id": normalized.get("capability_receipt_id"),
+        }
+    if normalized.get("measurement_status") != "legacy-ambiguous":
         return None
     counts = {field: normalized[field] for field in USAGE_FIELDS}
     if normalized.get("measurement_source") == "provider-receipt":
@@ -225,7 +243,7 @@ def record_usage(owner_home, instance_id, *, session_id, project_id, intent, tie
                  domains, usage, recorded_at=None):
     """Persist one bounded production measurement without calling it provider-attested."""
     normalized = normalize_usage(usage)
-    if normalized["measurement_status"] != "measured":
+    if normalized["measurement_status"] != "legacy-ambiguous":
         return None
     if tier not in TIER_BUDGETS or not isinstance(intent, str) or not intent \
             or not isinstance(project_id, str) \
@@ -260,7 +278,7 @@ def record_usage(owner_home, instance_id, *, session_id, project_id, intent, tie
         "measurement_source": normalized["measurement_source"],
         "provider_receipt": normalized["receipt"],
         **{field: normalized[field] for field in USAGE_FIELDS},
-        "total_tokens": normalized["total_tokens"],
+        "total_tokens": normalized["legacy_declared_total_tokens"],
     }
     path = _usage_path(owner_home, instance_id)
     import loom_memory
@@ -346,15 +364,17 @@ def usage_report(owner_home, instance_id):
 
 
 def evaluate_overhead(*, task_size, usage, implementation_tokens):
-    usage = normalize_usage(usage)
-    if usage["measurement_status"] != "measured":
-        raise PerformanceError("overhead evaluation requires complete token measurement")
+    usage = usage if isinstance(usage, dict) and usage.get("measurement_status") \
+        == "synthetic-policy-fixture" else normalize_usage(usage)
+    if usage["measurement_status"] not in {
+            "provider-complete", "host-complete", "synthetic-policy-fixture"}:
+        raise PerformanceError("overhead evaluation requires formula-complete token measurement")
     if type(implementation_tokens) is not int or implementation_tokens <= 0:
         raise PerformanceError("implementation_tokens must be a positive integer")
     budgets = {"tiny": 2000, "small": 6000, "medium": 16000, "large": 40000}
     if task_size not in budgets:
         raise PerformanceError("task_size is invalid")
-    total = usage["total_tokens"]
+    total = usage["processed_total_tokens"]
     return {
         "task_size": task_size,
         "budget_tokens": budgets[task_size],
@@ -388,10 +408,8 @@ def evaluate_benchmarks():
     }
     tiny = evaluate_overhead(
         task_size="tiny",
-        usage={
-            "input_tokens": 400, "cache_read_tokens": 100,
-            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
-        },
+        usage={"measurement_status": "synthetic-policy-fixture",
+               "processed_total_tokens": 800},
         implementation_tokens=1000)
     return {"scenarios": scenarios, "checks": checks, "tiny_task": tiny,
             "passed": all(checks.values()) and tiny["passed"]}
@@ -519,6 +537,53 @@ def production_context_manifest(install_root):
     return body
 
 
+def static_prefix_key(*, runtime_version, context_manifest, policy_hashes,
+                      host_adapter_version, provider, model,
+                      cache_semantics_version="v1"):
+    """Identify immutable prompt-prefix bytes without claiming a provider cache hit."""
+    values = (runtime_version, host_adapter_version, provider, model,
+              cache_semantics_version)
+    if any(not isinstance(item, str) or not item for item in values) \
+            or not isinstance(context_manifest, dict) \
+            or not re.fullmatch(r"[0-9a-f]{64}", str(
+                context_manifest.get("context_hash", ""))) \
+            or not isinstance(policy_hashes, (list, tuple)) \
+            or any(not re.fullmatch(r"[0-9a-f]{64}", str(item))
+                   for item in policy_hashes):
+        raise PerformanceError("static prefix identity inputs are invalid")
+    body = {"runtime_version": runtime_version,
+            "context_hash": context_manifest["context_hash"],
+            "policy_hashes": list(policy_hashes),
+            "host_adapter_version": host_adapter_version, "provider": provider,
+            "model": model, "cache_semantics_version": cache_semantics_version}
+    return hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def dynamic_capsule(*, request_hash, route_digest, survey_hash, vault_generation,
+                    domain_digest, plan_digest, payload):
+    """Bind volatile context to every authority generation and enforce its byte ceiling."""
+    identities = (request_hash, survey_hash, plan_digest)
+    if any(not re.fullmatch(r"[0-9a-f]{64}", str(item)) for item in identities) \
+            or not isinstance(route_digest, str) \
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", route_digest) \
+            or not isinstance(domain_digest, str) \
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", domain_digest) \
+            or type(vault_generation) is not int or vault_generation < 0 \
+            or not isinstance(payload, dict):
+        raise PerformanceError("dynamic capsule identity inputs are invalid")
+    body = {"schema_version": 1, "request_hash": request_hash,
+            "route_digest": route_digest, "survey_hash": survey_hash,
+            "vault_generation": vault_generation, "domain_digest": domain_digest,
+            "plan_digest": plan_digest, "payload": payload}
+    encoded = json.dumps(body, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False).encode("utf-8")
+    if len(encoded) > MAX_DYNAMIC_CAPSULE_BYTES:
+        raise PerformanceError("dynamic capsule exceeds 4096-byte Tier S bound")
+    return {**body, "capsule_bytes": len(encoded),
+            "capsule_hash": hashlib.sha256(encoded).hexdigest()}
+
+
 def _metric_delta(before, after):
     return {key: after[key] - before[key] for key in (
         "disk_reads", "cache_hits", "disk_bytes", "cache_bytes")}
@@ -568,8 +633,8 @@ def run_observed_benchmarks():
         }
     tiny = evaluate_overhead(
         task_size="tiny",
-        usage={"input_tokens": 400, "cache_read_tokens": 100,
-               "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0},
+        usage={"measurement_status": "synthetic-policy-fixture",
+               "processed_total_tokens": 800},
         implementation_tokens=1000)
     tiny["measurement_kind"] = "synthetic-policy-fixture"
     return {"measurement_kind": "observed-local-operations",

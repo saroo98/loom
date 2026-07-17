@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/usage-event.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "event_id", "owner_vault_id", "project_id", "session_id", "operation_id", "stage", "host", "provider", "api_surface", "model", "response_id", "provider_schema_version", "captured_at", "raw_response_sha256", "semantics_profile", "raw_counters", "retry_group", "attempt_number", "duration_ns"],
+  "properties": {
+    "schema_version": {"const": 3},
+    "event_id": {"type": "string", "format": "uuid"},
+    "owner_vault_id": {"type": "string", "format": "uuid"},
+    "project_id": {"type": "string", "pattern": "^p-[0-9a-f]{32}$"},
+    "session_id": {"type": "string", "format": "uuid"},
+    "operation_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "stage": {"type": "string"}, "host": {"type": "string"},
+    "provider": {"type": "string"}, "api_surface": {"type": "string"},
+    "model": {"type": "string"}, "response_id": {"type": ["string", "null"]},
+    "provider_schema_version": {"type": "string"},
+    "captured_at": {"type": "string", "format": "date-time"},
+    "raw_response_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "semantics_profile": {"enum": ["openai-responses-v1", "anthropic-messages-v1", "gemini-generate-content-v1", "gemini-interactions-v1", "generic-host-v1"]},
+    "raw_counters": {"type": "object", "maxProperties": 32, "additionalProperties": {"type": ["integer", "null"], "minimum": 0}},
+    "retry_group": {"type": "string"}, "attempt_number": {"type": "integer", "minimum": 1},
+    "duration_ns": {"type": ["integer", "null"], "minimum": 0}
+  }
+}

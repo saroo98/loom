@@ -93,6 +93,27 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(first["before"], first["after"])
         self.assertTrue(first["activated"])
 
+    def test_legacy_performance_samples_import_once_without_retro_certification(self):
+        performance = self.source / "performance.json"
+        performance.write_text(json.dumps({"schema_version": 2,
+            "instance_id": self.instance, "total_count": 1, "samples": [{
+                "id": "legacy-usage", "input_tokens": 100,
+                "cache_read_tokens": 80, "output_tokens": 40,
+                "tool_tokens": 10, "retry_tokens": 0, "total_tokens": 230
+            }]}), encoding="utf-8")
+        before = loom_migrate.source_inventory(self.source)
+        first = loom_migrate.migrate_v1(
+            self.home, self.install, self.vault, expected_instance_id=self.instance)
+        second = loom_migrate.migrate_v1(
+            self.home, self.install, self.vault, expected_instance_id=self.instance)
+        self.assertEqual("migrated", first["status"])
+        self.assertEqual("already-migrated", second["status"])
+        self.assertEqual(before, loom_migrate.source_inventory(self.source))
+        records = self.vault.list_entities("performance-observation", limit=8)
+        self.assertEqual(1, len(records))
+        self.assertEqual("legacy-ambiguous", records[0]["value"]["measurement_status"])
+        self.assertIsNone(records[0]["value"]["processed_total_tokens"])
+
     def test_tombstones_import_before_active_rows_and_block_resurrection(self):
         receipt = loom_migrate.migrate_v1(
             self.home, self.install, self.vault, expected_instance_id=self.instance)

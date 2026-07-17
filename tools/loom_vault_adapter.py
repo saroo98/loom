@@ -239,6 +239,22 @@ class VaultMemoryAdapter:
             "usage": result.get("usage", {}),
             "memory": outcome,
         })
+        usage = result.get("usage", {})
+        if isinstance(usage, dict) and usage.get("schema_version") == 3:
+            performance_id = str(uuid.uuid5(
+                uuid.UUID(self.instance_id), f"performance:{context.operation_id}"))
+            self.vault.put_entity("performance-observation", performance_id, {
+                "operation_id": context.operation_id,
+                "project_id": context.project_id,
+                "domains": list(context.prepared.domains),
+                "intent": context.intent,
+                "tier": context.prepared.route_contract["tier"],
+                "measurement_status": usage.get("measurement_status"),
+                "measurement_source": usage.get("measurement_source"),
+                "processed_total_tokens": usage.get("processed_total_tokens"),
+                "event_count": usage.get("event_count", 0),
+                "usage": usage,
+            })
         self._learn_from_outcome(context, result)
         return {"outcome_ids": [outcome_id], "adaptation_receipts": [],
                 "improvement_evidence_ids": list(result.get("evidence_ids", [])),
@@ -492,7 +508,25 @@ class VaultMemoryAdapter:
         return None
 
     def performance_summary(self):
-        return json.dumps(self.vault.improvement_summary(), sort_keys=True, separators=(",", ":"))
+        observations = self.vault.list_entities("performance-observation", limit=256)
+        states = {}
+        complete_totals = []
+        for item in observations:
+            value = item["value"]
+            state = value.get("measurement_status", "unknown")
+            states[state] = states.get(state, 0) + 1
+            total = value.get("processed_total_tokens")
+            if type(total) is int:
+                complete_totals.append(total)
+        return json.dumps({
+            "schema_version": 1,
+            "retained_observations": len(observations),
+            "retained_bound": 256,
+            "measurement_states": states,
+            "complete_minimum": min(complete_totals) if complete_totals else None,
+            "complete_maximum": max(complete_totals) if complete_totals else None,
+            "improvement": self.vault.improvement_summary(),
+        }, sort_keys=True, separators=(",", ":"))
 
     def undo_latest(self):
         raise VaultAdapterError("No reversible owner adaptation is available.")

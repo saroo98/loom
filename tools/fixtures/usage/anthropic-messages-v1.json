@@ -1,0 +1,1 @@
+{"profile":"anthropic-messages-v1","raw_counters":{"input_tokens":20,"cache_read_input_tokens":50,"cache_creation_input_tokens":30,"cache_creation_5m_input_tokens":10,"cache_creation_1h_input_tokens":20,"output_tokens":40,"total_tokens":140},"expected_processed_total_tokens":140}

@@ -186,6 +186,7 @@ def _migrate_v1_into(home, install_root, vault, *, expected_instance_id,
         "improvement-evidence.json": "policy-evaluation",
         "reversible-actions.json": "reversible-action",
         "usage.json": "usage-observation",
+        "performance.json": "performance-observation",
     }
     for name, entity_type in recognized.items():
         path = source / name
@@ -195,12 +196,19 @@ def _migrate_v1_into(home, install_root, vault, *, expected_instance_id,
             if isinstance(value, list):
                 records_value = value
             elif isinstance(value, dict):
-                for key in ("records", "events", "candidates", "entries", "actions"):
+                for key in ("records", "events", "candidates", "entries", "actions", "samples"):
                     if isinstance(value.get(key), list):
                         records_value = value[key]
                         break
             if records_value:
                 for index, item in enumerate(records_value, 1):
+                    if entity_type == "performance-observation":
+                        item = {"schema_version": 3,
+                            "measurement_status": "legacy-ambiguous",
+                            "processed_total_tokens": None,
+                            "normalization_reason":
+                                "legacy performance sample lacks overlap semantics",
+                            "legacy_sample": item}
                     entity_id = str(uuid.uuid5(
                         MIGRATION_NAMESPACE, f"{migration_id}:{name}:{index}"))
                     vault.put_entity(entity_type, entity_id, item, source_sequence=index)

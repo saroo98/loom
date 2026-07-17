@@ -1,0 +1,16 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"loom/schemas/usage-summary.schema.json",
+  "type":"object","additionalProperties":false,
+  "required":["schema_version","measurement_status","measurement_source","capability_receipt_id","event_count","events","processed_total_tokens","normalization_reason"],
+  "properties":{
+    "schema_version":{"const":3},
+    "measurement_status":{"enum":["provider-complete","provider-partial","host-complete","host-partial","unavailable","invalid"]},
+    "measurement_source":{"type":["string","null"]},
+    "capability_receipt_id":{"type":["string","null"]},
+    "event_count":{"type":"integer","minimum":0,"maximum":128},
+    "events":{"type":"array","maxItems":128,"items":{"type":"object"}},
+    "processed_total_tokens":{"type":["integer","null"],"minimum":0},
+    "normalization_reason":{"type":"string","minLength":1,"maxLength":256}
+  }
+}
