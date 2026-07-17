@@ -193,6 +193,33 @@ class DocumentationCoherenceTests(unittest.TestCase):
                  if item["code"].startswith("VERSION_BADGE")],
             )
 
+    def test_minimal_public_cut_needs_no_decorative_version_assets_or_badge(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for relative in loom_docs.VERSION_SURFACE:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Loom 1.6.0\n", encoding="utf-8")
+
+            self.assertEqual([], loom_docs.check_version_coherence(root, "1.6.0"))
+
+    def test_optional_visual_asset_is_checked_when_it_ships(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for relative in loom_docs.VERSION_SURFACE:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Loom 1.6.0\n", encoding="utf-8")
+            hero = root / "docs" / "readme-hero.svg"
+            hero.write_text("<svg><text>Loom 1.0</text></svg>", encoding="utf-8")
+
+            findings = loom_docs.check_version_coherence(root, "1.6.0")
+            self.assertEqual(
+                [{"code": "VERSION_DRIFT", "path": "docs/readme-hero.svg",
+                  "expected": "1.6.0"}],
+                findings,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
