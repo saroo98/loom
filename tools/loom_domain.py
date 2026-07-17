@@ -450,6 +450,39 @@ def _validate_host_proposal(value):
     return value
 
 
+def _domain_match_is_negated(text, match):
+    """Return True when a domain word is only present in an exclusion clause.
+
+    Requests often name the domain Loom must *not* activate (for example, "do not
+    apply website rules").  Treating that token as positive task evidence leaks an
+    ambient domain into the route.  Keep this deliberately grammatical and local:
+    a separate positive mention in another clause still activates the domain.
+    """
+    clause_start = max(text.rfind(mark, 0, match.start())
+                       for mark in (".", "!", "?", ";", ",", ":", "\n")) + 1
+    prefix = text[clause_start:match.start()][-120:]
+    if re.search(
+            r"(?:\b(?:do|does|did|must|should|can|could|will|would)\s+not\b|"
+            r"\b(?:never|without|exclud(?:e|es|ed|ing)|omit(?:s|ted|ting)?|"
+            r"avoid(?:s|ed|ing)?)\b)[^.!?;,:\n]{0,100}$",
+            prefix, re.IGNORECASE):
+        return True
+    clause_end_candidates = [index for mark in (".", "!", "?", ";", ",", ":", "\n")
+                             if (index := text.find(mark, match.end())) >= 0]
+    clause_end = min(clause_end_candidates) if clause_end_candidates else len(text)
+    suffix = text[match.end():clause_end][:100]
+    return bool(re.search(
+        r"^[^.!?;,:\n]{0,60}\b(?:is|are|was|were|should|must|does|do)\s+not\b",
+        suffix, re.IGNORECASE))
+
+
+def _positive_keyword_hits(patterns, text):
+    """Return patterns with at least one non-negated request-language match."""
+    return [pattern for pattern in patterns
+            if any(not _domain_match_is_negated(text, match)
+                   for match in re.finditer(pattern, text, flags=re.IGNORECASE))]
+
+
 def select_domains(description, explicit=None, project_facts=None, host_proposal=None):
     description = str(description or "").strip()
     explicit = [str(item).strip().lower() for item in (explicit or []) if str(item).strip()]
@@ -480,8 +513,7 @@ def select_domains(description, explicit=None, project_facts=None, host_proposal
         low = re.sub(r"\b[^\s]+\.(?:md|txt|json|yaml|yml|pdf)\b", " ", low)
         scored = []
         for order, (domain_id, adapter) in enumerate(CATALOG.items()):
-            hits = [pattern for pattern in adapter["keywords"]
-                    if re.search(pattern, low, flags=re.IGNORECASE)]
+            hits = _positive_keyword_hits(adapter["keywords"], low)
             structural = STRUCTURAL_SIGNALS.get(domain_id, {})
             structural_hits = []
             for key, signal_values in structural.items():
@@ -508,7 +540,7 @@ def select_domains(description, explicit=None, project_facts=None, host_proposal
                 domain_id, adapter, keyword_hits=hits,
                 structural_hits=structural_hits))
         for domain_id, patterns in DISCOVERY_CATALOG.items():
-            hits = [pattern for pattern in patterns if re.search(pattern, low, re.I)]
+            hits = _positive_keyword_hits(patterns, low)
             if hits:
                 matches.append(_unknown_result(domain_id, keyword_hits=hits))
         source = "language-evidence" if matches else "no-active-task-evidence"
