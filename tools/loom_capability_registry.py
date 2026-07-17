@@ -1,0 +1,148 @@
+#!/usr/bin/env python3
+"""Generate capability status only from current evidence-graph predicates."""
+
+import argparse
+import json
+import re
+from pathlib import Path
+
+
+STATUSES = {"supported", "experimental", "stale-proof", "unsupported", "unverified"}
+ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,95}$")
+MAX_BYTES = 4 * 1024 * 1024
+
+
+class CapabilityRegistryError(RuntimeError):
+    pass
+
+
+def _strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise CapabilityRegistryError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def _read(path):
+    path = Path(path).resolve()
+    if not path.is_file() or path.is_symlink() or path.stat().st_size > MAX_BYTES:
+        raise CapabilityRegistryError("registry input is missing, redirected, or oversized")
+    try:
+        return json.loads(path.read_text(encoding="utf-8"),
+                          object_pairs_hook=_strict_object)
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise CapabilityRegistryError(f"registry input is invalid: {exc}") from exc
+
+
+def _declarations(value):
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
+            or not isinstance(value.get("version"), str) \
+            or not isinstance(value.get("capabilities"), list) \
+            or len(value["capabilities"]) > 512:
+        raise CapabilityRegistryError("capability declarations are invalid")
+    declarations, seen = [], set()
+    for item in value["capabilities"]:
+        allowed = {"id", "kind", "enforcement", "tests"}
+        if value["schema_version"] == 2:
+            allowed |= {"status", "evidence_ids", "limitations"}
+        if not isinstance(item, dict) or set(item) != allowed \
+                or not isinstance(item.get("id"), str) \
+                or not ID_RE.fullmatch(item["id"]) or item["id"] in seen \
+                or item.get("kind") not in {"mechanical", "advisory"} \
+                or not isinstance(item.get("enforcement"), list) \
+                or not isinstance(item.get("tests"), list) \
+                or len(item["enforcement"]) > 64 or len(item["tests"]) > 64 \
+                or len(item["enforcement"]) != len(set(item["enforcement"])) \
+                or len(item["tests"]) != len(set(item["tests"])) \
+                or any(not isinstance(path, str) or not path
+                       for path in item["enforcement"] + item["tests"]):
+            raise CapabilityRegistryError("capability declaration entry is invalid")
+        seen.add(item["id"])
+        declarations.append({key: item[key] for key in
+                             ("id", "kind", "enforcement", "tests")})
+    return value["version"], declarations
+
+
+def _graph(value):
+    if value is None:
+        return None
+    required = {"schema_version", "policy_id", "subject_digest", "evaluated_at",
+                "active", "inactive", "predicates", "graph_sha256"}
+    if not isinstance(value, dict) or set(value) != required \
+            or value.get("schema_version") != 1 \
+            or value.get("policy_id") != "loom-evidence-policy-v1" \
+            or not isinstance(value.get("predicates"), dict) \
+            or not isinstance(value.get("inactive"), list):
+        raise CapabilityRegistryError("evidence graph result is invalid")
+    return value
+
+
+def generate(declarations, graph=None, *, root=None):
+    version, items = _declarations(declarations)
+    graph = _graph(graph)
+    root = Path(root).resolve() if root is not None else None
+    inactive_ids = {item.get("evidence_id") for item in graph["inactive"]} if graph else set()
+    result = []
+    for item in items:
+        if root is not None:
+            missing = [relative for relative in item["enforcement"] + item["tests"]
+                       if not (root / relative).is_file()]
+            if missing:
+                raise CapabilityRegistryError(
+                    f"capability proof path is missing: {item['id']}: {missing[0]}")
+        predicate = f"capability:{item['id']}"
+        active = sorted(graph["predicates"].get(predicate, [])) if graph else []
+        stale = sorted(inactive_ids & set(
+            evidence_id for row in (graph["inactive"] if graph else [])
+            for evidence_id in [row.get("evidence_id")]
+            if isinstance(evidence_id, str) and evidence_id.startswith(
+                f"ev-cap-{item['id']}-")))
+        if item["kind"] == "advisory":
+            status = "unsupported"
+            limitations = ["Human judgment is not machine-enforced."]
+        elif active:
+            status = "supported"
+            limitations = []
+        elif stale:
+            status = "stale-proof"
+            limitations = ["The last bound proof expired, was revoked, or lost a dependency."]
+        else:
+            status = "unverified"
+            limitations = ["No current exact-subject evidence envelope is active."]
+        result.append({**item, "status": status, "evidence_ids": active or stale,
+                       "limitations": limitations})
+    return {
+        "schema_version": 2, "version": version,
+        "generated_by": "tools/loom_capability_registry.py",
+        "evidence_policy": "loom-evidence-policy-v1",
+        "subject_digest": graph["subject_digest"] if graph else None,
+        "evaluated_at": graph["evaluated_at"] if graph else None,
+        "capabilities": result,
+    }
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("declarations")
+    parser.add_argument("--graph")
+    parser.add_argument("--root")
+    parser.add_argument("--output", required=True)
+    args = parser.parse_args(argv)
+    try:
+        declarations = _read(args.declarations)
+        graph = _read(args.graph) if args.graph else None
+        result = generate(declarations, graph, root=args.root)
+    except CapabilityRegistryError as exc:
+        print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
+        return 2
+    output = Path(args.output).resolve()
+    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps({"status": "generated", "output": str(output),
+                      "capabilities": len(result["capabilities"])}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

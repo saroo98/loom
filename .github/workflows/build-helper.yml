@@ -31,19 +31,40 @@ jobs:
         shell: bash
         run: |
           mkdir -p native-evidence
-          python -B -c "import json,platform; from pathlib import Path; Path('native-evidence/runner.json').write_text(json.dumps({'platform':'${{ inputs.platform }}','os':platform.system(),'architecture':platform.machine(),'python':platform.python_version()},sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')"
-      - name: Build locked native helper
-        run: cargo build --locked --release --manifest-path vault-helper/Cargo.toml
+          python -B tools/loom_platform_probe.py \
+            --runner "${{ inputs.runner }}" \
+            --workflow-digest "$(sha256sum .github/workflows/build-helper.yml | cut -d' ' -f1)" \
+            --output native-evidence/runner.json
+      - name: Build locked native helper twice
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=/Brepro"
+          fi
+          CARGO_TARGET_DIR="$RUNNER_TEMP/loom-build-a" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
+          CARGO_TARGET_DIR="$RUNNER_TEMP/loom-build-b" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
+          cmp "$RUNNER_TEMP/loom-build-a/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
+              "$RUNNER_TEMP/loom-build-b/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}"
       - name: Test locked native helper
         run: cargo test --locked --manifest-path vault-helper/Cargo.toml
+      - name: Generate both SBOM formats from final bytes
+        shell: bash
+        run: |
+          cp "$RUNNER_TEMP/loom-build-a/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
+             "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}"
+          python -B tools/loom_sbom.py . "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
+            "native-evidence/loom-vault.spdx.json" --platform "${{ inputs.platform }}" \
+            --namespace-seed "${{ github.sha }}"
+          python -B tools/loom_cyclonedx.py . "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
+            "native-evidence/loom-vault.cdx.json" --platform "${{ inputs.platform }}" \
+            --namespace-seed "${{ github.sha }}"
       - name: Record exact binary and source evidence
         shell: bash
         run: >-
           python -B -c "import hashlib,json,os; from pathlib import Path;
-          binary=Path('vault-helper/target/release/loom-vault' + ('.exe' if os.name=='nt' else ''));
+          binary=Path('native-evidence/loom-vault' + ('.exe' if os.name=='nt' else ''));
           receipt={'schema_version':1,'platform':'${{ inputs.platform }}','commit':'${{ github.sha }}','binary_sha256':hashlib.sha256(binary.read_bytes()).hexdigest(),'cargo_lock_sha256':hashlib.sha256(Path('vault-helper/Cargo.lock').read_bytes()).hexdigest()};
-          Path('native-evidence/receipt.json').write_text(json.dumps(receipt,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8');
-          Path('native-evidence/loom-vault' + ('.exe' if os.name=='nt' else '')).write_bytes(binary.read_bytes())"
+          Path('native-evidence/receipt.json').write_text(json.dumps(receipt,sort_keys=True,separators=(',',':'))+'\n',encoding='utf-8')"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: native-helper-${{ inputs.platform }}-${{ github.sha }}

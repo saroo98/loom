@@ -48,9 +48,8 @@ class PluginPackageTests(unittest.TestCase):
     def test_package_requires_reproducible_helpers_and_scans_final_bytes(self):
         with tempfile.TemporaryDirectory() as temporary:
             temp = Path(temporary)
-            helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
-            receipts, evidence = package_evidence(
-                ROOT, self.helper, temp / "evidence", loom_plugin_package.PLATFORMS)
+            helpers, receipts, evidence = package_evidence(
+                ROOT, temp / "evidence", loom_plugin_package.PLATFORMS)
             output = temp / "plugin"
             result = loom_plugin_package.build(
                 ROOT, output, helpers, receipts, evidence,
@@ -83,9 +82,8 @@ class PluginPackageTests(unittest.TestCase):
     def test_package_rejects_hash_valid_but_semantically_incomplete_sbom(self):
         with tempfile.TemporaryDirectory() as temporary:
             temp = Path(temporary)
-            helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
-            receipts, evidence = package_evidence(
-                ROOT, self.helper, temp / "evidence", loom_plugin_package.PLATFORMS)
+            helpers, receipts, evidence = package_evidence(
+                ROOT, temp / "evidence", loom_plugin_package.PLATFORMS)
             platform = "windows-x64"
             sbom_path = Path(evidence[platform]["sbom"])
             sbom = json.loads(sbom_path.read_text(encoding="utf-8"))
@@ -108,9 +106,8 @@ class PluginPackageTests(unittest.TestCase):
     def test_package_rejects_provenance_for_a_different_source_commit(self):
         with tempfile.TemporaryDirectory() as temporary:
             temp = Path(temporary)
-            helpers = {platform: self.helper for platform in loom_plugin_package.PLATFORMS}
-            receipts, evidence = package_evidence(
-                ROOT, self.helper, temp / "evidence", loom_plugin_package.PLATFORMS)
+            helpers, receipts, evidence = package_evidence(
+                ROOT, temp / "evidence", loom_plugin_package.PLATFORMS)
             platform = "windows-x64"
             provenance_path = Path(evidence[platform]["provenance"])
             provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
@@ -125,6 +122,35 @@ class PluginPackageTests(unittest.TestCase):
                     loom_plugin_package.PackageError, "provenance contract"):
                 loom_plugin_package.build(
                     ROOT, temp / "wrong-commit", helpers, receipts, evidence,
+                    version="1.1.0", release_sequence=2,
+                    source_commit=package_source_commit(ROOT))
+
+    def test_package_rejects_a_helper_labelled_as_the_wrong_platform(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            helpers, receipts, evidence = package_evidence(
+                ROOT, temp / "evidence", loom_plugin_package.PLATFORMS)
+            helpers["windows-x64"] = helpers["linux-x64"]
+            with self.assertRaisesRegex(
+                    loom_plugin_package.PackageError, "wrong executable target"):
+                loom_plugin_package.build(
+                    ROOT, temp / "wrong-platform", helpers, receipts, evidence,
+                    version="1.1.0", release_sequence=2,
+                    source_commit=package_source_commit(ROOT))
+
+    def test_package_rejects_oversized_helper_before_final_firewall(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            helpers, receipts, evidence = package_evidence(
+                ROOT, temp / "evidence", loom_plugin_package.PLATFORMS)
+            helper = Path(helpers["windows-x64"])
+            with helper.open("r+b") as stream:
+                stream.seek(loom_privacy.MAX_SCAN_FILE_BYTES)
+                stream.write(b"x")
+            with self.assertRaisesRegex(
+                    loom_plugin_package.PackageError, "exceeds the publication scan limit"):
+                loom_plugin_package.build(
+                    ROOT, temp / "oversized", helpers, receipts, evidence,
                     version="1.1.0", release_sequence=2,
                     source_commit=package_source_commit(ROOT))
 

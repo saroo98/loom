@@ -13,9 +13,11 @@ satisfy it. Neither an evidence file nor a command-line flag contains an editabl
 The classes are deliberately separate:
 
 - `mechanical-local`: deterministic implementation plus exact-revision local tests;
-- `matrix-reproduced`: every required platform or capability cell reproduced;
+- `ci-reproduced`: every required platform or capability cell reproduced on an identified CI environment;
 - `real-host`: a disposable invocation through the named host and version;
-- `provider-attested`: a content-bound response from the actual provider;
+- `provider-native`: unmodified provider fields with provider response and model identity;
+- `host-observed`: host-reported or locally timed behavior, not provider truth;
+- `independently-witnessed`: an outside evaluator signs raw evidence and its environment receipt;
 - `longitudinal-local`: repeated owner outcomes under a valid comparison design;
 - `independent-external`: an independent audit, reproduction, or usability study;
 - `public-adoption`: current facts from an authoritative public source;

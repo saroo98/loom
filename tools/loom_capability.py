@@ -10,6 +10,22 @@ class CapabilityError(RuntimeError):
     pass
 
 
+def _report_failed(report):
+    """Accept raw runner receipts and the release verifier's normalized receipt."""
+    if {"failures", "errors", "within_budget"} <= set(report):
+        return bool(report["failures"] or report["errors"]
+                    or report["within_budget"] is not True)
+    normalized = {"passed", "returncode", "capability_complete", "capability_status"}
+    if normalized <= set(report):
+        complete = report["capability_complete"] is True
+        expected_returncode = 0 if complete else 1
+        expected_status = "complete" if complete else "requires-matrix"
+        return not (report["passed"] is True
+                    and report["returncode"] == expected_returncode
+                    and report["capability_status"] == expected_status)
+    raise CapabilityError("capability report result contract is invalid")
+
+
 def aggregate(paths):
     reports = []
     for path in paths:
@@ -28,9 +44,7 @@ def aggregate(paths):
     skipped = sorted({item.get("test") for report in reports
                       for item in report["skip_receipts"] if item.get("test")})
     unresolved = [test for test in skipped if test not in passed]
-    failed_reports = sum(1 for report in reports
-                         if report.get("failures", 0) or report.get("errors", 0)
-                         or not report.get("within_budget", False))
+    failed_reports = sum(1 for report in reports if _report_failed(report))
     certified = not unresolved and failed_reports == 0
     return {
         "schema_version": 1, "status": "certified" if certified else "not-certified",

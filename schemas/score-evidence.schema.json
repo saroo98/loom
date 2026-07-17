@@ -23,7 +23,7 @@
       "evidence_id":{"type":"string","pattern":"^ev-[0-9a-f]{32}$"},
       "coverage_id":{"type":"string","pattern":"^[a-z0-9:._-]{1,160}$"},
       "subject":{"$ref":"#/$defs/subject"},
-      "evidence_class":{"enum":["mechanical-local","matrix-reproduced","real-host","provider-attested","longitudinal-local","independent-external","public-adoption","claimed-only"]},
+      "evidence_class":{"enum":["mechanical-local","matrix-reproduced","ci-reproduced","real-host","provider-attested","provider-native","host-observed","longitudinal-local","independently-witnessed","independent-external","public-adoption","claimed-only"]},
       "status":{"enum":["passed","failed","unverified"]},
       "requirement_id":{"type":"string","pattern":"^[a-z0-9-]{1,96}$"},
       "source":{"type":"object","additionalProperties":false,"required":["tool","locator","artifact_id","artifact_sha256"],"properties":{

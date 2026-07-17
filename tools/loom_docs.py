@@ -82,16 +82,32 @@ def load_capabilities(root):
         value = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise DocsError("capability registry is unreadable") from exc
-    if not isinstance(value, dict) or set(value) != {"schema_version", "version", "capabilities"} \
-            or value["schema_version"] != 1 or not isinstance(value["capabilities"], list):
+    v1_fields = {"schema_version", "version", "capabilities"}
+    v2_fields = v1_fields | {"generated_by", "evidence_policy", "subject_digest",
+                             "evaluated_at"}
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
+            or set(value) != (v1_fields if value.get("schema_version") == 1 else v2_fields) \
+            or not isinstance(value["capabilities"], list):
         raise DocsError("capability registry shape is invalid")
+    if value["schema_version"] == 2 and (
+            value.get("generated_by") != "tools/loom_capability_registry.py"
+            or value.get("evidence_policy") != "loom-evidence-policy-v1"):
+        raise DocsError("capability registry generator or policy is invalid")
     seen = set()
     for item in value["capabilities"]:
-        if not isinstance(item, dict) or set(item) != {"id", "kind", "enforcement", "tests"} \
+        fields = {"id", "kind", "enforcement", "tests"}
+        if value["schema_version"] == 2:
+            fields |= {"status", "evidence_ids", "limitations"}
+        if not isinstance(item, dict) or set(item) != fields \
                 or item["kind"] not in {"mechanical", "advisory"} \
                 or not isinstance(item["id"], str) or not item["id"] or item["id"] in seen \
                 or not isinstance(item["enforcement"], list) or not isinstance(item["tests"], list) \
-                or not all(isinstance(path, str) and path for path in item["enforcement"] + item["tests"]):
+                or not all(isinstance(path, str) and path for path in item["enforcement"] + item["tests"]) \
+                or value["schema_version"] == 2 and (
+                    item["status"] not in {"supported", "experimental", "stale-proof",
+                                           "unsupported", "unverified"}
+                    or not isinstance(item["evidence_ids"], list)
+                    or not isinstance(item["limitations"], list)):
             raise DocsError("capability registry entry is invalid")
         seen.add(item["id"])
     return value

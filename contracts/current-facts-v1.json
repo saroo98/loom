@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "policy_id": "loom-evidence-policy-v1",
+  "facts": [
+    {
+      "id": "codex.noninteractive.exec",
+      "claim": "Official Codex documentation describes codex exec as the non-interactive invocation surface and CODEX_HOME as the user state root.",
+      "source": "https://learn.chatgpt.com/docs/non-interactive-mode",
+      "retrieved_at": "2026-07-17T00:00:00Z",
+      "expires_at": "2026-08-16T00:00:00Z",
+      "verification_owner": "release-maintainer",
+      "status": "verified"
+    },
+    {
+      "id": "codex.local-version",
+      "claim": "The implementation environment reported codex-cli 0.128.0 and did not expose a plugin add subcommand.",
+      "source": "local:codex --version; codex plugin --help",
+      "retrieved_at": "2026-07-17T00:00:00Z",
+      "expires_at": "2026-07-24T00:00:00Z",
+      "verification_owner": "release-maintainer",
+      "status": "observed"
+    },
+    {
+      "id": "hosts.third-party-contracts",
+      "claim": "Exact current discovery, precedence, headless invocation, and teardown contracts for non-Codex hosts are not verified.",
+      "source": null,
+      "retrieved_at": null,
+      "expires_at": null,
+      "verification_owner": "integration-maintainer",
+      "status": "unverified"
+    },
+    {
+      "id": "ci.runner-labels",
+      "claim": "Availability and billing status of every declared native runner label is decided only by the actual workflow run.",
+      "source": null,
+      "retrieved_at": null,
+      "expires_at": null,
+      "verification_owner": "release-maintainer",
+      "status": "unverified"
+    },
+    {
+      "id": "providers.live-fields",
+      "claim": "Live model, pricing, retention, region, and response-field availability are provider-account facts and are not established by repository fixtures.",
+      "source": null,
+      "retrieved_at": null,
+      "expires_at": null,
+      "verification_owner": "benchmark-owner",
+      "status": "unverified"
+    },
+    {
+      "id": "marketplace.delivery",
+      "claim": "Marketplace approval, delivery, update cadence, and public adoption remain external facts until observed for the exact package.",
+      "source": null,
+      "retrieved_at": null,
+      "expires_at": null,
+      "verification_owner": "publisher",
+      "status": "unverified"
+    }
+  ]
+}

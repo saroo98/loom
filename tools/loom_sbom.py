@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """Generate and validate the exact SPDX dependency inventory for Loom's Rust helper."""
 
+import argparse
 import hashlib
 import json
 import re
-import tomllib
 from pathlib import Path
 
+import loom_cargo
 import loom_reliability
 
 
@@ -17,19 +18,9 @@ class SbomError(RuntimeError):
 def _lock_packages(source):
     lock = Path(source) / "vault-helper" / "Cargo.lock"
     try:
-        value = tomllib.loads(lock.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        return loom_cargo.lock_packages(lock)
+    except loom_cargo.CargoMetadataError as exc:
         raise SbomError(f"Cargo.lock is invalid: {exc}") from exc
-    packages = value.get("package")
-    if not isinstance(packages, list) or not packages:
-        raise SbomError("Cargo.lock contains no packages")
-    result = []
-    for item in packages:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str) \
-                or not isinstance(item.get("version"), str):
-            raise SbomError("Cargo.lock package identity is invalid")
-        result.append((item["name"], item["version"], item.get("checksum")))
-    return result
 
 
 def generate(source, helper, platform_id, output, *, namespace_seed):
@@ -112,3 +103,25 @@ def validate(path, source, helper, platform_id):
     if observed != expected:
         raise SbomError("helper SBOM does not exactly reconcile with Cargo.lock")
     return {"packages": len(value["packages"]), "helper_sha256": expected_helper}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source")
+    parser.add_argument("helper")
+    parser.add_argument("output")
+    parser.add_argument("--platform", required=True)
+    parser.add_argument("--namespace-seed", required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = generate(args.source, args.helper, args.platform, args.output,
+                          namespace_seed=args.namespace_seed)
+    except (SbomError, loom_reliability.ReliabilityError) as exc:
+        print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
+        return 2
+    print(json.dumps({"status": "created", **result}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

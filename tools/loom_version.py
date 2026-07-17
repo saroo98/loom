@@ -4,8 +4,9 @@
 import argparse
 import json
 import re
-import tomllib
 from pathlib import Path
+
+import loom_cargo
 
 
 class VersionError(RuntimeError):
@@ -44,16 +45,14 @@ def verify(root):
         if value.get(key) != version:
             findings.append(relative)
     try:
-        cargo = tomllib.loads((root / "vault-helper" / "Cargo.toml").read_text(
-            encoding="utf-8"))
-        lock = tomllib.loads((root / "vault-helper" / "Cargo.lock").read_text(
-            encoding="utf-8"))
-        own = [item for item in lock.get("package", []) if item.get("name") == "loom-vault"]
-    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
-        cargo, own = {}, []
-    if cargo.get("package", {}).get("version") != version:
+        cargo_version = loom_cargo.package_version(root / "vault-helper" / "Cargo.toml")
+        own = [item for item in loom_cargo.lock_packages(
+            root / "vault-helper" / "Cargo.lock") if item[0] == "loom-vault"]
+    except loom_cargo.CargoMetadataError:
+        cargo_version, own = None, []
+    if cargo_version != version:
         findings.append("vault-helper/Cargo.toml")
-    if len(own) != 1 or own[0].get("version") != version:
+    if len(own) != 1 or own[0][1] != version:
         findings.append("vault-helper/Cargo.lock")
     if findings:
         raise VersionError("version drift: " + ", ".join(sorted(set(findings))))

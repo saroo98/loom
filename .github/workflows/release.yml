@@ -44,6 +44,21 @@ jobs:
           test "${{ inputs.tag }}" = "v$(cat VERSION)"
           test "$(git rev-parse '${{ inputs.tag }}^{commit}')" = "${GITHUB_SHA}"
           git verify-tag "${{ inputs.tag }}"
+          git branch -r --contains "${GITHUB_SHA}" | grep -q 'origin/main'
+      - name: Rebuild and verify the public cut twice
+        shell: bash
+        run: |
+          python -B tools/loom_release.py build . "$RUNNER_TEMP/cut-a" --source-classification public-release
+          python -B tools/loom_release.py build . "$RUNNER_TEMP/cut-b" --source-classification public-release
+          diff -qr "$RUNNER_TEMP/cut-a" "$RUNNER_TEMP/cut-b"
+          python -B tools/loom_release.py verify-cut "$RUNNER_TEMP/cut-a" --output "$RUNNER_TEMP/cut-receipt.json"
+          python -B tools/loom_clean_room.py "$RUNNER_TEMP/cut-a" --output "$RUNNER_TEMP/clean-room.json"
+      - name: Run exact source suite and rollback battery
+        working-directory: tools
+        run: |
+          python -B loom_test.py full --output "$RUNNER_TEMP/full-suite.json"
+          python -B -m unittest -v test_loom_update_v11.py test_loom_crash_recovery.py test_release_asset.py
+          python -B loom_current_facts.py ../contracts/current-facts-v1.json
       - name: Download existing draft assets without publishing
         env:
           GH_TOKEN: ${{ github.token }}

@@ -186,7 +186,7 @@ Current records:
 - [Unknown-domain contract](./docs/unknown-domain-intelligence.md): what the discovery gate proves and does not prove.
 
 Loom does not claim a perfect score or production certification. Those require a complete hosted
-platform matrix, real disposable host runs, provider-attested token and latency measurements,
+platform matrix, real disposable host runs, provider-native token and latency measurements,
 independent unfamiliar-user and hostile audits, and measured longitudinal owner benefit against
 the exact release.
 

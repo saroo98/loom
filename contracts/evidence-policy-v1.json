@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "policy_id": "loom-evidence-policy-v1",
+  "rubric_id": "loom-cross-cutting-v2",
+  "subject_model": "one-source-commit-one-public-cut-one-plugin-asset-one-helper-set",
+  "evidence_classes": [
+    "mechanical-local",
+    "ci-reproduced",
+    "real-host",
+    "provider-native",
+    "host-observed",
+    "longitudinal-local",
+    "independently-witnessed",
+    "independent-external",
+    "public-adoption"
+  ],
+  "capability_statuses": [
+    "supported",
+    "experimental",
+    "stale-proof",
+    "unsupported",
+    "unverified"
+  ],
+  "expiry_days": {
+    "mechanical-local": 30,
+    "ci-reproduced": 30,
+    "real-host": 30,
+    "provider-native": 30,
+    "host-observed": 14,
+    "longitudinal-local": 90,
+    "independently-witnessed": 180,
+    "independent-external": 365,
+    "public-adoption": 30
+  },
+  "claim_rules": {
+    "missing": "unverified",
+    "expired_or_revoked": "stale-proof",
+    "partial": "experimental",
+    "all_current": "supported",
+    "declared_absent": "unsupported"
+  },
+  "authority_boundary": "A fully compromised OS account or an unrestricted hostile agent already authorized to execute host commands is outside Loom's enforceable boundary."
+}

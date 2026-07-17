@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/evidence-envelope.schema.json",
+  "title": "Loom evidence graph envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evidence_id", "subject_digest", "predicate_type", "producer", "evidence_class", "environment", "issued_at", "expires_at", "payload_sha256", "limitations", "signer", "verifier", "depends_on", "revoked", "envelope_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "evidence_id": {"type": "string", "pattern": "^ev-[a-z0-9._-]{1,96}$"},
+    "subject_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "predicate_type": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"},
+    "producer": {"type": "object", "additionalProperties": false, "required": ["id", "version", "digest"], "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128}, "version": {"type": "string", "minLength": 1, "maxLength": 64}, "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}},
+    "evidence_class": {"enum": ["mechanical-local", "ci-reproduced", "real-host", "provider-native", "host-observed", "longitudinal-local", "independently-witnessed", "independent-external", "public-adoption"]},
+    "environment": {"type": "object", "maxProperties": 32},
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": ["string", "null"], "format": "date-time"},
+    "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "limitations": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 512}},
+    "signer": {"type": "object", "additionalProperties": false, "required": ["authority", "key_id", "algorithm", "signature"], "properties": {"authority": {"type": "string", "minLength": 1, "maxLength": 128}, "key_id": {"type": ["string", "null"], "maxLength": 128}, "algorithm": {"enum": ["none", "rsa-pkcs1v15-sha256", "ed25519", "sigstore-bundle"]}, "signature": {"type": ["string", "null"], "maxLength": 16384}}},
+    "verifier": {"type": "object", "additionalProperties": false, "required": ["id", "verified_at", "status"], "properties": {"id": {"type": "string", "minLength": 1, "maxLength": 128}, "verified_at": {"type": "string", "format": "date-time"}, "status": {"enum": ["passed", "failed", "unverified"]}}},
+    "depends_on": {"type": "array", "maxItems": 64, "uniqueItems": true, "items": {"type": "string", "pattern": "^ev-[a-z0-9._-]{1,96}$"}},
+    "revoked": {"type": "boolean"},
+    "envelope_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

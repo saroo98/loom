@@ -44,6 +44,15 @@ class WorkflowPolicyTests(unittest.TestCase):
             if path.name != "release.yml":
                 self.assertNotIn("contents: write", text)
 
+    def test_compatibility_matrix_builds_before_it_verifies_the_exact_cut(self):
+        compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
+        build = "loom_release.py build .. \"${{ runner.temp }}/loom-public-cut\""
+        verify = "loom_release.py verify-cut \"${{ runner.temp }}/loom-public-cut\""
+        self.assertIn(build, compatibility)
+        self.assertIn(verify, compatibility)
+        self.assertLess(compatibility.index(build), compatibility.index(verify))
+        self.assertNotIn("loom_release.py verify-cut ..", compatibility)
+
 
 if __name__ == "__main__":
     unittest.main()

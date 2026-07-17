@@ -4,6 +4,7 @@ import unittest
 
 import loom_domain
 import loom_domain_contract
+import loom_tier
 
 
 class UnknownDomainRoutingTests(unittest.TestCase):
@@ -40,6 +41,45 @@ class UnknownDomainRoutingTests(unittest.TestCase):
     def test_path_names_do_not_redefine_the_request(self):
         result = loom_domain.select_domains(
             "Read C:\\reports\\website.md and improve this planning agent runtime")
+        self.assertIn("llm-agent", result["active_task_domains"])
+        self.assertNotIn("website", result["active_task_domains"])
+
+    def test_phase_7_program_is_not_tier_s_or_contaminated_by_negated_website(self):
+        request = (
+            "Recreate the Phase 7 Exact Score Evidence and Independent Validation plan. "
+            "Build a unified evidence graph and signed capability registry; strengthen "
+            "immutable reproducible releases, rollback and exact-cut verification across "
+            "the OS and architecture matrix; verify Codex and supported real hosts; "
+            "capture provider-native token and p95 latency receipts for a fixed research "
+            "corpus; measure and optimize the Tier-S path; broaden unknown-domain and "
+            "longitudinal owner-specific learning evidence; prepare blinded clean-room "
+            "evaluation, independent hostile security audits, marketplace integration, "
+            "and privacy-preserving adoption evidence. Do not activate website concerns "
+            "merely because the repository contains a website."
+        )
+
+        domains = loom_domain.select_domains(
+            request, project_facts={
+                "file_names": ["astro.config.mjs", "skill.md", "plugin.json"],
+                "extensions": [], "dependencies": ["astro", "openai"],
+            })
+        tier = loom_tier.classify(
+            request, domains=domains["active_task_domains"])
+
+        self.assertIn(tier["tier"], {"L", "XL"})
+        self.assertIn("llm-agent", domains["active_task_domains"])
+        self.assertIn("research", domains["active_task_domains"])
+        self.assertNotIn("website", domains["active_task_domains"])
+        self.assertIn("website", domains["ambient_domains"])
+
+    def test_negative_domain_mention_does_not_hide_separate_positive_clause(self):
+        result = loom_domain.select_domains(
+            "Do not apply website rules, build a marketing website for this launch")
+        self.assertIn("website", result["active_task_domains"])
+
+    def test_postposed_domain_negation_is_not_positive_evidence(self):
+        result = loom_domain.select_domains(
+            "Improve this planning agent runtime; website concerns are not part of the task")
         self.assertIn("llm-agent", result["active_task_domains"])
         self.assertNotIn("website", result["active_task_domains"])
 
