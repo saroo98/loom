@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Generate and validate the exact SPDX dependency inventory for Loom's Rust helper."""
 
+import argparse
 import hashlib
 import json
 import re
@@ -112,3 +113,25 @@ def validate(path, source, helper, platform_id):
     if observed != expected:
         raise SbomError("helper SBOM does not exactly reconcile with Cargo.lock")
     return {"packages": len(value["packages"]), "helper_sha256": expected_helper}
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("source")
+    parser.add_argument("helper")
+    parser.add_argument("output")
+    parser.add_argument("--platform", required=True)
+    parser.add_argument("--namespace-seed", required=True)
+    args = parser.parse_args(argv)
+    try:
+        result = generate(args.source, args.helper, args.platform, args.output,
+                          namespace_seed=args.namespace_seed)
+    except (SbomError, loom_reliability.ReliabilityError) as exc:
+        print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
+        return 2
+    print(json.dumps({"status": "created", **result}, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
