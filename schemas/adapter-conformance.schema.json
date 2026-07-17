@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/adapter-conformance.schema.json",
+  "title": "Loom adapter conformance receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "evidence_status", "runtime_version", "protocol_version", "hosts", "project_untouched", "network_listener", "limitations"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["passed", "failed"]},
+    "evidence_status": {"const": "simulated-conformant"},
+    "runtime_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "protocol_version": {"const": 2},
+    "hosts": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "initialize", "status", "same_runtime", "same_protocol", "adapter_receipt"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+          "initialize": {"const": "passed"},
+          "status": {"const": "passed"},
+          "same_runtime": {"type": "boolean"},
+          "same_protocol": {"type": "boolean"},
+          "adapter_receipt": {"type": "boolean"}
+        }
+      }
+    },
+    "project_untouched": {"const": true},
+    "network_listener": {"const": false},
+    "limitations": {"type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}}
+  }
+}

@@ -1,0 +1,65 @@
+# Loom integration ecosystem
+
+Loom has one engine, one owner vault, and one public action: `/loom <request>`. Agent integrations
+are intentionally small. They route a request to `~/.loom/bin/loom`; they do not copy Loom's engine,
+read its vault, select memory, migrate state, or keep host-specific policy.
+
+## What is mechanically proven
+
+- Adapter protocol v2 has a closed message vocabulary, exact fields, a 64 KiB frame limit, a
+  16-level nesting limit, explicit protocol negotiation, bounded errors, and canonical hashing.
+- Connected adapters and capability receipts are bound to exact bytes. Changed or unowned files
+  block update and uninstall.
+- Installation and upgrade are transactional across all detected eligible hosts. A failed write
+  restores prior adapter and receipt bytes.
+- An unowned host-local Loom adapter blocks connection because host precedence could otherwise
+  route requests around the shared runtime.
+- The bridge is a local JSON-over-stdio process. It creates no network listener.
+- Disposable simulated profiles prove that all five current adapter templates select one runtime
+  and protocol, produce ownership receipts, and leave the project directory unchanged.
+
+These proofs do not show that a real third-party host parsed or invoked the adapter. The conformance
+receipt therefore uses the literal status `simulated-conformant`; its schema cannot encode that
+result as real-host verification.
+
+## Current support matrix
+
+| Host | Adapter location | Current evidence | Connection policy |
+| --- | --- | --- | --- |
+| Codex | `~/.codex/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
+| Claude Code | `~/.claude/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
+| Gemini CLI | `~/.gemini/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
+| OpenCode | `~/.config/opencode/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
+| GitHub Copilot | `~/.copilot/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
+| Cursor | `~/.cursor/skills/loom/SKILL.md` | experimental | detected, not connected |
+| Generic Agent Skills host | `~/.agents/skills/loom/SKILL.md` | experimental | detected, not connected |
+| Factory Droid | `~/.factory/skills/loom/SKILL.md` | unsupported | detected, not connected |
+
+Detection records the observed configuration marker and executable separately. A directory name,
+installed executable, or generated adapter is never presented as evidence that the host actually
+used Loom.
+
+## Capability receipt
+
+Each installed host gets a private capability receipt containing the host identity and observed
+version, protocol and adapter versions, runtime version, detection evidence, evidence status, and
+which optional telemetry fields the host supplied. Empty usage, response-identity, cache, and
+latency capabilities stay false. The ownership receipt hashes the capability receipt, so changing
+the capability story without changing the adapter blocks the next update or removal.
+
+## Promotion to real-host verified
+
+A host/version can move from simulated to real-host verified only when a disposable clean profile
+proves all of the following against the exact release:
+
+1. the real host discovers the documented adapter location;
+2. `/loom <request>` reaches the stable launcher, not a plugin-cache or repository-local copy;
+3. initialization negotiates protocol 2 and reports the pinned runtime generation;
+4. invoke, status, completion, cancellation, timeout, malformed input, and protocol mismatch follow
+   the same contract;
+5. the project is unchanged except for work explicitly authorized by the Loom action;
+6. uninstall removes only unchanged Loom-owned files;
+7. any provider usage, response identity, cache, or latency claim is backed by content-bound host
+   evidence rather than inferred from local behavior.
+
+Until that matrix exists, Loom makes no universal-host, live-provider, or MCP-conformance claim.

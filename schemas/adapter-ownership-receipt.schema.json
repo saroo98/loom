@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/adapter-ownership-receipt.schema.json",
+  "title": "Loom adapter ownership receipt v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "protocol_version", "agent", "host_version", "adapter_version", "path", "sha256", "launcher", "evidence_status", "capability_receipt_sha256", "legacy_receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "protocol_version": {"const": 2},
+    "agent": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "host_version": {"type": ["string", "null"], "maxLength": 128},
+    "adapter_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "path": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "launcher": {"const": "~/.loom/bin/loom"},
+    "evidence_status": {"enum": ["contract-only", "simulated-conformant", "real-host-verified"]},
+    "capability_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "legacy_receipt_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+  }
+}

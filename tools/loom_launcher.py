@@ -16,6 +16,8 @@ if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 
 import loom_update
+import loom_adapter_bridge
+import loom_adapter_protocol
 
 
 LOCAL_SKILL_PATHS = (
@@ -103,7 +105,10 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--home", required=True)
     sub = parser.add_subparsers(dest="command", required=True)
-    sub.add_parser("adapter-probe")
+    probe = sub.add_parser("adapter-probe")
+    probe.add_argument("--protocol-min", type=int, default=2)
+    probe.add_argument("--protocol-max", type=int, default=2)
+    sub.add_parser("bridge")
     invoke = sub.add_parser("invoke")
     invoke.add_argument("--request", required=True)
     invoke.add_argument("--cwd", required=True)
@@ -111,11 +116,13 @@ def main(argv=None):
     invoke.add_argument("--agent-version", default="unknown")
     complete = sub.add_parser("complete")
     complete.add_argument("--action", required=True)
-    complete.add_argument("--usage", required=True)
+    complete.add_argument("--usage")
     complete.add_argument("--result")
     cancel = sub.add_parser("cancel")
     cancel.add_argument("--action", required=True)
     args = parser.parse_args(argv)
+    if args.command == "bridge":
+        return loom_adapter_bridge.serve(args.home, Path(__file__).resolve())
     manager = None
     lease_data = None
     runtime_healthy = False
@@ -133,8 +140,11 @@ def main(argv=None):
             lease_data = None
             current, runtime = _current(args.home)
         if args.command == "adapter-probe":
+            selected = loom_adapter_protocol.negotiate({
+                "minimum": args.protocol_min, "maximum": args.protocol_max})
             print(json.dumps({"status": "ready", "version": current["version"],
-                              "release_sequence": current["release_sequence"]}, sort_keys=True))
+                              "release_sequence": current["release_sequence"],
+                              "protocol_version": selected}, sort_keys=True))
             return 0
         orchestrator = runtime / "tools" / "loom_orchestrator.py"
         if not orchestrator.is_file():
@@ -152,9 +162,11 @@ def main(argv=None):
                 "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
         elif args.command == "complete":
             command = [sys.executable, "-B", str(orchestrator), "complete",
-                       "--action", args.action, "--usage", args.usage,
+                       "--action", args.action,
                        "--home", str(Path(args.home).resolve()),
                        "--install-root", str(runtime)]
+            if args.usage:
+                command.extend(["--usage", args.usage])
             if args.result:
                 command.extend(["--result", args.result])
         else:
@@ -166,7 +178,8 @@ def main(argv=None):
         if not runtime_healthy:
             trust_failure = f"runtime-exit-{result.returncode}"
         return result.returncode
-    except (RuntimeError, loom_update.UpdateError) as exc:
+    except (RuntimeError, loom_update.UpdateError,
+            loom_adapter_protocol.ProtocolError) as exc:
         if isinstance(exc, RuntimeError):
             trust_failure = str(exc)
         print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True))
