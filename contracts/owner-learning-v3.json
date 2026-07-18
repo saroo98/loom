@@ -4,6 +4,7 @@
   "authority": "owner-vault-sqlite",
   "scopes": ["general", "domain", "project", "component", "temporary", "device"],
   "legacy_scope_aliases": {"global": "general"},
+  "legacy_status_aliases": {"stale": "revalidation-required"},
   "categories": [
     "owner-preference", "communication", "workflow-calibration", "decision-economics",
     "process", "domain-invariant", "technical-fact"
@@ -45,6 +46,7 @@
   },
   "bounds": {
     "active_memory_items": 256,
+    "retained_memory_records": 512,
     "selected_records": 4,
     "selected_characters": 4096,
     "learning_candidates": 512,

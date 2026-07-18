@@ -212,6 +212,8 @@ class IntentRoutingTests(unittest.TestCase):
             ("Show me where we are", {}, "status"),
             ("Remember that I prefer concise reports", {}, "remember"),
             ("Be more careful", {}, "remember"),
+            ("Correct what you learned: I prefer detailed reports", {}, "remember"),
+            ("Retain this preference for future work", {}, "remember"),
             ("Forget that preference", {}, "forget"),
             ("Why did you do that?", {}, "why"),
             ("Undo the last Loom change", {}, "undo"),

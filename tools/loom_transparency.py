@@ -76,7 +76,9 @@ def explain_receipt(value):
         f"I chose {value['intent']} and finished as {value['status']} ({value['code']}). "
         f"Sealed evidence receipt: {value['receipt_hash']}. "
         f"World evidence: {value['world_fingerprint']}. "
-        f"Memory IDs considered: {memory}. Outcome IDs recorded: {outcomes}."
+        f"Memory IDs used: {memory}. Other records were excluded by scope, lifecycle state, "
+        f"or the bounded context limit; their contents remain private. "
+        f"Outcome IDs recorded: {outcomes}."
     )
 
 

@@ -109,6 +109,15 @@ class MergeTests(unittest.TestCase):
         self.assertEqual([], self.b.select_memory(domain="accounting", project_id=None))
         self.assertEqual(1, self.a.count("quarantine"))
         self.assertEqual(1, self.b.count("quarantine"))
+        self.assertEqual(
+            [{"conflict_id": self.a.relevant_preference_conflicts(
+                domain="accounting")[0]["conflict_id"],
+              "preference_key": "report_style"}],
+            self.a.relevant_preference_conflicts(domain="accounting"))
+        resolved = preference(
+            "00000000-0000-4000-8000-000000002213", "balanced")
+        self.a.put_memory(resolved)
+        self.assertEqual([], self.a.relevant_preference_conflicts(domain="accounting"))
 
     def test_revoked_device_and_broken_chain_fail_closed(self):
         self.a.put_memory(preference(

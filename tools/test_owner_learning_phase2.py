@@ -42,7 +42,7 @@ class OwnerLearningPhase2Tests(unittest.TestCase):
 
     def test_contract_is_single_v3_runtime_truth(self):
         result = loom_learning_contract.check_runtime()
-        self.assertEqual({"status": "ok", "schema_version": 3, "checks": 6}, result)
+        self.assertEqual({"status": "ok", "schema_version": 3, "checks": 10}, result)
         self.assertEqual(4096, loom_learning_contract.BOUNDS["selected_characters"])
 
     def test_v2_migrates_from_staged_copy_and_preserves_rollback(self):
@@ -85,6 +85,27 @@ class OwnerLearningPhase2Tests(unittest.TestCase):
         summary = self.vault.improvement_summary()
         self.assertEqual(1, summary["memory_selection_count"])
         self.assertEqual(0, summary["memory_application_count"])
+
+    def test_twenty_projects_remain_isolated_and_dormant_records_cost_zero_context(self):
+        identifiers = []
+        for index in range(20):
+            project_id = "p-" + f"{index + 1:032x}"
+            record = self.record(
+                f"Project {index + 1} local rule", domain=f"domain-{index % 4}")
+            record.update({"scope": "project", "project_id": project_id})
+            stored = self.vault.put_memory(record)
+            identifiers.append((project_id, record["domain"], stored["id"]))
+        for project_id, domain, record_id in identifiers:
+            selected = self.vault.select_memory(domain=domain, project_id=project_id)
+            self.assertEqual([record_id], [item["id"] for item in selected])
+        receipt = self.vault.maintain_memory_lifecycle(
+            now=dt.datetime(2026, 8, 5, tzinfo=dt.timezone.utc))
+        self.assertEqual(20, receipt["dormant"])
+        for project_id, domain, _record_id in identifiers:
+            self.assertEqual([], self.vault.select_memory(
+                domain=domain, project_id=project_id))
+        self.assertLessEqual(self.vault.count("memory_records"),
+                             loom_vault.MAX_ACTIVE_RECORDS)
 
     def test_component_and_currentness_boundaries_are_exact(self):
         project_id = "p-" + "1" * 32

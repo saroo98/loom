@@ -184,6 +184,14 @@ class VaultMemoryAdapter:
         return sorted(values.values(), key=lambda item: (
             item["key"], item.get("domain") or "", item["id"]))
 
+    def relevant_preference_conflicts(self, *, domains, project_id):
+        conflicts = {}
+        for domain in domains:
+            for item in self.vault.relevant_preference_conflicts(
+                    domain=domain, project_id=project_id):
+                conflicts[item["conflict_id"]] = item
+        return [conflicts[key] for key in sorted(conflicts)]
+
     def record_outcome(self, context, result):
         if context.intent in {"why", "status", "undo", "forget", "remember"}:
             return {"outcome_ids": [], "adaptation_receipts": [],
