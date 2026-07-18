@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.7.0
+
+- Replace hard-coded host paths with one versioned contract that drives detection, project-shadow
+  refusal, generated host documentation, and honest support status.
+- Serialize launcher, adapter, session, update, activation, rollback, and cleanup changes with
+  crash-recoverable receipts; pin runtime and owner-state generations per active session.
+- Bind release subjects to schemas, documentation, capability registry, provenance, and prior
+  release identity; retain actionable exact-cut failure receipts in every CI outcome.
+- Generate release readiness from exact evidence, add body-free local diagnostics and explicitly
+  encrypted support export, and keep absent real-host or independent proof visibly unverified.
+
 ## 1.6.0
 
 - Add a fixed 17-category, 100-point evidence rubric and deterministic scorer that refuses stale,

@@ -1,4 +1,4 @@
-# Loom 1.6.0 Limitations
+# Loom 1.7.0 Limitations
 
 Loom fails closed around evidence it does not possess.
 
@@ -54,7 +54,7 @@ Loom fails closed around evidence it does not possess.
 - The canonical deterministic ZIP builder, independent receipt verifier, semantic Cargo.lock SBOM
   reconciliation, and provenance schema are implemented and locally tested. GitHub attestations,
   native A/B helper rebuilds, a signed tag, and an immutable draft asset remain **[UNVERIFIED]**
-  until the release workflow runs against the exact `v1.6.0` bytes.
+  until the release workflow runs against the exact `v1.7.0` bytes.
 - Fresh marketplace installation trusts the Codex host as the initial delivery authority. Loom can
   detect internal corruption on first install, but cannot prove independence from a malicious host
   using a verifier delivered by that same host. Subsequent updates use the existing verified
@@ -74,6 +74,10 @@ Loom fails closed around evidence it does not possess.
 - Adapter installation verifies the receipt-owned shared launcher and every written adapter, but
   real disposable invocations through every named third-party host/version are **[UNVERIFIED]**
   until the clean-machine agent matrix runs. Unsupported hosts must not be described as connected.
+- Codex App, CLI, and IDE are separate evidence surfaces even when they share an adapter location.
+  None has a current exact-release real-host receipt. Cursor remains experimental, Gemini's current
+  contract is stale during its host transition, and Factory Droid plus the generic Agent Skills
+  format remain unsupported until their versioned contracts and disposable invocations pass.
 - Adapter protocol v2 and the shared-runtime topology are mechanically exercised with disposable
   simulated host profiles. This proves protocol negotiation, one-runtime routing, receipt ownership,
   project non-mutation, and fail-closed conflicts. It does not prove that a third-party host parsed
@@ -86,6 +90,13 @@ Loom fails closed around evidence it does not possess.
 - Runtime-wide stage-span export and live host capability negotiation are **[UNVERIFIED]**. Loom
   provides bounded span and capability-receipt contracts, but the current agent adapters do not
   yet prove that every host emits either record during a real invocation.
+- The generated release-readiness dashboard is expected to report `NOT-READY` until exact-cut,
+  privacy, provenance, reproducibility, rollback, SBOM, threshold-authority, platform, real-host,
+  and independent hostile-review evidence is supplied for one immutable release subject. Source
+  tests and simulated profiles cannot discharge those claims.
+- Independent two-builder reproducibility, distinct human signing authorities, native ARM64
+  hardware runs, real virtual-machine power-loss tests, and an independent hostile review remain
+  **[UNVERIFIED]**. Loom does not infer them from workflow definitions or local fault injection.
 - The historical 0.9-1.7M-token single-file UI report is `reported-unbound` because its original
   provider receipts are unavailable. It is retained as an incident, not presented as a measured
   baseline or used for release certification.
