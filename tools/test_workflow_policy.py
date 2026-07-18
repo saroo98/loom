@@ -10,6 +10,24 @@ WORKFLOWS = ROOT / ".github" / "workflows"
 
 
 class WorkflowPolicyTests(unittest.TestCase):
+    @staticmethod
+    def _run_expression_findings(path):
+        findings = []
+        lines = path.read_text(encoding="utf-8").splitlines()
+        run_indent = None
+        for line_number, line in enumerate(lines, 1):
+            stripped = line.lstrip()
+            indent = len(line) - len(stripped)
+            if run_indent is not None and stripped and indent <= run_indent:
+                run_indent = None
+            if re.match(r"^run:\s*", stripped):
+                run_indent = indent
+                if "${{ inputs." in stripped:
+                    findings.append(f"{path.name}:{line_number}")
+            elif run_indent is not None and "${{ inputs." in line:
+                findings.append(f"{path.name}:{line_number}")
+        return findings
+
     def test_every_external_action_is_pinned_to_a_full_commit_sha(self):
         findings = []
         for path in sorted(WORKFLOWS.glob("*.yml")):
@@ -43,6 +61,14 @@ class WorkflowPolicyTests(unittest.TestCase):
             self.assertRegex(text, r"(?m)^\s+timeout-minutes:\s+\d+")
             if path.name != "release.yml":
                 self.assertNotIn("contents: write", text)
+
+    def test_dispatch_and_reusable_inputs_are_never_interpolated_into_shell(self):
+        findings = []
+        for path in sorted(WORKFLOWS.glob("*.yml")):
+            findings.extend(self._run_expression_findings(path))
+        self.assertEqual([], findings)
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertIn('[[ "$RELEASE_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', release)
 
     def test_compatibility_matrix_builds_before_it_verifies_the_exact_cut(self):
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
