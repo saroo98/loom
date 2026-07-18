@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.8.1
+
+- Import the reliability authority used by the clean-room CLI receipt writer and lock the exact
+  successful `--output` path with a regression test, so release attestation cannot pass every
+  embedded test and then fail while sealing its final receipt.
+
 ## 1.8.0
 
 - Replace the undifferentiated 4,096-entry domain-inspection refusal with one bounded, Git-aware,
