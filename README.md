@@ -185,6 +185,9 @@ Current records:
 - [Current limitations](./docs/limitations.md): proof Loom does not yet have.
 - [Unknown-domain contract](./docs/unknown-domain-intelligence.md): what the discovery gate proves and does not prove.
 - [Planning-intelligence contract](./docs/planning-intelligence.md): bounded specialist atoms, source-material isolation, and lifecycle rules.
+- [Simple adaptive experience](./docs/simple-adaptive-experience.md): the sealed two-line owner
+  message, deterministic continuation authority, proportional effort, exact cache invalidation,
+  and bounded self-cleaning learning behind `/loom`.
 
 Loom does not claim a perfect score or production certification. Those require a complete hosted
 platform matrix, real disposable host runs, provider-native token and latency measurements,

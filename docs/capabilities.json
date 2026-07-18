@@ -876,6 +876,79 @@
       ]
     },
     {
+      "enforcement": [
+        "tools/loom_message.py",
+        "tools/loom_session.py",
+        "schemas/owner-message.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "bounded-owner-message",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_message.py",
+        "tools/test_transparency_surface.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_authority.py",
+        "tools/loom_orchestrator.py",
+        "schemas/continuation-authority.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "deterministic-continuation-authority",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_continuation_authority.py",
+        "tools/test_production_orchestrator.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "contracts/cache-classes-v1.json",
+        "tools/loom_cache_policy.py",
+        "tools/loom_performance.py"
+      ],
+      "evidence_ids": [],
+      "id": "exact-cache-invalidation",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_cache_policy.py",
+        "tools/test_performance_excellence.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "contracts/owner-learning-v3.json",
+        "tools/loom_vault.py",
+        "tools/loom_owner.py"
+      ],
+      "evidence_ids": [],
+      "id": "bounded-self-cleaning-learning",
+      "kind": "mechanical",
+      "limitations": [
+        "Longitudinal causal owner benefit remains unverified without external evidence."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_loom_vault_v11.py",
+        "tools/test_loom_owner_v11.py"
+      ]
+    },
+    {
       "enforcement": [],
       "evidence_ids": [],
       "id": "human-judgment-remains-owner-controlled",
