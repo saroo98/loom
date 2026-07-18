@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Loom 1.8.2 · Planning intelligence for AI coding agents.</strong><br>
+  <strong>Loom 1.8.3 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 

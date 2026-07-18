@@ -762,7 +762,7 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "loom-vault"
-version = "1.8.2"
+version = "1.8.3"
 dependencies = [
  "argon2",
  "base64",

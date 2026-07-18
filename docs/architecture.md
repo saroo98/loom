@@ -1,4 +1,4 @@
-# Loom 1.8.2 advanced architecture
+# Loom 1.8.3 advanced architecture
 
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.

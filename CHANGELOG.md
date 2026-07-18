@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.8.3
+
+- Bind draft-release certification to the exact successful main quality and compatibility runs.
+  A capability skipped on the release host is accepted only when an exact-commit, exact-public-cut
+  matrix receipt proves the same test passed elsewhere; uncovered skips, wrong subjects, and local
+  failures remain release blockers.
+
 ## 1.8.2
 
 - Isolate clean-room temporary and Cargo caches inside the disposable home, and bind the native
