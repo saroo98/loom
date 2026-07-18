@@ -41,11 +41,17 @@ jobs:
       - name: Require clean exact signed tag on default branch
         env:
           RELEASE_TAG: ${{ inputs.tag }}
+          LOOM_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.LOOM_RELEASE_SIGNING_PUBLIC_KEY }}
         shell: bash
         run: |
           [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          [[ "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]]
           test "$RELEASE_TAG" = "v$(cat VERSION)"
           test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "${GITHUB_SHA}"
+          printf 'xizirsaro@gmail.com %s\n' "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" \
+            > "$RUNNER_TEMP/loom-release-allowed-signers"
+          git config gpg.format ssh
+          git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/loom-release-allowed-signers"
           git verify-tag "$RELEASE_TAG"
           git branch -r --contains "${GITHUB_SHA}" | grep -q 'origin/main'
       - name: Rebuild and verify the public cut twice

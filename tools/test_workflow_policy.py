@@ -69,6 +69,15 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertEqual([], findings)
         release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         self.assertIn('[[ "$RELEASE_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', release)
+        self.assertIn(
+            "LOOM_RELEASE_SIGNING_PUBLIC_KEY: "
+            "${{ vars.LOOM_RELEASE_SIGNING_PUBLIC_KEY }}", release)
+        self.assertIn("git config gpg.format ssh", release)
+        self.assertIn("git config gpg.ssh.allowedSignersFile", release)
+        self.assertIn("git verify-tag", release)
+        self.assertLess(
+            release.index("git config gpg.ssh.allowedSignersFile"),
+            release.index("git verify-tag"))
         helper = (WORKFLOWS / "build-helper.yml").read_text(encoding="utf-8")
         self.assertIn("LOOM_SOURCE_SHA: ${{ github.sha }}", helper)
         self.assertIn("printf '%s' \"$LOOM_SOURCE_SHA\" | sha256sum", helper)
