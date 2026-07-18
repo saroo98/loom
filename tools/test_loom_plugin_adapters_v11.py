@@ -22,7 +22,7 @@ class PluginPackageTests(unittest.TestCase):
         manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(
             encoding="utf-8"))
         self.assertEqual("loom", manifest["name"])
-        self.assertEqual("1.6.0", manifest["version"])
+        self.assertEqual("1.7.0", manifest["version"])
         self.assertEqual("./skills/", manifest["skills"])
         self.assertNotIn("mcpServers", manifest)
         self.assertNotIn("apps", manifest)
@@ -60,10 +60,10 @@ class AdapterTests(unittest.TestCase):
         before = list(project.rglob("*"))
         result = loom_adapters.connect_all(
             self.home, self.home / ".loom", approved=True)
-        self.assertEqual(5, result["connected"])
+        self.assertEqual(4, result["connected"])
         self.assertEqual(result["connected"], result["verified"])
         self.assertEqual(
-            ["cursor", "factory-droid", "generic-agent-skills"],
+            ["cursor", "gemini-cli", "factory-droid", "generic-agent-skills"],
             result["unsupported"])
         self.assertEqual(before, list(project.rglob("*")))
         for receipt in result["receipts"]:
@@ -89,7 +89,7 @@ class AdapterTests(unittest.TestCase):
             self.home, self.home / ".loom", approved=False)
         self.assertEqual("approval-required", result["status"])
         self.assertFalse((self.home / ".codex" / "skills" / "loom").exists())
-        self.assertEqual(5, len(result["eligible"]))
+        self.assertEqual(4, len(result["eligible"]))
 
     def test_partial_adapter_write_is_rolled_back_completely(self):
         real_write = loom_adapters.loom_reliability.atomic_write_bytes
@@ -108,6 +108,66 @@ class AdapterTests(unittest.TestCase):
                     self.home, self.home / ".loom", approved=True)
         for relative in loom_adapters.AGENTS.values():
             self.assertFalse(self.home.joinpath(*Path(relative).parts).exists())
+
+    def test_partial_launcher_write_is_rolled_back_completely(self):
+        fresh = self.root / "fresh-user" / ".loom"
+        real_write = loom_adapters.loom_reliability.atomic_write_bytes
+        calls = {"count": 0}
+
+        def fail_third(path, content):
+            calls["count"] += 1
+            if calls["count"] == 3:
+                raise OSError("injected launcher write failure")
+            return real_write(path, content)
+
+        with mock.patch.object(
+                loom_adapters.loom_reliability, "atomic_write_bytes", side_effect=fail_third):
+            with self.assertRaisesRegex(loom_adapters.AdapterError, "restored"):
+                loom_adapters.install_launcher(
+                    fresh, ROOT / "tools" / "loom_launcher.py")
+        binary = fresh / "bin"
+        self.assertFalse((binary / "loom.py").exists())
+        self.assertFalse((binary / "loom").exists())
+        self.assertFalse((binary / "loom.cmd").exists())
+        recovered = json.loads((fresh / "adapters" / "transaction.json").read_text(
+            encoding="utf-8"))
+        self.assertEqual("rolled-back", recovered["status"])
+
+    def test_transaction_refuses_symlinked_target_parent(self):
+        target_root = self.root / "redirect-target"
+        target_root.mkdir()
+        redirect = self.home / "redirect"
+        try:
+            redirect.symlink_to(target_root, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest("symlink creation is unavailable")
+        target = redirect / "SKILL.md"
+        with self.assertRaisesRegex(loom_adapters.AdapterError, "symlink|invalid"):
+            loom_adapters._begin_transaction(
+                self.home, self.home / ".loom", "connect", [(target, b"new")])
+
+    def test_interrupted_adapter_transaction_recovers_before_next_writer(self):
+        target = self.home / ".codex" / "skills" / "loom" / "SKILL.md"
+        journal, _journal_path, _generation_path = loom_adapters._begin_transaction(
+            self.home, self.home / ".loom", "connect", [(target, b"new")])
+        target.parent.mkdir(parents=True)
+        target.write_bytes(b"new")
+        recovered_generation = loom_adapters._recover_transaction(
+            self.home, self.home / ".loom")
+        self.assertEqual(journal["generation"], recovered_generation)
+        self.assertFalse(target.exists())
+        recovered = json.loads((self.home / ".loom" / "adapters" /
+                                "transaction.json").read_text(encoding="utf-8"))
+        self.assertEqual("rolled-back", recovered["status"])
+        self.assertTrue(recovered["recovered_after_interruption"])
+
+    def test_unowned_alternate_global_route_blocks_without_overwrite(self):
+        alternate = self.home / ".agents" / "skills" / "loom" / "SKILL.md"
+        alternate.parent.mkdir(parents=True)
+        alternate.write_text("different Loom", encoding="utf-8")
+        with self.assertRaisesRegex(loom_adapters.AdapterError, "alternate|split-brain"):
+            loom_adapters.connect_all(self.home, self.home / ".loom", approved=True)
+        self.assertEqual("different Loom", alternate.read_text(encoding="utf-8"))
 
     def test_disconnect_removes_only_unchanged_receipt_owned_adapters(self):
         connected = loom_adapters.connect_all(

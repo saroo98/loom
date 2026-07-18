@@ -18,14 +18,10 @@ if str(TOOLS) not in sys.path:
 import loom_update
 import loom_adapter_bridge
 import loom_adapter_protocol
+import loom_host_registry
 
 
-LOCAL_SKILL_PATHS = (
-    ".codex/skills/loom/SKILL.md", ".agents/skills/loom/SKILL.md",
-    ".claude/skills/loom/SKILL.md", ".cursor/skills/loom/SKILL.md",
-    ".gemini/skills/loom/SKILL.md", ".github/skills/loom/SKILL.md",
-    ".factory/skills/loom/SKILL.md", ".opencode/skills/loom/SKILL.md",
-)
+LOCAL_SKILL_PATHS = loom_host_registry.project_skill_paths()
 
 
 def _reject_local_shadow(cwd):

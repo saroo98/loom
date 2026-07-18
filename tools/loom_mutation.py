@@ -94,7 +94,7 @@ MUTATIONS = (
      "test_adapter_protocol_v2.AdapterProtocolV2Tests."
      "test_protocol_mismatch_invalid_depth_and_oversize_fail_closed"),
     ("adapter-host-truth", "tools/loom_host_registry.py",
-     '"connectable": contract["evidence_status"] in CONNECTABLE,',
+     '"connectable": value["evidence_status"] in CONNECTABLE,',
      '"connectable": True,',
      "test_adapter_protocol_v2.AdapterProtocolV2Tests."
      "test_host_registry_never_calls_experimental_or_unsupported_supported"),

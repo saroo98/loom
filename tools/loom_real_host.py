@@ -21,17 +21,34 @@ def discover(host_id, *, which=None, run=None):
     except KeyError as exc:
         raise RealHostError("host is not in the bounded registry") from exc
     finder = which or shutil.which
-    executable_name = loom_host_registry.HOSTS[host_id]["executables"][0] \
-        if loom_host_registry.HOSTS[host_id]["executables"] else None
+    executable_name = next((name for name in loom_host_registry.HOSTS[host_id]["executables"]
+                            if finder(name)), None)
     executable = finder(executable_name) if executable_name else None
+    common = {
+        "schema_version": 2,
+        "contract_id": loom_host_registry.CONTRACT_ID,
+        "contract_reviewed_at": loom_host_registry.REVIEWED_AT,
+        "host": host_id,
+        "surfaces": contract["surfaces"],
+        "contract_status": contract["contract_status"],
+        "contract_evidence_status": contract["evidence_status"],
+        "proof_ttl_days": contract["proof_ttl_days"],
+        "sources": contract["sources"],
+        "evidence_class": "host-observed",
+    }
     if not executable:
-        return {"schema_version": 1, "host": host_id, "status": "not-detected",
-                "evidence_class": "host-observed", "version": None,
-                "binary_sha256": None, "official_source": contract["official_source"],
+        return {**common, "status": "not-detected", "version": None,
+                "binary_sha256": None, "version_command": None,
                 "limitations": ["No host executable was discovered."]}
     runner = run or subprocess.run
+    command = [executable, *contract["version_command"][1:]] \
+        if contract["version_command"] else None
+    if command is None:
+        return {**common, "status": "unverified", "version": None,
+                "binary_sha256": None, "version_command": None,
+                "limitations": ["The versioned contract has no executable version probe."]}
     try:
-        result = runner([executable, "--version"], capture_output=True, text=True,
+        result = runner(command, capture_output=True, text=True,
                         timeout=10, check=False)
         binary = Path(executable)
         binary_digest = hashlib.sha256(binary.read_bytes()).hexdigest() \
@@ -40,9 +57,8 @@ def discover(host_id, *, which=None, run=None):
         raise RealHostError(f"host discovery failed: {exc}") from exc
     version = (result.stdout or result.stderr).strip()[:128]
     status = "detected" if result.returncode == 0 and version else "unverified"
-    return {"schema_version": 1, "host": host_id, "status": status,
-            "evidence_class": "host-observed", "version": version or None,
-            "binary_sha256": binary_digest, "official_source": contract["official_source"],
+    return {**common, "status": status, "version": version or None,
+            "binary_sha256": binary_digest, "version_command": command,
             "limitations": [
                 "Discovery is not a Loom invocation and cannot upgrade real-host support."]}
 
