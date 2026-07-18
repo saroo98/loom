@@ -332,6 +332,58 @@ class SharedRuntime:
         self._transition("committed", version=version, release_sequence=release_sequence)
         return pointer
 
+    def _activate_direct_baseline_locked(self, pointer):
+        """Activate one already-verified direct runtime without signed-release claims."""
+        if self.current_path.exists():
+            current = self.current()
+            if current == pointer:
+                self._initialize_usage(pointer["version"])
+                return {"status": "current", "version": pointer["version"]}
+            raise UpdateError("a direct baseline cannot replace an active runtime")
+        if self.pending_path.exists() or self._active_sessions() \
+                or not self._pointer_contract(pointer) \
+                or pointer.get("release_sequence") != 1 \
+                or pointer.get("previous") is not None:
+            raise UpdateError("direct baseline activation inputs are unsafe")
+        runtime = self.versions / pointer["path"]
+        if not (runtime / ".loom-direct-source-receipt.json").is_file():
+            raise UpdateError("direct baseline has no verified authority receipt")
+        loom_reliability.atomic_write_json(self.current_path, pointer)
+        self._initialize_usage(pointer["version"])
+        self._transition(
+            "committed", version=pointer["version"], release_sequence=1)
+        return {"status": "activated", "version": pointer["version"]}
+
+    def _reconcile_current_metadata_locked(self):
+        """Finish only non-authoritative metadata after an interrupted pointer commit."""
+        current = self.current()
+        self._initialize_usage(current["version"])
+        if not self.update_state_path.exists():
+            self._transition(
+                "committed", version=current["version"],
+                release_sequence=current["release_sequence"])
+        else:
+            try:
+                state = json.loads(self.update_state_path.read_text(encoding="utf-8"))
+                uuid.UUID(state["transaction_id"])
+            except (OSError, UnicodeError, json.JSONDecodeError, KeyError,
+                    TypeError, ValueError) as exc:
+                raise UpdateError(f"update state receipt is invalid: {exc}") from exc
+            fields = {"schema_version", "transaction_id", "state", "version",
+                      "release_sequence", "reason_sha256", "history"}
+            states = {"downloaded", "verified", "staged", "pending", "activated",
+                      "observing", "committed", "rolled-back", "quarantined"}
+            if not isinstance(state, dict) or set(state) != fields \
+                    or state["schema_version"] != 1 or state["state"] not in states \
+                    or state["version"] != current["version"] \
+                    or state["release_sequence"] != current["release_sequence"] \
+                    or not isinstance(state["history"], list) \
+                    or not 1 <= len(state["history"]) <= 32 \
+                    or state["history"][-1] != {key: state[key] for key in (
+                        "state", "version", "release_sequence", "reason_sha256")}:
+                raise UpdateError("update state receipt does not match the active runtime")
+        return {"status": "current", "version": current["version"]}
+
     def current(self):
         try:
             value = json.loads(self.current_path.read_text(encoding="utf-8"))
@@ -851,6 +903,14 @@ class SharedRuntime:
         with self._locked("baseline installation"):
             return self._install_baseline_locked(
                 version, content, release_sequence=release_sequence)
+
+    def activate_direct_baseline(self, pointer):
+        with self._locked("direct baseline activation"):
+            return self._activate_direct_baseline_locked(pointer)
+
+    def reconcile_current_metadata(self):
+        with self._locked("current runtime reconciliation"):
+            return self._reconcile_current_metadata_locked()
 
     def begin_session(self):
         with self._locked("session start"):
