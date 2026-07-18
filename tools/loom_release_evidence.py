@@ -6,14 +6,20 @@ import json
 import re
 from pathlib import Path
 
+import loom_reliability
+
 
 class EvidenceError(RuntimeError):
     pass
 
 
 def _artifact(path):
-    path = Path(path).resolve()
-    if not path.is_file() or path.is_symlink() or path.stat().st_size < 1:
+    try:
+        path = loom_reliability._absolute(
+            path, "release evidence artifact", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise EvidenceError(str(exc)) from exc
+    if not path.is_file() or path.stat().st_size < 1:
         raise EvidenceError("release evidence names a missing or unsafe artifact")
     return {"name": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
             "bytes": path.stat().st_size}
@@ -23,7 +29,11 @@ def create(output_directory, *, repository, commit, version, release_sequence,
            source_tree_sha256, public_cut_sha256, plugin, sbom, helpers,
            test_matrix, capability_coverage, firewall, signer_key_ids,
            attestations=(), limitations=()):
-    output = Path(output_directory).resolve()
+    try:
+        output = loom_reliability._absolute(
+            output_directory, "release evidence output")
+    except loom_reliability.ReliabilityError as exc:
+        raise EvidenceError(str(exc)) from exc
     if output.exists() or repository != "https://github.com/saroo98/loom" \
             or not re.fullmatch(r"[0-9a-f]{40}", commit) \
             or not re.fullmatch(r"\d+\.\d+\.\d+", version) \
@@ -48,12 +58,13 @@ def create(output_directory, *, repository, commit, version, release_sequence,
         "attestations": sorted(set(attestations)), "limitations": list(limitations),
     }
     evidence_path = output / f"loom-v{version}-release-evidence.json"
-    evidence_path.write_text(
-        json.dumps(evidence, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    assets = [Path(plugin).resolve(), Path(sbom).resolve(), evidence_path]
+    loom_reliability.atomic_write_json(evidence_path, evidence)
+    assets = [loom_reliability._absolute(plugin, "release plugin", must_exist=True),
+              loom_reliability._absolute(sbom, "release SBOM", must_exist=True),
+              evidence_path]
     checksums = output / "SHA256SUMS"
-    checksums.write_text("".join(
+    loom_reliability.atomic_write_text(checksums, "".join(
         f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}\n"
-        for path in sorted(assets, key=lambda item: item.name)), encoding="utf-8")
+        for path in sorted(assets, key=lambda item: item.name)))
     return {"status": "created", "evidence": str(evidence_path),
             "checksums": str(checksums), "assets": len(assets)}

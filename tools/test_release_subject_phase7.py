@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import loom_release_subject
@@ -58,6 +59,24 @@ class ReleaseSubjectPhase7Tests(unittest.TestCase):
                 self.skipTest("directory symlink privilege unavailable")
             with self.assertRaises(loom_release_subject.ReleaseSubjectError):
                 loom_release_subject._artifact(link / "artifact")
+
+    def test_tree_rejects_redirected_directory_before_hashing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            tree = Path(temporary) / "tree"
+            redirected = tree / "redirected"
+            redirected.mkdir(parents=True)
+            (tree / "bound.txt").write_text("bound", encoding="utf-8")
+            real_redirect = loom_release_subject.loom_reliability._is_redirect
+
+            def redirect_probe(path):
+                return Path(path) == redirected or real_redirect(path)
+
+            with mock.patch.object(
+                    loom_release_subject.loom_reliability, "_is_redirect",
+                    side_effect=redirect_probe):
+                with self.assertRaisesRegex(
+                        loom_release_subject.ReleaseSubjectError, "redirected"):
+                    loom_release_subject._tree(tree)
 
 
 if __name__ == "__main__":

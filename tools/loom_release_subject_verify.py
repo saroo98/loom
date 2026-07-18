@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import loom_release_subject
+import loom_reliability
 
 
 class SubjectVerificationError(RuntimeError):
@@ -35,8 +36,12 @@ def verify(value, plugin, *, commit=None, tag=None):
     observed = hashlib.sha256(loom_release_subject._canonical(body)).hexdigest()
     if observed != value.get("subject_sha256"):
         raise SubjectVerificationError("release subject digest is invalid")
-    plugin = Path(plugin).resolve()
-    if not plugin.is_file() or plugin.is_symlink():
+    try:
+        plugin = loom_reliability._absolute(
+            plugin, "canonical plugin", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    if not plugin.is_file():
         raise SubjectVerificationError("canonical plugin is missing or redirected")
     raw = plugin.read_bytes()
     expected = value["canonical_plugin"]

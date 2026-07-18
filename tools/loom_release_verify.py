@@ -27,6 +27,35 @@ class VerifyError(RuntimeError):
     pass
 
 
+def _redirect(path):
+    path = Path(path)
+    try:
+        if path.is_symlink():
+            return True
+        junction = getattr(path, "is_junction", None)
+        if junction and junction():
+            return True
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+        return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise VerifyError(f"cannot inspect canonical plugin path: {path}: {exc}") from exc
+
+
+def _safe_archive(path):
+    try:
+        path = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+    except (TypeError, ValueError, OSError) as exc:
+        raise VerifyError(f"canonical plugin ZIP path is invalid: {exc}") from exc
+    for component in [*reversed(path.parents), path]:
+        if _redirect(component):
+            raise VerifyError("canonical plugin ZIP is missing or redirected")
+    if not path.is_file():
+        raise VerifyError("canonical plugin ZIP is missing or redirected")
+    return path
+
+
 def _name(value, seen):
     if not isinstance(value, str) or "\\" in value:
         raise VerifyError("archive entry path is ambiguous")
@@ -77,9 +106,7 @@ def _forbidden_in_archive(raw, display_name, tokens, *, depth=0):
 
 
 def verify(path, *, forbidden_tokens=()):
-    path = Path(path).resolve()
-    if not path.is_file() or path.is_symlink():
-        raise VerifyError("canonical plugin ZIP is missing or redirected")
+    path = _safe_archive(path)
     total = 0
     observed = {}
     seen = set()

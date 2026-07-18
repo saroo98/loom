@@ -194,26 +194,59 @@ def finalize_package(helper, package, root, authorities, *, expires,
         build = json.loads((package / "PLUGIN-BUILD-MANIFEST.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise SigningError(f"plugin package manifest is invalid: {exc}") from exc
-    bundle = sign_release(helper, root, manifest, authorities, expires=expires)
-    loom_reliability.atomic_write_json(release / "metadata.json", bundle)
-    loom_reliability.atomic_write_json(release / "trusted-root.json", root)
-    (release / "unsigned-manifest.json").unlink()
-    opaque = {item["sha256"] for item in manifest["targets"]}
-    for receipt in build.get("helper_provenance", {}).values():
-        opaque.add(receipt["binary_sha256"])
-    files = [{"path": path.relative_to(package).as_posix(),
-              "bytes": path.stat().st_size,
-              "sha256": loom_reliability.file_sha256(path)}
-             for path in loom_reliability._regular_files(package)]
-    receipt = {"schema_version": 1, "version": manifest["version"],
-               "release_sequence": manifest["release_sequence"], "files": files}
-    loom_reliability.atomic_write_json(package / "FINAL-PACKAGE-RECEIPT.json", receipt)
-    firewall = loom_privacy.scan_publication(
-        package, forbidden_tokens=tuple(forbidden_tokens),
-        verified_opaque_hashes=opaque)
-    if not firewall["clean"]:
-        (release / "metadata.json").unlink(missing_ok=True)
-        (release / "trusted-root.json").unlink(missing_ok=True)
-        (package / "FINAL-PACKAGE-RECEIPT.json").unlink(missing_ok=True)
-        raise SigningError(f"final signed package firewall failed: {firewall['findings'][:3]}")
-    return {"status": "finalized", "firewall": firewall, "receipt": receipt}
+    unsigned_path = release / "unsigned-manifest.json"
+    unsigned_bytes = unsigned_path.read_bytes()
+    created = [release / "metadata.json", release / "trusted-root.json",
+               package / "FINAL-PACKAGE-RECEIPT.json"]
+    created_hashes = {}
+    try:
+        bundle = sign_release(helper, root, manifest, authorities, expires=expires)
+        loom_reliability.atomic_write_json(created[0], bundle)
+        created_hashes[created[0]] = loom_reliability.file_sha256(created[0])
+        loom_reliability.atomic_write_json(created[1], root)
+        created_hashes[created[1]] = loom_reliability.file_sha256(created[1])
+        unsigned_path.unlink()
+        opaque = {item["sha256"] for item in manifest["targets"]}
+        for receipt_value in build.get("helper_provenance", {}).values():
+            opaque.add(receipt_value["binary_sha256"])
+        files = [{"path": path.relative_to(package).as_posix(),
+                  "bytes": path.stat().st_size,
+                  "sha256": loom_reliability.file_sha256(path)}
+                 for path in loom_reliability._regular_files(package)]
+        receipt = {"schema_version": 1, "version": manifest["version"],
+                   "release_sequence": manifest["release_sequence"], "files": files}
+        loom_reliability.atomic_write_json(created[2], receipt)
+        created_hashes[created[2]] = loom_reliability.file_sha256(created[2])
+        firewall = loom_privacy.scan_publication(
+            package, forbidden_tokens=tuple(forbidden_tokens),
+            verified_opaque_hashes=opaque)
+        if not firewall["clean"]:
+            raise SigningError(
+                f"final signed package firewall failed: {firewall['findings'][:3]}")
+        return {"status": "finalized", "firewall": firewall, "receipt": receipt}
+    except BaseException as exc:
+        rollback_error = None
+        for path, digest in created_hashes.items():
+            try:
+                if not path.is_file() or path.is_symlink() \
+                        or loom_reliability.file_sha256(path) != digest:
+                    raise SigningError(
+                        f"created release file changed before rollback: {path.name}")
+                path.unlink()
+            except (OSError, loom_reliability.ReliabilityError,
+                    SigningError) as cleanup_exc:
+                rollback_error = rollback_error or cleanup_exc
+        try:
+            if unsigned_path.exists():
+                if unsigned_path.read_bytes() != unsigned_bytes:
+                    raise SigningError("unsigned manifest changed during finalization rollback")
+            else:
+                loom_reliability.atomic_write_bytes(unsigned_path, unsigned_bytes)
+        except BaseException as cleanup_exc:
+            rollback_error = rollback_error or cleanup_exc
+        if rollback_error is not None:
+            raise SigningError(
+                "package finalization failed and rollback was incomplete") from rollback_error
+        if isinstance(exc, SigningError):
+            raise
+        raise SigningError("package finalization failed safely; prior state was restored") from exc

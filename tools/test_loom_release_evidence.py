@@ -2,6 +2,7 @@
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import loom_release_evidence
@@ -28,6 +29,17 @@ class ReleaseEvidenceTests(unittest.TestCase):
             lines = (output / "SHA256SUMS").read_text(encoding="utf-8").splitlines()
             self.assertEqual(3, len(lines))
             self.assertTrue(any("loom-plugin-v1.2.0.zip" in line for line in lines))
+
+    def test_redirected_evidence_artifact_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            artifact = Path(temporary) / "artifact"
+            artifact.write_bytes(b"bytes")
+            with mock.patch.object(
+                    loom_release_evidence.loom_reliability, "_is_redirect",
+                    side_effect=lambda path: Path(path) == artifact):
+                with self.assertRaisesRegex(
+                        loom_release_evidence.EvidenceError, "symlink|redirect"):
+                    loom_release_evidence._artifact(artifact)
 
 
 if __name__ == "__main__":
