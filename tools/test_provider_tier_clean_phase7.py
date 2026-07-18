@@ -79,6 +79,12 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
             with mock.patch.object(loom_clean_room.subprocess, "run", side_effect=run):
                 receipt = loom_clean_room.verify(cut)
             self.assertEqual((cut / "tools").resolve(), Path(called["cwd"]).resolve())
+            child_environment = called["env"]
+            child_temp = Path(child_environment["TMPDIR"]).resolve()
+            self.assertEqual(child_temp, Path(child_environment["TEMP"]).resolve())
+            self.assertEqual(child_temp, Path(child_environment["TMP"]).resolve())
+            self.assertEqual("tmp", child_temp.name)
+            self.assertEqual(Path(child_environment["HOME"]).resolve(), child_temp.parent)
             self.assertEqual("passed", receipt["status"])
             self.assertLessEqual(len(receipt["disposable_home"]["path_sample"]), 32)
 

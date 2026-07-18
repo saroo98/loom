@@ -20,7 +20,10 @@ import loom_release
 import loom_release_sign
 import loom_reliability
 import loom_update
-from v11_test_support import build_vault_helper, package_evidence, package_source_commit
+from v11_test_support import (
+    _build_environment_identity, build_vault_helper, package_evidence,
+    package_source_commit,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -59,6 +62,16 @@ class BootstrapIntegrationTests(unittest.TestCase):
         target = Path(root) / "direct-install"
         loom_install.install(self.direct_public, target)
         return target
+
+    def test_native_helper_cache_identity_binds_cargo_and_temp_environments(self):
+        baseline = _build_environment_identity({
+            "CARGO_HOME": "/one/cargo", "TMPDIR": "/one/tmp"})
+        cargo_changed = _build_environment_identity({
+            "CARGO_HOME": "/two/cargo", "TMPDIR": "/one/tmp"})
+        temp_changed = _build_environment_identity({
+            "CARGO_HOME": "/one/cargo", "TMPDIR": "/two/tmp"})
+        self.assertNotEqual(baseline, cargo_changed)
+        self.assertNotEqual(baseline, temp_changed)
 
     def test_receipt_proven_direct_install_bootstraps_without_signed_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:

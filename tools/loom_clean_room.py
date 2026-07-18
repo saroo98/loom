@@ -135,11 +135,16 @@ def verify(cut, *, timeout=1500):
     before = loom_release_subject._tree(cut)
     with tempfile.TemporaryDirectory(prefix="loom-clean-home-") as temporary:
         home = Path(temporary)
+        disposable_temp = home / "tmp"
+        disposable_temp.mkdir()
         environment = {key: value for key, value in os.environ.items()
                        if not any(token in key.upper() for token in
                                   ("TOKEN", "SECRET", "API_KEY", "PASSWORD"))}
         environment.update({"HOME": str(home), "USERPROFILE": str(home),
                             "CODEX_HOME": str(home / ".codex"),
+                            "TMPDIR": str(disposable_temp),
+                            "TEMP": str(disposable_temp),
+                            "TMP": str(disposable_temp),
                             "PYTHONDONTWRITEBYTECODE": "1"})
         rust_environment, rust_metadata = _prepare_rust_environment(
             cut, home, environment)

@@ -16,6 +16,10 @@ import loom_reliability
 MAX_CARGO_DIAGNOSTIC_CHARS = 4000
 SOURCE_KEY_HEX_LENGTH = 64
 RUST_COMPILER_STACK_BYTES = 64 * 1024 * 1024
+BUILD_ENVIRONMENT_KEYS = (
+    "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTFLAGS",
+    "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR",
+)
 
 
 def _cache_entry_valid(binary, receipt, source_key):
@@ -29,6 +33,23 @@ def _cache_entry_valid(binary, receipt, source_key):
         }
     except (OSError, UnicodeError, json.JSONDecodeError):
         return False
+
+
+def _build_environment_identity(environment=None):
+    """Bind cached native bytes to every path or flag that can affect them."""
+    environment = os.environ if environment is None else environment
+    values = {key: environment.get(key) for key in BUILD_ENVIRONMENT_KEYS}
+    cargo_home = environment.get("CARGO_HOME")
+    configs = {}
+    if cargo_home:
+        root = Path(cargo_home)
+        for name in ("config", "config.toml"):
+            path = root / name
+            if path.is_file() and not path.is_symlink():
+                configs[name] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return json.dumps(
+        {"environment": values, "cargo_configs": configs},
+        sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
 def _compile_vault_helper(root, crate, target):
@@ -103,7 +124,8 @@ def build_vault_helper(root):
         timeout=15, check=True).stdout.encode("utf-8")
     build_policy = (b"release-v4-stack64-windows-brepro"
                     if os.name == "nt" else b"release-v4-stack64")
-    digest = hashlib.sha256(rustc + b"\x00" + build_policy)
+    digest = hashlib.sha256(
+        rustc + b"\x00" + build_policy + b"\x00" + _build_environment_identity())
     for path in source_files:
         relative = path.relative_to(crate).as_posix().encode("utf-8")
         raw = path.read_bytes()
