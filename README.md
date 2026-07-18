@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Loom 1.7.0 · Planning intelligence for AI coding agents.</strong><br>
+  <strong>Loom 1.8.0 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
@@ -41,7 +41,9 @@ person asks for and what an agent is allowed to build.
 
 ## Install
 
-Requirements: Python 3.10 or newer and a clean checkout.
+Requirements: Python 3.10 or newer and a clean checkout. A direct source install also needs Rust
+with the locked dependencies available offline unless the install already contains the native
+helper for the current platform.
 
 ```powershell
 git clone https://github.com/saroo98/loom.git
@@ -65,6 +67,11 @@ The installer writes only to a new target, hashes every owned file, records an i
 identity, and verifies the copy. Removal is all-or-nothing: if an owned file changed, Loom refuses
 to delete it.
 
+On first use, the installed skill verifies that receipt and activates the stable launcher. This
+local path is labeled `direct-source-install-unattested`; it proves byte ownership, not publisher
+identity. Signed packages remain a separate authority and never fall back to this mode when signed
+metadata is incomplete.
+
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
@@ -73,7 +80,7 @@ submission and approval actually happen.
 | Stage | Loom decides | What this prevents |
 |---|---|---|
 | Resolve | Which project, installation, lifecycle, and authority are real | Planning the wrong folder or Loom instance |
-| Survey | What is committed, staged, unstaged, untracked, runtime-only, or time-drifted | A plan based on an incomplete world |
+| Survey | What is committed, staged, unstaged, untracked, policy-proven generated, unresolved, or time-drifted | A plan based on silent truncation or a guessed generated folder |
 | Route | Whether the work is S, M, L, or XL from consequence and uncertainty | Spending a migration-sized process on a typo, or a typo-sized process on a migration |
 | Discover | Which domain invariants, current facts, and proof medium apply | Web-shaped planning in accounting, 3D, firmware, research, or an unknown field |
 | Seal | Which artifacts, work orders, touched paths, gate records, and evidence are authorized | Implementation changing the plan after approval |

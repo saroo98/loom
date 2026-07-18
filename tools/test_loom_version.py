@@ -13,7 +13,7 @@ class VersionCoherenceTests(unittest.TestCase):
     def test_every_release_surface_uses_the_canonical_version(self):
         result = loom_version.verify(ROOT)
         self.assertEqual("coherent", result["status"])
-        self.assertEqual("1.7.0", result["version"])
+        self.assertEqual("1.8.0", result["version"])
 
 
 if __name__ == "__main__":

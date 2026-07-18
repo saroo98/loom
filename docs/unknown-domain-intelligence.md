@@ -14,6 +14,12 @@ structure. `memory_domains` are the covered active domains allowed to select own
 proposal can rank candidates but cannot activate a domain or memory without request or owner
 evidence.
 
+Project inspection is a separate structural authority. It counts the complete bounded world,
+classifies only policy-proven generated output, and records unresolved ignored, untracked,
+manifest, or ownership partitions. Valid request evidence can still select a route when structural
+coverage is partial, but ambient structure cannot activate memory and the receipt keeps G1 and
+implementation closed until relevant coverage is complete.
+
 ## Discovery contract
 
 Unknown and partial routes use at most eight owner questions, two host retrieval rounds, twenty

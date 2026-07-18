@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Loom 1.7.0 turns a plain-language request into a safe, evidence-backed execution plan.
+description: Loom 1.8.0 turns a plain-language request into a safe, evidence-backed execution plan.
 ---
 
 # Loom
@@ -19,6 +19,9 @@ invisible to the owner:
    --home <absolute user home>/.loom`, then run `<absolute user home>/.loom/bin/loom
    --home <absolute user home>/.loom invoke --request <verbatim request>
    --cwd <absolute project root> --agent codex --agent-version <actual host version>`.
+   A bootstrap `blocked` result is terminal and must be returned without invoking installation
+   Python directly. `direct-source-install-unattested` is an honest local-source authority label,
+   not a signed-release claim; never relabel it. The stable launcher is authoritative in both modes.
 3. If the JSON is a terminal receipt, return `owner_message.human` exactly as the default
    one-or-two-line owner response. Do not expand internal tier, gate, schema, pack, or ledger
    vocabulary unless the owner naturally asks to inspect or explain the sealed receipt. If it says
@@ -31,6 +34,9 @@ invisible to the owner:
    plan the named real media, stay within its lexical-token/character budget and work-order
    topology, use a genuinely independent reviewer for G1, and do not mutate implementation
    targets. Completion rejects any omitted, extra, or changed contract row.
+   If `plan_contract.project_inspection.g1_eligible` is false, draft only within the returned
+   contract, address every `inspection_obligations` record explicitly, and do not claim G1 or
+   implementation authorization. Only Loom's fresh completion recheck can clear that gate.
    For `repair`, write the private schema-v2 verification plan defined by
    `schemas/repair-result.schema.json`, covering exactly
    `repair_plan.affected_plan_sections`. Supply one bounded real-medium command and timeout per

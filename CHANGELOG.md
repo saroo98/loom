@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+## 1.8.0
+
+- Replace the undifferentiated 4,096-entry domain-inspection refusal with one bounded, Git-aware,
+  content-bound project-inspection receipt derived from Loom's frozen world observation.
+- Preserve request-backed routing under safely summarized structure while mechanically separating
+  draft-planning eligibility from G1 and implementation authorization.
+- Make direct-source bootstrap receipt-proven and explicitly unattested, retain signed-delivery
+  non-downgrade, and verify the installed stable-launcher path in disposable owner environments.
+- Supervise Linux Python 3.14 privacy scanning fail-closed, preserve release-mode Rust hardening
+  with a bounded compiler stack, isolate destructive reproducibility builds from the shared helper
+  cache, and cover POSIX and Windows capability branches across the matrix.
+
 ## 1.7.0
 
 - Replace hard-coded host paths with one versioned contract that drives detection, project-shadow

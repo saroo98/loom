@@ -1,4 +1,4 @@
-# Loom 1.7.0 advanced architecture
+# Loom 1.8.0 advanced architecture
 
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.
@@ -16,7 +16,16 @@ terminal cancellation, and safe cleanup only when its newly created draft pack i
 Planning actions also seal a deterministic plan contract: every artifact decision, required domain
 invariant/current fact/real medium, an explicitly defined `loom-lexical-v1` token and character
 ceiling, work-order topology, allowed host write scope, and the pre-authoring pack identity.
-Plan-contract v3 also seals a bounded planning-intelligence graph. Seven declarative specialist
+Plan-contract v4 additionally binds a typed project-inspection receipt, its compact capsule,
+generated-rule identities, and any unresolved structural obligations. The survey takes a complete
+bounded census once per world observation; freshness hashing and inspection derive from that same
+frozen entry set and Git index/status evidence. Detailed facts can summarize after their independent
+budget without losing counted coverage. A generated subtree is excluded from content hashing only
+when a versioned rule proves its owner marker, Git-ignored state, absence of tracked/current/touched
+descendants, absence of known trust authority, and safe census. Partial coverage can route and draft,
+but G1 and implementation remain mechanically false until a fresh receipt is complete.
+
+Plan-contract v3 introduced a bounded planning-intelligence graph. Seven declarative specialist
 modules may emit typed atoms only from active task evidence; source material and ambient repository
 signals cannot activate them. Every atom is linked to its module digest and evidence edge, and the
 Tier-S projection retains only the relevant bounded obligations. Incident, maintenance, milestone,
@@ -115,6 +124,12 @@ before the pointer changes. Update operations are serialized by an operating-sys
 record a bounded state-machine history from download through verification, staging, activation,
 observation, commit, quarantine, or rollback. A failed or repeatedly unhealthy runtime rolls back
 to the prior receipt-owned version without changing a running session.
+
+A direct-source installation is a separate, explicitly weaker delivery mode. Bootstrap verifies
+every installer-owned byte before importing installed Python, stages an immutable runtime, verifies
+or locally builds the platform helper from receipt-owned locked Rust sources, runs a disposable
+request, and labels the result `direct-source-install-unattested`. It cannot replace an active
+runtime, impersonate signed metadata, or fall back when only part of a signed metadata set exists.
 
 Mutable owner intelligence lives in an encrypted SQLite vault outside the plugin cache. Owner,
 device, runtime, and project identities are separate. Memory bodies, preferences, outcomes,

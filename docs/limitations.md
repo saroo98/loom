@@ -1,4 +1,4 @@
-# Loom 1.7.0 Limitations
+# Loom 1.8.0 Limitations
 
 Loom fails closed around evidence it does not possess.
 
@@ -54,11 +54,16 @@ Loom fails closed around evidence it does not possess.
 - The canonical deterministic ZIP builder, independent receipt verifier, semantic Cargo.lock SBOM
   reconciliation, and provenance schema are implemented and locally tested. GitHub attestations,
   native A/B helper rebuilds, a signed tag, and an immutable draft asset remain **[UNVERIFIED]**
-  until the release workflow runs against the exact `v1.7.0` bytes.
+  until the release workflow runs against the exact `v1.8.0` bytes.
 - Fresh marketplace installation trusts the Codex host as the initial delivery authority. Loom can
   detect internal corruption on first install, but cannot prove independence from a malicious host
   using a verifier delivered by that same host. Subsequent updates use the existing verified
   launcher before executing new payload code.
+- A direct-source install is deliberately labeled `direct-source-install-unattested`. Its complete
+  ownership receipt proves local byte consistency, not publisher identity. Without an included
+  platform helper, first bootstrap also requires a local Rust toolchain with all locked dependencies
+  available offline. Direct-source authority cannot replace an active runtime or satisfy a signed-
+  release claim.
 - Automatic host delivery is **[UNVERIFIED]** because Codex marketplace refresh behavior is owned
   by Codex. Once a newer plugin payload is present, Loom's verification, migration, activation,
   and rollback are automatic and offline.

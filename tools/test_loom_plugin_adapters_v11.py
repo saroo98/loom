@@ -22,7 +22,7 @@ class PluginPackageTests(unittest.TestCase):
         manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(
             encoding="utf-8"))
         self.assertEqual("loom", manifest["name"])
-        self.assertEqual("1.7.0", manifest["version"])
+        self.assertEqual("1.8.0", manifest["version"])
         self.assertEqual("./skills/", manifest["skills"])
         self.assertNotIn("mcpServers", manifest)
         self.assertNotIn("apps", manifest)

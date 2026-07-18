@@ -5,12 +5,12 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#121311">
   <meta name="color-scheme" content="dark light">
-  <meta name="loom-version" content="1.7.0">
+  <meta name="loom-version" content="1.8.0">
   <meta name="description" content="Loom turns one request into a current, domain-aware, evidence-backed execution plan for an AI coding agent. It learns locally, stays bounded, and fails closed.">
   <meta name="robots" content="index,follow,max-image-preview:large">
   <link rel="canonical" href="https://saroo98.github.io/loom/">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="site.css?v=1.7.0">
+  <link rel="stylesheet" href="site.css?v=1.8.0">
   <meta property="og:type" content="website">
   <meta property="og:site_name" content="Loom">
   <meta property="og:title" content="Loom — plan before the agent builds">
@@ -30,14 +30,14 @@
     "@context": "https://schema.org",
     "@type": "SoftwareSourceCode",
     "name": "Loom",
-    "version": "1.7.0",
+    "version": "1.8.0",
     "description": "Local-first planning intelligence for AI coding agents.",
     "codeRepository": "https://github.com/saroo98/loom",
     "license": "https://www.apache.org/licenses/LICENSE-2.0",
     "programmingLanguage": "Python"
   }
   </script>
-  <script src="site.js?v=1.7.0" defer></script>
+  <script src="site.js?v=1.8.0" defer></script>
 </head>
 <body>
   <!-- Public command contract required by the documentation audit: /loom <request> -->
@@ -52,7 +52,7 @@
           <path d="M3 10h30M3 18h30M3 26h30" class="weft"></path>
         </svg>
         <span>Loom</span>
-        <span class="version" data-loom-version="1.7.0">1.7.0</span>
+        <span class="version" data-loom-version="1.8.0">1.8.0</span>
       </a>
       <nav class="desktop-nav" aria-label="Primary navigation">
         <a href="#runtime">How it works</a>
@@ -292,7 +292,7 @@
           <p class="section-number">06 / INSTALL ONCE</p>
           <h2>Then ask for<br><span>the work you actually want.</span></h2>
           <p>Install Loom as a Codex skill. Normal use remains one plain-language request; the runtime handles tiering, domain discovery, planning, gates, learning, and receipts.</p>
-          <p class="install-requirement">Requires Python 3.10+ and a clean checkout.</p>
+          <p class="install-requirement">Requires Python 3.10+ and a clean checkout. Direct source installs also require Rust with locked dependencies available offline unless a platform helper is included.</p>
           <a class="primary-action dark-action" href="https://github.com/saroo98/loom" rel="noopener">Open GitHub</a>
         </div>
 
@@ -327,7 +327,7 @@ python tools/loom_install.py install . "$HOME/.codex/skills/loom"</code></pre>
         <a href="https://github.com/saroo98/loom/blob/main/CONTRIBUTING.md">Contribute</a>
         <a href="https://github.com/saroo98/loom/blob/main/LICENSE">Apache-2.0</a>
       </nav>
-      <p class="footer-meta">Local-first · no telemetry · standard-library Python · version <span data-loom-version="1.7.0">1.7.0</span></p>
+      <p class="footer-meta">Local-first · no telemetry · standard-library Python · version <span data-loom-version="1.8.0">1.8.0</span></p>
     </div>
   </footer>
 </body>
