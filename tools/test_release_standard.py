@@ -70,6 +70,33 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertEqual("requires-matrix", result["capability_status"])
         self.assertEqual(report["skip_receipts"], result["skip_receipts"])
 
+    def test_suite_failure_names_failed_tests_without_full_transcripts(self):
+        tools = self.root / "tools"
+        tools.mkdir()
+        (tools / "loom_test.py").write_text("# fixture runner\n", encoding="utf-8")
+        report = {
+            "capability_complete": False,
+            "failures": 1,
+            "errors": 0,
+            "within_budget": True,
+            "status": "failed",
+            "successful": False,
+            "skip_receipts": [],
+            "elapsed_seconds": 2.0,
+            "tests_run": 2,
+            "timings": [
+                {"test": "tests.Failed", "seconds": 1.0, "status": "failed"},
+                {"test": "tests.Passed", "seconds": 1.0, "status": "passed"},
+            ],
+        }
+        completed = mock.Mock(returncode=1, stdout=json.dumps(report), stderr="failure")
+        with mock.patch.object(subprocess, "run", return_value=completed):
+            result = loom_release._suite(self.root)
+        self.assertEqual(1, result["failure_count"])
+        self.assertEqual(0, result["error_count"])
+        self.assertEqual(
+            [{"test": "tests.Failed", "status": "failed"}], result["failed_tests"])
+
     def _source(self):
         source = self.root / "source"
         (source / "tools").mkdir(parents=True)

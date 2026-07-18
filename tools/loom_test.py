@@ -18,6 +18,7 @@ CONTAINMENT_FAST_TEST = (
        if os.name == "nt" else
        "test_posix_verifier_descendants_are_dead_before_evidence_is_sealed")
 )
+FAST_GATE_MAX_SECONDS = 30.0
 
 
 FAST_TESTS = (
@@ -116,7 +117,7 @@ class TimingResult(unittest.TextTestResult):
 def run(mode, *, max_seconds=None, verbosity=1):
     if mode == "fast":
         suite = unittest.defaultTestLoader.loadTestsFromNames(FAST_TESTS)
-        budget = 30.0 if max_seconds is None else float(max_seconds)
+        budget = FAST_GATE_MAX_SECONDS if max_seconds is None else float(max_seconds)
     elif mode == "full":
         suite = unittest.defaultTestLoader.discover(
             start_dir=str(Path(__file__).parent), pattern="test_*.py")

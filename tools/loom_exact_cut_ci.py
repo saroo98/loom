@@ -65,15 +65,18 @@ def run(source, cut, output, *, suite_output=None, forbidden_tokens=()):
         return base
     except BaseException as exc:
         message = f"{type(exc).__name__}:{exc}"
+        details = getattr(exc, "details", None)
         base.update({
             "error_type": type(exc).__name__,
             "error_sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
             "traceback_tail": _safe_trace(exc, (source, cut, output.parent)),
         })
+        if isinstance(details, dict) and isinstance(details.get("suite"), dict):
+            base["suite"] = details["suite"]
         return base
     finally:
         loom_reliability.atomic_write_json(output, base)
-        if base["status"] == "verified" and suite_output is not None:
+        if base["suite"] is not None and suite_output is not None:
             loom_reliability.atomic_write_json(suite_output, base["suite"])
 
 

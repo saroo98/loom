@@ -1,6 +1,6 @@
 {
   "capability_claims": 61,
-  "discovered_test_methods": 704,
+  "discovered_test_methods": 707,
   "discovered_test_modules": 80,
   "loom_version": "1.7.0",
   "measurement": "repository inventory; this does not claim tests passed",

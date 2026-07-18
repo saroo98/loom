@@ -1202,10 +1202,10 @@
             "sha256": "f6e6ce7fe021d79181a11dea538c53f0c21240a4ed9ac3363162d7b93dd0668c"
           },
           {
-            "bytes": 37791,
+            "bytes": 38958,
             "path": "tools/test_release_standard.py",
             "role": "test",
-            "sha256": "c878921785f9dcb9017a6bf302a6be6b8a31e4f511e0f45b0de619acb0d04360"
+            "sha256": "1796b4b1ad43eaa4db1f8c8c24cf10c580c6912b302413050d12569bc387951f"
           }
         ],
         "subject_digest": null
@@ -1230,10 +1230,10 @@
         "evidence_graph_sha256": null,
         "files": [
           {
-            "bytes": 47076,
+            "bytes": 48328,
             "path": "tools/loom_release.py",
             "role": "enforcement",
-            "sha256": "38953cdd665e26a0b45ba1cff9b3652bf0944acfd0ef731c2098220bb666c9e5"
+            "sha256": "e5eeab233230b21f9865ed1628798375009fdd5fec2bfd5c76f7c8197090f14a"
           },
           {
             "bytes": 21917,
@@ -1242,10 +1242,10 @@
             "sha256": "5205a9edfff12b5dfe65ef20218d905a6f14c552fc79972eb553951b254c579a"
           },
           {
-            "bytes": 37791,
+            "bytes": 38958,
             "path": "tools/test_release_standard.py",
             "role": "test",
-            "sha256": "c878921785f9dcb9017a6bf302a6be6b8a31e4f511e0f45b0de619acb0d04360"
+            "sha256": "1796b4b1ad43eaa4db1f8c8c24cf10c580c6912b302413050d12569bc387951f"
           }
         ],
         "subject_digest": null
@@ -1271,10 +1271,10 @@
         "evidence_graph_sha256": null,
         "files": [
           {
-            "bytes": 47076,
+            "bytes": 48328,
             "path": "tools/loom_release.py",
             "role": "enforcement",
-            "sha256": "38953cdd665e26a0b45ba1cff9b3652bf0944acfd0ef731c2098220bb666c9e5"
+            "sha256": "e5eeab233230b21f9865ed1628798375009fdd5fec2bfd5c76f7c8197090f14a"
           },
           {
             "bytes": 14160,
@@ -1289,10 +1289,10 @@
             "sha256": "5205a9edfff12b5dfe65ef20218d905a6f14c552fc79972eb553951b254c579a"
           },
           {
-            "bytes": 37791,
+            "bytes": 38958,
             "path": "tools/test_release_standard.py",
             "role": "test",
-            "sha256": "c878921785f9dcb9017a6bf302a6be6b8a31e4f511e0f45b0de619acb0d04360"
+            "sha256": "1796b4b1ad43eaa4db1f8c8c24cf10c580c6912b302413050d12569bc387951f"
           },
           {
             "bytes": 10766,
@@ -1956,10 +1956,10 @@
         "evidence_graph_sha256": null,
         "files": [
           {
-            "bytes": 8057,
+            "bytes": 8103,
             "path": "tools/loom_test.py",
             "role": "enforcement",
-            "sha256": "7d07bd02f1f76f3a542628df1c24302fd05a87cf0f4bd55a0fc44bc09450d4a8"
+            "sha256": "1ace4f68c021c2b2d7d39a64fe4723992197b126ff88a9dc57174141015dcd70"
           },
           {
             "bytes": 4822,
@@ -1968,10 +1968,10 @@
             "sha256": "a57566e3d2ab10dac938f15ed375c171965c611a014ff0fabbf442618e27747b"
           },
           {
-            "bytes": 1419,
+            "bytes": 2455,
             "path": "tools/test_test_runner.py",
             "role": "test",
-            "sha256": "8d00c6af68420fb7fdbed5d600684d6d152a1de421bf98e627b746bc51371a06"
+            "sha256": "a46f389b77f194bfbc184c3425f0cf795e05e13ec669153ac3ff3fda5dfaded8"
           },
           {
             "bytes": 4066,
@@ -2921,10 +2921,10 @@
         "evidence_graph_sha256": null,
         "files": [
           {
-            "bytes": 3686,
+            "bytes": 3857,
             "path": "tools/loom_exact_cut_ci.py",
             "role": "enforcement",
-            "sha256": "ddad7e3939dfa73ea1c0de5fef621e01bc15d31d044e7e88b5f94123bf12710f"
+            "sha256": "e6e1767d245d1d14555096f04218bfd1173ff592c2d4f0b4449f47f3c73a1175"
           },
           {
             "bytes": 7098,
@@ -2933,10 +2933,10 @@
             "sha256": "95555de2b23c223188c9bebfcc0eba495a1b4436a52aaf06615b482a3292a859"
           },
           {
-            "bytes": 2286,
+            "bytes": 3678,
             "path": "tools/test_exact_cut_ci_phase10.py",
             "role": "test",
-            "sha256": "d8cc6bb4ff2dfc77c41297a3a52f6f7b1e2e5ef458d49827cee598834b480b0b"
+            "sha256": "9e74af12de7db7ac1805951dca28bf86979aae9b4200aad01cdd53907507c539"
           },
           {
             "bytes": 3175,

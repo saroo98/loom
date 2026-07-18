@@ -104,7 +104,9 @@ HOSTILE_REVIEW_FIELDS = {
 
 
 class ReleaseError(RuntimeError):
-    pass
+    def __init__(self, message, *, details=None):
+        super().__init__(message)
+        self.details = details if isinstance(details, dict) else None
 
 
 def _strict_object(pairs):
@@ -354,14 +356,29 @@ def verify_cut(root, *, forbidden_tokens):
     suite = _suite(root)
     if not suite["passed"] or loom_docs.generate_evidence(root)[
             "discovered_test_methods"] < 1:
+        failed_tests = suite.get("failed_tests", [])
         diagnostic = loom_privacy.minimize_evidence(
             json.dumps({
                 "returncode": suite.get("returncode"),
                 "elapsed_seconds": suite.get("elapsed_seconds"),
                 "tests_run": suite.get("tests_run"),
+                "failed_tests": failed_tests,
                 "output": suite.get("output", ""),
             }, sort_keys=True), roots=(root,), max_chars=2400)
-        raise ReleaseError("public cut test suite failed: " + diagnostic)
+        raise ReleaseError("public cut test suite failed: " + diagnostic, details={
+            "suite": {
+                "passed": False,
+                "capability_complete": suite.get("capability_complete"),
+                "capability_status": suite.get("capability_status"),
+                "returncode": suite.get("returncode"),
+                "elapsed_seconds": suite.get("elapsed_seconds"),
+                "tests_run": suite.get("tests_run"),
+                "failure_count": suite.get("failure_count"),
+                "error_count": suite.get("error_count"),
+                "failed_tests": failed_tests,
+                "skip_receipts": suite.get("skip_receipts", []),
+            },
+        })
     manifest_after = _verify_cut_manifest(root)
     firewall_after = loom_privacy.scan_publication(
         root, forbidden_tokens=forbidden_tokens,
@@ -829,6 +846,13 @@ def _suite(root):
                    else result.stdout + result.stderr)[-4000:],
         "elapsed_seconds": timing.get("elapsed_seconds") if timing else None,
         "tests_run": timing.get("tests_run") if timing else None,
+        "failure_count": timing.get("failures") if timing else None,
+        "error_count": timing.get("errors") if timing else None,
+        "failed_tests": [
+            {"test": item.get("test"), "status": item.get("status")}
+            for item in (timing.get("timings", []) if timing else [])
+            if item.get("status") in {"failed", "error"}
+        ][:64],
         "timings": timing.get("timings", []) if timing else [],
     }
 

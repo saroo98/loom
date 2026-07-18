@@ -43,6 +43,35 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             self.assertEqual(7, suite["tests"])
             self.assertEqual("a" * 64, suite["binding"]["public_root_sha256"])
 
+    def test_suite_failure_preserves_failed_test_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "receipt.json"
+            suite_output = root / "suite.json"
+            error = loom_exact_cut_ci.loom_release.ReleaseError(
+                "suite failed",
+                details={"suite": {
+                    "passed": False,
+                    "tests_run": 704,
+                    "failure_count": 1,
+                    "error_count": 0,
+                    "failed_tests": [{"test": "tests.ExactFailure", "status": "failed"}],
+                }},
+            )
+            with mock.patch.object(
+                    loom_exact_cut_ci.loom_release, "build_public",
+                    return_value={"root_sha256": "a" * 64}), mock.patch.object(
+                        loom_exact_cut_ci.loom_release, "verify_cut", side_effect=error):
+                result = loom_exact_cut_ci.run(
+                    root, root / "cut", output, suite_output=suite_output)
+            self.assertEqual("failed", result["status"])
+            self.assertEqual(
+                [{"test": "tests.ExactFailure", "status": "failed"}],
+                result["suite"]["failed_tests"],
+            )
+            self.assertEqual(result["suite"], json.loads(
+                suite_output.read_text(encoding="utf-8")))
+
 
 if __name__ == "__main__":
     unittest.main()
