@@ -4,8 +4,12 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "policy_version", "coverage_state", "composition", "active_task_domains", "memory_domains", "ambient_domains", "candidates", "rejected_alternatives", "missing_knowledge", "consequence", "subsystems", "graph_digest", "route_digest"],
+  "allOf": [
+    {"if": {"properties": {"schema_version": {"const": 1}}}, "then": {"not": {"required": ["project_inspection"]}}},
+    {"if": {"properties": {"schema_version": {"const": 2}}}, "then": {"required": ["project_inspection"]}}
+  ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"enum": [1, 2]},
     "policy_version": {"const": "domain-intelligence-v1"},
     "coverage_state": {"enum": ["known", "partial", "unknown", "conflicted", "stale", "unsupported"]},
     "composition": {"type": "boolean"},
@@ -17,6 +21,7 @@
     "missing_knowledge": {"type": "array", "maxItems": 32, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}},
     "consequence": {"type": "object", "additionalProperties": false, "required": ["class", "categories", "evidence"], "properties": {"class": {"enum": ["ordinary", "material", "high", "critical"]}, "categories": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}, "evidence": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 256}}}},
     "subsystems": {"type": "array", "maxItems": 32, "items": {"type": "object", "additionalProperties": false, "required": ["id", "domains", "coverage", "consequence", "blocked"], "properties": {"id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}, "domains": {"$ref": "#/$defs/domains"}, "coverage": {"enum": ["known", "partial", "unknown", "conflicted", "stale", "unsupported"]}, "consequence": {"enum": ["ordinary", "material", "high", "critical"]}, "blocked": {"type": "boolean"}}}},
+    "project_inspection": {"$ref": "project-inspection-capsule.schema.json"},
     "graph_digest": {"$ref": "#/$defs/digest"},
     "route_digest": {"$ref": "#/$defs/digest"}
   },

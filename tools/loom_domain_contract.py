@@ -9,6 +9,7 @@ import re
 
 
 SCHEMA_VERSION = 1
+ROUTE_SCHEMA_VERSION = 2
 POLICY_VERSION = "domain-intelligence-v1"
 ID_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}-[0-9a-f]{16,64}$")
 DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -299,15 +300,28 @@ def validate_invariant(value, *, sources=None, applicability=None, now=None):
 
 
 def validate_route(value):
-    fields = {
+    base_fields = {
         "schema_version", "policy_version", "coverage_state", "composition",
         "active_task_domains", "memory_domains", "ambient_domains", "candidates",
         "rejected_alternatives", "missing_knowledge", "consequence", "subsystems",
         "graph_digest", "route_digest",
     }
-    _exact(value, fields, "domain route")
-    if value["schema_version"] != SCHEMA_VERSION or value["policy_version"] != POLICY_VERSION:
+    if not isinstance(value, dict) or value.get("schema_version") not in {
+            SCHEMA_VERSION, ROUTE_SCHEMA_VERSION}:
         raise DomainContractError("domain route version is invalid")
+    fields = base_fields | ({"project_inspection"}
+                            if value["schema_version"] == ROUTE_SCHEMA_VERSION else set())
+    _exact(value, fields, "domain route")
+    if value["policy_version"] != POLICY_VERSION:
+        raise DomainContractError("domain route version is invalid")
+    if value["schema_version"] == ROUTE_SCHEMA_VERSION:
+        import loom_project_inspection
+        capsule = value["project_inspection"]
+        try:
+            loom_project_inspection.capsule_from_capsule(capsule)
+        except loom_project_inspection.InspectionError as exc:
+            raise DomainContractError(
+                f"domain route inspection capsule is invalid: {exc}") from exc
     if value["coverage_state"] not in COVERAGE_STATES \
             or type(value["composition"]) is not bool:
         raise DomainContractError("domain route coverage is invalid")
@@ -351,7 +365,9 @@ def validate_route(value):
         raise DomainContractError("route graph digest is invalid")
     body = dict(value)
     claimed = body.pop("route_digest")
-    if claimed != digest("domain-route-v1", body):
+    prefix = ("domain-route-v2" if value["schema_version"] == ROUTE_SCHEMA_VERSION
+              else "domain-route-v1")
+    if claimed != digest(prefix, body):
         raise DomainContractError("domain route digest mismatch")
     return value
 

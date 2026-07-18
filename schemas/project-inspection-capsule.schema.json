@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/project-inspection-capsule.schema.json",
+  "title": "Bounded host-visible project inspection capsule",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "state", "receipt_digest", "relevant_coverage_complete", "routing_eligible", "draft_planning_eligible", "g1_eligible", "implementation_eligible", "tier_floor", "counts", "generated_rule_ids", "unresolved_roots"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "state": {"enum": ["complete", "partial-safe", "partial-requires-discovery", "blocked-unsafe", "unsupported"]},
+    "receipt_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "relevant_coverage_complete": {"type": "boolean"},
+    "routing_eligible": {"type": "boolean"},
+    "draft_planning_eligible": {"type": "boolean"},
+    "g1_eligible": {"type": "boolean"},
+    "implementation_eligible": {"type": "boolean"},
+    "tier_floor": {"enum": ["S", "M", "L", "XL"]},
+    "counts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["entries_seen", "tracked_paths_seen", "changed_paths_seen", "untracked_paths_seen", "generated_subtrees_excluded", "unknown_subtrees_summarized"],
+      "properties": {
+        "entries_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "tracked_paths_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "changed_paths_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "untracked_paths_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "generated_subtrees_excluded": {"type": "integer", "minimum": 0, "maximum": 128},
+        "unknown_subtrees_summarized": {"type": "integer", "minimum": 0, "maximum": 32}
+      }
+    },
+    "generated_rule_ids": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"}},
+    "unresolved_roots": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 512}}
+  }
+}

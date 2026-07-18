@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/project-inspection.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "policy_version", "target_identity", "survey_hash", "state",
+    "source_states", "counters", "facts", "partitions", "generated_exclusions",
+    "unresolved_roots", "relevant_coverage_complete", "routing_eligible",
+    "draft_planning_eligible", "g1_eligible", "implementation_eligible", "tier_floor",
+    "receipt_digest"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_version": {"const": "project-inspection-v1"},
+    "target_identity": {"type": "string", "pattern": "^target-sha256:[0-9a-f]{64}$"},
+    "survey_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "state": {"enum": ["complete", "partial-safe", "partial-requires-discovery", "blocked-unsafe", "unsupported"]},
+    "source_states": {
+      "type": "object", "additionalProperties": false,
+      "required": ["filesystem_safety", "tracked", "staged", "unstaged", "untracked", "ignored_generated", "manifests"],
+      "properties": {
+        "filesystem_safety": {"$ref": "#/$defs/sourceState"},
+        "tracked": {"$ref": "#/$defs/sourceState"},
+        "staged": {"$ref": "#/$defs/sourceState"},
+        "unstaged": {"$ref": "#/$defs/sourceState"},
+        "untracked": {"$ref": "#/$defs/sourceState"},
+        "ignored_generated": {"$ref": "#/$defs/sourceState"},
+        "manifests": {"$ref": "#/$defs/sourceState"}
+      }
+    },
+    "counters": {
+      "type": "object", "additionalProperties": false,
+      "required": ["entries_seen", "tracked_paths_seen", "changed_paths_seen", "untracked_paths_seen", "ignored_candidate_roots_seen", "relevant_files_inspected", "relevant_directories_inspected", "manifest_bytes_read", "generated_subtrees_excluded", "unknown_subtrees_summarized", "partitions_summarized", "detailed_facts_saturated", "elapsed_ms"],
+      "properties": {
+        "entries_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "tracked_paths_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "changed_paths_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "untracked_paths_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "ignored_candidate_roots_seen": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "relevant_files_inspected": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "relevant_directories_inspected": {"type": "integer", "minimum": 0, "maximum": 100000},
+        "manifest_bytes_read": {"type": "integer", "minimum": 0, "maximum": 1048576},
+        "generated_subtrees_excluded": {"type": "integer", "minimum": 0, "maximum": 128},
+        "unknown_subtrees_summarized": {"type": "integer", "minimum": 0, "maximum": 32},
+        "partitions_summarized": {"type": "integer", "minimum": 0, "maximum": 256},
+        "detailed_facts_saturated": {"type": "integer", "minimum": 0, "maximum": 1},
+        "elapsed_ms": {"type": "integer", "minimum": 0, "maximum": 120000}
+      }
+    },
+    "facts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["file_names", "extensions", "dependencies", "manifests"],
+      "properties": {
+        "file_names": {"$ref": "#/$defs/facts"},
+        "extensions": {"$ref": "#/$defs/facts"},
+        "dependencies": {"$ref": "#/$defs/facts"},
+        "manifests": {"$ref": "#/$defs/paths"}
+      }
+    },
+    "partitions": {
+      "type": "array", "maxItems": 256,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "files", "directories", "classification"],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "files": {"type": "integer", "minimum": 0, "maximum": 100000},
+          "directories": {"type": "integer", "minimum": 0, "maximum": 100000},
+          "classification": {"enum": ["relevant", "generated", "unknown"]}
+        }
+      }
+    },
+    "generated_exclusions": {
+      "type": "array", "maxItems": 128,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "rule_id", "evidence"],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "rule_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"},
+          "evidence": {"type": "array", "minItems": 3, "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}}
+        }
+      }
+    },
+    "unresolved_roots": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "reason", "potential_authorities"],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "reason": {"enum": ["detailed-budget", "ignored-unclassified", "manifest-oversized", "manifest-invalid", "non-git-generated-uncertain", "partition-budget", "untracked-volume"]},
+          "potential_authorities": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"}}
+        }
+      }
+    },
+    "relevant_coverage_complete": {"type": "boolean"},
+    "routing_eligible": {"type": "boolean"},
+    "draft_planning_eligible": {"type": "boolean"},
+    "g1_eligible": {"type": "boolean"},
+    "implementation_eligible": {"type": "boolean"},
+    "tier_floor": {"enum": ["S", "M", "L", "XL"]},
+    "receipt_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "sourceState": {"enum": ["complete", "partial-safe", "partial-requires-discovery", "blocked-unsafe", "unsupported"]},
+    "path": {"type": "string", "minLength": 1, "maxLength": 512, "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+    "paths": {"type": "array", "maxItems": 512, "uniqueItems": true, "items": {"$ref": "#/$defs/path"}},
+    "facts": {"type": "array", "maxItems": 512, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 200}}
+  }
+}

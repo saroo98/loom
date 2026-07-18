@@ -111,6 +111,25 @@ class _WorkspaceEntry:
     attributes: int
 
 
+@dataclass(frozen=True)
+class WorkspaceSnapshot:
+    """One frozen, bounded world observation shared by freshness and domain evidence."""
+
+    root: Path
+    state: RepoState
+    entries: tuple
+    tracked: tuple = ()
+    filter_drivers: tuple = ()
+    generated_classification: object = None
+
+    def git_query(self, *args, allowed=(0,), timeout=20, binary=False):
+        if not self.state.is_git:
+            raise SurveyError("Git evidence is unavailable for a non-Git project")
+        return run_git(
+            self.root, *args, allowed=allowed, timeout=timeout,
+            filter_drivers=self.filter_drivers, binary=binary)
+
+
 def _git_environment():
     environment = {
         key: value for key, value in os.environ.items()
@@ -231,11 +250,14 @@ def _display_git_path(path):
 
 
 def _is_excluded(rel, excluded):
-    candidate = os.path.normcase(rel) if os.name == "nt" else rel
+    # Census paths are canonical POSIX-relative strings on every platform.  Using
+    # os.path.normcase() on Windows changes their separators and made descendant
+    # exclusions compare a backslash prefix with a forward-slash boundary.
+    candidate = rel.casefold() if os.name == "nt" else rel
     return any(
-        candidate == (os.path.normcase(prefix) if os.name == "nt" else prefix)
+        candidate == (prefix.casefold() if os.name == "nt" else prefix)
         or candidate.startswith(
-            (os.path.normcase(prefix) if os.name == "nt" else prefix) + "/")
+            (prefix.casefold() if os.name == "nt" else prefix) + "/")
         for prefix in excluded)
 
 
@@ -384,13 +406,19 @@ def _hash_stream_header(digest, label, size):
     digest.update(int(size).to_bytes(8, "big"))
 
 
-def _hash_workspace(entries):
+def _hash_workspace(entries, content_excluded=(), exclusion_evidence=()):
     """Hash semantic project state while using volatile metadata only for race detection."""
-    digest = hashlib.sha256(b"complete-workspace-v4\0")
-    digest.update(len(entries).to_bytes(8, "big"))
+    digest = hashlib.sha256(b"complete-workspace-v5\0")
+    digest.update(sum(not _is_excluded(item.rel, content_excluded)
+                      for item in entries).to_bytes(8, "big"))
+    for path, rule_id in sorted(exclusion_evidence):
+        _hash_field(digest, b"generated-root", os.fsencode(path))
+        _hash_field(digest, b"generated-rule", rule_id.encode("ascii"))
     deadline = time.monotonic() + STATE_HASH_DEADLINE_SECONDS
     total_read = 0
     for entry in entries:
+        if _is_excluded(entry.rel, content_excluded):
+            continue
         if time.monotonic() > deadline:
             raise SurveyError(
                 "complete workspace hash exceeded its time bound; no partial state hash "
@@ -557,8 +585,8 @@ def _parse_porcelain_v2(content):
     }
 
 
-def repo_state(root_path, exclude_prefixes=None):
-    """Return a content-sensitive snapshot of committed and local Git state."""
+def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
+    """Return the complete frozen census and Git state used by one world observation."""
     root = Path(root_path)
     # Runtime callers have already supplied and validated an absolute root.
     # Do not call resolve() on that path: on Windows it can consult ambient cwd.
@@ -569,7 +597,6 @@ def repo_state(root_path, exclude_prefixes=None):
     excluded = tuple(sorted(str(path).replace("\\", "/").strip("/")
                             for path in exclude_prefixes if str(path).strip("/\\")))
     entries = _workspace_census(root, excluded)
-    workspace_hash = _hash_workspace(entries)
     pathspec = _state_pathspec(excluded)
     filter_drivers = _configured_filter_drivers(root)
     status_result = run_git(
@@ -579,7 +606,20 @@ def repo_state(root_path, exclude_prefixes=None):
     if status_result.returncode != 0:
         diagnostic = (status_result.stderr or status_result.stdout).lower()
         if b"not a git repository" in diagnostic or b"not a git directory" in diagnostic:
-            return _filesystem_state(root, excluded, entries, workspace_hash)
+            provisional = WorkspaceSnapshot(
+                root, RepoState(is_git=False, mode="filesystem", state_hash="0" * 64,
+                                excluded=excluded), tuple(entries))
+            import loom_project_inspection
+            classification = loom_project_inspection.classify_generated(
+                provisional, touch_paths=touch_paths)
+            generated = tuple(item["path"] for item in classification["exclusions"])
+            evidence = tuple((item["path"], item["rule_id"])
+                             for item in classification["exclusions"])
+            workspace_hash = _hash_workspace(entries, generated, evidence)
+            state = _filesystem_state(root, excluded, entries, workspace_hash)
+            return WorkspaceSnapshot(
+                root, state, tuple(entries),
+                generated_classification=classification)
         raise SurveyError(
             "cannot determine Git state: "
             + (diagnostic.decode("utf-8", errors="replace").strip() or "unknown error"))
@@ -595,15 +635,38 @@ def repo_state(root_path, exclude_prefixes=None):
     index_state = run_git(
         root, "ls-files", "--stage", "-v", "-z", *pathspec, binary=True).stdout
     unsafe_index = []
+    tracked_raw = []
     for record in (item for item in index_state.split(b"\0") if item):
+        if b"\t" not in record:
+            raise SurveyError("Git index record is malformed")
         tag = record[0]
+        raw_path = record.split(b"\t", 1)[-1]
+        if not raw_path:
+            raise SurveyError("Git index path is empty")
+        tracked_raw.append(raw_path)
         if chr(tag).islower() or tag == ord("S"):
-            unsafe_index.append(_display_git_path(record.split(b"\t", 1)[-1]))
+            unsafe_index.append(_display_git_path(raw_path))
     if unsafe_index:
         raise SurveyError(
             "Git index contains assume-unchanged/skip-worktree paths; complete "
             f"freshness is indeterminate: {unsafe_index[:10]}")
     _enforce_state_file_cap(staged, unstaged, untracked)
+    tracked = tuple(sorted({_display_git_path(path) for path in tracked_raw}))
+    _enforce_state_file_cap(tracked, staged, unstaged, untracked)
+    provisional_state = RepoState(
+        is_git=True, mode="git", head=head, branch=branch, staged=staged,
+        unstaged=unstaged, untracked=untracked, state_hash="0" * 64,
+        excluded=excluded)
+    provisional = WorkspaceSnapshot(
+        root, provisional_state, tuple(entries), tracked=tracked,
+        filter_drivers=tuple(filter_drivers))
+    import loom_project_inspection
+    classification = loom_project_inspection.classify_generated(
+        provisional, touch_paths=touch_paths)
+    generated = tuple(item["path"] for item in classification["exclusions"])
+    evidence = tuple((item["path"], item["rule_id"])
+                     for item in classification["exclusions"])
+    workspace_hash = _hash_workspace(entries, generated, evidence)
     digest = hashlib.sha256()
     digest.update(b"head\0" + head.encode("ascii") + b"\0")
     digest.update(b"branch\0" + branch_raw + b"\0")
@@ -615,10 +678,19 @@ def repo_state(root_path, exclude_prefixes=None):
         digest.update(label + b"\0")
         for path in paths:
             digest.update(path + b"\0")
-    return RepoState(
+    state = RepoState(
         is_git=True, mode="git", head=head, branch=branch, staged=staged,
         unstaged=unstaged, untracked=untracked, state_hash=digest.hexdigest(),
         excluded=excluded)
+    return WorkspaceSnapshot(
+        root, state, tuple(entries), tracked=tracked,
+        filter_drivers=tuple(filter_drivers),
+        generated_classification=classification)
+
+
+def repo_state(root_path, exclude_prefixes=None):
+    """Return a content-sensitive snapshot of committed and local Git state."""
+    return workspace_snapshot(root_path, exclude_prefixes).state
 
 
 def walk_files(root):

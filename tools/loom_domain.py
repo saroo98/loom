@@ -2,20 +2,21 @@
 """Select Loom domain adapters without pretending generic coverage is expertise."""
 
 import argparse
+import hashlib
 import json
 import os
 import re
-import stat
 import sys
 from pathlib import Path
 
 import loom_domain_composition
 import loom_domain_contract
+import loom_project_inspection
+import loom_survey
 
 SCHEMA_VERSION = 2
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
-MAX_PROJECT_FILES = 4096
-MAX_MANIFEST_BYTES = 512 * 1024
+MAX_PROJECT_FACTS = 512
 
 # Stable invariants only. Concrete regulations, SDK behavior, limits, and policies must be
 # verified from current authoritative sources during the planning run.
@@ -319,74 +320,24 @@ def _guidance(domain_id):
 
 
 def inspect_project(root_path):
-    """Return bounded structural evidence without treating project prose as domain truth."""
+    """Return facts from the shared typed inspection authority.
+
+    Kept as a compatibility API for diagnostics. Production routing consumes the
+    complete receipt directly through ``loom_runtime``.
+    """
     root = Path(root_path)
     if not root.is_absolute():
         root = Path(os.path.abspath(root))
-    if not root.is_dir() or root.is_symlink():
-        raise DomainError("project root must be a real local directory")
-    names, extensions, dependencies = set(), set(), set()
-    stack, count = [root], 0
-    manifests = {"package.json", "requirements.txt", "pyproject.toml", "cargo.toml",
-                 "manifest.json", "build.gradle", "build.gradle.kts"}
-    while stack:
-        directory = stack.pop()
-        try:
-            entries = sorted(directory.iterdir(), key=lambda item: os.fsencode(item.name))
-        except OSError as exc:
-            raise DomainError(f"cannot inspect project structure: {exc}") from exc
-        for path in entries:
-            count += 1
-            if count > MAX_PROJECT_FILES:
-                raise DomainError("project structure exceeds its inspection bound")
-            try:
-                info = path.lstat()
-            except OSError as exc:
-                raise DomainError(f"cannot inspect project entry: {exc}") from exc
-            if stat.S_ISLNK(info.st_mode):
-                raise DomainError("project structure contains a symlink")
-            if stat.S_ISDIR(info.st_mode):
-                if path.name not in {".git", "node_modules", "vendor", ".venv", "dist"}:
-                    stack.append(path)
-                continue
-            if not stat.S_ISREG(info.st_mode):
-                raise DomainError("project structure contains an unsupported special entry")
-            low_name = path.name.casefold()
-            names.add(low_name)
-            if path.suffix:
-                extensions.add(path.suffix.casefold())
-            if low_name in manifests and info.st_size <= MAX_MANIFEST_BYTES:
-                try:
-                    text = path.read_text(encoding="utf-8").casefold()
-                except (OSError, UnicodeError) as exc:
-                    raise DomainError(f"cannot read dependency manifest: {exc}") from exc
-                if low_name == "package.json":
-                    try:
-                        value = json.loads(text)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(value, dict):
-                        for field in ("dependencies", "devdependencies", "peerdependencies"):
-                            if isinstance(value.get(field), dict):
-                                dependencies.update(str(item).casefold()
-                                                    for item in value[field])
-                        if isinstance(value.get("bin"), (dict, str)):
-                            dependencies.add("package-bin")
-                elif low_name == "manifest.json":
-                    try:
-                        value = json.loads(text)
-                    except json.JSONDecodeError:
-                        continue
-                    if isinstance(value, dict) and type(value.get("manifest_version")) is int:
-                        dependencies.add("webextension-manifest")
-                elif low_name in {"build.gradle", "build.gradle.kts"}:
-                    if "com.android.application" in text:
-                        dependencies.add("com.android.application")
-                else:
-                    for token in re.findall(r"(?m)^\s*([a-z0-9_.@/-]+)", text):
-                        dependencies.add(re.split(r"[<>=!~\[]", token)[0])
-    return {"file_names": sorted(names), "extensions": sorted(extensions),
-            "dependencies": sorted(dependencies)}
+    try:
+        snapshot = loom_survey.workspace_snapshot(root)
+        target_identity = "target-sha256:" + hashlib.sha256(
+            b"loom-domain-diagnostic-target-v1\0" + os.fsencode(str(root))).hexdigest()
+        receipt = loom_project_inspection.inspect(
+            snapshot, target_identity=target_identity)
+        return loom_project_inspection.facts(receipt)
+    except (loom_survey.SurveyError,
+            loom_project_inspection.InspectionError, OSError) as exc:
+        raise DomainError(f"cannot inspect project structure: {exc}") from exc
 
 
 def _validate_facts(project_facts):
@@ -398,7 +349,7 @@ def _validate_facts(project_facts):
     normalized = {}
     for key in ("file_names", "extensions", "dependencies"):
         values = project_facts[key]
-        if not isinstance(values, list) or len(values) > MAX_PROJECT_FILES \
+        if not isinstance(values, list) or len(values) > MAX_PROJECT_FACTS \
                 or not all(isinstance(item, str) and 0 < len(item) <= 200 for item in values):
             raise DomainError("project facts are invalid or exceed their bound")
         normalized[key] = sorted(set(item.casefold() for item in values))
@@ -554,7 +505,8 @@ def request_clause_roles(description):
     return roles
 
 
-def select_domains(description, explicit=None, project_facts=None, host_proposal=None):
+def select_domains(description, explicit=None, project_facts=None, host_proposal=None,
+                   project_inspection=None):
     description = str(description or "").strip()
     explicit = [str(item).strip().lower() for item in (explicit or []) if str(item).strip()]
     if any(not ID_RE.fullmatch(item) for item in explicit):
@@ -667,8 +619,14 @@ def select_domains(description, explicit=None, project_facts=None, host_proposal
                     f"{domain_id}: load-bearing invariants and failure modes",
                     f"{domain_id}: real verification medium",
                 ])
+    inspection_capsule = None
+    if project_inspection is not None:
+        import loom_project_inspection
+        inspection_capsule = loom_project_inspection.capsule(project_inspection)
     route_body = {
-        "schema_version": loom_domain_contract.SCHEMA_VERSION,
+        "schema_version": (loom_domain_contract.ROUTE_SCHEMA_VERSION
+                           if inspection_capsule is not None
+                           else loom_domain_contract.SCHEMA_VERSION),
         "policy_version": loom_domain_contract.POLICY_VERSION,
         "coverage_state": coverage_state,
         "composition": len(graph_domains) > 1,
@@ -683,8 +641,12 @@ def select_domains(description, explicit=None, project_facts=None, host_proposal
         "subsystems": graph["nodes"],
         "graph_digest": graph["graph_digest"],
     }
+    if inspection_capsule is not None:
+        route_body["project_inspection"] = inspection_capsule
+    route_prefix = ("domain-route-v2" if inspection_capsule is not None
+                    else "domain-route-v1")
     route_contract = {**route_body, "route_digest": loom_domain_contract.digest(
-        "domain-route-v1", route_body)}
+        route_prefix, route_body)}
     try:
         loom_domain_contract.validate_route(route_contract)
     except loom_domain_contract.DomainContractError as exc:

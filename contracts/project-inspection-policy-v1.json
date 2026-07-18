@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "policy_version": "project-inspection-v1",
+  "budgets": {
+    "detailed_facts": 512,
+    "fact_characters": 32768,
+    "generated_exclusions": 128,
+    "manifest_bytes": 1048576,
+    "partitions": 256,
+    "unresolved_roots": 32
+  },
+  "generated_rules": [
+    {
+      "ancestor_markers": ["Cargo.toml"],
+      "basenames": ["target"],
+      "id": "rust-target",
+      "ignored_required_in_git": true
+    },
+    {
+      "ancestor_markers": ["package.json"],
+      "basenames": ["node_modules", ".next"],
+      "id": "node-generated",
+      "ignored_required_in_git": true
+    },
+    {
+      "ancestor_markers": ["pyproject.toml", "requirements.txt", "setup.py", "loom_test.py", "loom_bootstrap.py"],
+      "basenames": ["__pycache__", ".pytest_cache", ".coverage", "htmlcov", ".venv", "venv"],
+      "id": "python-generated",
+      "ignored_required_in_git": true
+    },
+    {
+      "ancestor_markers": ["BUILD-MANIFEST.json"],
+      "basenames": ["dist"],
+      "id": "loom-public-cut",
+      "ignored_required_in_git": true
+    }
+  ],
+  "trust_authority_names": [
+    ".codex-plugin",
+    ".github",
+    "AGENTS.md",
+    "Cargo.lock",
+    "Cargo.toml",
+    "Dockerfile",
+    "SKILL.md",
+    "build.gradle",
+    "build.gradle.kts",
+    "package.json",
+    "pyproject.toml",
+    "requirements.txt"
+  ]
+}
