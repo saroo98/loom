@@ -60,6 +60,18 @@
       "uniqueItems": true,
       "items": {"type": "string", "pattern": "^inv-[0-9a-f]{16,64}@sha256:[0-9a-f]{64}$"},
       "description": "Content-bound domain invariants this work order consumes."
+    },
+    "milestone": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$",
+      "description": "Exactly one sealed planning-program milestone, or delivery for a non-program plan."
+    },
+    "planning_obligations": {
+      "type": "array",
+      "maxItems": 24,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9:-]{0,127}$"},
+      "description": "Sealed specialist atom IDs assigned to this atomic work order."
     }
   }
 }

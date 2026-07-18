@@ -16,6 +16,11 @@ terminal cancellation, and safe cleanup only when its newly created draft pack i
 Planning actions also seal a deterministic plan contract: every artifact decision, required domain
 invariant/current fact/real medium, an explicitly defined `loom-lexical-v1` token and character
 ceiling, work-order topology, allowed host write scope, and the pre-authoring pack identity.
+Plan-contract v3 also seals a bounded planning-intelligence graph. Seven declarative specialist
+modules may emit typed atoms only from active task evidence; source material and ambient repository
+signals cannot activate them. Every atom is linked to its module digest and evidence edge, and the
+Tier-S projection retains only the relevant bounded obligations. Incident, maintenance, milestone,
+resume, and selective re-gating helpers use closed state transitions and content-bound receipts.
 Completion rejects omitted, extra, or changed rows and missing contract evidence before G1.
 `loom_gate`, `loom_lifecycle`, and `loom_lint` provide chronology, freshness, evidence, and pack
 integrity enforcement. A passing G1 must declare an independent reviewer and zero open High

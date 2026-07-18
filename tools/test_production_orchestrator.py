@@ -32,8 +32,34 @@ def _write(path, text):
     path.write_text(text, encoding="utf-8")
 
 
-def _author_medium_pack(pack, version):
+def _write_planning_assignments(pack, contract, work_order="WO-001", milestone="delivery"):
+    atoms = [item for item in contract["planning_intelligence"]["atoms"]
+             if item["gate_effect"] != "none"]
+    assignments = [{
+        "atom_id": item["atom_id"], "work_order": work_order,
+        "milestone": milestone,
+        "verification": loom_orchestrator.loom_planning_intelligence.expanded_verification(
+            contract["planning_intelligence"], item),
+    } for item in sorted(atoms, key=lambda value: value["atom_id"])]
+    body = {
+        "schema_version": 1, "plan_contract_hash": contract["contract_hash"],
+        "planning_intelligence_digest": contract["planning_intelligence"][
+            "intelligence_digest"],
+        "program_digest": (contract["planning_intelligence"]["program"] or {}).get(
+            "program_digest"),
+        "assignments": assignments,
+    }
+    value = {**body, "assignment_digest": loom_orchestrator.loom_domain_contract.digest(
+        "planning-obligation-assignments-v1", body)}
+    _write(pack / "planning-obligations.json", json.dumps(value, indent=2) + "\n")
+    return [item["atom_id"] for item in assignments]
+
+
+def _author_medium_pack(pack, version, contract):
     """Act as the host agent; production code must not import test helpers."""
+    _write(pack / "plan-contract.json", json.dumps(contract, indent=2) + "\n")
+    obligation_ids = _write_planning_assignments(pack, contract)
+    obligation_list = ", ".join(obligation_ids)
     _write(pack / "MANIFEST.md", f"""---
 artifact: manifest
 project: "orchestrator fixture"
@@ -42,6 +68,7 @@ status: active
 execution_mode: planned
 last_verified: {TODAY}
 loom_version: "{version}"
+plan_contract_version: 3
 domain_id: accounting
 domain_ids: [accounting]
 domain_coverage: adapter
@@ -126,6 +153,13 @@ period-close behavior, and dated jurisdiction rules.
 | accounting | current platform/tool versions and limits | repository and runtime inventory | verified |
 | accounting | current governing policies, standards, or regulations | request excludes policy changes | verified |
 | accounting | current target environment and release channel | local non-release target | verified |
+
+## Planning intelligence obligations
+
+- `security-privacy-safety:authority-boundary`
+- `security-privacy-safety:fail-closed-harm`
+- `verification-evidence:observable-oracle`
+- `verification-evidence:negative-recovery`
 """)
     _write(pack / "testing.md", f"""---
 artifact: testing-plan
@@ -152,6 +186,8 @@ routing: strong-coding
 size: S
 touches: [src/app.py]
 last_verified: {TODAY}
+milestone: delivery
+planning_obligations: [{obligation_list}]
 ---
 ## Intent
 Implement the requested change without violating D-001.
@@ -222,7 +258,10 @@ loom_version: "{version}"
 """)
 
 
-def _author_small_wo(pack):
+def _author_small_wo(pack, contract):
+    obligation_ids = [item["atom_id"] for item in contract["planning_intelligence"]["atoms"]
+                      if item["gate_effect"] != "none"]
+    obligation_list = ", ".join(sorted(obligation_ids))
     _write(pack / "WO-001.md", f"""---
 id: WO-001
 title: Add one CLI flag
@@ -233,6 +272,8 @@ routing: strong-coding
 size: S
 touches: [src/app.py]
 last_verified: {TODAY}
+milestone: delivery
+planning_obligations: [{obligation_list}]
 ---
 ## Intent
 Add the requested low-risk command-line flag.
@@ -245,6 +286,8 @@ Change only `src/app.py` and preserve existing exit and stream contracts.
 ## Acceptance criteria
 - [ ] `python -m unittest` exits 0.
 - [ ] Negative: an unknown flag exits nonzero without writing normal output.
+Planning obligations: `verification-evidence:observable-oracle`,
+`verification-evidence:negative-recovery`.
 ## Out of scope
 No architecture or packaging change.
 ## Escalation triggers
@@ -334,6 +377,28 @@ class ProductionOrchestratorTests(unittest.TestCase):
              *map(str, args)], capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=60)
 
+    def test_installed_phase_8_request_uses_deep_target_route(self):
+        request = (
+            "Phase 8 and 9 and 10 research is done and it's in the folders. "
+            "Read all of them, omit what is wrong, make a Loom plan for all three "
+            "phases separately and then start Phase 8's plan implementation."
+        )
+        opened = self.cli(
+            "invoke", "--request", request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed,
+            "--timeout-seconds", "300")
+        self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
+        action = json.loads(opened.stdout)
+        self.assertEqual("L", action["tier"])
+        self.assertEqual(["llm-agent"], action["domains"])
+        self.assertEqual(3, action["plan_contract"]["schema_version"])
+        active = {item["id"] for item in action["plan_contract"]
+                  ["planning_intelligence"]["active_modules"]}
+        self.assertTrue({"outcomes-requirements", "architecture-boundaries",
+                         "verification-evidence"}.issubset(active))
+        self.assertNotIn("interaction-accessibility", active)
+        self.assertNotIn("migration-release", active)
+
     def test_installed_invoke_drives_real_gate_and_seals_receipt(self):
         opened = self.cli(
             "invoke", "--request", self.request, "--cwd", self.repo,
@@ -346,12 +411,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("M", action["tier"])
         self.assertEqual(["accounting"], action["domains"])
         contract = action["plan_contract"]
-        self.assertEqual(2, contract["schema_version"])
+        self.assertEqual(3, contract["schema_version"])
         self.assertEqual(contract["domain_route"]["route_digest"],
                          contract["route_digest"])
         self.assertEqual(contract["domain_route"]["graph_digest"],
                          contract["composition_graph_digest"])
         self.assertEqual(15, len(contract["artifact_matrix"]))
+        self.assertIn("verification-evidence", {
+            item["id"] for item in contract["planning_intelligence"]["active_modules"]})
+        self.assertEqual("project", contract["planning_intelligence"]
+                         ["lifecycle_route"]["mode"])
         self.assertEqual(
             contract["contract_hash"],
             loom_orchestrator._hash({
@@ -371,7 +440,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            action["plan_contract"])
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -445,7 +515,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            result["plan_contract"])
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -585,7 +656,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         manifest = self.repo / "plans" / "MANIFEST.md"
         text = manifest.read_text(encoding="utf-8")
         text = text.replace(
@@ -610,7 +682,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
         loom_orchestrator._validate_authored_plan(action)
         cases = (
@@ -635,13 +708,103 @@ class ProductionOrchestratorTests(unittest.TestCase):
             finally:
                 path.write_text(original, encoding="utf-8")
 
+    def test_planning_assignment_cannot_change_verification_under_a_new_digest(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
+        action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
+        path = self.repo / "plans" / "planning-obligations.json"
+        value = json.loads(path.read_text(encoding="utf-8"))
+        value["assignments"][0]["verification"]["oracle"] = "self assertion"
+        body = dict(value); body.pop("assignment_digest")
+        value["assignment_digest"] = loom_orchestrator.loom_domain_contract.digest(
+            "planning-obligation-assignments-v1", body)
+        path.write_text(json.dumps(value), encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "scope, evidence, or verification"):
+            loom_orchestrator._validate_authored_plan(action)
+
+    def test_multi_phase_program_requires_every_milestone_and_atom_assignment(self):
+        request = (
+            "Phase 8, Phase 9, and Phase 10 research is complete. Make three plans "
+            "and then implement Phase 8 in the Loom agent runtime.")
+        opened = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        contract = opened["plan_contract"]
+        pack = self.repo / "program-assignments"
+        milestones = [item["id"] for item in contract["planning_intelligence"]
+                      ["program"]["milestone_graph"]["milestones"]]
+        atoms = [item for item in contract["planning_intelligence"]["atoms"]
+                 if item["gate_effect"] != "none"]
+        assignments = []
+        by_work_order = {f"WO-{index + 1:03d}": [] for index in range(len(milestones))}
+        for index, atom in enumerate(atoms):
+            slot = index % len(milestones)
+            work_order = f"WO-{slot + 1:03d}"
+            by_work_order[work_order].append(atom["atom_id"])
+            assignments.append({
+                "atom_id": atom["atom_id"], "work_order": work_order,
+                "milestone": milestones[slot],
+                "verification": loom_orchestrator.loom_planning_intelligence.
+                expanded_verification(contract["planning_intelligence"], atom)})
+        assignments.sort(key=lambda item: item["atom_id"])
+        for index, milestone in enumerate(milestones):
+            identity = f"WO-{index + 1:03d}"
+            obligations = ", ".join(sorted(by_work_order[identity]))
+            _write(pack / "work-orders" / f"{identity}.md", f"""---
+id: {identity}
+title: Complete {milestone}
+status: ready
+depends_on: []
+blocks: []
+routing: strong-coding
+size: S
+touches: [src/{milestone}.py]
+last_verified: {TODAY}
+milestone: {milestone}
+planning_obligations: [{obligations}]
+---
+""")
+        body = {"schema_version": 1, "plan_contract_hash": contract["contract_hash"],
+                "planning_intelligence_digest": contract["planning_intelligence"]
+                ["intelligence_digest"], "program_digest": contract["planning_intelligence"]
+                ["program"]["program_digest"], "assignments": assignments}
+        _write(pack / "planning-obligations.json", json.dumps({
+            **body, "assignment_digest": loom_orchestrator.loom_domain_contract.digest(
+                "planning-obligation-assignments-v1", body)}, indent=2) + "\n")
+        paths = sorted((pack / "work-orders").glob("WO-*.md"))
+        loom_orchestrator._validate_planning_assignments(pack, contract, paths)
+        _write(pack / "plan-contract.json", json.dumps(contract, indent=2) + "\n")
+        downstream = loom_orchestrator._program_impact(pack, ["src/phase-8.py"])
+        self.assertEqual(["phase-8", "phase-9", "phase-10"], downstream["affected"])
+        isolated = loom_orchestrator._program_impact(pack, ["src/phase-10.py"])
+        self.assertEqual(["phase-10"], isolated["affected"])
+        self.assertEqual(["phase-8", "phase-9"], isolated["isolated"])
+        broken = json.loads((pack / "planning-obligations.json").read_text(encoding="utf-8"))
+        broken["assignments"] = [item for item in broken["assignments"]
+                                 if item["milestone"] != "phase-10"]
+        body = dict(broken); body.pop("assignment_digest")
+        broken["assignment_digest"] = loom_orchestrator.loom_domain_contract.digest(
+            "planning-obligation-assignments-v1", body)
+        (pack / "planning-obligations.json").write_text(
+            json.dumps(broken), encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "incomplete|fully assigned"):
+            loom_orchestrator._validate_planning_assignments(pack, contract, paths)
+
     def test_plan_contract_enforces_budget_and_work_order_topology(self):
         opened = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
             install_root=self.installed)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
         decisions = self.repo / "plans" / "decisions.md"
         original = decisions.read_text(encoding="utf-8")
@@ -703,7 +866,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             item["id"] for item in action["context"]["memory"]})
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         usage = self.root / "replay-usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -838,7 +1002,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             action["plan_contract"], sort_keys=True, separators=(",", ":")).encode()), 4096)
         sealed = json.loads(Path(action["action_path"]).read_text(encoding="utf-8"))
         self.assertEqual(15, len(sealed["plan_contract"]["artifact_matrix"]))
-        _author_small_wo(self.repo / "plans")
+        _author_small_wo(self.repo / "plans", sealed["plan_contract"])
         completed = self.cli(
             "complete", "--action", action["action_path"])
         self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
@@ -855,7 +1019,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         opened = json.loads(self.cli(
             "invoke", "--request", request, "--cwd", self.repo,
             "--home", self.home, "--install-root", self.installed).stdout)
-        _author_small_wo(self.repo / "plans")
+        sealed = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
+        _author_small_wo(self.repo / "plans", sealed["plan_contract"])
         usage = self.root / "small-usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 300, "cache_read_tokens": 50,
@@ -891,7 +1056,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         opened = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed, now=started)
-        _author_small_wo(self.repo / "plans")
+        sealed = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
+        _author_small_wo(self.repo / "plans", sealed["plan_contract"])
         usage = self.root / "small-stale-usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 300, "cache_read_tokens": 50,
@@ -966,7 +1132,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--home", self.home, "--install-root", self.installed).stdout)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -1005,7 +1172,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--home", self.home, "--install-root", self.installed).stdout)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -1037,7 +1205,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--home", self.home, "--install-root", self.installed).stdout)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -1070,7 +1239,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--home", self.home, "--install-root", self.installed).stdout)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -1117,7 +1287,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--home", self.home, "--install-root", self.installed).stdout)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"])
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -1258,7 +1429,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--home", self.home, "--install-root", self.installed).stdout)
         _author_medium_pack(
             self.repo / "plans",
-            (self.installed / "VERSION").read_text(encoding="utf-8").strip())
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            second["plan_contract"])
         with mock.patch.object(
                 loom_orchestrator, "_handler_result",
                 side_effect=RuntimeError("seeded transient failure")):

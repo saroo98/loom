@@ -852,6 +852,30 @@
       ]
     },
     {
+      "enforcement": [
+        "tools/loom_domain.py",
+        "tools/loom_planning_intelligence.py",
+        "tools/loom_program.py",
+        "tools/loom_orchestrator.py",
+        "tools/loom_lint.py",
+        "schemas/planning-intelligence.schema.json",
+        "schemas/planning-obligations.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "bounded-planning-intelligence",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "status": "unverified",
+      "tests": [
+        "tools/test_planning_intelligence.py",
+        "tools/test_planning_program.py",
+        "tools/test_planning_evaluation.py",
+        "tools/test_production_orchestrator.py"
+      ]
+    },
+    {
       "enforcement": [],
       "evidence_ids": [],
       "id": "human-judgment-remains-owner-controlled",

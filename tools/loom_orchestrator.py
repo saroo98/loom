@@ -7,6 +7,7 @@ sys.dont_write_bytecode = True
 import argparse
 import contextlib
 import datetime as dt
+import fnmatch
 import hashlib
 import io
 import json
@@ -21,6 +22,8 @@ import loom_domain
 import loom_domain_bundle
 import loom_domain_contract
 import loom_domain_invariants
+import loom_planning_intelligence
+import loom_program
 import loom_domain_learning
 import loom_install
 import loom_improvement
@@ -50,7 +53,7 @@ ACTION_FIELDS = {
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
 MAX_ENCRYPTED_ACTION_BYTES = 384 * 1024
-PLAN_CONTRACT_SCHEMA_VERSION = 2
+PLAN_CONTRACT_SCHEMA_VERSION = 3
 ARTIFACT_ORDER = (
     "intake.md", "survey.md", "product.md", "architecture.md", "uiux.md",
     "contracts.md", "testing.md", "release-rollback.md", "security.md",
@@ -210,6 +213,8 @@ def _validate_action(value, path):
             "prior_state_hash", "current_state_hash", "force_full"}
         if value["tier"] == "S":
             repair_fields.add("lifecycle_sha256")
+        else:
+            repair_fields.add("program_impact")
         if not isinstance(repair_plan, dict) or set(repair_plan) != repair_fields \
                 or repair_plan["regate_scope"] not in {"selective", "full", "compact"} \
                 or (repair_plan["regate_scope"] == "compact") != (value["tier"] == "S") \
@@ -223,6 +228,12 @@ def _validate_action(value, path):
         if value["tier"] == "S" and not re.fullmatch(
                 r"[0-9a-f]{64}", str(repair_plan["lifecycle_sha256"])):
             raise OrchestratorError("ACTION_CORRUPT", "compact lifecycle binding is invalid")
+        if value["tier"] != "S" and repair_plan["program_impact"] is not None:
+            try:
+                loom_program.validate_impact_receipt(repair_plan["program_impact"])
+            except loom_program.ProgramError as exc:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT", f"sealed program impact is invalid: {exc}") from exc
     elif repair_plan is not None:
         raise OrchestratorError("ACTION_CORRUPT", "non-repair action carries repair scope")
     if value["host_result"] is not None and not isinstance(value["host_result"], dict):
@@ -334,6 +345,7 @@ tier: {prepared.route_contract['tier']}
 status: draft
 last_verified: {dt.date.today().isoformat()}
 loom_version: {json.dumps(version)}
+plan_contract_version: 3
 execution_mode: planned
 domain_id: {prepared.domains[0]}
 domain_ids: [{', '.join(prepared.domains)}]
@@ -500,6 +512,8 @@ def _make_plan_contract(action, prepared):
     topology = {
         "S": (1, 1), "M": (1, 8), "L": (2, 24), "XL": (3, 64),
     }
+    planning_intelligence = loom_planning_intelligence.compile_intelligence(
+        action["request"], tier=tier, route=route)
     body = {
         "schema_version": PLAN_CONTRACT_SCHEMA_VERSION,
         "request_hash": prepared.request_hash,
@@ -525,6 +539,7 @@ def _make_plan_contract(action, prepared):
             "maximum_sources": 20, "maximum_invariants": 32,
             "maximum_retrieval_rounds": 2,
         },
+        "planning_intelligence": planning_intelligence,
         "current_facts_to_verify": current_facts,
         "verification_media": verification_media,
         "budget": {
@@ -540,7 +555,8 @@ def _make_plan_contract(action, prepared):
         "completion_gates": [
             "exact-artifact-matrix", "domain-invariant-contract",
             "current-fact-contract", "verification-media-contract",
-            "budget", "work-order-topology", "lint", "g1", "lifecycle",
+            "planning-intelligence", "budget", "work-order-topology", "lint", "g1",
+            "lifecycle",
         ],
     }
     return {**body, "contract_hash": _hash(body)}
@@ -569,6 +585,10 @@ def _tier_s_host_capsule(contract):
                           for item in contract["current_facts_to_verify"]],
         "verification_media": sorted({item["medium"]
                                       for item in contract["verification_media"]}),
+        "planning_atoms": [{"id": item["atom_id"], "kind": item["kind"],
+                             "statement": item["statement"],
+                             "required_real_medium": item["required_real_medium"]}
+                            for item in contract["planning_intelligence"]["atoms"]],
         "promotion_triggers": ["unknown-or-partial-coverage", "consequential-change",
             "new-boundary", "more-than-five-touches", "irreversible-action",
             "multiple-outcomes", "missing-real-medium", "budget-overflow"],
@@ -582,12 +602,118 @@ def _tier_s_host_capsule(contract):
     return capsule
 
 
+def _validate_planning_assignments(pack, contract, work_orders):
+    intelligence = contract["planning_intelligence"]
+    required_atoms = {
+        item["atom_id"]: item for item in intelligence["atoms"]
+        if item["gate_effect"] != "none"}
+    work_order_records = {}
+    for path in work_orders:
+        try:
+            frontmatter, _ = loom_lint.parse_frontmatter(
+                path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as exc:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", f"{path.name} cannot be read: {exc}") from exc
+        if not isinstance(frontmatter, dict) or not frontmatter.get("id"):
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", f"{path.name} has no valid work-order identity")
+        work_order_records[frontmatter["id"]] = (path, frontmatter)
+    program = intelligence["program"]
+    if program is None:
+        allowed_milestones = {"delivery"}
+    else:
+        try:
+            loom_program.validate_program(program)
+        except loom_program.ProgramError as exc:
+            raise OrchestratorError("PLAN_CONTRACT_MISMATCH", str(exc)) from exc
+        allowed_milestones = {
+            item["id"] for item in program["milestone_graph"]["milestones"]}
+    if contract["tier"] == "S":
+        if set(work_order_records) != {"WO-001"}:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", "Tier-S planning assignments require WO-001")
+        frontmatter = work_order_records["WO-001"][1]
+        if frontmatter.get("milestone") != "delivery" \
+                or sorted(frontmatter.get("planning_obligations", [])) != sorted(required_atoms):
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH",
+                "Tier-S work order does not bind every sealed planning obligation")
+        return
+
+    path = pack / "planning-obligations.json"
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH", f"planning obligation assignments are invalid: {exc}") \
+            from exc
+    fields = {"schema_version", "plan_contract_hash", "planning_intelligence_digest",
+              "program_digest", "assignments", "assignment_digest"}
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1:
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH", "planning obligation assignment fields are invalid")
+    body = dict(value); claimed = body.pop("assignment_digest")
+    if claimed != loom_domain_contract.digest("planning-obligation-assignments-v1", body) \
+            or value["plan_contract_hash"] != contract["contract_hash"] \
+            or value["planning_intelligence_digest"] != intelligence["intelligence_digest"] \
+            or value["program_digest"] != (program or {}).get("program_digest"):
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH", "planning obligation assignments are stale or mutated")
+    assignments = value.get("assignments")
+    if not isinstance(assignments, list) or len(assignments) != len(required_atoms) \
+            or assignments != sorted(assignments, key=lambda item: item.get("atom_id", "")):
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH", "planning obligations are incomplete or noncanonical")
+    seen = set(); milestone_use = set(); by_work_order = {
+        identity: [] for identity in work_order_records}
+    for assignment in assignments:
+        if not isinstance(assignment, dict) or set(assignment) != {
+                "atom_id", "work_order", "milestone", "verification"}:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", "planning obligation assignment is invalid")
+        atom_id = assignment["atom_id"]
+        if atom_id in seen or atom_id not in required_atoms \
+                or assignment["work_order"] not in work_order_records \
+                or assignment["milestone"] not in allowed_milestones \
+                or assignment["verification"] != loom_planning_intelligence.expanded_verification(
+                    intelligence, required_atoms[atom_id]):
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH",
+                "planning obligation assignment changes scope, evidence, or verification")
+        seen.add(atom_id); milestone_use.add(assignment["milestone"])
+        by_work_order[assignment["work_order"]].append(atom_id)
+    if seen != set(required_atoms) or (program is not None and milestone_use != allowed_milestones):
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH",
+            "planning obligations or program milestones are not fully assigned")
+    for identity, (_path, frontmatter) in work_order_records.items():
+        assigned = sorted(by_work_order[identity])
+        if sorted(frontmatter.get("planning_obligations", [])) != assigned \
+                or frontmatter.get("milestone") not in allowed_milestones:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH",
+                f"{identity} frontmatter diverges from sealed planning assignments")
+
+
 def _validate_authored_plan(action):
     contract = action["plan_contract"]
     root = Path(action["explicit_target"] or action["cwd"])
     pack = root / contract["pack_root"]
     if not pack.is_dir() or pack.is_symlink():
         raise OrchestratorError("PLAN_CONTRACT_MISMATCH", "planning pack is missing or unsafe")
+    if action["tier"] != "S":
+        contract_path = pack / "plan-contract.json"
+        try:
+            persisted_contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH", f"persisted plan contract is invalid: {exc}") from exc
+        if persisted_contract != contract:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH",
+                "persisted plan contract differs from the sealed action contract")
     text_files = []
     for path in sorted(pack.rglob("*"), key=lambda item: item.as_posix()):
         if path.is_symlink() or (not path.is_file() and not path.is_dir()):
@@ -595,7 +721,9 @@ def _validate_authored_plan(action):
                 "PLAN_CONTRACT_MISMATCH", "planning pack contains an unsafe entry")
         if path.is_file():
             try:
-                text_files.append(path.read_text(encoding="utf-8"))
+                text = path.read_text(encoding="utf-8")
+                if path.suffix.casefold() == ".md":
+                    text_files.append(text)
             except (OSError, UnicodeError) as exc:
                 raise OrchestratorError(
                     "PLAN_CONTRACT_MISMATCH", f"planning artifact is not UTF-8 text: {exc}") \
@@ -614,6 +742,7 @@ def _validate_authored_plan(action):
     if not minimum <= len([item for item in work_orders if item.is_file()]) <= maximum:
         raise OrchestratorError(
             "PLAN_CONTRACT_MISMATCH", "work-order count is outside the sealed topology")
+    _validate_planning_assignments(pack, contract, work_orders)
     if action["tier"] == "S":
         return None
 
@@ -762,6 +891,55 @@ def _repair_force_full(pack, instant):
         raise OrchestratorError(
             "REPAIR_SCOPE_INDETERMINATE", f"cannot establish freshness scope: {exc}") from exc
     return (instant.date() - verified).days > window
+
+
+def _program_impact(pack, changed_paths, *, force_full=False):
+    """Bind repository drift to the sealed milestone dependency closure."""
+    pack = Path(pack)
+    contract_path = pack / "plan-contract.json"
+    assignment_path = pack / "planning-obligations.json"
+    if not contract_path.is_file() or not assignment_path.is_file():
+        return None
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        assignments = json.loads(assignment_path.read_text(encoding="utf-8"))
+        program = contract["planning_intelligence"]["program"]
+    except (OSError, UnicodeError, json.JSONDecodeError, KeyError) as exc:
+        raise OrchestratorError(
+            "REPAIR_SCOPE_INDETERMINATE", f"cannot load sealed planning program: {exc}") \
+            from exc
+    if program is None:
+        return None
+    try:
+        loom_program.validate_program(program)
+    except loom_program.ProgramError as exc:
+        raise OrchestratorError("REPAIR_SCOPE_INDETERMINATE", str(exc)) from exc
+    milestone_by_wo = {
+        item["work_order"]: item["milestone"] for item in assignments.get("assignments", [])
+        if isinstance(item, dict) and item.get("work_order") and item.get("milestone")}
+    seeds = set()
+    for path in sorted((pack / "work-orders").glob("WO-*.md")):
+        try:
+            frontmatter, _ = loom_lint.parse_frontmatter(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError) as exc:
+            raise OrchestratorError(
+                "REPAIR_SCOPE_INDETERMINATE", f"cannot inspect program work order: {exc}") \
+                from exc
+        identity = (frontmatter or {}).get("id")
+        patterns = (frontmatter or {}).get("touches", [])
+        if isinstance(patterns, str):
+            patterns = [patterns]
+        if force_full or any(fnmatch.fnmatchcase(changed, pattern)
+                             for changed in changed_paths for pattern in patterns):
+            if identity in milestone_by_wo:
+                seeds.add(milestone_by_wo[identity])
+    graph = program["milestone_graph"]
+    if not seeds:
+        seeds = {item["id"] for item in graph["milestones"]}
+    try:
+        return loom_program.affected_milestones(graph, sorted(seeds))
+    except loom_program.ProgramError as exc:
+        raise OrchestratorError("REPAIR_SCOPE_INDETERMINATE", str(exc)) from exc
 
 
 def _read_repair_result(result_path, action):
@@ -1573,7 +1751,10 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                 raise OrchestratorError(
                     "REPAIR_SCOPE_INDETERMINATE",
                     "repair route has no verifiable affected scope")
-            action["repair_plan"] = {**preview, "force_full": force_full}
+            program_impact = _program_impact(
+                target / "plans", preview["changed_paths"], force_full=force_full)
+            action["repair_plan"] = {
+                **preview, "force_full": force_full, "program_impact": program_impact}
     action = _write_action(path, action, action_security)
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",

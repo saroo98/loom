@@ -31,6 +31,9 @@ jobs:
       - name: Run locked unknown-domain benchmark and scope firewall
         working-directory: tools
         run: python -B loom_domain_benchmark.py --scope-traces 100000 --performance-iterations 1000
+      - name: Run adversarial planning-intelligence holdouts
+        working-directory: tools
+        run: python -B loom_planning_eval.py --output planning-intelligence-evaluation.json
       - name: Compile bounded Rust fuzz targets
         run: cargo check --locked --manifest-path vault-helper/fuzz/Cargo.toml --bins
       - name: Run hostile and trust-critical regressions
@@ -55,3 +58,6 @@ jobs:
           test_domain_freshness.py
           test_unknown_domain_learning.py
           test_domain_benchmark.py
+          test_planning_intelligence.py
+          test_planning_program.py
+          test_planning_evaluation.py

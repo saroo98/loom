@@ -65,7 +65,9 @@ import loom_gate
 import loom_memory
 import loom_domain
 import loom_domain_bundle
+import loom_domain_contract
 import loom_lifecycle
+import loom_planning_intelligence
 
 ENUMS = {
     "manifest.status": {"draft", "gated", "active", "stale", "maintenance", "archived"},
@@ -1168,6 +1170,8 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                             "routing": fm.get("routing", ""),
                             "touches": touches, "blocks": blocks,
                             "domain_invariants": fm.get("domain_invariants", []),
+                            "milestone": fm.get("milestone"),
+                            "planning_obligations": fm.get("planning_obligations", []),
                             "stale_ok": fm.get("status") in ("blocked", "done", "cancelled")}
                 if d and fm.get("status") in ("ready", "in-progress") and (today - d).days > window:
                     add_staleness(
@@ -1266,6 +1270,85 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                     rep.add("ERROR", "E19", f, 1,
                             f"{wid} is done without reproducible close-out evidence")
         check_wo_graph(rep, wos)
+
+        if mfm.get("tier") in {"M", "L", "XL"} and execution_mode == "planned" \
+                and not historical and mfm.get("plan_contract_version") == 3:
+            contract_path = pack / "plan-contract.json"
+            assignment_path = pack / "planning-obligations.json"
+            contract = assignments = None
+            try:
+                contract = json.loads(
+                    contract_path.read_text(encoding="utf-8"),
+                    object_pairs_hook=loom_lifecycle._strict_object)
+                validate_schema(rep, contract_path, contract, "plan-contract.schema.json")
+                body = dict(contract); claimed = body.pop("contract_hash")
+                expected = hashlib.sha256(json.dumps(
+                    body, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+                    allow_nan=False).encode("utf-8")).hexdigest()
+                if claimed != expected:
+                    raise ValueError("plan contract digest mismatch")
+                loom_planning_intelligence.validate(contract["planning_intelligence"])
+                assignments = json.loads(
+                    assignment_path.read_text(encoding="utf-8"),
+                    object_pairs_hook=loom_lifecycle._strict_object)
+                validate_schema(
+                    rep, assignment_path, assignments,
+                    "planning-obligations.schema.json")
+            except (OSError, UnicodeError, json.JSONDecodeError, KeyError, ValueError,
+                    loom_lifecycle.LifecycleError,
+                    loom_planning_intelligence.PlanningIntelligenceError) as exc:
+                rep.add("ERROR", "E26", contract_path, 1,
+                        f"sealed planning intelligence is invalid: {exc}")
+            if isinstance(contract, dict) and isinstance(assignments, dict):
+                assignment_body = dict(assignments)
+                assignment_digest = assignment_body.pop("assignment_digest", None)
+                intelligence = contract["planning_intelligence"]
+                program = intelligence["program"]
+                expected_atoms = {item["atom_id"]: item for item in intelligence["atoms"]
+                                  if item["gate_effect"] != "none"}
+                expected_program = (program or {}).get("program_digest")
+                rows = assignments.get("assignments", [])
+                row_ids = [item.get("atom_id") for item in rows
+                           if isinstance(item, dict)] if isinstance(rows, list) else []
+                invalid = assignment_digest != loom_domain_contract.digest(
+                    "planning-obligation-assignments-v1", assignment_body) \
+                    or assignments.get("plan_contract_hash") != contract.get("contract_hash") \
+                    or assignments.get("planning_intelligence_digest") != \
+                    intelligence.get("intelligence_digest") \
+                    or assignments.get("program_digest") != expected_program \
+                    or row_ids != sorted(expected_atoms) \
+                    or len(row_ids) != len(set(row_ids))
+                milestones = ({"delivery"} if program is None else {
+                    item["id"] for item in program["milestone_graph"]["milestones"]})
+                used_milestones = set()
+                assigned_by_wo = {identity: [] for identity in wos}
+                if not invalid:
+                    for row in rows:
+                        atom = expected_atoms.get(row.get("atom_id"))
+                        work_order = row.get("work_order")
+                        milestone = row.get("milestone")
+                        if set(row) != {"atom_id", "work_order", "milestone", "verification"} \
+                                or atom is None or work_order not in wos \
+                                or milestone not in milestones \
+                                or row.get("verification") != \
+                                loom_planning_intelligence.expanded_verification(
+                                    intelligence, atom):
+                            invalid = True
+                            break
+                        used_milestones.add(milestone)
+                        assigned_by_wo[work_order].append(row["atom_id"])
+                if program is not None and used_milestones != milestones:
+                    invalid = True
+                for identity, wo in wos.items():
+                    declared = wo["planning_obligations"] \
+                        if isinstance(wo["planning_obligations"], list) else []
+                    if sorted(declared) != sorted(assigned_by_wo[identity]) \
+                            or wo["milestone"] not in milestones:
+                        invalid = True
+                if invalid:
+                    rep.add("ERROR", "E26", assignment_path, 1,
+                            "planning assignments diverge from the sealed contract, work "
+                            "orders, verification, or program milestones")
 
         if validated_bundle is not None:
             required_bindings = {
