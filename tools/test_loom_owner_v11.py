@@ -77,6 +77,14 @@ class OwnerBootstrapTests(unittest.TestCase):
         self.assertFalse(summary["telemetry"])
         self.assertEqual(0, summary["active_memory_records"])
         self.assertEqual(0, summary["recent_memory_effects"])
+        self.assertEqual(0, summary["dormant_memory_records"])
+        self.assertEqual({}, summary["recent_memory_effect_states"])
+        self.assertTrue(summary["bounds_within_policy"])
+        self.assertEqual(loom_vault.MAX_ACTIVE_RECORDS,
+                         summary["bounds"]["active_memory"]["limit"])
+        self.assertEqual(loom_vault.MAX_MEMORY_RECORDS,
+                         summary["bounds"]["retained_memory"]["limit"])
+        self.assertIn("preference_conflicts", summary)
         self.assertNotIn("statement", json.dumps(summary).casefold())
         self.assertNotIn("ciphertext", json.dumps(summary).casefold())
 

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://loom.local/schemas/cache-generation.schema.json",
+  "title": "Loom cache generation receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "classes", "registry_digest", "authorizes_execution"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "classes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["static-guidance", "host-adapter", "project-routing", "domain-authority", "owner-selection", "provider-prefix"],
+      "properties": {
+        "static-guidance": {"$ref": "#/$defs/cacheClass"},
+        "host-adapter": {"$ref": "#/$defs/cacheClass"},
+        "project-routing": {"$ref": "#/$defs/cacheClass"},
+        "domain-authority": {"$ref": "#/$defs/cacheClass"},
+        "owner-selection": {"$ref": "#/$defs/cacheClass"},
+        "provider-prefix": {"$ref": "#/$defs/cacheClass"}
+      }
+    },
+    "registry_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "authorizes_execution": {"const": false}
+  },
+  "$defs": {
+    "cacheClass": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dependencies", "generation"],
+      "properties": {
+        "dependencies": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
+        "generation": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

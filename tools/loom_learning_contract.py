@@ -23,8 +23,9 @@ def load_contract(path=CONTRACT_PATH):
         raise LearningContractError(f"owner-learning contract is unreadable: {exc}") from exc
     required = {
         "schema_version", "payload_schema_version", "authority", "scopes",
-        "legacy_scope_aliases", "categories", "lifecycle_states", "attribution_states",
-        "evidence_states", "transitions", "promotion", "bounds", "claims", "privacy",
+        "legacy_scope_aliases", "legacy_status_aliases", "categories",
+        "lifecycle_states", "attribution_states", "evidence_states", "transitions",
+        "promotion", "bounds", "claims", "privacy",
     }
     if not isinstance(value, dict) or set(value) != required:
         raise LearningContractError("owner-learning contract fields are unknown or missing")
@@ -63,13 +64,23 @@ def check_runtime():
         mismatches.append("attribution states")
     if loom_vault.EVIDENCE_STATES != EVIDENCE_STATES:
         mismatches.append("evidence states")
+    runtime_scopes = loom_vault.SCOPES - set(CONTRACT["legacy_scope_aliases"])
+    if runtime_scopes != SCOPES:
+        mismatches.append("memory scopes")
+    runtime_states = loom_vault.STATUSES - set(CONTRACT["legacy_status_aliases"])
+    if runtime_states != LIFECYCLE_STATES:
+        mismatches.append("lifecycle states")
     if loom_vault.MAX_ACTIVE_RECORDS != BOUNDS["active_memory_items"]:
         mismatches.append("active memory bound")
+    if loom_vault.MAX_MEMORY_RECORDS != BOUNDS["retained_memory_records"]:
+        mismatches.append("retained memory bound")
+    if loom_vault.MAX_LEARNING_ARCHIVE_BYTES != BOUNDS["learning_archive_bytes"]:
+        mismatches.append("learning archive byte bound")
     if loom_vault.MAX_EVENTS != BOUNDS["events"]:
         mismatches.append("event bound")
     if mismatches:
         raise LearningContractError("runtime contract drift: " + ", ".join(mismatches))
-    return {"status": "ok", "schema_version": 3, "checks": 6}
+    return {"status": "ok", "schema_version": 3, "checks": 10}
 
 
 def main(argv=None):

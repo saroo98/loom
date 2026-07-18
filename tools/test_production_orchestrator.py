@@ -410,6 +410,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("plan", action["intent"])
         self.assertEqual("M", action["tier"])
         self.assertEqual(["accounting"], action["domains"])
+        self.assertEqual("automatic", action["continuation_authority"]["mode"])
+        self.assertFalse(action["continuation_authority"]["owner_authorized"])
+        self.assertEqual("progress", action["owner_message"]["state"])
+        self.assertEqual(2, len(action["owner_message"]["human"].splitlines()))
         contract = action["plan_contract"]
         self.assertEqual(3, contract["schema_version"])
         self.assertEqual(contract["domain_route"]["route_digest"],
@@ -436,6 +440,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         sealed_action = json.loads(
             Path(action["action_path"]).read_text(encoding="utf-8"))
         self.assertEqual(contract, sealed_action["plan_contract"])
+        self.assertEqual(action["continuation_authority"],
+                         sealed_action["continuation_authority"])
         self.assertTrue((self.repo / "plans" / "lifecycle.json").is_file())
 
         _author_medium_pack(
@@ -508,10 +514,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
             result["context"]["preferences"], action["context"]["preferences"])
         self.assertEqual(result["context_manifest"], action["context_manifest"])
         self.assertEqual(
-            {"skill/loom/SKILL.md", "START-HERE.md"},
+            {"skill/loom/SKILL.md", "START-HERE.md", "contracts/cache-classes-v1.json"},
             {item["path"] for item in action["context_manifest"]["entries"]})
-        self.assertEqual(2, action["context_manifest"]["load_metrics"]["disk_reads"])
-        self.assertEqual(2, action["context_manifest"]["load_metrics"]["cache_hits"])
+        self.assertEqual(3, action["context_manifest"]["load_metrics"]["disk_reads"])
+        self.assertEqual(3, action["context_manifest"]["load_metrics"]["cache_hits"])
 
         _author_medium_pack(
             self.repo / "plans",
@@ -851,6 +857,19 @@ planning_obligations: [{obligations}]
         path.write_text(json.dumps(action), encoding="utf-8")
         with self.assertRaisesRegex(
                 loom_orchestrator.OrchestratorError, "static context manifest"):
+            loom_orchestrator._read_action(path)
+
+    def test_rehashed_action_cannot_forge_continuation_authority(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        action = json.loads(path.read_text(encoding="utf-8"))
+        action["continuation_authority"]["mode"] = "explicit-authority"
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "continuation authority"):
             loom_orchestrator._read_action(path)
 
     def test_production_host_outcome_records_controlled_provider_replay_pair(self):

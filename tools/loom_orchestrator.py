@@ -17,6 +17,7 @@ import uuid
 from pathlib import Path
 
 import loom_gate
+import loom_authority
 import loom_crypto
 import loom_domain
 import loom_domain_bundle
@@ -30,6 +31,7 @@ import loom_improvement
 import loom_lifecycle
 import loom_lint
 import loom_memory
+import loom_message
 import loom_owner
 import loom_performance
 import loom_runtime
@@ -39,7 +41,7 @@ import loom_vault_adapter
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 5
+ACTION_SCHEMA_VERSION = 6
 ACTION_FIELDS = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -48,7 +50,7 @@ ACTION_FIELDS = {
     "operation_id", "journal_path", "initial_pack_hash",
     "remove_pristine_pack", "work_order", "prepared", "context", "result",
     "repair_plan", "host_result", "plan_contract", "domain_contract", "context_manifest",
-    "action_hash",
+    "continuation_authority", "owner_message", "action_hash",
 }
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
@@ -167,6 +169,27 @@ def _validate_action(value, path):
     if value["context_manifest"] != expected_manifest:
         raise OrchestratorError(
             "ACTION_CORRUPT", "sealed static context manifest is invalid or stale")
+    try:
+        loom_authority.validate(value["continuation_authority"])
+    except loom_authority.AuthorityError as exc:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", f"sealed continuation authority is invalid: {exc}") from exc
+    try:
+        loom_message.validate(value["owner_message"])
+    except loom_message.MessageError as exc:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", f"sealed owner message is invalid: {exc}") from exc
+    expected_owner_message = loom_message.build(
+        state="progress",
+        consequence={"S": "ordinary", "M": "material", "L": "high",
+                     "XL": "critical"}[value["tier"]],
+        verification="pending", freshness="current", reversible=True,
+        summary="Loom prepared the next safe frontier.",
+        next_action="Complete and verify the sealed frontier.",
+        receipt_id="action-" + value["action_id"])
+    if value["owner_message"] != expected_owner_message:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "sealed owner message does not match the action")
     try:
         prepared = loom_runtime.PreparedInvocation.from_dict(value["prepared"])
     except loom_runtime.RuntimeError as exc:
@@ -1636,6 +1659,22 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     if opened.terminal_receipt is not None:
         return opened.terminal_receipt.to_dict()
     prepared = opened.prepared
+    conflict_selector = getattr(memory, "relevant_preference_conflicts", None)
+    conflicts = (conflict_selector(
+        domains=prepared.domains, project_id=prepared.project_id)
+        if conflict_selector is not None else [])
+    if conflicts:
+        keys = sorted({item["preference_key"] for item in conflicts})
+        controller.handlers[prepared.intent] = lambda _context: {
+            "status": "blocked", "code": "preference-conflict",
+            "success": False, "metrics": {}, "evidence_ids": [],
+            "reversible_action_ids": [],
+            "user_message": (
+                "One owner choice is required for: " + ", ".join(keys))}
+        return controller.run(
+            request, invocation_id=invocation_id, cwd=cwd,
+            explicit_target=target, now=now, continue_open=True,
+            prepared=prepared).to_dict()
     context_capsule = controller.prepare_context(opened, request)
     created_at = _stamp(now)
     expires_at = _stamp(
@@ -1661,6 +1700,18 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "domain_contract": loom_domain.select_domains(
             request, explicit=list(prepared.domains))["domain_contract"],
         "context_manifest": loom_performance.production_context_manifest(install_root),
+        "continuation_authority": loom_authority.decide(
+            loom_authority.facts_for_intent(prepared.intent),
+            owner_authorized=prepared.intent in {
+                "execute", "close", "remember", "forget", "undo"}),
+        "owner_message": loom_message.build(
+            state="progress",
+            consequence={"S": "ordinary", "M": "material", "L": "high",
+                         "XL": "critical"}[prepared.route_contract["tier"]],
+            verification="pending", freshness="current", reversible=True,
+            summary="Loom prepared the next safe frontier.",
+            next_action="Complete and verify the sealed frontier.",
+            receipt_id="action-" + action_id),
         "result": None,
     }
     if prepared.route_contract["blocked"]:
@@ -1767,6 +1818,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                           if action["tier"] == "S" and action["plan_contract"] is not None
                           else action["plan_contract"]),
         "context_manifest": action["context_manifest"],
+        "continuation_authority": action["continuation_authority"],
+        "owner_message": action["owner_message"],
         "context": {
             "memory": context_capsule["memory"],
             "preferences": context_capsule["preferences"],

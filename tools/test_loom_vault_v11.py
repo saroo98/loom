@@ -173,6 +173,29 @@ class OwnerVaultTests(unittest.TestCase):
         self.assertEqual({accounting["id"], global_record["id"]}, {item["id"] for item in selected})
         self.assertNotIn(three_d["id"], {item["id"] for item in selected})
 
+    def test_legacy_stale_status_materializes_as_revalidation_required(self):
+        legacy = self.record()
+        legacy["status"] = "stale"
+        stored = self.vault.put_memory(legacy)
+        self.assertEqual("revalidation-required", stored["status"])
+        with self.vault._connect() as connection:
+            status = connection.execute(
+                "SELECT status FROM memory_records WHERE record_id=?",
+                (stored["id"],)).fetchone()[0]
+        self.assertEqual("revalidation-required", status)
+
+    def test_dormant_records_do_not_consume_the_active_selection_bound(self):
+        for index in range(loom_vault.MAX_ACTIVE_RECORDS):
+            value = self.record(
+                statement=f"Dormant retained rule {index}",
+                record_id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"dormant-{index}")))
+            value["status"] = "dormant"
+            self.vault.put_memory(value)
+        active = self.vault.put_memory(self.record(statement="Still selectable"))
+        self.assertEqual("active", active["status"])
+        self.assertEqual(loom_vault.MAX_ACTIVE_RECORDS + 1,
+                         self.vault.count("memory_records"))
+
     def test_project_identity_uses_owner_vault_not_runtime_install(self):
         lineage = {"kind": "git-lineage-v1", "roots": ["a" * 40], "origin_hash": "b" * 64}
         owner = self.vault.identity()["owner_vault_id"]

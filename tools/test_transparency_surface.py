@@ -118,9 +118,12 @@ class TransparencySurfaceTests(unittest.TestCase):
             invocation_id="00000000-0000-4000-8000-000000009001",
             now="2026-07-14T10:00:00Z")
         view = receipt.owner_view()
-        self.assertIn("Understood:", view)
-        self.assertIn("Changed: 1 reversible adaptation", view)
-        self.assertLessEqual(len(view), 800)
+        self.assertEqual(2, len(view.splitlines()))
+        self.assertIn("verification: verified", view)
+        self.assertIn("freshness: current", view)
+        self.assertIn("reversible: yes", view)
+        self.assertIn("Receipt: session-", view)
+        self.assertLessEqual(len(view), 600)
 
     def test_natural_profile_request_is_answered_without_a_user_handler(self):
         loom_memory.set_preference(

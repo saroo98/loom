@@ -26,6 +26,8 @@ from loom_reliability import _is_trusted_os_alias
 VAULT_SCHEMA_VERSION = 3
 PAYLOAD_SCHEMA_VERSION = 3
 MAX_ACTIVE_RECORDS = 256
+MAX_MEMORY_RECORDS = 512
+MAX_LEARNING_ARCHIVE_BYTES = 16 * 1024 * 1024
 MAX_EVENTS = 10000
 MAX_DEVICES = 32
 MAX_DEVICE_HISTORY = 256
@@ -767,6 +769,9 @@ class OwnerVault:
         _uuid(record["id"], "memory id")
         if record["scope"] not in SCOPES or record["status"] not in STATUSES:
             raise VaultError("memory scope or status is invalid")
+        record = json.loads(json.dumps(record))
+        if record["status"] == "stale":
+            record["status"] = "revalidation-required"
         if record["scope"] in {"global", "general"} and (record["domain"] is not None
                                                or record["project_id"] is not None):
             raise VaultError("general memory cannot carry domain or project identity")
@@ -807,7 +812,7 @@ class OwnerVault:
                 raise VaultError("active preference must be explicit and keyed")
         elif record["preference_key"] is not None or record["preference_value"] is not None:
             raise VaultError("non-preference memory cannot carry preference values")
-        return json.loads(json.dumps(record))
+        return record
 
     def _semantic_tag(self, record):
         body = {key: record.get(key) for key in (
@@ -870,10 +875,16 @@ class OwnerVault:
         domain_tag, project_tag, component_tag, device_tag = self._tags(record)
 
         def write(connection):
-            count = connection.execute("SELECT COUNT(*) FROM memory_records").fetchone()[0]
+            total_count = connection.execute(
+                "SELECT COUNT(*) FROM memory_records").fetchone()[0]
+            active_count = connection.execute(
+                "SELECT COUNT(*) FROM memory_records WHERE status='active'").fetchone()[0]
             exists = connection.execute(
                 "SELECT 1 FROM memory_records WHERE record_id=?", (record["id"],)).fetchone()
-            if not exists and count >= MAX_ACTIVE_RECORDS:
+            if not exists and total_count >= MAX_MEMORY_RECORDS:
+                raise VaultError("retained memory record bound reached")
+            if not exists and record["status"] == "active" \
+                    and active_count >= MAX_ACTIVE_RECORDS:
                 raise VaultError("active memory record bound reached")
             event = self._next_event(
                 connection, kind="memory-upsert", payload=record, scope=record["scope"],
@@ -885,12 +896,73 @@ class OwnerVault:
             self._apply_event(
                 connection, event=event,
                 body={"kind": "memory-upsert", "payload": record}, receipt=receipt)
+            cold_bytes = connection.execute(
+                "SELECT COALESCE(SUM(LENGTH(ciphertext)),0) FROM memory_records "
+                "WHERE status!='active'").fetchone()[0]
+            if cold_bytes > MAX_LEARNING_ARCHIVE_BYTES:
+                raise VaultError("learning archive byte bound reached")
             if receipt["deduplicated"] and connection.execute(
                     "SELECT 1 FROM tombstones WHERE record_id=?", (record["id"],)).fetchone():
                 return {"id": record["id"], "status": "forgotten"}
             return json.loads(json.dumps(record))
 
         return self.run_transaction(write)
+
+    def relevant_preference_conflicts(self, *, domain, project_id=None):
+        """Return bounded conflict metadata only when no newer active choice resolves it."""
+        if not isinstance(domain, str) or not domain \
+                or project_id is not None and (
+                    not isinstance(project_id, str) or not project_id.startswith("p-")):
+            raise VaultError("preference conflict scope is invalid")
+        owner = self.identity()["owner_vault_id"]
+        result = []
+        with self._connect() as connection:
+            active_rows = connection.execute(
+                "SELECT * FROM memory_records WHERE status='active'").fetchall()
+            active = [self._decrypt_record(row) for row in active_rows]
+            rows = connection.execute(
+                "SELECT * FROM quarantine WHERE kind='preference-conflict' "
+                "ORDER BY created_at,item_id LIMIT 128").fetchall()
+            for row in rows:
+                aad = f"quarantine:{owner}:{row['item_id']}".encode()
+                try:
+                    payload = json.loads(self.crypto.open(bytes(row["ciphertext"]), aad))
+                except (ValueError, TypeError, UnicodeError, json.JSONDecodeError) as exc:
+                    raise VaultError("preference conflict quarantine is corrupt") from exc
+                if not isinstance(payload, dict) or set(payload) != {
+                        "record_ids", "preference_key"} \
+                        or not isinstance(payload["record_ids"], list) \
+                        or not isinstance(payload["preference_key"], str):
+                    raise VaultError("preference conflict quarantine is invalid")
+                conflict_records = []
+                for record_id in payload["record_ids"]:
+                    candidate = connection.execute(
+                        "SELECT * FROM memory_records WHERE record_id=?", (record_id,)).fetchone()
+                    if candidate is not None:
+                        conflict_records.append(self._decrypt_record(candidate))
+                relevant = any(
+                    record["scope"] in {"global", "general"}
+                    or record["scope"] == "domain" and record.get("domain") == domain
+                    or record["scope"] == "project"
+                    and record.get("domain") == domain
+                    and record.get("project_id") == project_id
+                    for record in conflict_records)
+                if not relevant:
+                    continue
+                resolved = any(
+                    record.get("category") == "preference"
+                    and record.get("preference_key") == payload["preference_key"]
+                    and any(
+                        candidate["scope"] == record["scope"]
+                        and candidate.get("domain") == record.get("domain")
+                        and candidate.get("project_id") == record.get("project_id")
+                        for candidate in conflict_records)
+                    for record in active)
+                if not resolved:
+                    result.append({
+                        "conflict_id": row["item_id"],
+                        "preference_key": payload["preference_key"]})
+        return result
 
     def import_memory(self, record, *, source_sequence):
         return self.put_memory(record, source_sequence=source_sequence)

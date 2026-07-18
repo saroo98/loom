@@ -9,7 +9,7 @@
                "reconciled_session_id", "selected_memory_ids", "selected_preference_ids",
                "outcome_ids", "adaptation_receipts", "improvement_evidence_ids", "tier", "domains",
                "reversible_action_ids", "archived_count", "uncertainty_codes",
-               "owner_input_required", "user_message", "usage",
+               "owner_input_required", "user_message", "owner_message", "usage",
                "event_count", "world_fingerprint", "started_at", "completed_at",
                "receipt_hash"],
   "properties": {
@@ -41,6 +41,7 @@
       "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}},
     "owner_input_required": {"type": "boolean"},
     "user_message": {"type": "string", "maxLength": 1000},
+    "owner_message": {"$ref": "owner-message.schema.json"},
     "usage": {"$ref": "#/$defs/usage"},
     "event_count": {"type": "integer", "minimum": 1, "maximum": 4096},
     "world_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},

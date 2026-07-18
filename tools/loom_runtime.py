@@ -530,7 +530,8 @@ def resolve_intent(request, state=None):
         and not build_request
     explicit_remember = bool(re.search(
         r"\bremember(?: that| this)?\b|\bbe more careful\b|\bfrom now on\b|\bprefer\b|"
-        r"\bbe less autonomous\b|\bcorrect (?:that|my|the)\b",
+        r"\bbe less autonomous\b|\bcorrect (?:that|my|the|what you learned)\b|"
+        r"\bretain (?:that|this|what you learned)\b",
         text)) and not build_request and not profile_query
     memory_direct = None
     if profile_query:
@@ -564,7 +565,7 @@ def resolve_intent(request, state=None):
             "remember", "forget", "why", "undo", "status", "review", "repair",
             "close", "continue")}
         memory_match = re.search(
-            r"\b(?:remember|forget|stop remembering)\b|\bbe more careful\b|"
+            r"\b(?:remember|forget|stop remembering|retain|correct)\b|\bbe more careful\b|"
             r"\bfrom now on\b|\bprefer\b|\bshow (?:me )?what you remember\b", text)
         decision = _route(text, memory_direct, memory_match)
     else:

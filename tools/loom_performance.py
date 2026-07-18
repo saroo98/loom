@@ -517,7 +517,8 @@ class ContextCache:
 def production_context_manifest(install_root):
     """Hash the complete static host guidance used by the one-surface bridge."""
     root = Path(install_root)
-    paths = ("skill/loom/SKILL.md", "START-HERE.md")
+    paths = (
+        "skill/loom/SKILL.md", "START-HERE.md", "contracts/cache-classes-v1.json")
     cache = ContextCache()
     entries = []
     for relative in paths:

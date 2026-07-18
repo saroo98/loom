@@ -273,14 +273,28 @@ def health_summary(home, vault):
         devices = {row["status"]: row["count"] for row in connection.execute(
             "SELECT status,COUNT(*) AS count FROM devices GROUP BY status")}
         quarantine = connection.execute("SELECT COUNT(*) FROM quarantine").fetchone()[0]
+        quarantine_bytes = connection.execute(
+            "SELECT COALESCE(SUM(bytes),0) FROM quarantine").fetchone()[0]
         migration = connection.execute(
             "SELECT created_at FROM receipts WHERE kind='legacy-migration' "
             "ORDER BY created_at DESC LIMIT 1").fetchone()
         commitments = {row["status"]: row["count"] for row in connection.execute(
             "SELECT status,COUNT(*) AS count FROM deletion_commitments GROUP BY status")}
-        active_memory = connection.execute(
-            "SELECT COUNT(*) FROM memory_records WHERE status='active'").fetchone()[0]
-        effect_count = connection.execute("SELECT COUNT(*) FROM memory_effects").fetchone()[0]
+        memory_states = {row["status"]: row["count"] for row in connection.execute(
+            "SELECT status,COUNT(*) AS count FROM memory_records GROUP BY status")}
+        effect_states = {
+            row["attribution_status"]: row["count"] for row in connection.execute(
+                "SELECT attribution_status,COUNT(*) AS count FROM memory_effects "
+                "GROUP BY attribution_status")}
+        effect_count = sum(effect_states.values())
+        event_count = connection.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+        memory_count = connection.execute(
+            "SELECT COUNT(*) FROM memory_records").fetchone()[0]
+        cold_memory_bytes = connection.execute(
+            "SELECT COALESCE(SUM(LENGTH(ciphertext)),0) FROM memory_records "
+            "WHERE status!='active'").fetchone()[0]
+        preference_conflicts = connection.execute(
+            "SELECT COUNT(*) FROM quarantine WHERE kind='preference-conflict'").fetchone()[0]
     backup_entries = backup.get("entries", []) if isinstance(backup, dict) else []
     last_backup = max((item.get("created_at", "") for item in backup_entries), default=None)
     identity = vault.identity()
@@ -291,9 +305,19 @@ def health_summary(home, vault):
         "deletion_epoch": vault.deletion_epoch(),
         "pending_deletion_commitments": (
             commitments.get("pending-checkpoint", 0) + commitments.get("pending-devices", 0)),
-        "active_memory_records": active_memory,
+        "selected_learning_records": memory_states.get("active", 0),
+        "active_memory_records": memory_states.get("active", 0),
+        "dormant_memory_records": memory_states.get("dormant", 0),
+        "revalidation_required_records": memory_states.get("revalidation-required", 0),
+        "archived_memory_records": memory_states.get("archived", 0),
+        "forgotten_memory_records": memory_states.get("forgotten", 0),
         "active_memory_bound": loom_vault.MAX_ACTIVE_RECORDS,
         "recent_memory_effects": effect_count,
+        "recent_memory_effect_states": effect_states,
+        "recent_verified_helped": effect_states.get("verified-helped", 0),
+        "recent_verified_hurt": effect_states.get("verified-hurt", 0),
+        "recent_verified_neutral": effect_states.get("verified-neutral", 0),
+        "preference_conflicts": preference_conflicts,
         "learning_evidence_state": vault.improvement_summary()["evidence_state"],
         "last_verified_backup": last_backup,
         "connected_agents": connected,
@@ -301,6 +325,30 @@ def health_summary(home, vault):
         "dormant_devices": devices.get("dormant", 0),
         "last_successful_migration": migration["created_at"] if migration else None,
         "quarantined_conflicts": quarantine,
+        "bounds": {
+            "active_memory": {
+                "used": memory_states.get("active", 0),
+                "limit": loom_vault.MAX_ACTIVE_RECORDS},
+            "retained_memory": {
+                "used": memory_count, "limit": loom_vault.MAX_MEMORY_RECORDS},
+            "cold_memory_bytes": {
+                "used": cold_memory_bytes,
+                "limit": loom_vault.MAX_LEARNING_ARCHIVE_BYTES},
+            "events": {"used": event_count, "limit": loom_vault.MAX_EVENTS},
+            "devices": {"used": sum(devices.values()), "limit": loom_vault.MAX_DEVICES},
+            "recent_effects": {
+                "used": effect_count, "limit": loom_vault.MAX_RECENT_EFFECTS},
+            "quarantine_bytes": {
+                "used": quarantine_bytes, "limit": loom_vault.MAX_QUARANTINE_BYTES},
+        },
+        "bounds_within_policy": (
+            memory_states.get("active", 0) <= loom_vault.MAX_ACTIVE_RECORDS
+            and memory_count <= loom_vault.MAX_MEMORY_RECORDS
+            and cold_memory_bytes <= loom_vault.MAX_LEARNING_ARCHIVE_BYTES
+            and event_count <= loom_vault.MAX_EVENTS
+            and sum(devices.values()) <= loom_vault.MAX_DEVICES
+            and effect_count <= loom_vault.MAX_RECENT_EFFECTS
+            and quarantine_bytes <= loom_vault.MAX_QUARANTINE_BYTES),
         "update_delivery": "codex-marketplace-controlled",
         "telemetry": False,
     }
