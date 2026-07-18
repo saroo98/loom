@@ -1,7 +1,11 @@
 import copy
 import unittest
+from pathlib import Path
 
 import loom_capability_registry
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class CapabilityRegistryPhase7Tests(unittest.TestCase):
@@ -31,11 +35,20 @@ class CapabilityRegistryPhase7Tests(unittest.TestCase):
         self.assertEqual("unsupported", statuses["human-review"])
 
     def test_active_exact_evidence_supports_and_expiry_downgrades(self):
-        supported = loom_capability_registry.generate(self.declarations(), self.graph())
+        supported = loom_capability_registry.generate(
+            self.declarations(), self.graph(), root=ROOT)
         self.assertEqual("supported", supported["capabilities"][0]["status"])
+        self.assertTrue(supported["capabilities"][0]["proof_binding"]["files"])
+        self.assertEqual("a" * 64,
+                         supported["capabilities"][0]["proof_binding"]["subject_digest"])
         stale = loom_capability_registry.generate(
             self.declarations(), self.graph(active=False))
         self.assertEqual("stale-proof", stale["capabilities"][0]["status"])
+
+    def test_current_evidence_without_bound_code_bytes_is_not_supported(self):
+        result = loom_capability_registry.generate(self.declarations(), self.graph())
+        self.assertEqual("experimental", result["capabilities"][0]["status"])
+        self.assertEqual([], result["capabilities"][0]["proof_binding"]["files"])
 
     def test_unknown_fields_and_duplicate_ids_fail_closed(self):
         invalid = self.declarations()

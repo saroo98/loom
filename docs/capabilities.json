@@ -12,6 +12,48 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 64813,
+            "path": "tools/loom_runtime.py",
+            "role": "enforcement",
+            "sha256": "77663afd4e5281df7daafbecebdde9c874abc792451069006387556dce19a286"
+          },
+          {
+            "bytes": 71895,
+            "path": "tools/loom_session.py",
+            "role": "enforcement",
+            "sha256": "c39f1a492c61ae62b46bc01153595da857a1f0639e30826f4337de2dd1cd9dad"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          },
+          {
+            "bytes": 41031,
+            "path": "tools/test_loom_runtime.py",
+            "role": "test",
+            "sha256": "0f4d5a0abb38cd77e48a2acbda7d4f9733a0d37abed4a4ffc213ff1508a05639"
+          },
+          {
+            "bytes": 20123,
+            "path": "tools/test_loom_session.py",
+            "role": "test",
+            "sha256": "0a1cfd44553498f3fc9efb65e88a8a1900416614c0d6f0af57ab8288061e675f"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_production_orchestrator.py",
@@ -30,6 +72,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 64813,
+            "path": "tools/loom_runtime.py",
+            "role": "enforcement",
+            "sha256": "77663afd4e5281df7daafbecebdde9c874abc792451069006387556dce19a286"
+          },
+          {
+            "bytes": 37855,
+            "path": "tools/loom_survey.py",
+            "role": "enforcement",
+            "sha256": "003215e62f4ce73ba389742a98ff6a7756670ac1e44643176cd9f361e96c33e3"
+          },
+          {
+            "bytes": 41031,
+            "path": "tools/test_loom_runtime.py",
+            "role": "test",
+            "sha256": "0f4d5a0abb38cd77e48a2acbda7d4f9733a0d37abed4a4ffc213ff1508a05639"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_runtime.py"
@@ -45,6 +111,24 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 77744,
+            "path": "tools/loom_gate.py",
+            "role": "enforcement",
+            "sha256": "8ed64556277a305e1ec28495a79c4dbaa594101b078163e98472214de66e8de2"
+          },
+          {
+            "bytes": 27303,
+            "path": "tools/test_loom_gate.py",
+            "role": "test",
+            "sha256": "23e91b255a2a47014cb2802524a1f64c4462bb02d808ec849ab31dd2b26299a6"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_gate.py"
@@ -61,6 +145,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 5728,
+            "path": "schemas/plan-contract.schema.json",
+            "role": "enforcement",
+            "sha256": "2f82035c0a7d91ed0703dcb64679900cf8272162a7ca21428d6ec5a19fb6c9bd"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_production_orchestrator.py"
@@ -77,6 +185,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 36344,
+            "path": "tools/loom_lifecycle.py",
+            "role": "enforcement",
+            "sha256": "30c6ff3821d3e03f2d4e2ed0d1e7fa51d0192a5518e9509fffab39360c3719f3"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_production_orchestrator.py"
@@ -92,6 +224,24 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 85147,
+            "path": "tools/loom_lint.py",
+            "role": "enforcement",
+            "sha256": "ba8aacaa539f804312fd2895d8531340012465e5e17039dc4798f696ccb415fa"
+          },
+          {
+            "bytes": 43927,
+            "path": "tools/test_loom_lint.py",
+            "role": "test",
+            "sha256": "d67a1986c33afa8b6767991f2040b6bcabb1c7b7a833afc152d05c0a1c6d34e5"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_lint.py"
@@ -110,6 +260,60 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 40905,
+            "path": "tools/loom_domain.py",
+            "role": "enforcement",
+            "sha256": "e7b82bfbdc7bd05f2b54e58c8a0ce1793b709cc43d8f0444220419d0b27dfae3"
+          },
+          {
+            "bytes": 64813,
+            "path": "tools/loom_runtime.py",
+            "role": "enforcement",
+            "sha256": "77663afd4e5281df7daafbecebdde9c874abc792451069006387556dce19a286"
+          },
+          {
+            "bytes": 85147,
+            "path": "tools/loom_lint.py",
+            "role": "enforcement",
+            "sha256": "ba8aacaa539f804312fd2895d8531340012465e5e17039dc4798f696ccb415fa"
+          },
+          {
+            "bytes": 77744,
+            "path": "tools/loom_gate.py",
+            "role": "enforcement",
+            "sha256": "8ed64556277a305e1ec28495a79c4dbaa594101b078163e98472214de66e8de2"
+          },
+          {
+            "bytes": 5391,
+            "path": "tools/test_domain_universality.py",
+            "role": "test",
+            "sha256": "5504f1438ac5178d1146bb299917ecc672d34b900aa3f9c8494ab855e972ca5a"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          },
+          {
+            "bytes": 43927,
+            "path": "tools/test_loom_lint.py",
+            "role": "test",
+            "sha256": "d67a1986c33afa8b6767991f2040b6bcabb1c7b7a833afc152d05c0a1c6d34e5"
+          },
+          {
+            "bytes": 27303,
+            "path": "tools/test_loom_gate.py",
+            "role": "test",
+            "sha256": "23e91b255a2a47014cb2802524a1f64c4462bb02d808ec849ab31dd2b26299a6"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_domain_universality.py",
@@ -131,6 +335,48 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 6363,
+            "path": "tools/loom_domain_bundle.py",
+            "role": "enforcement",
+            "sha256": "f28c9801ef202c7f87ea847cd3dc15df6514f15f4b461f63f44a4bc518c3e5d5"
+          },
+          {
+            "bytes": 7821,
+            "path": "tools/loom_domain_evidence.py",
+            "role": "enforcement",
+            "sha256": "6856a61126097f43bb4ad24de69e27a555ee99dcd5507473bb9274c27592a068"
+          },
+          {
+            "bytes": 5832,
+            "path": "tools/loom_domain_invariants.py",
+            "role": "enforcement",
+            "sha256": "bee5b4179cd603a69ab747d77e57f12c43042cb9b004001f0c88b2d0f6a31fe5"
+          },
+          {
+            "bytes": 1099,
+            "path": "schemas/domain-bundle.schema.json",
+            "role": "enforcement",
+            "sha256": "6659551e0f50efdfe32639c42158bd79aca1b44df254f07ebdeb0c0b48591204"
+          },
+          {
+            "bytes": 3597,
+            "path": "tools/test_domain_evidence.py",
+            "role": "test",
+            "sha256": "2f75a3b5ea2ce2068e1d068706ee031aeac41cc019f344d3b4e578c1e3fe25eb"
+          },
+          {
+            "bytes": 1670,
+            "path": "tools/test_domain_discovery.py",
+            "role": "test",
+            "sha256": "d9ef37ad4cde28b4319ad88fdba3df65be2836d67892e9d147371366ce4bae9e"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_domain_evidence.py",
@@ -149,6 +395,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 1838,
+            "path": "tools/loom_domain_freshness.py",
+            "role": "enforcement",
+            "sha256": "375c45509ec4b71781b010313af1324c5d054c02694ba6bb734487cb4b3bbe3f"
+          },
+          {
+            "bytes": 85147,
+            "path": "tools/loom_lint.py",
+            "role": "enforcement",
+            "sha256": "ba8aacaa539f804312fd2895d8531340012465e5e17039dc4798f696ccb415fa"
+          },
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 1377,
+            "path": "tools/test_domain_freshness.py",
+            "role": "test",
+            "sha256": "aac6ed7546005196098aa3fe0a83f9237fe2f409611673d762a87fd7a8c4ecc5"
+          },
+          {
+            "bytes": 43927,
+            "path": "tools/test_loom_lint.py",
+            "role": "test",
+            "sha256": "d67a1986c33afa8b6767991f2040b6bcabb1c7b7a833afc152d05c0a1c6d34e5"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_domain_freshness.py",
@@ -166,6 +448,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 7748,
+            "path": "tools/loom_domain_benchmark.py",
+            "role": "enforcement",
+            "sha256": "8b0e27a7cdc720efd4694fc70c55c6f12d655871fd1b2f24b27d66d0aa22a7ba"
+          },
+          {
+            "bytes": 2459,
+            "path": "benchmarks/domain-intelligence/corpus.json",
+            "role": "enforcement",
+            "sha256": "9001ee08848e502d7e2143708d3130c6a69d70272f685095eeb9afc62ccd3f11"
+          },
+          {
+            "bytes": 1274,
+            "path": "tools/test_domain_benchmark.py",
+            "role": "test",
+            "sha256": "f3bc112978909ee78e52cd8f352f962702c5ad6b792f521d43d09cbba182bd1a"
+          },
+          {
+            "bytes": 2850,
+            "path": "tools/test_unknown_domain_learning.py",
+            "role": "test",
+            "sha256": "8dfbe416ac0fc8f6c3c47ad972ca7299ed834077ffcfca277bb5c1c9f680dab5"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_domain_benchmark.py",
@@ -184,6 +496,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 140622,
+            "path": "tools/loom_vault.py",
+            "role": "enforcement",
+            "sha256": "fe1b2e9d8c7fed1451e44771bb75984719bdeb142550a06521140a977a8cfcfe"
+          },
+          {
+            "bytes": 40905,
+            "path": "tools/loom_domain.py",
+            "role": "enforcement",
+            "sha256": "e7b82bfbdc7bd05f2b54e58c8a0ce1793b709cc43d8f0444220419d0b27dfae3"
+          },
+          {
+            "bytes": 3327,
+            "path": "contracts/owner-learning-v3.json",
+            "role": "enforcement",
+            "sha256": "a264744af8534b3fa4f9935fc4b1d70432dd281645b92aa27e2c3a3f71e4ad45"
+          },
+          {
+            "bytes": 14381,
+            "path": "tools/test_owner_learning_phase2.py",
+            "role": "test",
+            "sha256": "2b63a871738d28224af3721f0ee8e406eefb4bd5430de9b5c26a2b53b47a520e"
+          },
+          {
+            "bytes": 5391,
+            "path": "tools/test_domain_universality.py",
+            "role": "test",
+            "sha256": "5504f1438ac5178d1146bb299917ecc672d34b900aa3f9c8494ab855e972ca5a"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_learning_phase2.py",
@@ -202,6 +550,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 140622,
+            "path": "tools/loom_vault.py",
+            "role": "enforcement",
+            "sha256": "fe1b2e9d8c7fed1451e44771bb75984719bdeb142550a06521140a977a8cfcfe"
+          },
+          {
+            "bytes": 26993,
+            "path": "tools/loom_learning.py",
+            "role": "enforcement",
+            "sha256": "c44f1d4e614029f7ed5fd8d4f69056e76002b9bf90719af5531ffb0bbb82b240"
+          },
+          {
+            "bytes": 4134,
+            "path": "tools/loom_learning_contract.py",
+            "role": "enforcement",
+            "sha256": "c2c7b55cb67d02f79e691b40356bd689a5af654327532d8778b944679838f049"
+          },
+          {
+            "bytes": 14381,
+            "path": "tools/test_owner_learning_phase2.py",
+            "role": "test",
+            "sha256": "2b63a871738d28224af3721f0ee8e406eefb4bd5430de9b5c26a2b53b47a520e"
+          },
+          {
+            "bytes": 19705,
+            "path": "tools/test_memory_lifecycle.py",
+            "role": "test",
+            "sha256": "f407cae2077511870fd32706e1b54e00963d772f9b1b5bcdcb5258c6052a2a73"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_learning_phase2.py",
@@ -219,6 +603,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 29407,
+            "path": "tools/loom_vault_adapter.py",
+            "role": "enforcement",
+            "sha256": "5ea3d166f68cea067235f2b43bb67520641d916a27bd2a7be06a9f537615313a"
+          },
+          {
+            "bytes": 26993,
+            "path": "tools/loom_learning.py",
+            "role": "enforcement",
+            "sha256": "c44f1d4e614029f7ed5fd8d4f69056e76002b9bf90719af5531ffb0bbb82b240"
+          },
+          {
+            "bytes": 14381,
+            "path": "tools/test_owner_learning_phase2.py",
+            "role": "test",
+            "sha256": "2b63a871738d28224af3721f0ee8e406eefb4bd5430de9b5c26a2b53b47a520e"
+          },
+          {
+            "bytes": 8736,
+            "path": "tools/test_loom_vault_adapter_v11.py",
+            "role": "test",
+            "sha256": "fd7c8be2f33963b6ff3c392295ed45e6792542fa99ab8040e09c17a689e53b61"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_learning_phase2.py",
@@ -237,6 +651,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 140622,
+            "path": "tools/loom_vault.py",
+            "role": "enforcement",
+            "sha256": "fe1b2e9d8c7fed1451e44771bb75984719bdeb142550a06521140a977a8cfcfe"
+          },
+          {
+            "bytes": 29407,
+            "path": "tools/loom_vault_adapter.py",
+            "role": "enforcement",
+            "sha256": "5ea3d166f68cea067235f2b43bb67520641d916a27bd2a7be06a9f537615313a"
+          },
+          {
+            "bytes": 810,
+            "path": "schemas/memory-effect.schema.json",
+            "role": "enforcement",
+            "sha256": "f005d3e17a02c16a6dc11baf18aa6b066175241c173ec7074cf7f5eafc212f5e"
+          },
+          {
+            "bytes": 14381,
+            "path": "tools/test_owner_learning_phase2.py",
+            "role": "test",
+            "sha256": "2b63a871738d28224af3721f0ee8e406eefb4bd5430de9b5c26a2b53b47a520e"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_learning_phase2.py"
@@ -253,6 +697,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 140622,
+            "path": "tools/loom_vault.py",
+            "role": "enforcement",
+            "sha256": "fe1b2e9d8c7fed1451e44771bb75984719bdeb142550a06521140a977a8cfcfe"
+          },
+          {
+            "bytes": 35741,
+            "path": "tools/loom_transfer.py",
+            "role": "enforcement",
+            "sha256": "a9293820b4631137991118dbde0d63e5a3d9c83c00106f2897e3f60a91848180"
+          },
+          {
+            "bytes": 14381,
+            "path": "tools/test_owner_learning_phase2.py",
+            "role": "test",
+            "sha256": "2b63a871738d28224af3721f0ee8e406eefb4bd5430de9b5c26a2b53b47a520e"
+          },
+          {
+            "bytes": 15779,
+            "path": "tools/test_loom_transfer_v11.py",
+            "role": "test",
+            "sha256": "516d4632dd51f2b0ecba3c860541812bd0e7b0a7d86b7400b2ed859df48cbd6c"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_learning_phase2.py",
@@ -270,6 +744,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 5445,
+            "path": "tools/loom_learning_stats.py",
+            "role": "enforcement",
+            "sha256": "95a3a485b5a522b750c170a68fe6ad2d3437275b975099edb2a3ba17938f609a"
+          },
+          {
+            "bytes": 3565,
+            "path": "tools/loom_shadow_eval.py",
+            "role": "enforcement",
+            "sha256": "3324ffac402d68e19c590ad14652a43c12b6a14a4aa0655097194b830951a2f9"
+          },
+          {
+            "bytes": 14381,
+            "path": "tools/test_owner_learning_phase2.py",
+            "role": "test",
+            "sha256": "2b63a871738d28224af3721f0ee8e406eefb4bd5430de9b5c26a2b53b47a520e"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_learning_phase2.py"
@@ -285,6 +783,24 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 21917,
+            "path": "tools/loom_privacy.py",
+            "role": "enforcement",
+            "sha256": "5205a9edfff12b5dfe65ef20218d905a6f14c552fc79972eb553951b254c579a"
+          },
+          {
+            "bytes": 12860,
+            "path": "tools/test_privacy_excellence.py",
+            "role": "test",
+            "sha256": "162c99dcfc74ebbb2ed5f5959b8701a16e8326786f78e60aebfafedc8b53b84f"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_privacy_excellence.py"
@@ -300,6 +816,24 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 21917,
+            "path": "tools/loom_privacy.py",
+            "role": "enforcement",
+            "sha256": "5205a9edfff12b5dfe65ef20218d905a6f14c552fc79972eb553951b254c579a"
+          },
+          {
+            "bytes": 12860,
+            "path": "tools/test_privacy_excellence.py",
+            "role": "test",
+            "sha256": "162c99dcfc74ebbb2ed5f5959b8701a16e8326786f78e60aebfafedc8b53b84f"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_privacy_excellence.py"
@@ -315,6 +849,24 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 18641,
+            "path": "tools/loom_reliability.py",
+            "role": "enforcement",
+            "sha256": "f6e6ce7fe021d79181a11dea538c53f0c21240a4ed9ac3363162d7b93dd0668c"
+          },
+          {
+            "bytes": 8127,
+            "path": "tools/test_reliability_excellence.py",
+            "role": "test",
+            "sha256": "9a9742a0d2bc5434188e947bf70e6d5ab6310fb43a348b16c2bef47658e12616"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_reliability_excellence.py"
@@ -332,6 +884,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 14554,
+            "path": "tools/loom_usage.py",
+            "role": "enforcement",
+            "sha256": "9b0193907a50dbf7d77adfa8659e0de9a23f0053fecd3ffd65ad265ffb2f6979"
+          },
+          {
+            "bytes": 29445,
+            "path": "tools/loom_performance.py",
+            "role": "enforcement",
+            "sha256": "3d5a120c185f7d5f9f529b875e36d408e846a23be9acd92ffd564446ce1ffdd8"
+          },
+          {
+            "bytes": 1453,
+            "path": "contracts/performance-accounting-v3.json",
+            "role": "enforcement",
+            "sha256": "2a2a94ccf3298b272969adfaecce754fec0748275e91a6ea8ec0a98c4664a65b"
+          },
+          {
+            "bytes": 5736,
+            "path": "tools/test_token_accounting_v3.py",
+            "role": "test",
+            "sha256": "91a06378e861a6bec8b99e1990a18849f6ca831588b4eeb1021adf29f9d938cf"
+          },
+          {
+            "bytes": 16405,
+            "path": "tools/test_performance_excellence.py",
+            "role": "test",
+            "sha256": "65b2acce214e013955e441d612957c5ceeb0bc9871d02bdc83643ee32b133b50"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_token_accounting_v3.py",
@@ -351,6 +939,48 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 10690,
+            "path": "tools/loom_tier.py",
+            "role": "enforcement",
+            "sha256": "1b1b402054d1e38df0fc26f2c9800e312bc24b2e0b2ab04e448f8e2edf8e5257"
+          },
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 77744,
+            "path": "tools/loom_gate.py",
+            "role": "enforcement",
+            "sha256": "8ed64556277a305e1ec28495a79c4dbaa594101b078163e98472214de66e8de2"
+          },
+          {
+            "bytes": 628,
+            "path": "contracts/tier-s-fast-path-v1.json",
+            "role": "enforcement",
+            "sha256": "677cf33bd91281b5a7101815cb4889b97cb53538427d92f829d844d54a990814"
+          },
+          {
+            "bytes": 2565,
+            "path": "tools/test_tier_s_fast_path.py",
+            "role": "test",
+            "sha256": "33379b17ee55fa3b8a8a34b22ee43cca82edbb27a0d07f3e0f2a3bc16ab68f41"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_tier_s_fast_path.py",
@@ -369,6 +999,48 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 1940,
+            "path": "tools/loom_observe.py",
+            "role": "enforcement",
+            "sha256": "d92610c8fe56e41a3398c146ce60c767716f80e4c6bbe5bdbbb52c0561a66929"
+          },
+          {
+            "bytes": 5258,
+            "path": "tools/loom_benchmark.py",
+            "role": "enforcement",
+            "sha256": "64a1bb35db193f2d1f8ffebc628513ccbdace1290349e5a1419676b3abe1ded7"
+          },
+          {
+            "bytes": 29407,
+            "path": "tools/loom_vault_adapter.py",
+            "role": "enforcement",
+            "sha256": "5ea3d166f68cea067235f2b43bb67520641d916a27bd2a7be06a9f537615313a"
+          },
+          {
+            "bytes": 16405,
+            "path": "tools/test_performance_excellence.py",
+            "role": "test",
+            "sha256": "65b2acce214e013955e441d612957c5ceeb0bc9871d02bdc83643ee32b133b50"
+          },
+          {
+            "bytes": 5736,
+            "path": "tools/test_token_accounting_v3.py",
+            "role": "test",
+            "sha256": "91a06378e861a6bec8b99e1990a18849f6ca831588b4eeb1021adf29f9d938cf"
+          },
+          {
+            "bytes": 2320,
+            "path": "tools/test_performance_end_to_end.py",
+            "role": "test",
+            "sha256": "5bfd516cca7ee869c00627ca780c4a02434f7291e5145414b8a8c816360996c1"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_performance_excellence.py",
@@ -387,6 +1059,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 11051,
+            "path": "tools/loom_transparency.py",
+            "role": "enforcement",
+            "sha256": "226166553bf3ea1fb3cd2834be711874f23e8861c008d9d06663cfe12848734d"
+          },
+          {
+            "bytes": 71895,
+            "path": "tools/loom_session.py",
+            "role": "enforcement",
+            "sha256": "c39f1a492c61ae62b46bc01153595da857a1f0639e30826f4337de2dd1cd9dad"
+          },
+          {
+            "bytes": 9750,
+            "path": "tools/test_transparency_surface.py",
+            "role": "test",
+            "sha256": "5c45366587a0ee6a899487fc281bc09317ed54d1331b111b26aea658e4971aec"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_transparency_surface.py"
@@ -402,6 +1098,24 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 26899,
+            "path": "tools/loom_adaptation_eval.py",
+            "role": "enforcement",
+            "sha256": "b4833b400d80a85b85f10a6717401df00df43a152290e0e3ac9addd6b28b0cc3"
+          },
+          {
+            "bytes": 2903,
+            "path": "tools/test_adaptation_evaluation.py",
+            "role": "test",
+            "sha256": "b2cd045d8d375e88b452efa86ab8b333c4b696b26252b3e72ae61dd0a0de2528"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_adaptation_evaluation.py"
@@ -419,6 +1133,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 29741,
+            "path": "tools/loom_improvement.py",
+            "role": "enforcement",
+            "sha256": "d367f5e8795f0868668e42025cdc9309585cdd41c62a0e1fd52f85856ef1cb00"
+          },
+          {
+            "bytes": 9048,
+            "path": "tools/loom_improvement_audit.py",
+            "role": "enforcement",
+            "sha256": "51f17e7806b4061e16773e6dae3f3c9a5be2c937734e058df7c4539556f61de3"
+          },
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 14058,
+            "path": "tools/test_improvement_proof.py",
+            "role": "test",
+            "sha256": "698b343a67457c5b30917169ee3adc5d2d58b95a105789340f39472c6b699e34"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_improvement_proof.py",
@@ -436,6 +1186,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 6193,
+            "path": "tools/loom_install.py",
+            "role": "enforcement",
+            "sha256": "b8802ecf5690519aafe960e2c35d1c52e250ac4f8deff66c2ca1c0f9d9c13098"
+          },
+          {
+            "bytes": 18641,
+            "path": "tools/loom_reliability.py",
+            "role": "enforcement",
+            "sha256": "f6e6ce7fe021d79181a11dea538c53f0c21240a4ed9ac3363162d7b93dd0668c"
+          },
+          {
+            "bytes": 37791,
+            "path": "tools/test_release_standard.py",
+            "role": "test",
+            "sha256": "c878921785f9dcb9017a6bf302a6be6b8a31e4f511e0f45b0de619acb0d04360"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_release_standard.py"
@@ -452,6 +1226,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 47076,
+            "path": "tools/loom_release.py",
+            "role": "enforcement",
+            "sha256": "38953cdd665e26a0b45ba1cff9b3652bf0944acfd0ef731c2098220bb666c9e5"
+          },
+          {
+            "bytes": 21917,
+            "path": "tools/loom_privacy.py",
+            "role": "enforcement",
+            "sha256": "5205a9edfff12b5dfe65ef20218d905a6f14c552fc79972eb553951b254c579a"
+          },
+          {
+            "bytes": 37791,
+            "path": "tools/test_release_standard.py",
+            "role": "test",
+            "sha256": "c878921785f9dcb9017a6bf302a6be6b8a31e4f511e0f45b0de619acb0d04360"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_release_standard.py"
@@ -469,6 +1267,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 47076,
+            "path": "tools/loom_release.py",
+            "role": "enforcement",
+            "sha256": "38953cdd665e26a0b45ba1cff9b3652bf0944acfd0ef731c2098220bb666c9e5"
+          },
+          {
+            "bytes": 14160,
+            "path": "tools/loom_docs.py",
+            "role": "enforcement",
+            "sha256": "39f11d22afe8766c9c475a2a0e25d130d55a4e61451fa135c70e168869eed2a1"
+          },
+          {
+            "bytes": 21917,
+            "path": "tools/loom_privacy.py",
+            "role": "enforcement",
+            "sha256": "5205a9edfff12b5dfe65ef20218d905a6f14c552fc79972eb553951b254c579a"
+          },
+          {
+            "bytes": 37791,
+            "path": "tools/test_release_standard.py",
+            "role": "test",
+            "sha256": "c878921785f9dcb9017a6bf302a6be6b8a31e4f511e0f45b0de619acb0d04360"
+          },
+          {
+            "bytes": 10766,
+            "path": "tools/test_documentation_coherence.py",
+            "role": "test",
+            "sha256": "da4937a094483e122ab3ef80b8c5ab1cfdf686ac286dd180a21d763f40da791f"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_release_standard.py",
@@ -487,6 +1321,48 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 16173,
+            "path": "tools/loom_owner.py",
+            "role": "enforcement",
+            "sha256": "be04afed7721ead83f7b6450f2b07f9d49db5a2acd7ef45fa9188c8d010a9a4c"
+          },
+          {
+            "bytes": 140622,
+            "path": "tools/loom_vault.py",
+            "role": "enforcement",
+            "sha256": "fe1b2e9d8c7fed1451e44771bb75984719bdeb142550a06521140a977a8cfcfe"
+          },
+          {
+            "bytes": 12951,
+            "path": "tools/loom_crypto.py",
+            "role": "enforcement",
+            "sha256": "627d236c1658a4e8adf9fd438bef1e3634833bcad751e03e7aea5e140d83ea4d"
+          },
+          {
+            "bytes": 7887,
+            "path": "tools/test_loom_owner_v11.py",
+            "role": "test",
+            "sha256": "a9f51d843fd023861d139c15b92c9de41e48343f5ed8efad8f6390fa3dd28635"
+          },
+          {
+            "bytes": 15413,
+            "path": "tools/test_loom_vault_v11.py",
+            "role": "test",
+            "sha256": "b367fc83c61fa05e910d82fec4ab91302616299dcfff2db216349dc3748d408b"
+          },
+          {
+            "bytes": 8736,
+            "path": "tools/test_loom_vault_adapter_v11.py",
+            "role": "test",
+            "sha256": "fd7c8be2f33963b6ff3c392295ed45e6792542fa99ab8040e09c17a689e53b61"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_owner_v11.py",
@@ -506,6 +1382,48 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 41082,
+            "path": "tools/loom_update.py",
+            "role": "enforcement",
+            "sha256": "ec0fe3bf35240548dcfbc6c965d473b279c819149c5614ff77f21b2d0334fc41"
+          },
+          {
+            "bytes": 9076,
+            "path": "tools/loom_launcher.py",
+            "role": "enforcement",
+            "sha256": "f85b80b702af17379cd6d12ed64ac46cb6f9fc525249d1157405b32f9299dd3d"
+          },
+          {
+            "bytes": 10673,
+            "path": "tools/loom_release_sign.py",
+            "role": "enforcement",
+            "sha256": "462ae2752d917e05f90951daeb312627623b28b3e2c8d2ded4cabf7b8a4f1dca"
+          },
+          {
+            "bytes": 19061,
+            "path": "tools/test_loom_update_v11.py",
+            "role": "test",
+            "sha256": "e416c47f8678a69f4e86515dfe72835746ad5a48410cf8f7333cd91280e26786"
+          },
+          {
+            "bytes": 5843,
+            "path": "tools/test_loom_bootstrap_v11.py",
+            "role": "test",
+            "sha256": "3448a1890b65c1c08002c8158e01eb7f4eacfd2438f7eabdd8244124d0774819"
+          },
+          {
+            "bytes": 5773,
+            "path": "tools/test_loom_release_sign_v11.py",
+            "role": "test",
+            "sha256": "66f5692605cd6f7590b4a9e017002fb22b6ee70542d9eae08b6692146159dcbf"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_update_v11.py",
@@ -524,6 +1442,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 35741,
+            "path": "tools/loom_transfer.py",
+            "role": "enforcement",
+            "sha256": "a9293820b4631137991118dbde0d63e5a3d9c83c00106f2897e3f60a91848180"
+          },
+          {
+            "bytes": 12951,
+            "path": "tools/loom_crypto.py",
+            "role": "enforcement",
+            "sha256": "627d236c1658a4e8adf9fd438bef1e3634833bcad751e03e7aea5e140d83ea4d"
+          },
+          {
+            "bytes": 15779,
+            "path": "tools/test_loom_transfer_v11.py",
+            "role": "test",
+            "sha256": "516d4632dd51f2b0ecba3c860541812bd0e7b0a7d86b7400b2ed859df48cbd6c"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_transfer_v11.py"
@@ -539,6 +1481,24 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 140622,
+            "path": "tools/loom_vault.py",
+            "role": "enforcement",
+            "sha256": "fe1b2e9d8c7fed1451e44771bb75984719bdeb142550a06521140a977a8cfcfe"
+          },
+          {
+            "bytes": 8115,
+            "path": "tools/test_loom_merge_v11.py",
+            "role": "test",
+            "sha256": "39864bf3b12e0962523a110916da99884c630a5646249dd5d1614df6975a72ec"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_merge_v11.py"
@@ -555,6 +1515,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 25537,
+            "path": "tools/loom_adapters.py",
+            "role": "enforcement",
+            "sha256": "597d63aeedb7943a13a259700db9b3ce94c3aeb903608c4fe5e6d719ffa4612b"
+          },
+          {
+            "bytes": 9076,
+            "path": "tools/loom_launcher.py",
+            "role": "enforcement",
+            "sha256": "f85b80b702af17379cd6d12ed64ac46cb6f9fc525249d1157405b32f9299dd3d"
+          },
+          {
+            "bytes": 13929,
+            "path": "tools/test_loom_plugin_adapters_v11.py",
+            "role": "test",
+            "sha256": "04963a4f9568d85d7bafac10407b69608bac6bfdc63a306b830c05280001dffa"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_plugin_adapters_v11.py"
@@ -573,6 +1557,48 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 8102,
+            "path": "tools/loom_adapter_protocol.py",
+            "role": "enforcement",
+            "sha256": "4e587645c03cd40a5e3294e15b24c1ccdb5786eba213316e2978627e475cd6f2"
+          },
+          {
+            "bytes": 5593,
+            "path": "tools/loom_adapter_bridge.py",
+            "role": "enforcement",
+            "sha256": "eeadb4d56d6c5efaa1a58d4de9ce193706a10d1d9de3d0001a38b5aa39252d68"
+          },
+          {
+            "bytes": 6369,
+            "path": "schemas/adapter-message.schema.json",
+            "role": "enforcement",
+            "sha256": "472df1a9c4ff0904b1d9e65aed4ceadb8042c4a73cbe65b76a4baf0fc886ca45"
+          },
+          {
+            "bytes": 588,
+            "path": "contracts/adapter-protocol-v2.json",
+            "role": "enforcement",
+            "sha256": "a1a2b807e08c2b359d7057dbc76d0daa8ff4d2daf5d72995b1711520d19c5b3a"
+          },
+          {
+            "bytes": 5353,
+            "path": "tools/test_adapter_protocol_v2.py",
+            "role": "test",
+            "sha256": "962ee08979f02bcc255ee4affbd4cdacf0f998572f7851e83586bd8bfd74b653"
+          },
+          {
+            "bytes": 572,
+            "path": "tools/test_loom_mutation.py",
+            "role": "test",
+            "sha256": "604a1585c62054ab53ea299c5d4d7843d55aa4ff0b6f9506aa8b03dd7f6c6bf0"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_adapter_protocol_v2.py",
@@ -591,6 +1617,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 5805,
+            "path": "tools/loom_adapter_conformance.py",
+            "role": "enforcement",
+            "sha256": "f84a1688167a6a5afb3b0c13a5275634c849ade28d480db8f6091cfb7ccdca9b"
+          },
+          {
+            "bytes": 6512,
+            "path": "tools/loom_host_registry.py",
+            "role": "enforcement",
+            "sha256": "59e767faa6c2042ee088f881e0400ffb155b0e8bf06d6f56bfab15978152122d"
+          },
+          {
+            "bytes": 1534,
+            "path": "schemas/adapter-conformance.schema.json",
+            "role": "enforcement",
+            "sha256": "638b716439df877b01b08e5b7e5b0d289a4f743f17459ba782041aa07df3f5be"
+          },
+          {
+            "bytes": 1771,
+            "path": "tools/test_adapter_conformance_v2.py",
+            "role": "test",
+            "sha256": "bf0c3f6a57eb6aa912af6b91d12224e1b5466af4ebad79394c36163586187740"
+          },
+          {
+            "bytes": 13929,
+            "path": "tools/test_loom_plugin_adapters_v11.py",
+            "role": "test",
+            "sha256": "04963a4f9568d85d7bafac10407b69608bac6bfdc63a306b830c05280001dffa"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_adapter_conformance_v2.py",
@@ -611,6 +1673,54 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 45269,
+            "path": "tools/loom_scorecard.py",
+            "role": "enforcement",
+            "sha256": "bf865b3888cb3b3829ef396df904df5a36676acf6d99e37f4f560e14564f1b8e"
+          },
+          {
+            "bytes": 8787,
+            "path": "contracts/score-rubric-v1.json",
+            "role": "enforcement",
+            "sha256": "2e174cc777d73f1dba1d0820d0ba851458fde9b6b6acda9ef58613073047fe18"
+          },
+          {
+            "bytes": 2864,
+            "path": "schemas/score-evidence.schema.json",
+            "role": "enforcement",
+            "sha256": "76391e554af22094fc8a888991bdd06cbfb2a2520acc45d5e38352c1c1eaf4cc"
+          },
+          {
+            "bytes": 1780,
+            "path": "schemas/scorecard.schema.json",
+            "role": "enforcement",
+            "sha256": "8d706f80873396a6ede80721b8eef5b9dbd33007c6db07e7f4c01a0e0ced8e63"
+          },
+          {
+            "bytes": 1763,
+            "path": "schemas/score-trust-policy.schema.json",
+            "role": "enforcement",
+            "sha256": "bee14cf0fb681b03fd01640b2be4d61d3f678af30c59df7f63df45dda12b1a08"
+          },
+          {
+            "bytes": 13347,
+            "path": "tools/test_scorecard_phase6.py",
+            "role": "test",
+            "sha256": "f9b6c42736a81f7ec277c9c35ffcfe3bdbc33b7f115f7daf1d0ff6e9d9ad505f"
+          },
+          {
+            "bytes": 572,
+            "path": "tools/test_loom_mutation.py",
+            "role": "test",
+            "sha256": "604a1585c62054ab53ea299c5d4d7843d55aa4ff0b6f9506aa8b03dd7f6c6bf0"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_scorecard_phase6.py",
@@ -629,6 +1739,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 45269,
+            "path": "tools/loom_scorecard.py",
+            "role": "enforcement",
+            "sha256": "bf865b3888cb3b3829ef396df904df5a36676acf6d99e37f4f560e14564f1b8e"
+          },
+          {
+            "bytes": 1443,
+            "path": "schemas/competitor-snapshot.schema.json",
+            "role": "enforcement",
+            "sha256": "3ed8aef957959f4cdf5a9a13a16c2ab6ba38132ece69951087e5cfbc1cb85e50"
+          },
+          {
+            "bytes": 1119,
+            "path": "schemas/score-comparison.schema.json",
+            "role": "enforcement",
+            "sha256": "333e071cbd407cc3675c786f60a8bf8f0d26ab5ce8f1a085221833047707770e"
+          },
+          {
+            "bytes": 13347,
+            "path": "tools/test_scorecard_phase6.py",
+            "role": "test",
+            "sha256": "f9b6c42736a81f7ec277c9c35ffcfe3bdbc33b7f115f7daf1d0ff6e9d9ad505f"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_scorecard_phase6.py"
@@ -645,6 +1785,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 45269,
+            "path": "tools/loom_scorecard.py",
+            "role": "enforcement",
+            "sha256": "bf865b3888cb3b3829ef396df904df5a36676acf6d99e37f4f560e14564f1b8e"
+          },
+          {
+            "bytes": 1046,
+            "path": "schemas/score-regression.schema.json",
+            "role": "enforcement",
+            "sha256": "9684246689b277030abb98d02d79c0c0906646d01e5bae5cd8bc6045613cf408"
+          },
+          {
+            "bytes": 13347,
+            "path": "tools/test_scorecard_phase6.py",
+            "role": "test",
+            "sha256": "f9b6c42736a81f7ec277c9c35ffcfe3bdbc33b7f115f7daf1d0ff6e9d9ad505f"
+          },
+          {
+            "bytes": 572,
+            "path": "tools/test_loom_mutation.py",
+            "role": "test",
+            "sha256": "604a1585c62054ab53ea299c5d4d7843d55aa4ff0b6f9506aa8b03dd7f6c6bf0"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_scorecard_phase6.py",
@@ -662,6 +1832,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 5964,
+            "path": "tools/loom_sbom.py",
+            "role": "enforcement",
+            "sha256": "7b760819a8ca04facc7b4ee6ed1055c06e6adc3d859629691e1748b1d72d0030"
+          },
+          {
+            "bytes": 15785,
+            "path": "tools/loom_plugin_package.py",
+            "role": "enforcement",
+            "sha256": "58cb163d9addedbffa8bee3127384e0d616705b99bfb23f9fec194714a95e6cc"
+          },
+          {
+            "bytes": 7784,
+            "path": "tools/test_loom_plugin_package_v11.py",
+            "role": "test",
+            "sha256": "88ccd366dd7f2cb17931adb8e34e255d1e635b9a7ee06bf9151b22eb5ca861d3"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_plugin_package_v11.py"
@@ -678,6 +1872,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 15785,
+            "path": "tools/loom_plugin_package.py",
+            "role": "enforcement",
+            "sha256": "58cb163d9addedbffa8bee3127384e0d616705b99bfb23f9fec194714a95e6cc"
+          },
+          {
+            "bytes": 8093,
+            "path": "tools/loom_release_verify.py",
+            "role": "enforcement",
+            "sha256": "c5ef6ac3a66b202a8f6a2096a6ae3fc8c3a752d2fdf5fd7f0e59b31e1c318a78"
+          },
+          {
+            "bytes": 3795,
+            "path": "tools/test_release_asset.py",
+            "role": "test",
+            "sha256": "66b130dbe14079f91ee865496c4af9e767007c2b5cab7f1b230ac16a13039118"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_release_asset.py"
@@ -694,6 +1912,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 10673,
+            "path": "tools/loom_release_sign.py",
+            "role": "enforcement",
+            "sha256": "462ae2752d917e05f90951daeb312627623b28b3e2c8d2ded4cabf7b8a4f1dca"
+          },
+          {
+            "bytes": 41082,
+            "path": "tools/loom_update.py",
+            "role": "enforcement",
+            "sha256": "ec0fe3bf35240548dcfbc6c965d473b279c819149c5614ff77f21b2d0334fc41"
+          },
+          {
+            "bytes": 5773,
+            "path": "tools/test_loom_release_sign_v11.py",
+            "role": "test",
+            "sha256": "66f5692605cd6f7590b4a9e017002fb22b6ee70542d9eae08b6692146159dcbf"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_loom_release_sign_v11.py"
@@ -710,6 +1952,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 8057,
+            "path": "tools/loom_test.py",
+            "role": "enforcement",
+            "sha256": "7d07bd02f1f76f3a542628df1c24302fd05a87cf0f4bd55a0fc44bc09450d4a8"
+          },
+          {
+            "bytes": 4822,
+            "path": "tools/loom_capability.py",
+            "role": "enforcement",
+            "sha256": "a57566e3d2ab10dac938f15ed375c171965c611a014ff0fabbf442618e27747b"
+          },
+          {
+            "bytes": 1419,
+            "path": "tools/test_test_runner.py",
+            "role": "test",
+            "sha256": "8d00c6af68420fb7fdbed5d600684d6d152a1de421bf98e627b746bc51371a06"
+          },
+          {
+            "bytes": 4066,
+            "path": "tools/test_loom_capability.py",
+            "role": "test",
+            "sha256": "f48afa88ec44b44af9bbac3d2a1bfdde92db8f812f84ba0196d85f1f66a06d22"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_test_runner.py",
@@ -727,6 +1999,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 10839,
+            "path": "tools/loom_cli_contract.py",
+            "role": "enforcement",
+            "sha256": "29c9b2b9466ba0c6307c44d1ae7d00fe5ae0f95d91019e4ce80c894ba531e770"
+          },
+          {
+            "bytes": 2126,
+            "path": "schemas/tool-contract.schema.json",
+            "role": "enforcement",
+            "sha256": "313b76460dda21d1d672b5974356a9785523d9ee74ac26eace9778ef5dd5f6e7"
+          },
+          {
+            "bytes": 1078,
+            "path": "tools/test_tool_contracts.py",
+            "role": "test",
+            "sha256": "9b63fc8c79a8ef616ddf19bf4dcb259fdbe644f61792e49252a5c16aee6af2e3"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_tool_contracts.py"
@@ -743,6 +2039,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 40905,
+            "path": "tools/loom_domain.py",
+            "role": "enforcement",
+            "sha256": "e7b82bfbdc7bd05f2b54e58c8a0ce1793b709cc43d8f0444220419d0b27dfae3"
+          },
+          {
+            "bytes": 10690,
+            "path": "tools/loom_tier.py",
+            "role": "enforcement",
+            "sha256": "1b1b402054d1e38df0fc26f2c9800e312bc24b2e0b2ab04e448f8e2edf8e5257"
+          },
+          {
+            "bytes": 6878,
+            "path": "tools/test_unknown_domain_routing.py",
+            "role": "test",
+            "sha256": "dad67441c0feda5f94405825fcf224b49514486b9a549c2fff882156c1070a4d"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_unknown_domain_routing.py"
@@ -760,6 +2080,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 10170,
+            "path": "tools/loom_evidence_graph.py",
+            "role": "enforcement",
+            "sha256": "943de3654baa2e35cc66a051df3a66e379dce8faa902f9813653f2083eb03527"
+          },
+          {
+            "bytes": 1205,
+            "path": "contracts/evidence-policy-v1.json",
+            "role": "enforcement",
+            "sha256": "078c1de725dde4113888a464e2e901b68763501f8ddb6c0b298d7bd52235f9a3"
+          },
+          {
+            "bytes": 2628,
+            "path": "schemas/evidence-envelope.schema.json",
+            "role": "enforcement",
+            "sha256": "d43f91d3a339b025e0e6a9b0bbd18a117184bc264a99610b8affecd3de6b8fe6"
+          },
+          {
+            "bytes": 3879,
+            "path": "tools/test_evidence_graph_phase7.py",
+            "role": "test",
+            "sha256": "6b67e2ad19ed375fe1bd574df029241871c277366b80b9fd64fc605296386d5d"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_evidence_graph_phase7.py"
@@ -776,6 +2126,30 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 7440,
+            "path": "tools/loom_capability_registry.py",
+            "role": "enforcement",
+            "sha256": "a09ae205dc23d14787efbeba8175791bd749a9b9e372d64d68ca692559cff940"
+          },
+          {
+            "bytes": 2696,
+            "path": "schemas/capability-registry.schema.json",
+            "role": "enforcement",
+            "sha256": "98ad67e4bcf2f50115459b606d65231437a518aa23f5b1a8ba17844f9fd791bb"
+          },
+          {
+            "bytes": 3061,
+            "path": "tools/test_capability_registry_phase7.py",
+            "role": "test",
+            "sha256": "f0e47d13c74b79c85df5c3889c3bb594c64e0d88ed5ad499360b514d2078a876"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_capability_registry_phase7.py"
@@ -793,6 +2167,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 6511,
+            "path": "tools/loom_release_subject.py",
+            "role": "enforcement",
+            "sha256": "2d86b140e2395099a88976fa4e3ea3ec00fb5cceda7cf33993a96d2106d97be8"
+          },
+          {
+            "bytes": 8093,
+            "path": "tools/loom_release_verify.py",
+            "role": "enforcement",
+            "sha256": "c5ef6ac3a66b202a8f6a2096a6ae3fc8c3a752d2fdf5fd7f0e59b31e1c318a78"
+          },
+          {
+            "bytes": 1843,
+            "path": "schemas/release-subject.schema.json",
+            "role": "enforcement",
+            "sha256": "893a0dfedeca21c90669c69b6a0327d79a1bf2cc08936bf79898768d27f95b54"
+          },
+          {
+            "bytes": 3140,
+            "path": "tools/test_release_subject_phase7.py",
+            "role": "test",
+            "sha256": "2759917e7f2e90e71a640a809c6d3373f270c02c12378eec7b28b67072c98fbb"
+          },
+          {
+            "bytes": 3795,
+            "path": "tools/test_release_asset.py",
+            "role": "test",
+            "sha256": "66b130dbe14079f91ee865496c4af9e767007c2b5cab7f1b230ac16a13039118"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_release_subject_phase7.py",
@@ -811,6 +2221,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 4663,
+            "path": "tools/loom_platform_probe.py",
+            "role": "enforcement",
+            "sha256": "15db882fb42666d2e0bb94331b82315308c5c9ad6c17505a0bd7cea06e55eb90"
+          },
+          {
+            "bytes": 1688,
+            "path": ".github/workflows/compatibility.yml",
+            "role": "enforcement",
+            "sha256": "d6a41412118422f237a74754b32f40afff89197a59bbff66a716580e36665f23"
+          },
+          {
+            "bytes": 3481,
+            "path": ".github/workflows/build-helper.yml",
+            "role": "enforcement",
+            "sha256": "2a5a9449a076435221229ce305e3f32cf37dd9b526a0f37a5fc8949e4354ce6c"
+          },
+          {
+            "bytes": 1170,
+            "path": "tools/test_platform_probe_phase7.py",
+            "role": "test",
+            "sha256": "27eb7a567d2c19dddc3a3b1ded746d2047f569aa14b3931d1b4a943ad0124e53"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_platform_probe_phase7.py"
@@ -828,6 +2268,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 3934,
+            "path": "tools/loom_provider_evidence.py",
+            "role": "enforcement",
+            "sha256": "178710c804ddaadfc718102ccaa2d1924550e2a3f84c1e4037632c69e7fee857"
+          },
+          {
+            "bytes": 14554,
+            "path": "tools/loom_usage.py",
+            "role": "enforcement",
+            "sha256": "9b0193907a50dbf7d77adfa8659e0de9a23f0053fecd3ffd65ad265ffb2f6979"
+          },
+          {
+            "bytes": 1387,
+            "path": "schemas/provider-native-receipt.schema.json",
+            "role": "enforcement",
+            "sha256": "eb7ae78e8f30227b62478cb9417d3d266ea2cfbbeedbfa09445bbc1399683fb0"
+          },
+          {
+            "bytes": 5657,
+            "path": "tools/test_provider_tier_clean_phase7.py",
+            "role": "test",
+            "sha256": "fa859392665ef3052d64cf039e4867ff573c0d1626e416b5261a741b2cbece2b"
+          },
+          {
+            "bytes": 5736,
+            "path": "tools/test_token_accounting_v3.py",
+            "role": "test",
+            "sha256": "91a06378e861a6bec8b99e1990a18849f6ca831588b4eeb1021adf29f9d938cf"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_provider_tier_clean_phase7.py",
@@ -846,6 +2322,36 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 9230,
+            "path": "tools/loom_clean_room.py",
+            "role": "enforcement",
+            "sha256": "d6d2205c88bcd43733fe4ef0f5bcc47b495d7c3004c39b507f90e1ccdd39c451"
+          },
+          {
+            "bytes": 3494,
+            "path": "tools/loom_current_facts.py",
+            "role": "enforcement",
+            "sha256": "f39a0ba5ace19996f11babbfd3826347663e3e8241c5498562b4412e78d88847"
+          },
+          {
+            "bytes": 4629,
+            "path": "docs/phase-7-validation.md",
+            "role": "enforcement",
+            "sha256": "9090cd1899eef41c6671b3af18d350484600638160454e7652c0a485748b2480"
+          },
+          {
+            "bytes": 1465,
+            "path": "tools/test_phase7_protocols.py",
+            "role": "test",
+            "sha256": "87f2055c8980d42376401a639c90560b0cadb97682e360d99190694326798219"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_phase7_protocols.py"
@@ -867,6 +2373,78 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 40905,
+            "path": "tools/loom_domain.py",
+            "role": "enforcement",
+            "sha256": "e7b82bfbdc7bd05f2b54e58c8a0ce1793b709cc43d8f0444220419d0b27dfae3"
+          },
+          {
+            "bytes": 19968,
+            "path": "tools/loom_planning_intelligence.py",
+            "role": "enforcement",
+            "sha256": "a0323a1bc7eb2724f1a0249c7b1c23064371adac5b7cbff8d44ea42cf9b7d45e"
+          },
+          {
+            "bytes": 13805,
+            "path": "tools/loom_program.py",
+            "role": "enforcement",
+            "sha256": "48092024b285fe4bb69453040cf677c6c33875d5842e9a3f6666dbf3c224ecce"
+          },
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 85147,
+            "path": "tools/loom_lint.py",
+            "role": "enforcement",
+            "sha256": "ba8aacaa539f804312fd2895d8531340012465e5e17039dc4798f696ccb415fa"
+          },
+          {
+            "bytes": 6017,
+            "path": "schemas/planning-intelligence.schema.json",
+            "role": "enforcement",
+            "sha256": "11435e140dfe403fac7c3d83d2c51bf9e24891e0c1b65706e0d1edee4b5cecdc"
+          },
+          {
+            "bytes": 1332,
+            "path": "schemas/planning-obligations.schema.json",
+            "role": "enforcement",
+            "sha256": "59a913328531cdb7d87e96a9b9e59ea5c04f4e89537e905ae69fedf549588ea8"
+          },
+          {
+            "bytes": 8410,
+            "path": "tools/test_planning_intelligence.py",
+            "role": "test",
+            "sha256": "0f188f3c86f3c97111ae9002126548771a1a9ceafee54af207f5df441a39524f"
+          },
+          {
+            "bytes": 4302,
+            "path": "tools/test_planning_program.py",
+            "role": "test",
+            "sha256": "5f2e53ae214bf6cfe21a117a361d19de943de544b076819fdfae800a1d05f5c8"
+          },
+          {
+            "bytes": 633,
+            "path": "tools/test_planning_evaluation.py",
+            "role": "test",
+            "sha256": "3f750f6db045d063a65a004d34080d1eb820a7596f18f1db99dada0e5931ba8d"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_planning_intelligence.py",
@@ -887,6 +2465,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 6374,
+            "path": "tools/loom_message.py",
+            "role": "enforcement",
+            "sha256": "c17dc3eac792cb3d299d87f1175dfc5b1fd2835bbe51152ac0faf6429dd65040"
+          },
+          {
+            "bytes": 71895,
+            "path": "tools/loom_session.py",
+            "role": "enforcement",
+            "sha256": "c39f1a492c61ae62b46bc01153595da857a1f0639e30826f4337de2dd1cd9dad"
+          },
+          {
+            "bytes": 1783,
+            "path": "schemas/owner-message.schema.json",
+            "role": "enforcement",
+            "sha256": "fc512d5c167419767aae3ca1f038538b16d708f3ced17d5dcfcccdc838764083"
+          },
+          {
+            "bytes": 3066,
+            "path": "tools/test_owner_message.py",
+            "role": "test",
+            "sha256": "53ef61ef6fe3546a3c33624cdcdd7bd80a954d8f32b9872648a769479f45e372"
+          },
+          {
+            "bytes": 9750,
+            "path": "tools/test_transparency_surface.py",
+            "role": "test",
+            "sha256": "5c45366587a0ee6a899487fc281bc09317ed54d1331b111b26aea658e4971aec"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_message.py",
@@ -905,6 +2519,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 4915,
+            "path": "tools/loom_authority.py",
+            "role": "enforcement",
+            "sha256": "b31851c58cb424a5a781c07b045d5ff57f967c474f693c2032e174f800749882"
+          },
+          {
+            "bytes": 103066,
+            "path": "tools/loom_orchestrator.py",
+            "role": "enforcement",
+            "sha256": "7e49d0c3c6897214b33dcdd6498e2e994c39d7941805bdaad65b3f9400cd5e2e"
+          },
+          {
+            "bytes": 1713,
+            "path": "schemas/continuation-authority.schema.json",
+            "role": "enforcement",
+            "sha256": "0ee8e34b65cf19feffeb6619dce63f2c1c7fd8b5c45c842ac1a96e715db72307"
+          },
+          {
+            "bytes": 1993,
+            "path": "tools/test_continuation_authority.py",
+            "role": "test",
+            "sha256": "879dcb581520e0e58a7eae28150bddba746ddf8f4029e0792bba9ee3b1187ce9"
+          },
+          {
+            "bytes": 73492,
+            "path": "tools/test_production_orchestrator.py",
+            "role": "test",
+            "sha256": "0c9b40819068623db26dbc9846c5c1683e33c552233afa49bee758c030699e4a"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_continuation_authority.py",
@@ -923,6 +2573,42 @@
       "limitations": [
         "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 588,
+            "path": "contracts/cache-classes-v1.json",
+            "role": "enforcement",
+            "sha256": "04ddd8bb9fa1461a975e186a13a70a5c94c92d648d66e3ee829056357e5c7c58"
+          },
+          {
+            "bytes": 4929,
+            "path": "tools/loom_cache_policy.py",
+            "role": "enforcement",
+            "sha256": "c4a4b29bf10d9594577a2afb0b6712d91df006e668127e432dd646a66f272660"
+          },
+          {
+            "bytes": 29445,
+            "path": "tools/loom_performance.py",
+            "role": "enforcement",
+            "sha256": "3d5a120c185f7d5f9f529b875e36d408e846a23be9acd92ffd564446ce1ffdd8"
+          },
+          {
+            "bytes": 2529,
+            "path": "tools/test_cache_policy.py",
+            "role": "test",
+            "sha256": "07b8efc8100bc54af692cd480c076170aa3a4ec566656fc89a47bd8846b33933"
+          },
+          {
+            "bytes": 16405,
+            "path": "tools/test_performance_excellence.py",
+            "role": "test",
+            "sha256": "65b2acce214e013955e441d612957c5ceeb0bc9871d02bdc83643ee32b133b50"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_cache_policy.py",
@@ -939,13 +2625,332 @@
       "id": "bounded-self-cleaning-learning",
       "kind": "mechanical",
       "limitations": [
-        "Longitudinal causal owner benefit remains unverified without external evidence."
+        "No current exact-subject evidence envelope is active."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 3327,
+            "path": "contracts/owner-learning-v3.json",
+            "role": "enforcement",
+            "sha256": "a264744af8534b3fa4f9935fc4b1d70432dd281645b92aa27e2c3a3f71e4ad45"
+          },
+          {
+            "bytes": 140622,
+            "path": "tools/loom_vault.py",
+            "role": "enforcement",
+            "sha256": "fe1b2e9d8c7fed1451e44771bb75984719bdeb142550a06521140a977a8cfcfe"
+          },
+          {
+            "bytes": 16173,
+            "path": "tools/loom_owner.py",
+            "role": "enforcement",
+            "sha256": "be04afed7721ead83f7b6450f2b07f9d49db5a2acd7ef45fa9188c8d010a9a4c"
+          },
+          {
+            "bytes": 14381,
+            "path": "tools/test_owner_learning_phase2.py",
+            "role": "test",
+            "sha256": "2b63a871738d28224af3721f0ee8e406eefb4bd5430de9b5c26a2b53b47a520e"
+          },
+          {
+            "bytes": 15413,
+            "path": "tools/test_loom_vault_v11.py",
+            "role": "test",
+            "sha256": "b367fc83c61fa05e910d82fec4ab91302616299dcfff2db216349dc3748d408b"
+          },
+          {
+            "bytes": 7887,
+            "path": "tools/test_loom_owner_v11.py",
+            "role": "test",
+            "sha256": "a9f51d843fd023861d139c15b92c9de41e48343f5ed8efad8f6390fa3dd28635"
+          }
+        ],
+        "subject_digest": null
+      },
       "status": "unverified",
       "tests": [
         "tools/test_owner_learning_phase2.py",
         "tools/test_loom_vault_v11.py",
         "tools/test_loom_owner_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "contracts/host-contracts-v2.json",
+        "tools/loom_host_registry.py",
+        "tools/loom_adapters.py",
+        "tools/loom_reliability.py",
+        "tools/loom_launcher.py"
+      ],
+      "evidence_ids": [],
+      "id": "versioned-host-contracts-and-transactional-adapters",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 6890,
+            "path": "contracts/host-contracts-v2.json",
+            "role": "enforcement",
+            "sha256": "b303b50ed73a3fc3ae1d0f8bb6b516eef1bf0808fba4a9f2487c0d4611e5528f"
+          },
+          {
+            "bytes": 6512,
+            "path": "tools/loom_host_registry.py",
+            "role": "enforcement",
+            "sha256": "59e767faa6c2042ee088f881e0400ffb155b0e8bf06d6f56bfab15978152122d"
+          },
+          {
+            "bytes": 25537,
+            "path": "tools/loom_adapters.py",
+            "role": "enforcement",
+            "sha256": "597d63aeedb7943a13a259700db9b3ce94c3aeb903608c4fe5e6d719ffa4612b"
+          },
+          {
+            "bytes": 18641,
+            "path": "tools/loom_reliability.py",
+            "role": "enforcement",
+            "sha256": "f6e6ce7fe021d79181a11dea538c53f0c21240a4ed9ac3363162d7b93dd0668c"
+          },
+          {
+            "bytes": 9076,
+            "path": "tools/loom_launcher.py",
+            "role": "enforcement",
+            "sha256": "f85b80b702af17379cd6d12ed64ac46cb6f9fc525249d1157405b32f9299dd3d"
+          },
+          {
+            "bytes": 5353,
+            "path": "tools/test_adapter_protocol_v2.py",
+            "role": "test",
+            "sha256": "962ee08979f02bcc255ee4affbd4cdacf0f998572f7851e83586bd8bfd74b653"
+          },
+          {
+            "bytes": 13929,
+            "path": "tools/test_loom_plugin_adapters_v11.py",
+            "role": "test",
+            "sha256": "04963a4f9568d85d7bafac10407b69608bac6bfdc63a306b830c05280001dffa"
+          },
+          {
+            "bytes": 8127,
+            "path": "tools/test_reliability_excellence.py",
+            "role": "test",
+            "sha256": "9a9742a0d2bc5434188e947bf70e6d5ab6310fb43a348b16c2bef47658e12616"
+          }
+        ],
+        "subject_digest": null
+      },
+      "status": "unverified",
+      "tests": [
+        "tools/test_adapter_protocol_v2.py",
+        "tools/test_loom_plugin_adapters_v11.py",
+        "tools/test_reliability_excellence.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_update.py",
+        "schemas/runtime-session-lease.schema.json",
+        "schemas/update-state.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "runtime-and-owner-state-generation-pinning",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 41082,
+            "path": "tools/loom_update.py",
+            "role": "enforcement",
+            "sha256": "ec0fe3bf35240548dcfbc6c965d473b279c819149c5614ff77f21b2d0334fc41"
+          },
+          {
+            "bytes": 785,
+            "path": "schemas/runtime-session-lease.schema.json",
+            "role": "enforcement",
+            "sha256": "3b4d1fe4a8c53132e3a0d1b9cb91e53b8eaa78742bb875c599e89ad5fd8e9451"
+          },
+          {
+            "bytes": 1416,
+            "path": "schemas/update-state.schema.json",
+            "role": "enforcement",
+            "sha256": "159db06810d28410278689fc4234806698f1c6b254ed584d991e38e563c56a87"
+          },
+          {
+            "bytes": 19061,
+            "path": "tools/test_loom_update_v11.py",
+            "role": "test",
+            "sha256": "e416c47f8678a69f4e86515dfe72835746ad5a48410cf8f7333cd91280e26786"
+          },
+          {
+            "bytes": 13929,
+            "path": "tools/test_loom_plugin_adapters_v11.py",
+            "role": "test",
+            "sha256": "04963a4f9568d85d7bafac10407b69608bac6bfdc63a306b830c05280001dffa"
+          }
+        ],
+        "subject_digest": null
+      },
+      "status": "unverified",
+      "tests": [
+        "tools/test_loom_update_v11.py",
+        "tools/test_loom_plugin_adapters_v11.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_release_subject.py",
+        "schemas/release-subject.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "immutable-complete-release-subject-v2",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 6511,
+            "path": "tools/loom_release_subject.py",
+            "role": "enforcement",
+            "sha256": "2d86b140e2395099a88976fa4e3ea3ec00fb5cceda7cf33993a96d2106d97be8"
+          },
+          {
+            "bytes": 1843,
+            "path": "schemas/release-subject.schema.json",
+            "role": "enforcement",
+            "sha256": "893a0dfedeca21c90669c69b6a0327d79a1bf2cc08936bf79898768d27f95b54"
+          },
+          {
+            "bytes": 3140,
+            "path": "tools/test_release_subject_phase7.py",
+            "role": "test",
+            "sha256": "2759917e7f2e90e71a640a809c6d3373f270c02c12378eec7b28b67072c98fbb"
+          }
+        ],
+        "subject_digest": null
+      },
+      "status": "unverified",
+      "tests": [
+        "tools/test_release_subject_phase7.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_readiness.py",
+        "tools/loom_diagnostics.py",
+        "schemas/release-readiness.schema.json",
+        "schemas/diagnostic-receipt.schema.json"
+      ],
+      "evidence_ids": [],
+      "id": "evidence-generated-readiness-and-private-diagnostics",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 10472,
+            "path": "tools/loom_readiness.py",
+            "role": "enforcement",
+            "sha256": "c3eba0c0ac1a2d50971eda20643988542415d32c2325341b11cb7b5b149e61d7"
+          },
+          {
+            "bytes": 8208,
+            "path": "tools/loom_diagnostics.py",
+            "role": "enforcement",
+            "sha256": "6d7b5483cc15e7795f4fbd79a3fd3482b5c0a3395533d23210db76ad9ad6c1ce"
+          },
+          {
+            "bytes": 1955,
+            "path": "schemas/release-readiness.schema.json",
+            "role": "enforcement",
+            "sha256": "f49dee596f58a1a2aaf34f81b9f9202b2644e7337c76319d11899932c51111da"
+          },
+          {
+            "bytes": 2479,
+            "path": "schemas/diagnostic-receipt.schema.json",
+            "role": "enforcement",
+            "sha256": "a1c58ff7f4ccac43c68a3d044382f464784b9afa2d4ed44003de6785cd98a581"
+          },
+          {
+            "bytes": 1631,
+            "path": "tools/test_readiness_phase10.py",
+            "role": "test",
+            "sha256": "60c13aece51538eb1451edc376162a55ac87129b02faafc192e8fe0ae26d81dd"
+          },
+          {
+            "bytes": 3125,
+            "path": "tools/test_diagnostics_phase10.py",
+            "role": "test",
+            "sha256": "02642dda16efe4e1280ee2bdb8c7ccaa1758a2f64b069c7648b444d69c8b8319"
+          }
+        ],
+        "subject_digest": null
+      },
+      "status": "unverified",
+      "tests": [
+        "tools/test_readiness_phase10.py",
+        "tools/test_diagnostics_phase10.py"
+      ]
+    },
+    {
+      "enforcement": [
+        "tools/loom_exact_cut_ci.py",
+        ".github/workflows/quality.yml"
+      ],
+      "evidence_ids": [],
+      "id": "bounded-exact-cut-failure-receipts",
+      "kind": "mechanical",
+      "limitations": [
+        "No current exact-subject evidence envelope is active."
+      ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [
+          {
+            "bytes": 3686,
+            "path": "tools/loom_exact_cut_ci.py",
+            "role": "enforcement",
+            "sha256": "ddad7e3939dfa73ea1c0de5fef621e01bc15d31d044e7e88b5f94123bf12710f"
+          },
+          {
+            "bytes": 7064,
+            "path": ".github/workflows/quality.yml",
+            "role": "enforcement",
+            "sha256": "87a543470e881e5d270b45173a45bc4c0e7b3c3e9c3caf99d95a1c60d7c9bc23"
+          },
+          {
+            "bytes": 2286,
+            "path": "tools/test_exact_cut_ci_phase10.py",
+            "role": "test",
+            "sha256": "d8cc6bb4ff2dfc77c41297a3a52f6f7b1e2e5ef458d49827cee598834b480b0b"
+          },
+          {
+            "bytes": 2808,
+            "path": "tools/test_workflow_policy.py",
+            "role": "test",
+            "sha256": "de5508b466a89696b936083144df0d514d73d15dbc90599f3a472126ece1734f"
+          }
+        ],
+        "subject_digest": null
+      },
+      "status": "unverified",
+      "tests": [
+        "tools/test_exact_cut_ci_phase10.py",
+        "tools/test_workflow_policy.py"
       ]
     },
     {
@@ -956,6 +2961,11 @@
       "limitations": [
         "Human judgment is not machine-enforced."
       ],
+      "proof_binding": {
+        "evidence_graph_sha256": null,
+        "files": [],
+        "subject_digest": null
+      },
       "status": "unsupported",
       "tests": []
     }
@@ -965,5 +2975,5 @@
   "generated_by": "tools/loom_capability_registry.py",
   "schema_version": 2,
   "subject_digest": null,
-  "version": "1.6.0"
+  "version": "1.7.0"
 }

@@ -18,7 +18,7 @@
     "capability": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "kind", "status", "enforcement", "tests", "evidence_ids", "limitations"],
+      "required": ["id", "kind", "status", "enforcement", "tests", "evidence_ids", "limitations", "proof_binding"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,95}$"},
         "kind": {"enum": ["mechanical", "advisory"]},
@@ -26,7 +26,31 @@
         "enforcement": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
         "tests": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
         "evidence_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
-        "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}}
+        "limitations": {"type": "array", "items": {"type": "string", "minLength": 1}},
+        "proof_binding": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["subject_digest", "evidence_graph_sha256", "files"],
+          "properties": {
+            "subject_digest": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+            "evidence_graph_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+            "files": {
+              "type": "array",
+              "uniqueItems": true,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["role", "path", "bytes", "sha256"],
+                "properties": {
+                  "role": {"enum": ["enforcement", "test"]},
+                  "path": {"type": "string", "minLength": 1},
+                  "bytes": {"type": "integer", "minimum": 0},
+                  "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+                }
+              }
+            }
+          }
+        }
       }
     }
   }

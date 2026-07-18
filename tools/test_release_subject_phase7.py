@@ -13,15 +13,23 @@ class ReleaseSubjectPhase7Tests(unittest.TestCase):
             source.mkdir(); cut.mkdir()
             (source / "README.md").write_text("source", encoding="utf-8")
             (cut / "README.md").write_text("cut", encoding="utf-8")
-            plugin, helper, sbom, workflow = [root / name for name in
-                ("plugin.zip", "helper", "sbom.json", "quality.yml")]
-            for path in (plugin, helper, sbom, workflow):
+            plugin, helper, sbom, workflow, registry, provenance = [root / name for name in
+                ("plugin.zip", "helper", "sbom.json", "quality.yml", "registry.json", "provenance.json")]
+            schemas, docs = root / "schemas", root / "docs"
+            schemas.mkdir(); docs.mkdir()
+            (schemas / "schema.json").write_text("{}", encoding="utf-8")
+            (docs / "README.md").write_text("docs", encoding="utf-8")
+            for path in (plugin, helper, sbom, workflow, registry, provenance):
                 path.write_bytes(path.name.encode())
             kwargs = dict(source=source, public_cut=cut, plugin=plugin,
                           helpers={"linux-x64": helper}, sboms={"linux-x64": sbom},
-                          workflows={"quality": workflow}, commit="a" * 40,
-                          tag="v1.6.0", release_sequence=16)
+                          workflows={"quality": workflow}, schemas=schemas, docs=docs,
+                          registry=registry, provenance={"slsa": provenance},
+                          commit="a" * 40, tag="v1.6.0", release_sequence=16,
+                          previous_subject="b" * 64)
             first = loom_release_subject.create(**kwargs)
+            self.assertEqual(2, first["schema_version"])
+            self.assertEqual("b" * 64, first["previous_subject_sha256"])
             workflow.write_bytes(b"changed")
             second = loom_release_subject.create(**kwargs)
             self.assertNotEqual(first["subject_sha256"], second["subject_sha256"])
