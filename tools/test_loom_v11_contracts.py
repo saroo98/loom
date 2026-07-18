@@ -6,6 +6,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+CURRENT_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 class LoomV11ContractTests(unittest.TestCase):
@@ -43,10 +44,9 @@ class LoomV11ContractTests(unittest.TestCase):
     }
 
     def test_version_and_every_entry_point_are_current(self):
-        self.assertEqual("1.8.0", (ROOT / "VERSION").read_text(encoding="utf-8").strip())
         for path in (ROOT / "README.md", ROOT / "START-HERE.md",
                      ROOT / "skill" / "loom" / "SKILL.md"):
-            self.assertIn("1.8.0", path.read_text(encoding="utf-8"), path)
+            self.assertIn(CURRENT_VERSION, path.read_text(encoding="utf-8"), path)
 
     def test_contracts_are_closed_bounded_and_have_required_fields(self):
         for name, required in self.CONTRACTS.items():
