@@ -90,6 +90,10 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertEqual(2, helper.count('CARGO_TARGET_DIR="$LOOM_BUILD_TARGET" cargo build'))
         self.assertNotIn("loom-build-a", helper)
         self.assertNotIn("loom-build-b", helper)
+        self.assertIn('"rebuild_sha256": digest(rebuild)', helper)
+        self.assertIn('"provenance_sha256": digest(provenance_path)', helper)
+        self.assertIn('"independent_build": True', helper)
+        self.assertIn("_verify_helper_receipt(", helper)
 
     def test_exact_cut_forbidden_token_cannot_match_shipped_workflow_bytes(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")

@@ -21,6 +21,8 @@
   dependency analysis cannot inherit an undersized host setting and panic during proof rebuilds.
 - Keep the 30-second fast gate focused on one cheap sentinel per learning boundary while the full
   matrix retains every expensive longitudinal learning case, eliminating cold-runner false blocks.
+- Export both native rebuild bytes, validated SBOM hashes, exact source hashes, and builder-bound
+  provenance so the six-platform CI artifacts can actually assemble the canonical signed plugin.
 
 ## 1.7.0
 
