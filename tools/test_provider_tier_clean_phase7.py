@@ -1,9 +1,10 @@
+import json
+import subprocess
 import tempfile
 import unittest
 import uuid
 from pathlib import Path
 from unittest import mock
-import subprocess
 
 import loom_provider_evidence
 import loom_clean_room
@@ -80,6 +81,18 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
             self.assertEqual((cut / "tools").resolve(), Path(called["cwd"]).resolve())
             self.assertEqual("passed", receipt["status"])
             self.assertLessEqual(len(receipt["disposable_home"]["path_sample"]), 32)
+
+    def test_clean_room_cli_writes_the_verified_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            output = root / "clean-room.json"
+            receipt = {"status": "passed", "receipt_sha256": "a" * 64}
+            with mock.patch.object(
+                    loom_clean_room, "verify", return_value=receipt):
+                code = loom_clean_room.main([
+                    str(root / "cut"), "--output", str(output)])
+            self.assertEqual(0, code)
+            self.assertEqual(receipt, json.loads(output.read_text(encoding="utf-8")))
 
     def test_disposable_home_inventory_is_bounded_and_content_bound(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -11,6 +11,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+import loom_reliability
 import loom_release_subject
 
 
