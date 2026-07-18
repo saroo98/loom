@@ -49,10 +49,18 @@ DOMAIN_COMPLEXITY = {
 
 
 def classify(description, *, files=None, days=None, new_components=0,
-             new_boundaries=0, implementers=1, irreversible=False, domains=None):
+             new_boundaries=0, implementers=1, irreversible=False, domains=None,
+             outcomes=1, dependency_reach=0, domain_coverage="verified",
+             repository_health="current", consequence=None):
     text = str(description or "").strip()
     domain_ids = sorted(set(str(item).strip().casefold()
                             for item in (domains or []) if str(item).strip()))
+    if type(outcomes) is not int or outcomes < 1 \
+            or type(dependency_reach) is not int or dependency_reach < 0 \
+            or domain_coverage not in {"verified", "discovered", "unknown"} \
+            or repository_health not in {"current", "drifted", "unknown"} \
+            or consequence not in {None, "ordinary", "material", "high", "critical"}:
+        raise ValueError("adaptive effort observations are invalid")
     reasons = []
     tier = "S"
     risk_hits = sorted(set(match.group(0).lower() for match in RISK_RE.finditer(text)))
@@ -88,9 +96,13 @@ def classify(description, *, files=None, days=None, new_components=0,
         reasons.append(
             "product/subsystem, domain-boundary, or multi-implementer signals require a "
             "release pack")
-    elif risk_hits or consequential_domain or irreversible or (days is not None and days > 1) \
+    elif risk_hits or consequential_domain or irreversible or outcomes > 1 \
+            or domain_coverage == "unknown" or repository_health != "current" \
+            or consequence in {"material", "high", "critical"} \
+            or (days is not None and days > 1) \
             or new_components > 0 or new_boundaries > 0 \
-            or (files is not None and files > 5) or implementers > 1 \
+            or dependency_reach > 5 or (files is not None and files > 5) \
+            or implementers > 1 \
             or greenfield_unknown or complex_single_domain:
         tier = "M"
         reasons.append(
@@ -115,9 +127,35 @@ def classify(description, *, files=None, days=None, new_components=0,
             "promote to XL if observed work spans more than 60 days, eight subsystems "
             "or boundaries, six implementers, or a portfolio-scale program",
         ]
+    observed_consequence = consequence or (
+        "high" if consequential_domain else "material" if risk_hits else "ordinary")
+    observation_vector = {
+        "outcomes": outcomes,
+        "touched_scope": files,
+        "new_boundaries": new_boundaries,
+        "consequence": observed_consequence,
+        "reversible": not irreversible,
+        "domain_coverage": domain_coverage,
+        "dependency_reach": dependency_reach,
+        "novelty": "new-boundary" if new_boundaries else (
+            "new-component" if new_components else "within-existing-boundary"),
+        "repository_health": repository_health,
+    }
+    obligations = ["causal-baseline", "acceptance-evidence", "freshness-check"]
+    if domain_coverage == "unknown":
+        obligations.append("domain-invariant-discovery")
+    if new_boundaries:
+        obligations.append("boundary-contract")
+    if irreversible or observed_consequence in {"high", "critical"}:
+        obligations.extend(["explicit-authority", "rollback-or-safe-stop"])
+    if outcomes > 1:
+        obligations.append("atomic-outcome-slices")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "tier": tier,
+        "compatibility_label": tier,
+        "observation_vector": observation_vector,
+        "obligations": sorted(set(obligations)),
         "reasons": reasons,
         "risk_terms": risk_hits,
         "program_terms": program_hits,
@@ -142,9 +180,17 @@ def main(argv=None):
     parser.add_argument("--implementers", type=int, default=1)
     parser.add_argument("--irreversible", action="store_true")
     parser.add_argument("--domain", action="append", default=[])
+    parser.add_argument("--outcomes", type=int, default=1)
+    parser.add_argument("--dependency-reach", type=int, default=0)
+    parser.add_argument("--domain-coverage", choices=("verified", "discovered", "unknown"),
+                        default="verified")
+    parser.add_argument("--repository-health", choices=("current", "drifted", "unknown"),
+                        default="current")
+    parser.add_argument("--consequence", choices=("ordinary", "material", "high", "critical"))
     args = parser.parse_args(argv)
     numeric = (args.files, args.days, args.new_components,
-               args.new_boundaries, args.implementers)
+               args.new_boundaries, args.implementers, args.outcomes,
+               args.dependency_reach)
     if any(value is not None and value < 0 for value in numeric) or args.implementers < 1:
         print(json.dumps({"status": "error", "error": "numeric inputs are out of range"}))
         return 1
@@ -152,7 +198,11 @@ def main(argv=None):
         args.description, files=args.files, days=args.days,
         new_components=args.new_components, new_boundaries=args.new_boundaries,
         implementers=args.implementers, irreversible=args.irreversible,
-        domains=args.domain)
+        domains=args.domain, outcomes=args.outcomes,
+        dependency_reach=args.dependency_reach,
+        domain_coverage=args.domain_coverage,
+        repository_health=args.repository_health,
+        consequence=args.consequence)
     print(json.dumps({"status": "ok", "result": result}, sort_keys=True))
     return 0
 

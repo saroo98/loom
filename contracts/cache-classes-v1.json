@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "classes": {
+    "static-guidance": ["runtime-generation"],
+    "host-adapter": ["host-adapter-generation"],
+    "project-routing": ["project-state-generation", "request-generation"],
+    "domain-authority": ["project-routing", "domain-facts-generation"],
+    "owner-selection": ["domain-authority", "vault-generation"],
+    "provider-prefix": ["static-guidance", "host-adapter", "provider-semantics-generation"]
+  },
+  "execution_authority": false,
+  "policy": "Cache receipts optimize loading only. Live freshness and lifecycle gates remain authoritative."
+}

@@ -20,3 +20,8 @@ verification promote the task before authorization.
 Local spans use monotonic durations and bounded numeric counters. They never contain prompts,
 repository bodies, memory statements, secrets, or telemetry. Provider prompt caching is optional
 host behavior, never a correctness dependency or freshness authority.
+
+Cache behavior is governed by `contracts/cache-classes-v1.json`. Static guidance, host adapters,
+project routing, domain authority, owner selection, and provider prefixes have distinct generation
+keys. A dependency change invalidates only its descendants. Every cache receipt declares
+`authorizes_execution: false`; live world-state and lifecycle gates are always re-evaluated.

@@ -31,6 +31,29 @@ class TierSFastPathTests(unittest.TestCase):
             "Make a tiny one-line change", files=9, new_components=1)
         self.assertEqual("M", result["tier"])
 
+    def test_adaptive_effort_vector_names_obligations_and_promotion(self):
+        result = loom_tier.classify(
+            "Adjust one existing parser", files=1, outcomes=2,
+            domain_coverage="unknown", repository_health="drifted")
+        self.assertEqual(2, result["schema_version"])
+        self.assertEqual(result["tier"], result["compatibility_label"])
+        self.assertEqual("unknown", result["observation_vector"]["domain_coverage"])
+        self.assertNotEqual("S", result["tier"])
+        self.assertIn("domain-invariant-discovery", result["obligations"])
+        self.assertIn("atomic-outcome-slices", result["obligations"])
+
+    def test_every_small_promotion_trigger_prevents_tier_s(self):
+        cases = (
+            {"files": 6}, {"new_boundaries": 1}, {"irreversible": True},
+            {"outcomes": 2}, {"domain_coverage": "unknown"},
+            {"consequence": "material"}, {"repository_health": "unknown"},
+        )
+        for observations in cases:
+            with self.subTest(observations=observations):
+                self.assertNotEqual(
+                    "S", loom_tier.classify(
+                        "Adjust one existing parser", **observations)["tier"])
+
 
 if __name__ == "__main__":
     unittest.main()
