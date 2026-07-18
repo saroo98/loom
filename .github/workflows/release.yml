@@ -26,6 +26,7 @@ jobs:
     timeout-minutes: 50
     environment: loom-release
     permissions:
+      actions: read
       contents: write
       id-token: write
       attestations: write
@@ -62,10 +63,55 @@ jobs:
           diff -qr "$RUNNER_TEMP/cut-a" "$RUNNER_TEMP/cut-b"
           python -B tools/loom_release.py verify-cut "$RUNNER_TEMP/cut-a" --output "$RUNNER_TEMP/cut-receipt.json"
           python -B tools/loom_clean_room.py "$RUNNER_TEMP/cut-a" --output "$RUNNER_TEMP/clean-room.json"
+      - name: Bind exact main capability evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LOOM_SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          python -B - <<'PY' > "$RUNNER_TEMP/main-runs.env"
+          import json
+          import os
+          import subprocess
+
+          sha = os.environ["LOOM_SOURCE_SHA"]
+
+          def exact_success(workflow):
+              completed = subprocess.run(
+                  ["gh", "run", "list", "--workflow", workflow, "--commit", sha,
+                   "--event", "push", "--limit", "20", "--json",
+                   "databaseId,headBranch,headSha,status,conclusion"],
+                  check=True, capture_output=True, text=True,
+              )
+              rows = json.loads(completed.stdout)
+              matches = [row for row in rows if row["headBranch"] == "main"
+                         and row["headSha"] == sha and row["status"] == "completed"
+                         and row["conclusion"] == "success"]
+              if not matches:
+                  raise SystemExit(f"no successful exact-main {workflow} run")
+              return max(int(row["databaseId"]) for row in matches)
+
+          print(f"QUALITY_RUN={exact_success('quality.yml')}")
+          print(f"COMPATIBILITY_RUN={exact_success('compatibility.yml')}")
+          PY
+          source "$RUNNER_TEMP/main-runs.env"
+          test -n "$QUALITY_RUN" -a -n "$COMPATIBILITY_RUN"
+          gh run download "$QUALITY_RUN" --pattern 'full-test-timings-*' \
+            --dir "$RUNNER_TEMP/capability-reports"
+          test "$(find "$RUNNER_TEMP/capability-reports" -name full-test-timings.json -type f | wc -l)" -eq 15
       - name: Run exact source suite and rollback battery
         working-directory: tools
+        env:
+          LOOM_CUT_RECEIPT: ${{ runner.temp }}/cut-receipt.json
+          LOOM_MATRIX_ROOT: ${{ runner.temp }}/capability-reports
+          LOOM_SOURCE_SHA: ${{ github.sha }}
         run: |
-          python -B loom_test.py full --output "$RUNNER_TEMP/full-suite.json"
+          PUBLIC_ROOT="$(python -B -c 'import json,os; print(json.load(open(os.environ["LOOM_CUT_RECEIPT"], encoding="utf-8"))["root_sha256"])')"
+          mapfile -t REPORTS < <(find "$LOOM_MATRIX_ROOT" -name full-test-timings.json -type f | sort)
+          ARGS=()
+          for report in "${REPORTS[@]}"; do ARGS+=(--matrix-report "$report"); done
+          python -B loom_release_suite.py "${ARGS[@]}" --commit "$LOOM_SOURCE_SHA" \
+            --public-root "$PUBLIC_ROOT" --output "$RUNNER_TEMP/full-suite.json"
           python -B -m unittest -v test_loom_update_v11.py test_loom_crash_recovery.py test_release_asset.py
           python -B loom_current_facts.py ../contracts/current-facts-v1.json
       - name: Download existing draft assets without publishing

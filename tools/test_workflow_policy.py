@@ -122,6 +122,16 @@ class WorkflowPolicyTests(unittest.TestCase):
         )
         self.assertEqual(2, quality.count("if-no-files-found: ignore"))
 
+    def test_release_suite_imports_exact_main_capability_evidence(self):
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("actions: read", release)
+        self.assertIn('["gh", "run", "list"', release)
+        self.assertIn("exact_success('quality.yml')", release)
+        self.assertIn("gh run download", release)
+        self.assertIn("loom_release_suite.py", release)
+        self.assertIn("$RUNNER_TEMP/cut-receipt.json", release)
+        self.assertNotIn("python -B loom_test.py full", release)
+
 
 if __name__ == "__main__":
     unittest.main()
