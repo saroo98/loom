@@ -19,6 +19,8 @@
   stay deterministic while the immutable shared helper artifact is never deleted or overwritten.
 - Give the pinned Rust release compiler a deterministic 64 MiB worker stack so LTO-heavy
   dependency analysis cannot inherit an undersized host setting and panic during proof rebuilds.
+- Keep the 30-second fast gate focused on one cheap sentinel per learning boundary while the full
+  matrix retains every expensive longitudinal learning case, eliminating cold-runner false blocks.
 
 ## 1.7.0
 

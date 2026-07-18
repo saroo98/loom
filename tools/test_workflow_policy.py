@@ -83,6 +83,14 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertLess(compatibility.index(build), compatibility.index(verify))
         self.assertNotIn("loom_release.py verify-cut ..", compatibility)
 
+    def test_native_reproducibility_rebuilds_at_one_private_path(self):
+        helper = (WORKFLOWS / "build-helper.yml").read_text(encoding="utf-8")
+        self.assertIn("LOOM_BUILD_TARGET: ${{ runner.temp }}/loom-repro-build", helper)
+        self.assertIn("export RUST_MIN_STACK=67108864", helper)
+        self.assertEqual(2, helper.count('CARGO_TARGET_DIR="$LOOM_BUILD_TARGET" cargo build'))
+        self.assertNotIn("loom-build-a", helper)
+        self.assertNotIn("loom-build-b", helper)
+
     def test_exact_cut_forbidden_token_cannot_match_shipped_workflow_bytes(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         self.assertNotIn("__ci_public_scan_sentinel_9f4c2d__", quality)

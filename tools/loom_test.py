@@ -58,9 +58,7 @@ FAST_TESTS = (
     "test_production_orchestrator.ProductionOrchestratorTests."
     "test_plan_completion_rejects_artifact_rows_outside_the_sealed_contract",
     "test_loom_learning.AutomaticLearningTests."
-    "test_storage_boundary_rejects_domain_semantics_from_global_learning",
-    "test_loom_learning.AutomaticLearningTests."
-    "test_composite_project_attributes_learning_to_every_domain",
+    "test_tampered_learning_event_fails_closed",
     "test_reliability_excellence.ReliabilityExcellenceTests."
     "test_uninstaller_fails_closed_when_owned_file_changed",
     "test_documentation_coherence.DocumentationCoherenceTests."
@@ -68,11 +66,7 @@ FAST_TESTS = (
     "test_loom_runtime.InvalidWorldStateTests."
     "test_invalid_lifecycle_preserves_only_valid_manifest_route_for_diagnosis",
     "test_owner_learning_phase2.OwnerLearningPhase2Tests."
-    "test_active_task_language_never_inherits_ambient_web_domains",
-    "test_owner_learning_phase2.OwnerLearningPhase2Tests."
-    "test_per_memory_effects_prevent_session_wide_credit",
-    "test_owner_learning_phase2.OwnerLearningPhase2Tests."
-    "test_derived_forgetting_removes_children_and_checkpoints_floor",
+    "test_missing_crypto_helper_never_falls_back_to_json_learning",
     "test_unknown_domain_routing.UnknownDomainRoutingTests."
     "test_recognized_unknown_keeps_identity_but_cannot_activate_memory",
     "test_domain_evidence.DomainEvidenceTests.test_complete_bundle_is_gate_ready",

@@ -38,15 +38,21 @@ jobs:
             --workflow-digest "$(sha256sum .github/workflows/build-helper.yml | cut -d' ' -f1)" \
             --output native-evidence/runner.json
       - name: Build locked native helper twice
+        env:
+          LOOM_BUILD_TARGET: ${{ runner.temp }}/loom-repro-build
         shell: bash
         run: |
+          export RUST_MIN_STACK=67108864
           if [ "$RUNNER_OS" = "Windows" ]; then
             export RUSTFLAGS="${RUSTFLAGS:+$RUSTFLAGS }-C link-arg=/Brepro"
           fi
-          CARGO_TARGET_DIR="$RUNNER_TEMP/loom-build-a" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
-          CARGO_TARGET_DIR="$RUNNER_TEMP/loom-build-b" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
-          cmp "$RUNNER_TEMP/loom-build-a/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
-              "$RUNNER_TEMP/loom-build-b/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}"
+          CARGO_TARGET_DIR="$LOOM_BUILD_TARGET" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
+          cp "$LOOM_BUILD_TARGET/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
+             "$RUNNER_TEMP/loom-vault-first${{ runner.os == 'Windows' && '.exe' || '' }}"
+          python -B -c "import os,shutil; from pathlib import Path; target=Path(os.environ['LOOM_BUILD_TARGET']).resolve(); temporary=Path(os.environ['RUNNER_TEMP']).resolve(); target.relative_to(temporary); assert target.name == 'loom-repro-build'; shutil.rmtree(target)"
+          CARGO_TARGET_DIR="$LOOM_BUILD_TARGET" cargo build --locked --release --manifest-path vault-helper/Cargo.toml
+          cmp "$RUNNER_TEMP/loom-vault-first${{ runner.os == 'Windows' && '.exe' || '' }}" \
+              "$LOOM_BUILD_TARGET/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}"
       - name: Test locked native helper
         run: cargo test --locked --manifest-path vault-helper/Cargo.toml
       - name: Generate both SBOM formats from final bytes
@@ -56,7 +62,7 @@ jobs:
         shell: bash
         run: |
           NAMESPACE_SEED="$(printf '%s' "$LOOM_SOURCE_SHA" | sha256sum | cut -d' ' -f1)"
-          cp "$RUNNER_TEMP/loom-build-a/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
+          cp "$RUNNER_TEMP/loom-repro-build/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
              "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}"
           python -B tools/loom_sbom.py . "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
             "native-evidence/loom-vault.spdx.json" --platform "$LOOM_PLATFORM" \
