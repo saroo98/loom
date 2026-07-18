@@ -2,9 +2,11 @@
 
 import datetime as dt
 import os
+import json
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import loom_crypto
@@ -110,9 +112,75 @@ class ReleaseSigningTests(unittest.TestCase):
             skipped_root["version"] = 3
             skipped["root"] = {"signed": skipped_root, "signatures": []}
             with self.assertRaisesRegex(loom_update.UpdateError, "skipped"):
-                loom_update.verify_metadata(
-                    skipped, trusted_root=old["root"], verify_signature=verify,
-                    now="2026-07-15T12:00:00Z")
+                    loom_update.verify_metadata(
+                        skipped, trusted_root=old["root"], verify_signature=verify,
+                        now="2026-07-15T12:00:00Z")
+
+    def test_failed_final_firewall_restores_unsigned_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "package"
+            release = package / "release"
+            release.mkdir(parents=True)
+            manifest = {
+                "package": "loom", "version": "1.7.0", "release_sequence": 17,
+                "targets": [],
+            }
+            unsigned = release / "unsigned-manifest.json"
+            unsigned.write_text(json.dumps(manifest), encoding="utf-8")
+            (package / "PLUGIN-BUILD-MANIFEST.json").write_text(json.dumps({
+                "helper_provenance": {},
+            }), encoding="utf-8")
+            with mock.patch.object(
+                    loom_release_sign, "sign_release", return_value={"signed": True}), \
+                    mock.patch.object(
+                        loom_release_sign.loom_privacy, "scan_publication",
+                        return_value={"clean": False, "findings": ["private"]}):
+                with self.assertRaisesRegex(loom_release_sign.SigningError, "firewall"):
+                    loom_release_sign.finalize_package(
+                        "helper", package,
+                        {"version": 1, "threshold": 2, "keys": {
+                            "a": "a", "b": "b", "c": "c"}, "expires": "2030"},
+                        [], expires=dt.datetime(2027, 1, 1, tzinfo=dt.timezone.utc))
+            self.assertEqual(manifest, json.loads(unsigned.read_text(encoding="utf-8")))
+            self.assertFalse((release / "metadata.json").exists())
+            self.assertFalse((release / "trusted-root.json").exists())
+            self.assertFalse((package / "FINAL-PACKAGE-RECEIPT.json").exists())
+
+    def test_finalization_never_deletes_a_concurrently_changed_output(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            package = Path(temporary) / "package"
+            release = package / "release"
+            release.mkdir(parents=True)
+            manifest = {
+                "package": "loom", "version": "1.7.0", "release_sequence": 17,
+                "targets": [],
+            }
+            unsigned = release / "unsigned-manifest.json"
+            unsigned.write_text(json.dumps(manifest), encoding="utf-8")
+            (package / "PLUGIN-BUILD-MANIFEST.json").write_text(json.dumps({
+                "helper_provenance": {},
+            }), encoding="utf-8")
+
+            def replace_then_fail(root, **_kwargs):
+                (root / "release" / "metadata.json").write_text(
+                    "concurrent owner data", encoding="utf-8")
+                return {"clean": False, "findings": ["private"]}
+
+            with mock.patch.object(
+                    loom_release_sign, "sign_release", return_value={"signed": True}), \
+                    mock.patch.object(
+                        loom_release_sign.loom_privacy, "scan_publication",
+                        side_effect=replace_then_fail):
+                with self.assertRaisesRegex(
+                        loom_release_sign.SigningError, "rollback was incomplete"):
+                    loom_release_sign.finalize_package(
+                        "helper", package,
+                        {"version": 1, "threshold": 2, "keys": {
+                            "a": "a", "b": "b", "c": "c"}, "expires": "2030"},
+                        [], expires=dt.datetime(2027, 1, 1, tzinfo=dt.timezone.utc))
+            self.assertEqual(
+                "concurrent owner data",
+                (release / "metadata.json").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

@@ -45,7 +45,21 @@ def _allowed_transaction_path(path, user_home, loom_home):
         loom_home = loom_reliability._absolute(loom_home, "Loom home")
     except loom_reliability.ReliabilityError:
         return False
-    return path.is_relative_to(user_home) or path.is_relative_to(loom_home)
+    adapter_targets = {
+        user_home.joinpath(*Path(relative).parts) for relative in AGENTS.values()
+    }
+    adapter_state = {
+        _receipt_path(loom_home, agent) for agent in AGENTS
+    } | {
+        _capability_path(loom_home, agent) for agent in AGENTS
+    }
+    launcher_files = {
+        "loom.py", "loom", "loom.cmd", ".loom-launcher-receipt.json",
+        "loom_update.py", "loom_reliability.py", "loom_adapter_protocol.py",
+        "loom_adapter_bridge.py", "loom_host_registry.py", "host-contracts-v2.json",
+    }
+    launcher_targets = {loom_home / "bin" / name for name in launcher_files}
+    return path in adapter_targets | adapter_state | launcher_targets
 
 
 def _recover_transaction(user_home, loom_home):

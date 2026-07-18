@@ -27,7 +27,7 @@ def _safe_trace(exc, roots):
 def run(source, cut, output, *, suite_output=None, forbidden_tokens=()):
     source = Path(source).resolve()
     cut = Path(cut).resolve()
-    output = Path(output).resolve()
+    output = Path(output)
     base = {
         "schema_version": 1,
         "status": "failed",

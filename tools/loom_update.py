@@ -294,6 +294,25 @@ class SharedRuntime:
                     microsecond=0).isoformat().replace("+00:00", "Z"),
                 "successful_sessions": 0})
 
+    def _pointer_contract(self, value, *, previous=False):
+        fields = {"version", "path", "payload_sha256", "release_sequence"}
+        if not previous:
+            fields.add("previous")
+        if not isinstance(value, dict) or set(value) != fields \
+                or not VERSION_RE.fullmatch(str(value.get("version", ""))) \
+                or value.get("path") != value.get("version") \
+                or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("payload_sha256", ""))) \
+                or type(value.get("release_sequence")) is not int \
+                or value["release_sequence"] < 1:
+            return False
+        runtime = self.versions / value["path"]
+        if not runtime.is_dir() or _redirect(runtime):
+            return False
+        if previous:
+            return True
+        prior = value["previous"]
+        return prior is None or self._pointer_contract(prior, previous=True)
+
     def _install_baseline_locked(self, version, content, *, release_sequence):
         if self.current_path.exists() or not VERSION_RE.fullmatch(version) \
                 or not isinstance(content, bytes) or not content \
@@ -318,11 +337,7 @@ class SharedRuntime:
             value = json.loads(self.current_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise UpdateError(f"active runtime pointer is invalid: {exc}") from exc
-        if not isinstance(value, dict) or set(value) != {
-                "version", "path", "payload_sha256", "release_sequence", "previous"} \
-                or not VERSION_RE.fullmatch(str(value["version"])) \
-                or value["path"] != value["version"] \
-                or not (self.versions / value["path"]).is_dir():
+        if not self._pointer_contract(value):
             raise UpdateError("active runtime pointer is unsafe or incomplete")
         return value
 
@@ -670,9 +685,7 @@ class SharedRuntime:
             return {"status": "no-pending-update"}
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise UpdateError(f"pending runtime pointer is invalid: {exc}") from exc
-        if not isinstance(pending, dict) or set(pending) != {
-                "version", "path", "payload_sha256", "release_sequence", "previous"} \
-                or not (self.versions / str(pending.get("path"))).is_dir():
+        if not self._pointer_contract(pending):
             raise UpdateError("pending runtime pointer is unsafe")
         loom_reliability.atomic_write_json(self.current_path, pending)
         self._transition("activated", version=pending["version"],
@@ -682,6 +695,90 @@ class SharedRuntime:
         self._transition("observing", version=pending["version"],
                          release_sequence=pending["release_sequence"])
         return {"status": "activated", "version": pending["version"]}
+
+    def _verify_removable_runtime(self, directory):
+        """Prove every byte in one old runtime is Loom-owned before deletion."""
+        if not directory.is_dir() or _redirect(directory) \
+                or not VERSION_RE.fullmatch(directory.name):
+            raise UpdateError("old runtime is not a safe version directory")
+        try:
+            observed = {
+                path.relative_to(directory).as_posix(): path
+                for path in loom_reliability._regular_files(directory)
+            }
+        except loom_reliability.ReliabilityError as exc:
+            raise UpdateError(f"old runtime ownership is unverifiable: {exc}") from exc
+
+        baseline_path = directory / ".loom-baseline-receipt.json"
+        release_path = directory / ".loom-runtime-receipt.json"
+        if baseline_path.is_file() and not release_path.exists():
+            baseline = self._read_receipt(baseline_path, "baseline receipt")
+            if set(baseline) != {"version", "path", "sha256"} \
+                    or baseline.get("version") != directory.name \
+                    or baseline.get("path") != "loom-runtime.txt" \
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(baseline.get("sha256", ""))) \
+                    or set(observed) != {
+                        ".loom-baseline-receipt.json", "loom-runtime.txt"} \
+                    or hashlib.sha256(observed["loom-runtime.txt"].read_bytes()).hexdigest() \
+                    != baseline["sha256"]:
+                raise UpdateError("old baseline runtime contains unowned or changed bytes")
+            return
+        if not release_path.is_file() or baseline_path.exists():
+            raise UpdateError("old runtime has ambiguous ownership receipts")
+
+        runtime_receipt = self._read_receipt(release_path, "release receipt")
+        if set(runtime_receipt) != {
+                "version", "release_sequence", "manifest_sha256", "targets"} \
+                or runtime_receipt.get("version") != directory.name \
+                or type(runtime_receipt.get("release_sequence")) is not int \
+                or runtime_receipt["release_sequence"] < 1 \
+                or not re.fullmatch(
+                    r"[0-9a-f]{64}", str(runtime_receipt.get("manifest_sha256", ""))) \
+                or not isinstance(runtime_receipt.get("targets"), list):
+            raise UpdateError("old runtime release receipt is invalid")
+        install = self._read_receipt(
+            directory / ".loom-install-receipt.json", "installation receipt")
+        if set(install) != {"schema_version", "install_id", "files", "receipt_hash"} \
+                or install.get("schema_version") != 1 \
+                or not isinstance(install.get("files"), list) \
+                or install.get("receipt_hash") != _sha({
+                    key: install[key] for key in ("schema_version", "install_id", "files")
+                }):
+            raise UpdateError("old runtime installation receipt is invalid")
+        owned = set()
+        for item in install["files"]:
+            if not isinstance(item, dict) or set(item) != {"path", "sha256"} \
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(item.get("sha256", ""))):
+                raise UpdateError("old runtime owned-file receipt is invalid")
+            relative = _relative(item["path"]).as_posix()
+            if relative in owned or relative not in observed \
+                    or hashlib.sha256(observed[relative].read_bytes()).hexdigest() \
+                    != item["sha256"]:
+                raise UpdateError("old runtime owned bytes do not match their receipt")
+            owned.add(relative)
+        health = self._read_receipt(
+            directory / ".loom-health-receipt.json", "health receipt")
+        if set(health) != {
+                "schema_version", "version", "manifest_sha256", "healthy",
+                "migration_complete", "disposable_request_passed",
+                "before_inventory_sha256", "after_inventory_sha256"} \
+                or health.get("schema_version") != 1 \
+                or health.get("version") != directory.name \
+                or health.get("manifest_sha256") != runtime_receipt["manifest_sha256"] \
+                or health.get("healthy") is not True \
+                or health.get("migration_complete") is not True \
+                or health.get("disposable_request_passed") is not True \
+                or health.get("before_inventory_sha256") \
+                != health.get("after_inventory_sha256") \
+                or not re.fullmatch(
+                    r"[0-9a-f]{64}", str(health.get("before_inventory_sha256", ""))):
+            raise UpdateError("old runtime health receipt is invalid")
+        metadata = {
+            ".loom-install-receipt.json", ".loom-runtime-receipt.json",
+            ".loom-health-receipt.json",
+        }
+        if set(observed) != owned | metadata:
+            raise UpdateError("old runtime contains unowned, missing, or substituted files")
 
     def _prune_versions_locked(self, *, now=None):
         current = self.current()
@@ -697,10 +794,7 @@ class SharedRuntime:
         for directory in sorted(self.versions.iterdir()):
             if not directory.is_dir() or directory.name in keep:
                 continue
-            if _redirect(directory) or not VERSION_RE.fullmatch(directory.name) \
-                    or not ((directory / ".loom-runtime-receipt.json").is_file()
-                            or (directory / ".loom-baseline-receipt.json").is_file()):
-                raise UpdateError("old runtime is not receipt-owned; refusing cleanup")
+            self._verify_removable_runtime(directory)
             shutil.rmtree(directory)
             self._usage_path(directory.name).unlink(missing_ok=True)
             removed.append(directory.name)
@@ -711,9 +805,7 @@ class SharedRuntime:
             raise UpdateError("rollback reason is invalid or a session is active")
         current = self.current()
         previous = current["previous"]
-        if not isinstance(previous, dict) or set(previous) != {
-                "version", "path", "payload_sha256", "release_sequence"} \
-                or not (self.versions / previous["path"]).is_dir():
+        if not self._pointer_contract(previous, previous=True):
             raise UpdateError("no verified previous runtime is available")
         pointer = {**previous, "previous": None}
         loom_reliability.atomic_write_json(self.current_path, pointer)

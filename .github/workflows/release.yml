@@ -39,11 +39,14 @@ jobs:
         with:
           python-version: "3.11"
       - name: Require clean exact signed tag on default branch
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
-          test "${{ inputs.tag }}" = "v$(cat VERSION)"
-          test "$(git rev-parse '${{ inputs.tag }}^{commit}')" = "${GITHUB_SHA}"
-          git verify-tag "${{ inputs.tag }}"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" = "v$(cat VERSION)"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "${GITHUB_SHA}"
+          git verify-tag "$RELEASE_TAG"
           git branch -r --contains "${GITHUB_SHA}" | grep -q 'origin/main'
       - name: Rebuild and verify the public cut twice
         shell: bash
@@ -62,17 +65,20 @@ jobs:
       - name: Download existing draft assets without publishing
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "${{ inputs.tag }}" --dir release-assets
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release download "$RELEASE_TAG" --dir release-assets
       - name: Verify canonical archive and checksums
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
           cd release-assets
           sha256sum --check SHA256SUMS
           cd ../tools
-          python -B loom_release_verify.py "../release-assets/loom-plugin-${{ inputs.tag }}.zip"
+          python -B loom_release_verify.py "../release-assets/loom-plugin-${RELEASE_TAG}.zip"
           python -B loom_release_subject_verify.py "../release-assets/RELEASE-SUBJECT.json" \
-            --plugin "../release-assets/loom-plugin-${{ inputs.tag }}.zip" \
-            --commit "${GITHUB_SHA}" --tag "${{ inputs.tag }}"
+            --plugin "../release-assets/loom-plugin-${RELEASE_TAG}.zip" \
+            --commit "${GITHUB_SHA}" --tag "$RELEASE_TAG"
       - name: Verify generated operational truth is current
         working-directory: tools
         run: python -B loom_readiness.py .. --check
@@ -82,5 +88,6 @@ jobs:
       - name: Prove the release is still a draft
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
-        run: test "$(gh release view '${{ inputs.tag }}' --json isDraft --jq .isDraft)" = "true"
+        run: test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"

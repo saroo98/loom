@@ -4,6 +4,7 @@ import json
 import io
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 from pathlib import Path
 
@@ -73,6 +74,24 @@ class CanonicalReleaseAssetTests(unittest.TestCase):
             with self.assertRaisesRegex(loom_release_verify.VerifyError, "nested"):
                 loom_release_verify.verify(
                     archive, forbidden_tokens=["owner-only-project-name"])
+
+    def test_redirected_archive_path_is_rejected_before_open(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "plugin.zip"
+            archive.write_bytes(b"not opened")
+            with mock.patch.object(
+                    loom_release_verify, "_redirect",
+                    side_effect=lambda path: Path(path) == archive):
+                with self.assertRaisesRegex(loom_release_verify.VerifyError, "redirected"):
+                    loom_release_verify.verify(archive)
+
+    def test_only_exact_macos_root_aliases_are_trusted(self):
+        with mock.patch.object(loom_release_verify.sys, "platform", "darwin"):
+            with mock.patch.object(Path, "resolve", return_value=Path("/private/var")):
+                self.assertTrue(loom_release_verify._trusted_os_alias(Path("/var")))
+            with mock.patch.object(Path, "resolve", return_value=Path("/other/var")):
+                self.assertFalse(loom_release_verify._trusted_os_alias(Path("/var")))
+            self.assertFalse(loom_release_verify._trusted_os_alias(Path("/users")))
 
 
 if __name__ == "__main__":

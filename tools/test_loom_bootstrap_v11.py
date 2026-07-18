@@ -69,6 +69,22 @@ class BootstrapIntegrationTests(unittest.TestCase):
             self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
             self.assertEqual("1.1.0", json.loads(probe.stdout)["version"])
 
+    def test_prebootstrap_runtime_scan_rejects_redirected_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = Path(temporary) / "runtime"
+            redirected = runtime / "redirected"
+            redirected.mkdir(parents=True)
+            (runtime / "file").write_text("bound", encoding="utf-8")
+            real_redirect = loom_bootstrap._redirect
+
+            def redirect_probe(path):
+                return Path(path) == redirected or real_redirect(path)
+
+            with mock.patch.object(
+                    loom_bootstrap, "_redirect", side_effect=redirect_probe):
+                with self.assertRaisesRegex(loom_bootstrap.BootstrapError, "redirected"):
+                    list(loom_bootstrap._runtime_files(runtime))
+
     def test_failed_first_legacy_migration_never_activates_blank_vault_and_retry_resumes(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

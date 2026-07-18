@@ -8,6 +8,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -19,6 +20,42 @@ MAX_INPUT = 64 * 1024
 
 class BootstrapError(RuntimeError):
     pass
+
+
+def _redirect(path):
+    path = Path(path)
+    try:
+        if path.is_symlink():
+            return True
+        junction = getattr(path, "is_junction", None)
+        if junction and junction():
+            return True
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+        return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise BootstrapError(f"cannot inspect runtime path: {path}: {exc}") from exc
+
+
+def _runtime_files(root):
+    pending = [Path(root)]
+    while pending:
+        directory = pending.pop()
+        try:
+            entries = sorted(os.scandir(directory), key=lambda item: item.name.casefold())
+        except OSError as exc:
+            raise BootstrapError(f"cannot inspect active runtime: {directory}: {exc}") from exc
+        for entry in entries:
+            path = Path(entry.path)
+            if _redirect(path):
+                raise BootstrapError("active runtime contains a redirected entry")
+            if entry.is_dir(follow_symlinks=False):
+                pending.append(path)
+            elif entry.is_file(follow_symlinks=False):
+                yield path
+            else:
+                raise BootstrapError("active runtime contains a non-regular entry")
 
 
 def _load(path, label):
@@ -80,8 +117,8 @@ def _verified_current_runtime(home):
         ".loom-install-receipt.json", ".loom-health-receipt.json",
     }
     observed = {
-        path.relative_to(runtime).as_posix() for path in runtime.rglob("*")
-        if path.is_file() and path.name not in ignored
+        path.relative_to(runtime).as_posix() for path in _runtime_files(runtime)
+        if path.name not in ignored
     }
     if observed != expected:
         raise BootstrapError("active runtime contains unlisted or missing files")

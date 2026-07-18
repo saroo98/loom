@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import loom_sbom
+import loom_reliability
 
 
 class CycloneDxError(RuntimeError):
@@ -15,8 +16,13 @@ class CycloneDxError(RuntimeError):
 
 
 def create(source, helper, output, *, platform_id, namespace_seed):
-    source, helper, output = map(Path, (source, helper, output))
-    if not source.is_dir() or not helper.is_file() or helper.is_symlink() \
+    try:
+        source = loom_reliability._absolute(source, "CycloneDX source", must_exist=True)
+        helper = loom_reliability._absolute(helper, "CycloneDX helper", must_exist=True)
+        output = loom_reliability._absolute(output, "CycloneDX output")
+    except loom_reliability.ReliabilityError as exc:
+        raise CycloneDxError(str(exc)) from exc
+    if not source.is_dir() or not helper.is_file() \
             or output.exists() or not re.fullmatch(r"[a-z0-9-]{3,32}", platform_id) \
             or not re.fullmatch(r"[0-9a-f]{16,64}", namespace_seed):
         raise CycloneDxError("CycloneDX inputs are invalid")
@@ -42,7 +48,7 @@ def create(source, helper, output, *, platform_id, namespace_seed):
         "version": 1, "metadata": {"component": components[0]},
         "components": components,
     }
-    output.write_text(json.dumps(body, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    loom_reliability.atomic_write_json(output, body)
     return {"status": "created", "components": len(components),
             "sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
 

@@ -7,6 +7,7 @@ import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import unicodedata
 import zipfile
@@ -25,6 +26,51 @@ TOKEN_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be")
 
 class VerifyError(RuntimeError):
     pass
+
+
+def _redirect(path):
+    path = Path(path)
+    try:
+        if path.is_symlink():
+            return True
+        junction = getattr(path, "is_junction", None)
+        if junction and junction():
+            return True
+        attributes = getattr(path.lstat(), "st_file_attributes", 0)
+        return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise VerifyError(f"cannot inspect canonical plugin path: {path}: {exc}") from exc
+
+
+def _trusted_os_alias(path):
+    """Accept only macOS root aliases whose resolved targets are exact."""
+    if sys.platform != "darwin":
+        return False
+    expected = {
+        Path("/var"): Path("/private/var"),
+        Path("/tmp"): Path("/private/tmp"),
+    }.get(Path(path))
+    if expected is None:
+        return False
+    try:
+        return Path(path).resolve(strict=False) == expected
+    except OSError as exc:
+        raise VerifyError(f"cannot resolve operating-system alias: {path}: {exc}") from exc
+
+
+def _safe_archive(path):
+    try:
+        path = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+    except (TypeError, ValueError, OSError) as exc:
+        raise VerifyError(f"canonical plugin ZIP path is invalid: {exc}") from exc
+    for component in [*reversed(path.parents), path]:
+        if _redirect(component) and not _trusted_os_alias(component):
+            raise VerifyError("canonical plugin ZIP is missing or redirected")
+    if not path.is_file():
+        raise VerifyError("canonical plugin ZIP is missing or redirected")
+    return path
 
 
 def _name(value, seen):
@@ -77,9 +123,7 @@ def _forbidden_in_archive(raw, display_name, tokens, *, depth=0):
 
 
 def verify(path, *, forbidden_tokens=()):
-    path = Path(path).resolve()
-    if not path.is_file() or path.is_symlink():
-        raise VerifyError("canonical plugin ZIP is missing or redirected")
+    path = _safe_archive(path)
     total = 0
     observed = {}
     seen = set()

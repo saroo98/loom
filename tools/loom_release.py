@@ -1028,11 +1028,11 @@ def main(argv=None):
                 args.root, forbidden_tokens=args.forbid,
                 source_classification=args.source_classification)
             if args.output:
-                loom_reliability.atomic_write_json(Path(args.output).resolve(), result)
+                loom_reliability.atomic_write_json(Path(args.output), result)
         else:
             result = verify_cut(args.root, forbidden_tokens=args.forbid)
             if args.output:
-                loom_reliability.atomic_write_json(Path(args.output).resolve(), result)
+                loom_reliability.atomic_write_json(Path(args.output), result)
     except (ReleaseError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
