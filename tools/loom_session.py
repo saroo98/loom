@@ -16,6 +16,7 @@ from types import MappingProxyType
 import loom_runtime
 import loom_memory
 import loom_learning
+import loom_message
 import loom_preferences
 import loom_planning
 import loom_performance
@@ -507,6 +508,7 @@ class SessionReceipt:
     uncertainty_codes: tuple
     owner_input_required: bool
     user_message: str
+    owner_message: MappingProxyType
     usage: MappingProxyType
     event_count: int
     world_fingerprint: str
@@ -538,6 +540,7 @@ class SessionReceipt:
             "uncertainty_codes": list(self.uncertainty_codes),
             "owner_input_required": self.owner_input_required,
             "user_message": self.user_message,
+            "owner_message": _thaw(self.owner_message),
             "usage": _thaw(self.usage),
             "event_count": self.event_count,
             "world_fingerprint": self.world_fingerprint,
@@ -547,8 +550,7 @@ class SessionReceipt:
         }
 
     def owner_view(self):
-        return loom_transparency.render_compact_receipt(
-            loom_transparency.compact_receipt(self.to_dict()))
+        return self.owner_message["human"]
 
     def explain(self):
         return loom_transparency.explain_receipt(self.to_dict())
@@ -595,7 +597,7 @@ def _receipt_from_data(value, *, repeated):
         "selected_preference_ids", "adaptation_receipts",
         "improvement_evidence_ids",
         "tier", "domains", "reversible_action_ids", "archived_count",
-        "uncertainty_codes", "owner_input_required", "user_message", "usage",
+        "uncertainty_codes", "owner_input_required", "user_message", "owner_message", "usage",
         "event_count", "world_fingerprint", "started_at", "completed_at",
         "receipt_hash",
     }
@@ -614,6 +616,17 @@ def _receipt_from_data(value, *, repeated):
     data["domains"] = tuple(data["domains"])
     data["reversible_action_ids"] = tuple(data["reversible_action_ids"])
     data["uncertainty_codes"] = tuple(data["uncertainty_codes"])
+    loom_message.validate(data["owner_message"])
+    expected_owner_message = loom_message.from_session(
+        status=data["status"], code=data["code"], tier=data["tier"],
+        owner_input_required=data["owner_input_required"],
+        reversible_action_ids=data["reversible_action_ids"],
+        detail=data["user_message"],
+        receipt_id="session-" + data["operation_id"][:16])
+    if data["owner_message"] != expected_owner_message:
+        raise SessionBlocked(
+            "RECEIPT_CORRUPT", "owner message does not match the sealed receipt")
+    data["owner_message"] = _freeze(data["owner_message"])
     data["usage"] = _freeze(data["usage"])
     return SessionReceipt(**data)
 
@@ -1386,6 +1399,17 @@ class SessionController:
                 "HANDLER_INTERRUPTED",
                 "session did not close; the next invocation will reconcile it") from exc
         completed = _format_time(instant)
+        reversible_action_ids = list(dict.fromkeys(
+            result.get("reversible_action_ids", [])
+            + (memory_result.get("reversible_action_ids", [])
+               if isinstance(memory_result, dict) else [])))
+        owner_message = loom_message.from_session(
+            status=result["status"], code=result["code"],
+            tier=prepared.route_contract["tier"],
+            owner_input_required=prepared.route_contract["needs_owner"],
+            reversible_action_ids=reversible_action_ids,
+            detail=result.get("user_message", ""),
+            receipt_id="session-" + operation_id[:16])
         receipt_data = {
             "schema_version": SCHEMA_VERSION,
             "session_id": session_id,
@@ -1410,16 +1434,14 @@ class SessionController:
             "improvement_evidence_ids": list(improvement_evidence_ids),
             "tier": prepared.route_contract["tier"],
             "domains": list(prepared.domains),
-            "reversible_action_ids": list(dict.fromkeys(
-                result.get("reversible_action_ids", [])
-                + (memory_result.get("reversible_action_ids", [])
-                   if isinstance(memory_result, dict) else []))),
+            "reversible_action_ids": reversible_action_ids,
             "archived_count": _transition_count(
                 {"housekeeping": housekeeping_result, "compaction": compact_result}),
             "uncertainty_codes": ([prepared.route_contract["code"].lower()]
                                     if prepared.route_contract["needs_owner"] else []),
             "owner_input_required": prepared.route_contract["needs_owner"],
             "user_message": result.get("user_message", ""),
+            "owner_message": owner_message,
             "usage": result["usage"],
             "event_count": len(journal["events"]) + 1,
             "world_fingerprint": prepared.world_fingerprint,

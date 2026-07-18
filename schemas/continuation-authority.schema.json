@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/continuation-authority.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "mode", "facts", "blockers", "owner_authorized", "rationale", "undo", "authority_digest"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "mode": {"enum": ["automatic", "explicit-authority", "decision-needed"]},
+    "facts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["reversible", "destructive", "inside_scope", "external_effect", "cost", "privileged", "privacy_expanding", "legal_or_safety_judgment", "uncertain", "currently_evidenced", "verifiable_before_harm", "consequence"],
+      "properties": {
+        "reversible": {"type": "boolean"}, "destructive": {"type": "boolean"},
+        "inside_scope": {"type": "boolean"}, "external_effect": {"type": "boolean"},
+        "cost": {"type": "boolean"}, "privileged": {"type": "boolean"},
+        "privacy_expanding": {"type": "boolean"}, "legal_or_safety_judgment": {"type": "boolean"},
+        "uncertain": {"type": "boolean"}, "currently_evidenced": {"type": "boolean"},
+        "verifiable_before_harm": {"type": "boolean"},
+        "consequence": {"enum": ["ordinary", "material", "high", "critical"]}
+      }
+    },
+    "blockers": {"type": "array", "maxItems": 12, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 64}},
+    "owner_authorized": {"type": "boolean"},
+    "rationale": {"type": "string", "minLength": 1, "maxLength": 240},
+    "undo": {"type": ["string", "null"], "maxLength": 240},
+    "authority_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -38,9 +38,11 @@ runtime below. Never read every Loom file into context.
    records outcomes, and runs bounded compaction. Attach formula-bound usage-receipt-v3 events only
    when the host exposes them. Missing telemetry records `unavailable` and never blocks completion;
    contradictory supplied telemetry fails closed.
-6. Return the compact owner receipt: what Loom understood, did, changed, learned, archived, remains
-   uncertain, needs owner input, and what happens next. Explain a prior decision with its receipt,
-   evidence, and memory identifiers. Report forgetting as complete only after derived state is
+6. Return `owner_message.human` as the default one-or-two-line response: consequence,
+   verification/freshness, reversibility, one next action, and its short receipt ID. For an
+   intervention, preserve exactly one decision and one recommendation. Explain a prior decision
+   with its full sealed receipt only when the owner asks naturally; include governing evidence
+   and memory identifiers. Report forgetting as complete only after derived state is
    removed, a deletion floor is checkpointed, and every active device acknowledges it.
 
 ## Non-negotiable boundaries

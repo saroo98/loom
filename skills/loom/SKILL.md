@@ -19,7 +19,9 @@ invisible to the owner:
    --home <absolute user home>/.loom`, then run `<absolute user home>/.loom/bin/loom
    --home <absolute user home>/.loom invoke --request <verbatim request>
    --cwd <absolute project root> --agent codex --agent-version <actual host version>`.
-3. If the JSON is a terminal receipt, return its compact owner message. If it says
+3. If the JSON is a terminal receipt, return `owner_message.human` exactly as the default
+   one-or-two-line owner response. Do not expand internal tier, gate, schema, pack, or ledger
+   vocabulary unless the owner naturally asks to inspect or explain the sealed receipt. If it says
    `action-required`, honor its exact tier, domains, deadline, and session identity. The
    orchestrator has already recorded the planning baseline. Treat the returned `context_manifest`
    hash as the stable static-context cache key. The sealed capsule and plan contract are complete;

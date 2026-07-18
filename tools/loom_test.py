@@ -40,6 +40,13 @@ FAST_TESTS = (
     "test_tier_s_fast_path.TierSFastPathTests.test_deceptive_small_consequences_promote",
     "test_tier_s_fast_path.TierSFastPathTests.test_ordinary_small_work_stays_tier_s",
     "test_tier_s_fast_path.TierSFastPathTests.test_small_wording_never_overrides_observed_scope",
+    "test_tier_s_fast_path.TierSFastPathTests."
+    "test_every_small_promotion_trigger_prevents_tier_s",
+    "test_owner_message.OwnerMessageTests."
+    "test_every_state_is_closed_and_never_exceeds_two_lines",
+    "test_continuation_authority.ContinuationAuthorityTests."
+    "test_complete_boolean_truth_table_allows_only_the_safe_vector",
+    "test_cache_policy.CachePolicyTests.test_exact_dependency_subtrees_invalidate",
     "test_privacy_excellence.PrivacyExcellenceTests."
     "test_firewall_rejects_common_provider_and_high_entropy_credentials",
     "test_privacy_excellence.PrivacyExcellenceTests."
