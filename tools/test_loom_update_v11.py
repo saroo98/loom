@@ -224,6 +224,18 @@ class UpdateTests(unittest.TestCase):
                 self.stage()
         self.assertEqual("1.0.0", self.runtime.current()["version"])
 
+    def test_corrupt_pending_pointer_cannot_replace_working_pointer(self):
+        before = self.runtime.current_path.read_bytes()
+        self.runtime.pending_path.write_text(json.dumps({
+            "version": "1.1.0", "path": "1.0.0",
+            "payload_sha256": "a" * 64, "release_sequence": 2,
+            "previous": None,
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(loom_update.UpdateError, "pending.*unsafe"):
+            self.runtime.activate_pending()
+        self.assertEqual(before, self.runtime.current_path.read_bytes())
+        self.assertEqual("1.0.0", self.runtime.current()["version"])
+
     def test_crashed_session_is_reaped_but_invalid_lease_blocks_uncertain_activation(self):
         runtime = loom_update.SharedRuntime(
             self.root / "crash-home", plugin_roots=[self.root / "plugin-cache"],
@@ -319,6 +331,30 @@ class UpdateTests(unittest.TestCase):
         self.assertEqual(["1.0.0"], pruned["removed"])
         self.assertTrue((self.runtime.versions / "1.1.0").is_dir())
         self.assertTrue((self.runtime.versions / "1.2.0").is_dir())
+
+    def test_old_runtime_cleanup_refuses_unowned_files(self):
+        self.stage()
+        plugin = self.root / "plugin-cache" / "loom" / "1.2.0" / "runtime-payload"
+        plugin.mkdir(parents=True)
+        (plugin / "loom-runtime.txt").write_text("runtime 1.2", encoding="utf-8")
+        bundle, trusted = self.fixture.bundle(plugin, version="1.2.0", sequence=3)
+        health = {"healthy": True, "migration_complete": True,
+                  "disposable_request_passed": True,
+                  "before_inventory_sha256": "a" * 64,
+                  "after_inventory_sha256": "a" * 64}
+        self.runtime.stage_update(
+            plugin, bundle, trusted_root=trusted, verify_signature=self.fixture.verify,
+            vault_schema=1, health_check=lambda _path: health,
+            now="2026-07-15T12:00:00Z")
+        usage_path = self.runtime._usage_path("1.2.0")
+        usage = json.loads(usage_path.read_text(encoding="utf-8"))
+        usage.update(activated_at="2026-07-15T00:00:00Z", successful_sessions=10)
+        usage_path.write_text(json.dumps(usage), encoding="utf-8")
+        victim = self.runtime.versions / "1.0.0" / "owner-added.txt"
+        victim.write_text("do not delete", encoding="utf-8")
+        with self.assertRaisesRegex(loom_update.UpdateError, "unowned"):
+            self.runtime.prune_versions(now="2026-08-20T12:00:00Z")
+        self.assertEqual("do not delete", victim.read_text(encoding="utf-8"))
 
     def test_three_repeated_trust_failures_roll_back_to_last_runtime(self):
         self.stage()

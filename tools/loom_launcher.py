@@ -19,6 +19,7 @@ import loom_update
 import loom_adapter_bridge
 import loom_adapter_protocol
 import loom_host_registry
+import loom_reliability
 
 
 LOCAL_SKILL_PATHS = loom_host_registry.project_skill_paths()
@@ -80,10 +81,16 @@ def _verify_runtime(runtime, version):
             if len(raw) != item["bytes"] or hashlib.sha256(raw).hexdigest() != item["sha256"]:
                 raise RuntimeError("active runtime bytes do not match their verified manifest")
             expected.add(item["path"].replace("\\", "/"))
-        observed = {path.relative_to(runtime).as_posix() for path in runtime.rglob("*")
-                    if path.is_file() and path.name not in {
-                        "RUNTIME-MANIFEST.json", ".loom-runtime-receipt.json",
-                        ".loom-install-receipt.json", ".loom-health-receipt.json"}}
+        try:
+            observed = {
+                path.relative_to(runtime).as_posix()
+                for path in loom_reliability._regular_files(runtime)
+                if path.name not in {
+                    "RUNTIME-MANIFEST.json", ".loom-runtime-receipt.json",
+                    ".loom-install-receipt.json", ".loom-health-receipt.json"}
+            }
+        except loom_reliability.ReliabilityError as exc:
+            raise RuntimeError(f"active runtime tree is unsafe: {exc}") from exc
         if observed != expected:
             raise RuntimeError("active runtime contains unlisted or missing files")
         return
@@ -93,6 +100,15 @@ def _verify_runtime(runtime, version):
         if baseline.get("version") != version or not content.is_file() \
                 or hashlib.sha256(content.read_bytes()).hexdigest() != baseline.get("sha256"):
             raise RuntimeError("baseline runtime receipt does not match active bytes")
+        try:
+            observed = {
+                path.relative_to(runtime).as_posix()
+                for path in loom_reliability._regular_files(runtime)
+            }
+        except loom_reliability.ReliabilityError as exc:
+            raise RuntimeError(f"active runtime tree is unsafe: {exc}") from exc
+        if observed != {".loom-baseline-receipt.json", str(baseline.get("path"))}:
+            raise RuntimeError("baseline runtime contains unlisted or missing files")
         return
     raise RuntimeError("active runtime has no verifiable content manifest")
 

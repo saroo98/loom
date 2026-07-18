@@ -133,6 +133,21 @@ class AdapterTests(unittest.TestCase):
             encoding="utf-8"))
         self.assertEqual("rolled-back", recovered["status"])
 
+    def test_launcher_rejects_unlisted_redirected_runtime_directory(self):
+        runtime = self.home / ".loom" / "runtime" / "versions" / "1.1.0"
+        redirected = runtime / "redirected"
+        redirected.mkdir()
+        real_redirect = loom_launcher.loom_reliability._is_redirect
+
+        def redirect_probe(path):
+            return Path(path) == redirected or real_redirect(path)
+
+        with mock.patch.object(
+                loom_launcher.loom_reliability, "_is_redirect",
+                side_effect=redirect_probe):
+            with self.assertRaisesRegex(RuntimeError, "unsafe|redirected"):
+                loom_launcher._verify_runtime(runtime, "1.1.0")
+
     def test_transaction_refuses_symlinked_target_parent(self):
         target_root = self.root / "redirect-target"
         target_root.mkdir()
@@ -160,6 +175,29 @@ class AdapterTests(unittest.TestCase):
                                 "transaction.json").read_text(encoding="utf-8"))
         self.assertEqual("rolled-back", recovered["status"])
         self.assertTrue(recovered["recovered_after_interruption"])
+
+    def test_forged_transaction_cannot_delete_unrelated_user_file(self):
+        victim = self.home / "owner-document.txt"
+        victim.write_bytes(b"valuable")
+        _lock, journal_path, _generation = loom_adapters._transaction_paths(
+            self.home / ".loom")
+        journal_path.parent.mkdir(parents=True, exist_ok=True)
+        journal_path.write_text(json.dumps({
+            "schema_version": 1,
+            "transaction_id": "forged",
+            "generation": 1,
+            "operation": "connect",
+            "status": "prepared",
+            "entries": [{
+                "path": str(victim),
+                "before_base64": None,
+                "before_sha256": None,
+                "after_sha256": hashlib.sha256(b"valuable").hexdigest(),
+            }],
+        }), encoding="utf-8")
+        with self.assertRaisesRegex(loom_adapters.AdapterError, "escapes|owned"):
+            loom_adapters._recover_transaction(self.home, self.home / ".loom")
+        self.assertEqual(b"valuable", victim.read_bytes())
 
     def test_unowned_alternate_global_route_blocks_without_overwrite(self):
         alternate = self.home / ".agents" / "skills" / "loom" / "SKILL.md"
