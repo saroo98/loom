@@ -75,8 +75,8 @@ MUTATIONS = (
      "test_unknown_domain_learning.UnknownDomainLearningTests."
      "test_gate_ready_invariant_reuses_only_in_exact_scope"),
     ("domain-route-digest", "tools/loom_domain_contract.py",
-     'if claimed != digest("domain-route-v1", body):',
-     'if False and claimed != digest("domain-route-v1", body):',
+     "if claimed != digest(prefix, body):",
+     "if False and claimed != digest(prefix, body):",
      "test_unknown_domain_routing.UnknownDomainRoutingTests."
      "test_semantic_route_mutation_invalidates_digest"),
     ("domain-bundle-target", "tools/loom_domain_bundle.py",

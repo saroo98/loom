@@ -10,6 +10,72 @@ import tempfile
 import shutil
 from pathlib import Path
 
+import loom_reliability
+
+
+MAX_CARGO_DIAGNOSTIC_CHARS = 4000
+
+
+def _cache_entry_valid(binary, receipt, source_key):
+    if not binary.is_file() or not receipt.is_file():
+        return False
+    try:
+        value = json.loads(receipt.read_text(encoding="utf-8"))
+        return value == {
+            "source_key": source_key,
+            "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        }
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+
+
+def _compile_vault_helper(root, crate, target):
+    """Build in a caller-owned target and return bounded actionable failures."""
+    target = Path(target).resolve()
+    target.mkdir(parents=True, exist_ok=True)
+    environment = {**os.environ, "CARGO_TARGET_DIR": str(target)}
+    environment.setdefault("RUST_MIN_STACK", str(16 * 1024 * 1024))
+    if os.name == "nt":
+        environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
+                                     + " -C link-arg=/Brepro").strip()
+    try:
+        result = subprocess.run(
+            ["cargo", "build", "--quiet", "--locked", "--release",
+             "--manifest-path", str(crate / "Cargo.toml")], cwd=root,
+            env=environment, capture_output=True, text=True,
+            check=False, timeout=180)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("vault-helper build exceeded its 180-second bound") from exc
+    if result.returncode != 0:
+        diagnostic = "\n".join(
+            item.strip() for item in (result.stdout, result.stderr) if item.strip())
+        diagnostic = diagnostic[-MAX_CARGO_DIAGNOSTIC_CHARS:] or "no Cargo diagnostic"
+        raise RuntimeError(
+            f"vault-helper build failed with exit {result.returncode}: {diagnostic}")
+    binary = target / "release" / (
+        "loom-vault.exe" if os.name == "nt" else "loom-vault")
+    if not binary.is_file():
+        raise RuntimeError("vault-helper build produced no executable")
+    return binary
+
+
+def _publish_cached_helper(binary, receipt, source_key, built):
+    """Publish one complete helper generation without exposing a partial write."""
+    target = binary.parent.parent
+    lock = target.parent / "locks" / f"{source_key}.lock"
+    with loom_reliability.exclusive_file_lock(lock, timeout=60):
+        if _cache_entry_valid(binary, receipt, source_key):
+            return binary
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        staged = binary.with_name(f".{binary.name}.{os.getpid()}.staged")
+        shutil.copy2(built, staged)
+        os.replace(staged, binary)
+        loom_reliability.atomic_write_json(receipt, {
+            "source_key": source_key,
+            "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+        })
+    return binary
+
 
 def build_vault_helper(root):
     root = Path(root).resolve()
@@ -29,51 +95,35 @@ def build_vault_helper(root):
         digest.update(len(relative).to_bytes(4, "big") + relative)
         digest.update(len(raw).to_bytes(8, "big") + raw)
     source_key = digest.hexdigest()
-    target = Path(tempfile.gettempdir()) / "loom-cargo-test-cache" / source_key
+    cache_root = Path(tempfile.gettempdir()) / "loom-cargo-test-cache"
+    target = cache_root / source_key
     binary = target / "release" / ("loom-vault.exe" if os.name == "nt" else "loom-vault")
     receipt = target / "loom-test-helper-receipt.json"
-    valid = False
-    if binary.is_file() and receipt.is_file():
-        try:
-            value = json.loads(receipt.read_text(encoding="utf-8"))
-            valid = value == {
-                "source_key": source_key,
-                "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-            }
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            valid = False
-    if not valid:
-        binary.unlink(missing_ok=True)
-        environment = {**os.environ, "CARGO_TARGET_DIR": str(target)}
-        if os.name == "nt":
-            environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
-                                         + " -C link-arg=/Brepro").strip()
-        subprocess.run(
-            ["cargo", "build", "--quiet", "--locked", "--release", "--manifest-path",
-             str(crate / "Cargo.toml")], cwd=root,
-            env=environment,
-            check=True, timeout=180)
-        if not binary.is_file():
-            raise RuntimeError("vault-helper build produced no executable")
-        target.mkdir(parents=True, exist_ok=True)
-        receipt.write_text(json.dumps({
-            "source_key": source_key,
-            "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-        }, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+    if not _cache_entry_valid(binary, receipt, source_key):
+        builds = cache_root / "builds"
+        builds.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(
+                prefix=f"{source_key[:12]}-", dir=builds) as temporary:
+            built = _compile_vault_helper(root, crate, temporary)
+            _publish_cached_helper(binary, receipt, source_key, built)
     return binary
 
 
 def _clean_rebuild_vault_helper(root, helper):
-    """Rebuild from a clean target at the same normalized path and require equality."""
+    """Rebuild in isolation without deleting the shared cache generation."""
     helper = Path(helper).resolve()
     expected = hashlib.sha256(helper.read_bytes()).hexdigest()
-    target = helper.parent.parent
-    shutil.rmtree(target)
-    rebuilt = build_vault_helper(root)
-    observed = hashlib.sha256(rebuilt.read_bytes()).hexdigest()
+    root = Path(root).resolve()
+    crate = root / "vault-helper"
+    cache_root = helper.parent.parent.parent
+    builds = cache_root / "builds"
+    builds.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="rebuild-", dir=builds) as temporary:
+        rebuilt = _compile_vault_helper(root, crate, temporary)
+        observed = hashlib.sha256(rebuilt.read_bytes()).hexdigest()
     if observed != expected:
         raise RuntimeError("clean vault-helper release rebuild is not reproducible")
-    return rebuilt
+    return helper
 
 
 def _platform_fixture(platform_id):

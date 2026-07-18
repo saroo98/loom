@@ -11,6 +11,7 @@ from unittest import mock
 
 import loom_plugin_package
 import loom_privacy
+import v11_test_support
 from v11_test_support import build_vault_helper, package_evidence, package_source_commit
 
 
@@ -37,6 +38,25 @@ class PluginPackageTests(unittest.TestCase):
             changed = loom_privacy.scan_publication(
                 root, forbidden_tokens=[], verified_opaque_hashes={digest})
             self.assertFalse(changed["clean"])
+
+    def test_clean_rebuild_never_deletes_the_shared_cache_generation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            helper = root / "cache" / "source-key" / "release" / (
+                "loom-vault.exe" if os.name == "nt" else "loom-vault")
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes(b"deterministic-helper")
+            sentinel = helper.parent.parent / "shared-cache-sentinel"
+            sentinel.write_text("must survive", encoding="utf-8")
+            rebuilt = root / "isolated" / "release" / helper.name
+            rebuilt.parent.mkdir(parents=True)
+            rebuilt.write_bytes(helper.read_bytes())
+            with mock.patch(
+                    "v11_test_support._compile_vault_helper", return_value=rebuilt):
+                result = v11_test_support._clean_rebuild_vault_helper(ROOT, helper)
+            self.assertEqual(result, helper.resolve())
+            self.assertEqual(helper.read_bytes(), b"deterministic-helper")
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "must survive")
 
     def test_git_free_fixture_identity_does_not_require_git_executable(self):
         with mock.patch("v11_test_support.subprocess.run", side_effect=FileNotFoundError):

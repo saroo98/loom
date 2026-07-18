@@ -3,12 +3,16 @@
 
 import argparse
 import ast
+import atexit
 import base64
 import hashlib
 import json
 import os
 import re
+import selectors
 import stat
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -146,6 +150,106 @@ def _scan_views(content):
     return tuple(views), tuple(texts)
 
 
+def _forbidden_token_match(content, folded, decoded_texts, folded_tokens):
+    for token, encoded_forms in folded_tokens:
+        for encoded in encoded_forms:
+            if encoded in content or encoded in folded:
+                return token
+        folded_token = token.casefold()
+        for text in decoded_texts:
+            if folded_token in text.casefold():
+                return token
+    return None
+
+
+def _secret_signature_match(scan_views):
+    for label, pattern in SECRET_PATTERNS:
+        for view in scan_views:
+            if pattern.search(view) is not None:
+                return label
+    return None
+
+
+class _SecretScanWorker:
+    """Supervise a local regex worker so an interpreter crash cannot certify clean."""
+
+    def __init__(self):
+        self.process = None
+
+    def _start(self):
+        self.process = subprocess.Popen(
+            [sys.executable, "-B", str(Path(__file__).resolve()), "_secret-worker"],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            bufsize=0)
+
+    def _stop(self):
+        process, self.process = self.process, None
+        if process is None:
+            return
+        try:
+            if process.stdin is not None:
+                process.stdin.close()
+            process.wait(timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            process.kill()
+            process.wait(timeout=5)
+        finally:
+            if process.stdout is not None:
+                process.stdout.close()
+
+    def close(self):
+        self._stop()
+
+    def scan(self, content):
+        if not isinstance(content, bytes) or len(content) > MAX_SCAN_FILE_BYTES:
+            raise PrivacyError("isolated secret scan input is invalid or oversized")
+        for _attempt in range(3):
+            if self.process is None or self.process.poll() is not None:
+                self._stop()
+                try:
+                    self._start()
+                except OSError:
+                    continue
+            try:
+                self.process.stdin.write(len(content).to_bytes(8, "big"))
+                self.process.stdin.write(content)
+                self.process.stdin.flush()
+                with selectors.DefaultSelector() as selector:
+                    selector.register(self.process.stdout, selectors.EVENT_READ)
+                    if not selector.select(timeout=30):
+                        raise TimeoutError("secret scan worker timed out")
+                response = self.process.stdout.readline()
+                if not response.endswith(b"\n"):
+                    raise BrokenPipeError("secret scan worker stopped before its receipt")
+                label = response[:-1].decode("ascii")
+                labels = {item[0] for item in SECRET_PATTERNS}
+                if label and label not in labels:
+                    raise ValueError("secret scan worker returned an unknown rule")
+                return label or None
+            except (BrokenPipeError, OSError, TimeoutError, UnicodeDecodeError, ValueError):
+                self._stop()
+        raise PrivacyError("isolated secret scan failed closed after three attempts")
+
+
+_SECRET_SCAN_WORKER = None
+
+
+def _isolated_secret_signature_match(content):
+    """Contain known CPython 3.14 Linux regex crashes and fail closed."""
+    global _SECRET_SCAN_WORKER
+    if _SECRET_SCAN_WORKER is None:
+        _SECRET_SCAN_WORKER = _SecretScanWorker()
+    return _SECRET_SCAN_WORKER.scan(content)
+
+
+def _close_secret_scan_worker():
+    if _SECRET_SCAN_WORKER is not None:
+        _SECRET_SCAN_WORKER.close()
+
+
+atexit.register(_close_secret_scan_worker)
+
+
 def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False,
                      verified_opaque_hashes=()):
     """Scan every regular file byte and every relative filename without extension filters."""
@@ -199,22 +303,21 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False,
         bytes_scanned += len(content)
         folded = content.lower()
         scan_views, decoded_texts = _scan_views(content)
-        token_match = next((
-            token for token, encoded_forms in folded_tokens
-            if any(encoded in content or encoded in folded
-                   for encoded in encoded_forms)
-            or any(token.casefold() in text.casefold() for text in decoded_texts)
-        ), None)
+        # Keep matching in small explicit helpers.  This avoids a CPython 3.14
+        # Linux optimizer crash observed when the large scanner frame combined
+        # nested regex/generator state while inspecting staged plugin packages.
+        token_match = _forbidden_token_match(
+            content, folded, decoded_texts, folded_tokens)
         if token_match is not None:
             findings.append({"kind": "forbidden-content", "path": relative,
                              "rule": hashlib.sha256(token_match.encode()).hexdigest()[:12]})
-        secret_match = None
-        for label, pattern in SECRET_PATTERNS:
-            if any(pattern.search(view) for view in scan_views):
-                findings.append({"kind": "secret-signature", "path": relative,
-                                 "rule": label})
-                secret_match = label
-                break
+        secret_match = (_isolated_secret_signature_match(content)
+                        if sys.platform.startswith("linux")
+                        and sys.version_info >= (3, 14)
+                        else _secret_signature_match(scan_views))
+        if secret_match is not None:
+            findings.append({"kind": "secret-signature", "path": relative,
+                             "rule": secret_match})
         transparent_name = not path.suffix or path.suffix.lower() in TRANSPARENT_TEXT_SUFFIXES
         opaque_verified = hashlib.sha256(content).hexdigest() in verified_opaque_hashes
         if token_match is None and secret_match is None and not opaque_verified \
@@ -463,6 +566,31 @@ def erase_private_state(home, instance_id, *, confirmation):
 
 
 def main(argv=None):
+    if argv is None:
+        argv = sys.argv[1:]
+    if argv == ["_secret-worker"]:
+        stream = sys.stdin.buffer
+        while True:
+            header = stream.read(8)
+            if not header:
+                return 0
+            if len(header) != 8:
+                return 2
+            size = int.from_bytes(header, "big")
+            if size > MAX_SCAN_FILE_BYTES:
+                return 2
+            chunks = []
+            remaining = size
+            while remaining:
+                chunk = stream.read(min(1024 * 1024, remaining))
+                if not chunk:
+                    return 2
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            content = b"".join(chunks)
+            label = _secret_signature_match(_scan_views(content)[0])
+            sys.stdout.buffer.write((label or "").encode("ascii") + b"\n")
+            sys.stdout.buffer.flush()
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     scan = sub.add_parser("scan")
