@@ -9,6 +9,7 @@ import os
 import platform
 import re
 import shutil
+import sqlite3
 import stat
 import uuid
 import zipfile
@@ -212,6 +213,8 @@ class SharedRuntime:
         self.current_path = self.runtime / "current.json"
         self.pending_path = self.runtime / "pending.json"
         self.failure_path = self.runtime / "trust-failures.json"
+        self.update_state_path = self.runtime / "update-state.json"
+        self.lock_path = self.runtime / "runtime-transaction.lock"
         self.usage = self.runtime / "usage"
         roots = [loom_reliability._absolute(path, "plugin root", must_exist=True)
                  for path in plugin_roots]
@@ -220,6 +223,63 @@ class SharedRuntime:
         self.versions.mkdir(parents=True, exist_ok=True)
         self.sessions.mkdir(parents=True, exist_ok=True)
         self.usage.mkdir(parents=True, exist_ok=True)
+
+    def _transition(self, state, *, version, release_sequence, transaction_id=None,
+                    reason=None):
+        states = {"downloaded", "verified", "staged", "pending", "activated",
+                  "observing", "committed", "rolled-back", "quarantined"}
+        if state not in states or not VERSION_RE.fullmatch(str(version)) \
+                or type(release_sequence) is not int or release_sequence < 1 \
+                or reason is not None and (not isinstance(reason, str) or not reason):
+            raise UpdateError("update state transition is invalid")
+        try:
+            prior = (json.loads(self.update_state_path.read_text(encoding="utf-8"))
+                     if self.update_state_path.exists() else None)
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise UpdateError(f"update state receipt is invalid: {exc}") from exc
+        if prior is not None and (not isinstance(prior, dict)
+                                  or prior.get("schema_version") != 1
+                                  or prior.get("state") not in states
+                                  or not isinstance(prior.get("history"), list)):
+            raise UpdateError("update state receipt contract is invalid")
+        transaction_id = transaction_id or (prior.get("transaction_id") if prior else None) \
+            or str(uuid.uuid4())
+        try:
+            transaction_id = str(uuid.UUID(transaction_id))
+        except ValueError as exc:
+            raise UpdateError("update transaction identity is invalid") from exc
+        entry = {"state": state, "version": version,
+                 "release_sequence": release_sequence,
+                 "reason_sha256": (hashlib.sha256(reason.encode("utf-8")).hexdigest()
+                                   if reason is not None else None)}
+        history = ((prior.get("history", []) if prior else []) + [entry])[-32:]
+        value = {"schema_version": 1, "transaction_id": transaction_id,
+                 **entry, "history": history}
+        loom_reliability.atomic_write_json(self.update_state_path, value)
+        return value
+
+    def _state_identity(self):
+        """Return the exact owner-vault generation pinned by a new runtime session."""
+        database = self.home / "vault" / "owner.sqlite3"
+        if not database.exists():
+            return {"state_generation": 0, "state_schema": 0}
+        if not database.is_file() or _redirect(database):
+            raise UpdateError("owner-vault state is missing or redirected")
+        try:
+            connection = sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=2)
+            try:
+                integrity = connection.execute("PRAGMA quick_check").fetchone()
+                rows = dict(connection.execute(
+                    "SELECT key,value FROM metadata WHERE key IN ('generation','schema_version')"))
+            finally:
+                connection.close()
+            generation = int(rows["generation"])
+            schema = int(rows["schema_version"])
+        except (sqlite3.Error, OSError, KeyError, TypeError, ValueError) as exc:
+            raise UpdateError(f"owner-vault generation is unverifiable: {exc}") from exc
+        if integrity != ("ok",) or generation < 1 or schema < 1:
+            raise UpdateError("owner-vault integrity or generation is invalid")
+        return {"state_generation": generation, "state_schema": schema}
 
     def _usage_path(self, version):
         if not VERSION_RE.fullmatch(str(version)):
@@ -234,7 +294,7 @@ class SharedRuntime:
                     microsecond=0).isoformat().replace("+00:00", "Z"),
                 "successful_sessions": 0})
 
-    def install_baseline(self, version, content, *, release_sequence):
+    def _install_baseline_locked(self, version, content, *, release_sequence):
         if self.current_path.exists() or not VERSION_RE.fullmatch(version) \
                 or not isinstance(content, bytes) or not content \
                 or type(release_sequence) is not int or release_sequence < 1:
@@ -250,6 +310,7 @@ class SharedRuntime:
                    "previous": None}
         loom_reliability.atomic_write_json(self.current_path, pointer)
         self._initialize_usage(version)
+        self._transition("committed", version=version, release_sequence=release_sequence)
         return pointer
 
     def current(self):
@@ -387,11 +448,14 @@ class SharedRuntime:
                 lease = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise UpdateError(f"session lease is invalid; freshness is unknown: {exc}") from exc
-            required = {"session_id", "version", "release_sequence", "pid", "started_at"}
+            required = {"session_id", "version", "release_sequence", "state_generation",
+                        "state_schema", "pid", "started_at"}
             if not isinstance(lease, dict) or set(lease) != required \
                     or path.stem != lease.get("session_id") \
                     or not VERSION_RE.fullmatch(str(lease.get("version"))) \
                     or type(lease.get("release_sequence")) is not int \
+                    or type(lease.get("state_generation")) is not int \
+                    or type(lease.get("state_schema")) is not int \
                     or type(lease.get("pid")) is not int:
                 raise UpdateError("session lease is invalid; freshness is unknown")
             _time(lease["started_at"])
@@ -401,13 +465,14 @@ class SharedRuntime:
                 path.unlink()
         return active
 
-    def begin_session(self):
+    def _begin_session_locked(self):
         if self.pending_path.is_file() and not self._active_sessions():
-            self.activate_pending()
+            self._activate_pending_locked()
         current = self.current()
+        state = self._state_identity()
         session_id = str(uuid.uuid4())
         lease = {"session_id": session_id, "version": current["version"],
-                 "release_sequence": current["release_sequence"], "pid": os.getpid(),
+                 "release_sequence": current["release_sequence"], **state, "pid": os.getpid(),
                  "started_at": dt.datetime.now(dt.timezone.utc).replace(
                      microsecond=0).isoformat().replace("+00:00", "Z")}
         path = self.sessions / f"{session_id}.json"
@@ -419,7 +484,7 @@ class SharedRuntime:
             os.close(descriptor)
         return lease
 
-    def end_session(self, session_id, *, successful=True):
+    def _end_session_locked(self, session_id, *, successful=True):
         try:
             canonical = str(uuid.UUID(session_id))
         except ValueError as exc:
@@ -443,10 +508,14 @@ class SharedRuntime:
             _time(usage["activated_at"])
             usage["successful_sessions"] += 1
             loom_reliability.atomic_write_json(usage_path, usage)
+            if usage["successful_sessions"] >= 10:
+                self._transition(
+                    "committed", version=current["version"],
+                    release_sequence=current["release_sequence"])
         return {"session_id": canonical, "status": "ended"}
 
-    def stage_update(self, plugin_payload, bundle, *, trusted_root, verify_signature,
-                     vault_schema, health_check, now):
+    def _stage_update_locked(self, plugin_payload, bundle, *, trusted_root, verify_signature,
+                             vault_schema, health_check, now):
         source = self._plugin_payload(plugin_payload)
         manifest = verify_metadata(
             bundle, trusted_root=trusted_root,
@@ -467,6 +536,10 @@ class SharedRuntime:
         version = manifest["version"]
         if not isinstance(version, str) or not VERSION_RE.fullmatch(version):
             raise UpdateError("release version is invalid")
+        transaction_id = str(uuid.uuid4())
+        self._transition("downloaded", version=version,
+                         release_sequence=manifest["release_sequence"],
+                         transaction_id=transaction_id)
         schema_range = manifest["schema_range"]
         if not isinstance(schema_range, dict) or set(schema_range) != {"minimum", "maximum"} \
                 or not schema_range["minimum"] <= vault_schema <= schema_range["maximum"]:
@@ -503,6 +576,9 @@ class SharedRuntime:
             observed.add(path.relative_to(source).as_posix())
         if observed != expected_paths:
             raise UpdateError("release payload contains unlisted files")
+        self._transition("verified", version=version,
+                         release_sequence=manifest["release_sequence"],
+                         transaction_id=transaction_id)
 
         final = self.versions / version
         staging = self.versions / f".{version}.staged-{uuid.uuid4().hex}"
@@ -555,6 +631,9 @@ class SharedRuntime:
                         **health,
                     })
                 os.replace(staging, final)
+            self._transition("staged", version=version,
+                             release_sequence=manifest["release_sequence"],
+                             transaction_id=transaction_id)
             payload_hash = hashlib.sha256(_canonical(selected)).hexdigest()
             pending = {"version": version, "path": version,
                        "payload_sha256": payload_hash,
@@ -563,15 +642,26 @@ class SharedRuntime:
                            "version", "path", "payload_sha256", "release_sequence")}
                                     if current is not None else None)}
             loom_reliability.atomic_write_json(self.pending_path, pending)
+            self._transition("pending", version=version,
+                             release_sequence=manifest["release_sequence"],
+                             transaction_id=transaction_id)
             if self._active_sessions():
                 return {"status": "staged-active-session", "version": version}
-            return self.activate_pending()
-        except BaseException:
+            return self._activate_pending_locked()
+        except BaseException as exc:
             if staging.exists() and staging.is_dir() and staging.parent == self.versions:
                 shutil.rmtree(staging)
+            if "version" in locals() and VERSION_RE.fullmatch(str(version)):
+                try:
+                    self._transition(
+                        "quarantined", version=version,
+                        release_sequence=manifest["release_sequence"],
+                        transaction_id=locals().get("transaction_id"), reason=str(exc))
+                except BaseException:
+                    pass
             raise
 
-    def activate_pending(self):
+    def _activate_pending_locked(self):
         if self._active_sessions():
             return {"status": "staged-active-session"}
         try:
@@ -585,11 +675,15 @@ class SharedRuntime:
                 or not (self.versions / str(pending.get("path"))).is_dir():
             raise UpdateError("pending runtime pointer is unsafe")
         loom_reliability.atomic_write_json(self.current_path, pending)
+        self._transition("activated", version=pending["version"],
+                         release_sequence=pending["release_sequence"])
         self.pending_path.unlink()
         self._initialize_usage(pending["version"])
+        self._transition("observing", version=pending["version"],
+                         release_sequence=pending["release_sequence"])
         return {"status": "activated", "version": pending["version"]}
 
-    def prune_versions(self, *, now=None):
+    def _prune_versions_locked(self, *, now=None):
         current = self.current()
         usage = json.loads(self._usage_path(current["version"]).read_text(encoding="utf-8"))
         instant = _time(now) if now is not None else dt.datetime.now(dt.timezone.utc)
@@ -612,7 +706,7 @@ class SharedRuntime:
             removed.append(directory.name)
         return {"status": "pruned", "removed": removed}
 
-    def rollback(self, reason):
+    def _rollback_locked(self, reason):
         if not isinstance(reason, str) or not reason or self._active_sessions():
             raise UpdateError("rollback reason is invalid or a session is active")
         current = self.current()
@@ -623,9 +717,11 @@ class SharedRuntime:
             raise UpdateError("no verified previous runtime is available")
         pointer = {**previous, "previous": None}
         loom_reliability.atomic_write_json(self.current_path, pointer)
+        self._transition("rolled-back", version=previous["version"],
+                         release_sequence=previous["release_sequence"], reason=reason)
         return {"status": "rolled-back", "version": previous["version"], "reason": reason}
 
-    def record_trust_health(self, *, healthy, reason="runtime-health"):
+    def _record_trust_health_locked(self, *, healthy, reason="runtime-health"):
         if type(healthy) is not bool or not isinstance(reason, str) or not reason:
             raise UpdateError("trust-health input is invalid")
         if healthy:
@@ -648,7 +744,50 @@ class SharedRuntime:
             hashlib.sha256(reason.encode("utf-8")).hexdigest()])[-3:]
         loom_reliability.atomic_write_json(self.failure_path, receipt)
         if receipt["failures"] >= 3 and current.get("previous") is not None:
-            rolled = self.rollback("repeated-trust-health-failure")
+            rolled = self._rollback_locked("repeated-trust-health-failure")
             self.failure_path.unlink(missing_ok=True)
             return {**rolled, "failures": receipt["failures"]}
         return {"status": "failure-recorded", "failures": receipt["failures"]}
+
+    def _locked(self, operation):
+        try:
+            return loom_reliability.exclusive_file_lock(self.lock_path, timeout=15)
+        except loom_reliability.ReliabilityError as exc:
+            raise UpdateError(f"{operation} could not acquire the runtime transaction lock: {exc}") from exc
+
+    def install_baseline(self, version, content, *, release_sequence):
+        with self._locked("baseline installation"):
+            return self._install_baseline_locked(
+                version, content, release_sequence=release_sequence)
+
+    def begin_session(self):
+        with self._locked("session start"):
+            return self._begin_session_locked()
+
+    def end_session(self, session_id, *, successful=True):
+        with self._locked("session completion"):
+            return self._end_session_locked(session_id, successful=successful)
+
+    def stage_update(self, plugin_payload, bundle, *, trusted_root, verify_signature,
+                     vault_schema, health_check, now):
+        with self._locked("update staging"):
+            return self._stage_update_locked(
+                plugin_payload, bundle, trusted_root=trusted_root,
+                verify_signature=verify_signature, vault_schema=vault_schema,
+                health_check=health_check, now=now)
+
+    def activate_pending(self):
+        with self._locked("update activation"):
+            return self._activate_pending_locked()
+
+    def prune_versions(self, *, now=None):
+        with self._locked("runtime cleanup"):
+            return self._prune_versions_locked(now=now)
+
+    def rollback(self, reason):
+        with self._locked("runtime rollback"):
+            return self._rollback_locked(reason)
+
+    def record_trust_health(self, *, healthy, reason="runtime-health"):
+        with self._locked("runtime health update"):
+            return self._record_trust_health_locked(healthy=healthy, reason=reason)
