@@ -1,4 +1,4 @@
-# Loom 1.8.1 Limitations
+# Loom 1.8.2 Limitations
 
 Loom fails closed around evidence it does not possess.
 
@@ -54,7 +54,7 @@ Loom fails closed around evidence it does not possess.
 - The canonical deterministic ZIP builder, independent receipt verifier, semantic Cargo.lock SBOM
   reconciliation, and provenance schema are implemented and locally tested. GitHub attestations,
   native A/B helper rebuilds, a signed tag, and an immutable draft asset remain **[UNVERIFIED]**
-  until the release workflow runs against the exact `v1.8.1` bytes.
+  until the release workflow runs against the exact `v1.8.2` bytes.
 - Fresh marketplace installation trusts the Codex host as the initial delivery authority. Loom can
   detect internal corruption on first install, but cannot prove independence from a malicious host
   using a verifier delivered by that same host. Subsequent updates use the existing verified

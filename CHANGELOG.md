@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.8.2
+
+- Isolate clean-room temporary and Cargo caches inside the disposable home, and bind the native
+  helper test cache to Cargo, Rust, and temporary-path build inputs. This prevents a verified
+  clean-room build from contaminating a later release step with incompatible cached bytes.
+
 ## 1.8.1
 
 - Import the reliability authority used by the clean-room CLI receipt writer and lock the exact
