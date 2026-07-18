@@ -8,10 +8,10 @@
     "schema_version", "instance_id", "project_id", "invocation_id",
     "request_hash", "canonical_target_identity", "survey_hash",
     "world_fingerprint", "intent", "domains", "route_contract", "hard_stops",
-    "config_source", "retry_key", "prepared_at", "prepared_hash"
+    "config_source", "retry_key", "prepared_at", "project_inspection", "prepared_hash"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "const": 2 },
     "instance_id": { "type": "string", "format": "uuid" },
     "project_id": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" },
     "invocation_id": { "type": "string", "format": "uuid" },
@@ -37,7 +37,8 @@
         "needs_owner", "routine_question_count", "target_mutation_count",
         "journal_mutation_count", "network_call_count", "contribution_count",
         "real_home_call_count", "tier", "autonomy", "use_profile",
-        "requires_domain_discovery"
+        "requires_domain_discovery", "project_inspection_state",
+        "project_inspection_digest", "project_inspection_g1_eligible"
       ],
       "properties": {
         "intent": {
@@ -62,7 +63,14 @@
         "tier": { "enum": ["S", "M", "L", "XL"] },
         "autonomy": { "enum": ["A0", "A1", "A2", "A3"] },
         "use_profile": { "type": "boolean" },
-        "requires_domain_discovery": { "type": "boolean" }
+        "requires_domain_discovery": { "type": "boolean" },
+        "project_inspection_state": {
+          "enum": ["complete", "partial-safe", "partial-requires-discovery", "blocked-unsafe", "unsupported"]
+        },
+        "project_inspection_digest": {
+          "type": "string", "pattern": "^sha256:[0-9a-f]{64}$"
+        },
+        "project_inspection_g1_eligible": { "type": "boolean" }
       }
     },
     "hard_stops": {
@@ -79,6 +87,7 @@
     },
     "retry_key": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "prepared_at": { "type": "string", "format": "date-time" },
+    "project_inspection": { "$ref": "project-inspection.schema.json" },
     "prepared_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
   }
 }

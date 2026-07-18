@@ -70,14 +70,14 @@ class RuntimeFixture(unittest.TestCase):
 
 class StableSurveyCountTests(RuntimeFixture):
     def test_each_authority_boundary_uses_exactly_two_complete_observations(self):
-        original = loom_survey.repo_state
+        original = loom_survey.workspace_snapshot
         calls = []
 
         def counted(*args, **kwargs):
             calls.append(1)
             return original(*args, **kwargs)
 
-        with mock.patch.object(loom_survey, "repo_state", side_effect=counted):
+        with mock.patch.object(loom_survey, "workspace_snapshot", side_effect=counted):
             self.prepare("Fix one documentation typo")
         self.assertEqual(2, len(calls))
 
@@ -199,6 +199,15 @@ class ProjectResolutionTests(RuntimeFixture):
 
 
 class IntentRoutingTests(unittest.TestCase):
+    def test_request_touch_paths_are_bounded_relative_and_canonical(self):
+        request = (
+            "Update `target/configuration.json` and src\\main.py, but not "
+            "C:\\private\\secret.txt or ../outside.txt")
+
+        self.assertEqual(
+            ("src/main.py", "target/configuration.json"),
+            loom_runtime._request_touch_paths(request))
+
     def test_every_required_plain_language_phrase_routes_with_state(self):
         cases = [
             ("Build a command-line tool", {}, "plan"),
@@ -275,6 +284,7 @@ class WorldFingerprintTests(RuntimeFixture):
             "capsule_version": "capsule-1",
             "profile_version": "profile-1",
             "prior_session_hash": "5" * 64,
+            "project_inspection_hash": "sha256:" + "6" * 64,
             "staleness_bucket": 100,
         }
         original = loom_runtime.compose_world_fingerprint(base)
@@ -752,7 +762,7 @@ class InvalidWorldStateTests(RuntimeFixture):
 
     def test_indeterminate_survey_is_a_typed_block(self):
         with mock.patch.object(
-                loom_runtime.loom_survey, "repo_state",
+                loom_runtime.loom_survey, "workspace_snapshot",
                 side_effect=loom_runtime.loom_survey.SurveyError("seeded survey failure")):
             with self.assertRaisesRegex(
                     loom_runtime.RuntimeBlocked, "PROJECT_INDETERMINATE"):

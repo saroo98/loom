@@ -13,6 +13,7 @@ import io
 import json
 import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -33,7 +34,12 @@ import loom_lint
 import loom_memory
 import loom_message
 import loom_owner
+
+
+TEST_LEGACY_BACKEND_MARKER = ".loom-test-legacy-backend-v1"
+TEST_LEGACY_BACKEND_MARKER_BYTES = b"loom-disposable-test-backend-v1\n"
 import loom_performance
+import loom_project_inspection
 import loom_runtime
 import loom_session
 import loom_survey
@@ -41,7 +47,8 @@ import loom_vault_adapter
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 6
+ACTION_SCHEMA_VERSION = 7
+LEGACY_ACTION_SCHEMA_VERSION = 6
 ACTION_FIELDS = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -55,7 +62,7 @@ ACTION_FIELDS = {
 ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
 MAX_ACTION_BYTES = 256 * 1024
 MAX_ENCRYPTED_ACTION_BYTES = 384 * 1024
-PLAN_CONTRACT_SCHEMA_VERSION = 3
+PLAN_CONTRACT_SCHEMA_VERSION = 4
 ARTIFACT_ORDER = (
     "intake.md", "survey.md", "product.md", "architecture.md", "uiux.md",
     "contracts.md", "testing.md", "release-rollback.md", "security.md",
@@ -111,6 +118,30 @@ def _action_path(owner_home, instance_id, project_id, action_id):
 def _validate_action(value, path):
     if not isinstance(value, dict):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
+    if value.get("schema_version") == LEGACY_ACTION_SCHEMA_VERSION:
+        if set(value) != ACTION_FIELDS or value.get("action_hash") != _action_hash(value) \
+                or value.get("status") not in ACTION_STATUSES:
+            raise OrchestratorError("ACTION_CORRUPT", "legacy action fields or hash are invalid")
+        if value["status"] != "completed":
+            raise OrchestratorError(
+                "ACTION_REPREPARE_REQUIRED",
+                "an open pre-inspection action cannot resume; invoke /loom again against "
+                "the current project state",
+                status="action-required")
+        try:
+            if str(uuid.UUID(value["action_id"])) != value["action_id"] \
+                    or str(uuid.UUID(value["instance_id"])) != value["instance_id"] \
+                    or not isinstance(value["result"], dict):
+                raise ValueError
+        except (ValueError, TypeError, KeyError) as exc:
+            raise OrchestratorError("ACTION_CORRUPT", "legacy terminal action is invalid") \
+                from exc
+        expected = _action_path(
+            value.get("owner_home"), value.get("instance_id"), value.get("project_id"),
+            value.get("action_id"))
+        if Path(path) != expected:
+            raise OrchestratorError("ACTION_PATH_MISMATCH", "legacy action path is not scoped")
+        return value
     if value.get("schema_version") != ACTION_SCHEMA_VERSION:
         raise OrchestratorError(
             "ACTION_VERSION_UNSUPPORTED", "action schema version is not supported")
@@ -368,7 +399,7 @@ tier: {prepared.route_contract['tier']}
 status: draft
 last_verified: {dt.date.today().isoformat()}
 loom_version: {json.dumps(version)}
-plan_contract_version: 3
+plan_contract_version: 4
 execution_mode: planned
 domain_id: {prepared.domains[0]}
 domain_ids: [{', '.join(prepared.domains)}]
@@ -537,6 +568,20 @@ def _make_plan_contract(action, prepared):
     }
     planning_intelligence = loom_planning_intelligence.compile_intelligence(
         action["request"], tier=tier, route=route)
+    project_inspection = loom_runtime._thaw(prepared.project_inspection)
+    inspection_capsule = loom_project_inspection.capsule(project_inspection)
+    inspection_obligations = [
+        {"path": item["path"], "reason": item["reason"],
+         "potential_authorities": list(item["potential_authorities"])}
+        for item in project_inspection["unresolved_roots"]]
+    completion_gates = [
+        "exact-artifact-matrix", "domain-invariant-contract",
+        "current-fact-contract", "verification-media-contract",
+        "planning-intelligence", "budget", "work-order-topology", "lint", "g1",
+        "lifecycle",
+    ]
+    if not project_inspection["relevant_coverage_complete"]:
+        completion_gates.insert(0, "project-inspection")
     body = {
         "schema_version": PLAN_CONTRACT_SCHEMA_VERSION,
         "request_hash": prepared.request_hash,
@@ -547,6 +592,8 @@ def _make_plan_contract(action, prepared):
         "route_digest": route["route_digest"],
         "composition_graph_digest": route["graph_digest"],
         "target_fingerprint": action["survey_hash"],
+        "project_inspection": inspection_capsule,
+        "inspection_obligations": inspection_obligations,
         "pack_baseline_hash": action["initial_pack_hash"],
         "pack_root": "plans",
         "allowed_host_write_paths": ["plans/**"],
@@ -575,12 +622,7 @@ def _make_plan_contract(action, prepared):
             "dag_required": True, "atomic_outcomes_required": True,
             "acceptance_evidence_required": True,
         },
-        "completion_gates": [
-            "exact-artifact-matrix", "domain-invariant-contract",
-            "current-fact-contract", "verification-media-contract",
-            "planning-intelligence", "budget", "work-order-topology", "lint", "g1",
-            "lifecycle",
-        ],
+        "completion_gates": completion_gates,
     }
     return {**body, "contract_hash": _hash(body)}
 
@@ -593,6 +635,7 @@ def _tier_s_host_capsule(contract):
         "schema_version": 1,
         "plan_contract_hash": contract["contract_hash"],
         "request_hash": contract["request_hash"],
+        "project_inspection": contract["project_inspection"],
         "allowed_host_write_paths": contract["allowed_host_write_paths"],
         "work_order": {"count": 1, "path": "plans/WO-001.md",
                        "maximum_touches": 5, "maximum_outcomes": 1,
@@ -757,6 +800,14 @@ def _validate_authored_plan(action):
             or lexical_tokens > contract["budget"]["token_ceiling"]:
         raise OrchestratorError(
             "PLAN_CONTRACT_MISMATCH", "authored plan exceeds its sealed planning budget")
+    missing_inspection_obligations = [
+        item["path"] for item in contract["inspection_obligations"]
+        if item["path"] not in combined]
+    if missing_inspection_obligations:
+        raise OrchestratorError(
+            "PLAN_CONTRACT_MISMATCH",
+            "authored plan omits sealed project-inspection obligations: "
+            + ", ".join(missing_inspection_obligations[:8]))
 
     work_orders = ([pack / "WO-001.md"] if action["tier"] == "S" else
                    sorted((pack / "work-orders").glob("WO-*.md")))
@@ -1599,13 +1650,29 @@ def _vault_helper(install_root):
     return None
 
 
+def _disposable_test_legacy_backend_allowed(home):
+    """Keep the legacy test adapter unavailable outside an explicit temp fixture."""
+    if os.environ.get("LOOM_TEST_ALLOW_LEGACY_BACKEND") != "1":
+        return False
+    try:
+        temporary = Path(tempfile.gettempdir()).resolve(strict=True)
+        candidate = Path(os.path.abspath(os.fspath(home)))
+        candidate.relative_to(temporary)
+        marker = candidate / TEST_LEGACY_BACKEND_MARKER
+        return marker.is_file() and not marker.is_symlink() \
+            and marker.read_bytes() == TEST_LEGACY_BACKEND_MARKER_BYTES \
+            and not (candidate / "vault" / "owner.sqlite3").exists()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def _memory_backend(home, install_root, project_root=None):
+    if _disposable_test_legacy_backend_allowed(home):
+        instance_id = loom_memory.initialize(home, install_root)
+        return instance_id, loom_session.LocalMemoryAdapter(
+            owner_home=home, instance_id=instance_id)
     helper = _vault_helper(install_root)
     if helper is None:
-        if os.environ.get("LOOM_TEST_ALLOW_LEGACY_BACKEND") == "1":
-            instance_id = loom_memory.initialize(home, install_root)
-            return instance_id, loom_session.LocalMemoryAdapter(
-                owner_home=home, instance_id=instance_id)
         raise OrchestratorError(
             "OWNER_VAULT_BACKEND_UNAVAILABLE",
             "the verified owner-vault helper is unavailable; Loom refused to create a second "
@@ -1698,7 +1765,11 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         "context": context_capsule,
         "repair_plan": None, "host_result": None, "plan_contract": None,
         "domain_contract": loom_domain.select_domains(
-            request, explicit=list(prepared.domains))["domain_contract"],
+            request, explicit=list(prepared.domains),
+            project_facts=loom_project_inspection.facts(
+                loom_runtime._thaw(prepared.project_inspection)),
+            project_inspection=loom_runtime._thaw(prepared.project_inspection)
+        )["domain_contract"],
         "context_manifest": loom_performance.production_context_manifest(install_root),
         "continuation_authority": loom_authority.decide(
             loom_authority.facts_for_intent(prepared.intent),
@@ -1938,6 +2009,14 @@ def complete(action_path, usage_path=None, *, result_path=None, now=None,
             raise OrchestratorError(
                 "TARGET_DRIFT",
                 "target, project, or routed intent changed during delegated work")
+        if action["intent"] == "plan" and not current.project_inspection[
+                "g1_eligible"]:
+            unresolved = [item["path"] for item in
+                          current.project_inspection["unresolved_roots"]]
+            raise OrchestratorError(
+                "PROJECT_INSPECTION_INCOMPLETE",
+                "G1 remains blocked until relevant project coverage is complete: "
+                + ", ".join(unresolved[:8]), status="action-required")
     validated_domain_bundle = None
     if action["intent"] == "plan":
         validated_domain_bundle = _validate_authored_plan(action)

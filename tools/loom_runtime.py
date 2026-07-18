@@ -22,12 +22,13 @@ import loom_gate
 import loom_lifecycle
 import loom_lint
 import loom_memory
+import loom_project_inspection
 import loom_survey
 import loom_tier
 from loom_reliability import _is_trusted_os_alias
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_CONFIG_BYTES = 256 * 1024
 MAX_FRONTIER_FILES = 2048
 MAX_FRONTIER_BYTES = 16 * 1024 * 1024
@@ -63,17 +64,20 @@ ROUTE_FIELDS = {
     "intent", "blocked", "code", "recommendation", "evidence", "confidence",
     "needs_owner", "routine_question_count", *EFFECT_COUNT_FIELDS,
     "tier", "autonomy", "use_profile", "requires_domain_discovery",
+    "project_inspection_state", "project_inspection_digest",
+    "project_inspection_g1_eligible",
 }
 WORLD_COMPONENT_FIELDS = {
     "target_survey_hash", "pack_hash", "config_hash", "lifecycle_hash",
     "capsule_version", "profile_version", "prior_session_hash",
-    "staleness_bucket",
+    "staleness_bucket", "project_inspection_hash",
 }
 PREPARED_FIELDS = {
     "schema_version", "instance_id", "project_id", "invocation_id",
     "request_hash", "canonical_target_identity", "survey_hash",
     "world_fingerprint", "intent", "domains", "route_contract", "hard_stops",
-    "config_source", "retry_key", "prepared_at", "prepared_hash",
+    "config_source", "retry_key", "prepared_at", "project_inspection",
+    "prepared_hash",
 }
 SESSION_FIELDS = {
     "schema_version", "session_id", "instance_id", "project_id", "request_hash",
@@ -668,7 +672,7 @@ def _validate_route(route):
     if route.get("intent") not in INTENTS:
         raise RuntimeError("route intent is invalid")
     for field in ("blocked", "needs_owner", "use_profile",
-                  "requires_domain_discovery"):
+                  "requires_domain_discovery", "project_inspection_g1_eligible"):
         if type(route.get(field)) is not bool:
             raise RuntimeError(f"route {field} must be boolean")
     if type(route.get("routine_question_count")) is not int \
@@ -680,6 +684,11 @@ def _validate_route(route):
     if route.get("tier") not in {"S", "M", "L", "XL"} \
             or route.get("autonomy") not in {"A0", "A1", "A2", "A3"}:
         raise RuntimeError("route tier/autonomy is invalid")
+    if route.get("project_inspection_state") not in loom_project_inspection.STATES \
+            or not isinstance(route.get("project_inspection_digest"), str) \
+            or not loom_project_inspection.DIGEST_RE.fullmatch(
+                route["project_inspection_digest"]):
+        raise RuntimeError("route project inspection binding is invalid")
     if not isinstance(route.get("recommendation"), str) \
             or len(route["recommendation"]) > 1000 \
             or not isinstance(route.get("code"), str) or not route["code"] \
@@ -714,6 +723,7 @@ class PreparedInvocation:
     config_source: str
     retry_key: str
     prepared_at: str
+    project_inspection: MappingProxyType
     prepared_hash: str
 
     def to_dict(self):
@@ -733,6 +743,7 @@ class PreparedInvocation:
         data["domains"] = list(data["domains"])
         data["route_contract"] = _thaw(data["route_contract"])
         data["hard_stops"] = list(data["hard_stops"])
+        data["project_inspection"] = _thaw(data["project_inspection"])
         data["prepared_hash"] = _sha(_canonical_json(data))
         return cls.from_dict(data)
 
@@ -770,6 +781,20 @@ class PreparedInvocation:
         _validate_route(data.get("route_contract"))
         if data["route_contract"]["intent"] != data["intent"]:
             raise RuntimeError("prepared intent/route mismatch")
+        try:
+            loom_project_inspection.validate(data.get("project_inspection"))
+        except loom_project_inspection.InspectionError as exc:
+            raise RuntimeError(f"prepared project inspection is invalid: {exc}") from exc
+        project_inspection = data["project_inspection"]
+        if project_inspection["target_identity"] != data["canonical_target_identity"] \
+                or project_inspection["survey_hash"] != data["survey_hash"] \
+                or data["route_contract"]["project_inspection_state"] \
+                != project_inspection["state"] \
+                or data["route_contract"]["project_inspection_digest"] \
+                != project_inspection["receipt_digest"] \
+                or data["route_contract"]["project_inspection_g1_eligible"] \
+                != project_inspection["g1_eligible"]:
+            raise RuntimeError("prepared project inspection binding is inconsistent")
         stops = data.get("hard_stops")
         if not isinstance(stops, list) or len(stops) > MAX_HARD_STOPS or not all(
                 isinstance(item, str) and item.strip() and len(item) <= 1000 for item in stops):
@@ -795,6 +820,7 @@ class PreparedInvocation:
         data["domains"] = tuple(data["domains"])
         data["route_contract"] = _freeze(data["route_contract"])
         data["hard_stops"] = tuple(data["hard_stops"])
+        data["project_inspection"] = _freeze(data["project_inspection"])
         return cls(**data)
 
 
@@ -1291,12 +1317,43 @@ def _owner_state_versions(owner_root, instance_id, project_id, use_profile):
     }
 
 
+def _request_touch_paths(request):
+    """Return conservative repository-relative paths named by the request.
+
+    This is only an exclusion firewall. False positives keep a subtree inspectable;
+    they cannot authorize a write or narrow project coverage.
+    """
+    paths = set()
+    candidates = re.findall(
+        r"(?:`([^`]{1,512})`|(?<![A-Za-z0-9_.:/\\-])"
+        r"([A-Za-z0-9_.-]+(?:[/\\][A-Za-z0-9_. -]+)+))",
+        request)
+    for quoted, plain in candidates:
+        value = (quoted or plain).strip().strip("'\"()[]{}")
+        value = value.rstrip(",;:!?")
+        value = value.replace("\\", "/").strip("/")
+        if not value or len(value) > 512 or re.match(r"^[A-Za-z]:", value):
+            continue
+        parts = value.split("/")
+        if any(part in {"", ".", ".."} for part in parts):
+            continue
+        if any(any(ord(char) < 32 for char in part) for part in parts):
+            continue
+        paths.add("/".join(parts))
+        if len(paths) >= 32:
+            break
+    return tuple(sorted(paths, key=os.fsencode))
+
+
 def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
-                   prepared_time=None):
+                   prepared_time=None, touch_paths=()):
     """Read one complete preparation snapshot through owned bounded primitives."""
     pack_rel = pack.relative_to(project.root).as_posix()
-    repo_state = loom_survey.repo_state(
-        project.root, exclude_prefixes=(pack_rel,))
+    snapshot = loom_survey.workspace_snapshot(
+        project.root, exclude_prefixes=(pack_rel,), touch_paths=touch_paths)
+    repo_state = snapshot.state
+    inspection = loom_project_inspection.inspect(
+        snapshot, target_identity=project.canonical_target_identity)
     state = _inspect_lifecycle(
         pack, repo_state.state_hash,
         today=(prepared_time.date() if prepared_time is not None else None))
@@ -1305,10 +1362,11 @@ def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
         "pack_hash": _hash_frontier(pack),
         "config_hash": config_hash,
         "lifecycle_hash": _hash_frontier(pack, lifecycle_only=True),
+        "project_inspection_hash": inspection["receipt_digest"],
         **_owner_state_versions(
             owner_root, instance_id, project.project_id, config["use_profile"]),
     }
-    return repo_state, state, components
+    return repo_state, state, components, inspection
 
 
 def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
@@ -1333,27 +1391,32 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
     except ValueError as exc:
         raise RuntimeBlocked("PROJECT_INDETERMINATE", "pack path escapes the project") from exc
     try:
-        first_repo, first_state, first_components = _observe_world(
+        request_touch_paths = _request_touch_paths(request)
+        first_repo, first_state, first_components, first_inspection = _observe_world(
             project, pack, config, config_hash, owner_root, instance_id,
-            prepared_time)
+            prepared_time, request_touch_paths)
         check_config = _load_config(project.root, explicit_config, owner_root)
         if check_config != (config, config_source, config_hash, config_error):
             raise RuntimeBlocked(
                 "PROJECT_INDETERMINATE", "selected config changed during preparation")
-        second_repo, second_state, second_components = _observe_world(
+        second_repo, second_state, second_components, second_inspection = _observe_world(
             project, pack, config, config_hash, owner_root, instance_id,
-            prepared_time)
+            prepared_time, request_touch_paths)
         if (first_repo, first_state, first_components) != \
-                (second_repo, second_state, second_components):
+                (second_repo, second_state, second_components) \
+                or first_inspection["receipt_digest"] \
+                != second_inspection["receipt_digest"]:
             raise RuntimeBlocked(
                 "PROJECT_INDETERMINATE", "project or owner state changed during preparation")
     except RuntimeBlocked:
         raise
-    except (RuntimeError, loom_survey.SurveyError, OSError) as exc:
+    except (RuntimeError, loom_survey.SurveyError,
+            loom_project_inspection.InspectionError, OSError) as exc:
         raise RuntimeBlocked(
             "PROJECT_INDETERMINATE", f"cannot establish complete project state: {exc}") \
             from exc
     repo_state, state, components = first_repo, dict(first_state), dict(first_components)
+    project_inspection = dict(first_inspection)
     decision = resolve_intent(request, state)
     try:
         pack_route = (_pack_route_contract(pack, state)
@@ -1363,7 +1426,8 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             (config["domain_ids"] if config_source != "builtin-safe-default"
              and config["domain_ids"] != ["unclassified"] else None))
         domains_result = loom_domain.select_domains(
-            request, explicit_domains, loom_domain.inspect_project(project.root))
+            request, explicit_domains, loom_project_inspection.facts(project_inspection),
+            project_inspection=project_inspection)
     except loom_domain.DomainError as exc:
         raise RuntimeBlocked(
             "DOMAIN_INDETERMINATE",
@@ -1374,14 +1438,27 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
     domains = domains_result["active_task_domains"] or ["unclassified"]
     tier = (pack_route["tier"] if pack_route is not None
             else loom_tier.classify(request, domains=domains)["tier"])
-    if domains_result["requires_domain_discovery"] and tier == "S":
+    requires_discovery = (
+        domains_result["requires_domain_discovery"]
+        or not project_inspection["relevant_coverage_complete"])
+    tier_order = {"S": 0, "M": 1, "L": 2, "XL": 3}
+    inspection_floor = project_inspection["tier_floor"]
+    if requires_discovery and tier == "S":
         tier = "M"
+    if tier_order[tier] < tier_order[inspection_floor]:
+        tier = inspection_floor
     decision.update({
         "tier": tier,
         "autonomy": config["autonomy"],
         "use_profile": config["use_profile"],
-        "requires_domain_discovery": domains_result["requires_domain_discovery"],
+        "requires_domain_discovery": requires_discovery,
+        "project_inspection_state": project_inspection["state"],
+        "project_inspection_digest": project_inspection["receipt_digest"],
+        "project_inspection_g1_eligible": project_inspection["g1_eligible"],
     })
+    if not project_inspection["relevant_coverage_complete"]:
+        decision["evidence"] = [*decision["evidence"][:15],
+                                "project-inspection-incomplete"]
     if config_error:
         decision.update({
             "blocked": True,
@@ -1446,4 +1523,5 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
         config_source=config_source,
         retry_key=retry_key,
         prepared_at=_format_time(prepared_time),
+        project_inspection=project_inspection,
     )

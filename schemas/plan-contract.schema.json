@@ -7,13 +7,14 @@
   "required": [
     "schema_version", "request_hash", "survey_hash", "tier", "domains",
     "domain_route", "route_digest", "composition_graph_digest", "target_fingerprint",
+    "project_inspection", "inspection_obligations",
     "pack_baseline_hash", "pack_root", "allowed_host_write_paths",
     "artifact_matrix", "required_domain_invariants", "domain_invariants", "domain_discovery", "planning_intelligence", "current_facts_to_verify",
     "verification_media", "budget", "work_order_topology", "completion_gates",
     "contract_hash"
   ],
   "properties": {
-    "schema_version": {"const": 3},
+    "schema_version": {"const": 4},
     "request_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "survey_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "tier": {"enum": ["S", "M", "L", "XL"]},
@@ -25,6 +26,19 @@
     "route_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "composition_graph_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "target_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "project_inspection": {"$ref": "project-inspection-capsule.schema.json"},
+    "inspection_obligations": {
+      "type": "array", "maxItems": 32,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["path", "reason", "potential_authorities"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 512},
+          "reason": {"enum": ["detailed-budget", "ignored-unclassified", "manifest-oversized", "manifest-invalid", "non-git-generated-uncertain", "partition-budget", "untracked-volume"]},
+          "potential_authorities": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"}}
+        }
+      }
+    },
     "pack_baseline_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "pack_root": {"const": "plans"},
     "allowed_host_write_paths": {

@@ -68,7 +68,7 @@ status: active
 execution_mode: planned
 last_verified: {TODAY}
 loom_version: "{version}"
-plan_contract_version: 3
+plan_contract_version: 4
 domain_id: accounting
 domain_ids: [accounting]
 domain_coverage: adapter
@@ -350,6 +350,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.installed = self.installed_fixture
         self.home = self.root / "home"
+        self.home.mkdir(parents=True)
+        (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
+            loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         self.repo = self.root / "target"
         (self.repo / "src").mkdir(parents=True)
         _write(self.repo / "src" / "app.py", "VALUE = 1\n")
@@ -377,6 +380,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
              *map(str, args)], capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=60)
 
+    def test_legacy_test_backend_requires_exact_disposable_marker(self):
+        marker = self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER
+        self.assertTrue(loom_orchestrator._disposable_test_legacy_backend_allowed(
+            self.home))
+        marker.write_text("wrong\n", encoding="utf-8")
+        self.assertFalse(loom_orchestrator._disposable_test_legacy_backend_allowed(
+            self.home))
+
     def test_installed_phase_8_request_uses_deep_target_route(self):
         request = (
             "Phase 8 and 9 and 10 research is done and it's in the folders. "
@@ -391,7 +402,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         action = json.loads(opened.stdout)
         self.assertEqual("L", action["tier"])
         self.assertEqual(["llm-agent"], action["domains"])
-        self.assertEqual(3, action["plan_contract"]["schema_version"])
+        self.assertEqual(4, action["plan_contract"]["schema_version"])
         active = {item["id"] for item in action["plan_contract"]
                   ["planning_intelligence"]["active_modules"]}
         self.assertTrue({"outcomes-requirements", "architecture-boundaries",
@@ -415,7 +426,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("progress", action["owner_message"]["state"])
         self.assertEqual(2, len(action["owner_message"]["human"].splitlines()))
         contract = action["plan_contract"]
-        self.assertEqual(3, contract["schema_version"])
+        self.assertEqual(4, contract["schema_version"])
         self.assertEqual(contract["domain_route"]["route_digest"],
                          contract["route_digest"])
         self.assertEqual(contract["domain_route"]["graph_digest"],
@@ -489,6 +500,31 @@ class ProductionOrchestratorTests(unittest.TestCase):
         removed = loom_install.uninstall(
             cycle_install, confirmation=receipt["install_id"])
         self.assertTrue(removed["target_removed"])
+
+    def test_partial_project_inspection_routes_but_cannot_seal_g1(self):
+        _write(self.repo / ".gitignore", "unknown-output/\n")
+        subprocess.run(["git", "-C", str(self.repo), "add", ".gitignore"], check=True)
+        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm",
+                        "ignore ambiguous output"], check=True)
+        _write(self.repo / "unknown-output" / "payload.bin", "ambiguous\n")
+
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", opened["status"])
+        self.assertEqual("L", opened["tier"])
+        self.assertEqual(
+            "partial-requires-discovery",
+            opened["plan_contract"]["project_inspection"]["state"])
+        self.assertIn("project-inspection", opened["plan_contract"]["completion_gates"])
+        self.assertEqual(
+            "unknown-output",
+            opened["plan_contract"]["inspection_obligations"][0]["path"])
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError,
+                "PROJECT_INSPECTION_INCOMPLETE"):
+            loom_orchestrator.complete(opened["action_path"])
 
     def test_invoke_supplies_bounded_owner_context_before_host_work(self):
         instance_id = loom_memory.initialize(self.home, self.installed)
@@ -871,6 +907,28 @@ planning_obligations: [{obligations}]
         with self.assertRaisesRegex(
                 loom_orchestrator.OrchestratorError, "continuation authority"):
             loom_orchestrator._read_action(path)
+
+    def test_legacy_open_action_requires_fresh_preparation_but_terminal_is_readable(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        action = json.loads(path.read_text(encoding="utf-8"))
+        action["schema_version"] = loom_orchestrator.LEGACY_ACTION_SCHEMA_VERSION
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "cannot resume") as raised:
+            loom_orchestrator._read_action(path)
+        self.assertEqual("ACTION_REPREPARE_REQUIRED", raised.exception.code)
+
+        action["status"] = "completed"
+        action["result"] = {"status": "completed", "code": "legacy-terminal"}
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+        _path, restored, _security = loom_orchestrator._read_action(path)
+        self.assertEqual("completed", restored["status"])
 
     def test_production_host_outcome_records_controlled_provider_replay_pair(self):
         instance_id = loom_memory.initialize(self.home, self.installed)

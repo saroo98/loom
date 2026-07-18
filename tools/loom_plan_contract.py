@@ -8,6 +8,7 @@ import loom_domain
 import loom_domain_contract
 import loom_domain_invariants
 import loom_planning_intelligence
+import loom_project_inspection
 
 
 class PlanContractMigrationError(ValueError):
@@ -113,3 +114,67 @@ def migrate_v2(value, *, request):
     return {"contract": migrated, "migration_receipt": {
         **receipt_body, "receipt_digest": loom_domain_contract.digest(
             "plan-contract-migration-v2-v3", receipt_body)}}
+
+
+def migrate_v3(value, *, project_inspection):
+    """Bind a sealed v3 contract to typed structural coverage for v4 authorization."""
+    if not isinstance(value, dict) or value.get("schema_version") != 3 \
+            or "project_inspection" in value or "inspection_obligations" in value:
+        raise PlanContractMigrationError("v3 plan contract fields are invalid")
+    body = dict(value)
+    claimed = body.pop("contract_hash", None)
+    if not isinstance(claimed, str) or claimed != _hash(body):
+        raise PlanContractMigrationError("v3 plan contract hash mismatch")
+    try:
+        loom_project_inspection.validate(project_inspection)
+    except loom_project_inspection.InspectionError as exc:
+        raise PlanContractMigrationError(str(exc)) from exc
+    if project_inspection["survey_hash"] != value["survey_hash"]:
+        raise PlanContractMigrationError(
+            "project inspection does not describe the v3 contract survey")
+    route = dict(value["domain_route"])
+    try:
+        loom_domain_contract.validate_route(route)
+    except loom_domain_contract.DomainContractError as exc:
+        raise PlanContractMigrationError(str(exc)) from exc
+    if route["schema_version"] != 1:
+        raise PlanContractMigrationError("v3 contract route is not a legacy v1 route")
+    route.pop("route_digest")
+    route["schema_version"] = loom_domain_contract.ROUTE_SCHEMA_VERSION
+    capsule = loom_project_inspection.capsule(project_inspection)
+    route["project_inspection"] = capsule
+    route["route_digest"] = loom_domain_contract.digest("domain-route-v2", route)
+    loom_domain_contract.validate_route(route)
+    obligations = [
+        {"path": item["path"], "reason": item["reason"],
+         "potential_authorities": list(item["potential_authorities"])}
+        for item in project_inspection["unresolved_roots"]]
+    migrated = {
+        **body,
+        "schema_version": 4,
+        "domain_route": route,
+        "route_digest": route["route_digest"],
+        "project_inspection": capsule,
+        "inspection_obligations": obligations,
+    }
+    gates = list(migrated["completion_gates"])
+    if obligations and "project-inspection" not in gates:
+        gates.insert(0, "project-inspection")
+    migrated["completion_gates"] = gates
+    migrated["contract_hash"] = _hash(migrated)
+    receipt_body = {
+        "schema_version": 1,
+        "source_contract_hash": claimed,
+        "target_contract_hash": migrated["contract_hash"],
+        "inspection_receipt_digest": project_inspection["receipt_digest"],
+        "route_digest": route["route_digest"],
+        "status": "revalidation-required",
+        "semantic_changes": [
+            "bound the plan to typed project-inspection evidence",
+            "made unresolved structural authority an explicit completion gate",
+            "requires a current complete receipt before G1 or implementation",
+        ],
+    }
+    return {"contract": migrated, "migration_receipt": {
+        **receipt_body, "receipt_digest": loom_domain_contract.digest(
+            "plan-contract-migration-v3-v4", receipt_body)}}
