@@ -42,17 +42,22 @@ class PluginPackageTests(unittest.TestCase):
     def test_clean_rebuild_never_deletes_the_shared_cache_generation(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            helper = root / "cache" / "source-key" / "release" / (
+            source_key = "a" * 64
+            helper = root / "cache" / "artifacts" / source_key / "release" / (
                 "loom-vault.exe" if os.name == "nt" else "loom-vault")
             helper.parent.mkdir(parents=True)
             helper.write_bytes(b"deterministic-helper")
             sentinel = helper.parent.parent / "shared-cache-sentinel"
             sentinel.write_text("must survive", encoding="utf-8")
-            rebuilt = root / "isolated" / "release" / helper.name
-            rebuilt.parent.mkdir(parents=True)
-            rebuilt.write_bytes(helper.read_bytes())
+            rebuilt = root / "cache" / "builds" / source_key / "release" / helper.name
+
+            def compile_fixture(_root, _crate, _target):
+                rebuilt.parent.mkdir(parents=True)
+                rebuilt.write_bytes(helper.read_bytes())
+                return rebuilt
+
             with mock.patch(
-                    "v11_test_support._compile_vault_helper", return_value=rebuilt):
+                    "v11_test_support._compile_vault_helper", side_effect=compile_fixture):
                 result = v11_test_support._clean_rebuild_vault_helper(ROOT, helper)
             self.assertEqual(result, helper.resolve())
             self.assertEqual(helper.read_bytes(), b"deterministic-helper")

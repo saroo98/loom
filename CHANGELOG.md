@@ -15,6 +15,10 @@
   cache, and cover POSIX and Windows capability branches across the matrix.
 - Canonicalize disposable test-home containment across operating-system path aliases and preserve
   the primary CI diagnostic when later evidence artifacts are legitimately absent after a failure.
+- Rebuild native helper reproducibility probes at one source-keyed private target so build paths
+  stay deterministic while the immutable shared helper artifact is never deleted or overwritten.
+- Give the pinned Rust release compiler a deterministic 64 MiB worker stack so LTO-heavy
+  dependency analysis cannot inherit an undersized host setting and panic during proof rebuilds.
 
 ## 1.7.0
 

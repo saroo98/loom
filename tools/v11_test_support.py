@@ -14,6 +14,8 @@ import loom_reliability
 
 
 MAX_CARGO_DIAGNOSTIC_CHARS = 4000
+SOURCE_KEY_HEX_LENGTH = 64
+RUST_COMPILER_STACK_BYTES = 64 * 1024 * 1024
 
 
 def _cache_entry_valid(binary, receipt, source_key):
@@ -34,7 +36,7 @@ def _compile_vault_helper(root, crate, target):
     target = Path(target).resolve()
     target.mkdir(parents=True, exist_ok=True)
     environment = {**os.environ, "CARGO_TARGET_DIR": str(target)}
-    environment.setdefault("RUST_MIN_STACK", str(16 * 1024 * 1024))
+    environment["RUST_MIN_STACK"] = str(RUST_COMPILER_STACK_BYTES)
     if os.name == "nt":
         environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
                                      + " -C link-arg=/Brepro").strip()
@@ -60,21 +62,33 @@ def _compile_vault_helper(root, crate, target):
 
 
 def _publish_cached_helper(binary, receipt, source_key, built):
-    """Publish one complete helper generation without exposing a partial write."""
-    target = binary.parent.parent
-    lock = target.parent / "locks" / f"{source_key}.lock"
-    with loom_reliability.exclusive_file_lock(lock, timeout=60):
-        if _cache_entry_valid(binary, receipt, source_key):
-            return binary
-        binary.parent.mkdir(parents=True, exist_ok=True)
-        staged = binary.with_name(f".{binary.name}.{os.getpid()}.staged")
-        shutil.copy2(built, staged)
-        os.replace(staged, binary)
-        loom_reliability.atomic_write_json(receipt, {
-            "source_key": source_key,
-            "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
-        })
+    """Publish one complete helper generation while the source lock is held."""
+    binary.parent.mkdir(parents=True, exist_ok=True)
+    staged = binary.with_name(f".{binary.name}.{os.getpid()}.staged")
+    shutil.copy2(built, staged)
+    os.replace(staged, binary)
+    loom_reliability.atomic_write_json(receipt, {
+        "source_key": source_key,
+        "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+    })
     return binary
+
+
+def _reset_private_build_target(cache_root, target, source_key):
+    """Delete only Loom's source-keyed transient build directory."""
+    cache_root = Path(cache_root).resolve()
+    lexical_builds = cache_root / "builds"
+    lexical_target = Path(os.path.abspath(os.fspath(target)))
+    if lexical_builds.is_symlink() or lexical_target.is_symlink():
+        raise RuntimeError("vault-helper private build target is redirected")
+    builds = lexical_builds.resolve()
+    target = lexical_target.resolve()
+    if len(source_key) != SOURCE_KEY_HEX_LENGTH \
+            or any(character not in "0123456789abcdef" for character in source_key) \
+            or target != builds / source_key:
+        raise RuntimeError("vault-helper private build target is unsafe")
+    if target.exists():
+        shutil.rmtree(target)
 
 
 def build_vault_helper(root):
@@ -87,7 +101,8 @@ def build_vault_helper(root):
     rustc = subprocess.run(
         ["rustc", "--version", "--verbose"], capture_output=True, text=True,
         timeout=15, check=True).stdout.encode("utf-8")
-    build_policy = b"release-v2-windows-brepro" if os.name == "nt" else b"release-v2"
+    build_policy = (b"release-v4-stack64-windows-brepro"
+                    if os.name == "nt" else b"release-v4-stack64")
     digest = hashlib.sha256(rustc + b"\x00" + build_policy)
     for path in source_files:
         relative = path.relative_to(crate).as_posix().encode("utf-8")
@@ -96,30 +111,35 @@ def build_vault_helper(root):
         digest.update(len(raw).to_bytes(8, "big") + raw)
     source_key = digest.hexdigest()
     cache_root = Path(tempfile.gettempdir()) / "loom-cargo-test-cache"
-    target = cache_root / source_key
-    binary = target / "release" / ("loom-vault.exe" if os.name == "nt" else "loom-vault")
-    receipt = target / "loom-test-helper-receipt.json"
+    artifact = cache_root / "artifacts" / source_key
+    binary = artifact / "release" / ("loom-vault.exe" if os.name == "nt" else "loom-vault")
+    receipt = artifact / "loom-test-helper-receipt.json"
     if not _cache_entry_valid(binary, receipt, source_key):
-        builds = cache_root / "builds"
-        builds.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(
-                prefix=f"{source_key[:12]}-", dir=builds) as temporary:
-            built = _compile_vault_helper(root, crate, temporary)
-            _publish_cached_helper(binary, receipt, source_key, built)
+        lock = cache_root / "locks" / f"{source_key}.lock"
+        with loom_reliability.exclusive_file_lock(lock, timeout=60):
+            if not _cache_entry_valid(binary, receipt, source_key):
+                target = cache_root / "builds" / source_key
+                _reset_private_build_target(cache_root, target, source_key)
+                built = _compile_vault_helper(root, crate, target)
+                _publish_cached_helper(binary, receipt, source_key, built)
     return binary
 
 
 def _clean_rebuild_vault_helper(root, helper):
-    """Rebuild in isolation without deleting the shared cache generation."""
+    """Rebuild at the same private path without deleting the shared artifact."""
     helper = Path(helper).resolve()
     expected = hashlib.sha256(helper.read_bytes()).hexdigest()
     root = Path(root).resolve()
     crate = root / "vault-helper"
-    cache_root = helper.parent.parent.parent
-    builds = cache_root / "builds"
-    builds.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="rebuild-", dir=builds) as temporary:
-        rebuilt = _compile_vault_helper(root, crate, temporary)
+    source_key = helper.parent.parent.name
+    cache_root = helper.parent.parent.parent.parent
+    if helper.parent.parent.parent.name != "artifacts":
+        raise RuntimeError("vault-helper cache layout is invalid")
+    target = cache_root / "builds" / source_key
+    lock = cache_root / "locks" / f"{source_key}.lock"
+    with loom_reliability.exclusive_file_lock(lock, timeout=60):
+        _reset_private_build_target(cache_root, target, source_key)
+        rebuilt = _compile_vault_helper(root, crate, target)
         observed = hashlib.sha256(rebuilt.read_bytes()).hexdigest()
     if observed != expected:
         raise RuntimeError("clean vault-helper release rebuild is not reproducible")
