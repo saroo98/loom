@@ -52,16 +52,18 @@ jobs:
       - name: Generate both SBOM formats from final bytes
         env:
           LOOM_PLATFORM: ${{ inputs.platform }}
+          LOOM_SOURCE_SHA: ${{ github.sha }}
         shell: bash
         run: |
+          NAMESPACE_SEED="$(printf '%s' "$LOOM_SOURCE_SHA" | sha256sum | cut -d' ' -f1)"
           cp "$RUNNER_TEMP/loom-build-a/release/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
              "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}"
           python -B tools/loom_sbom.py . "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
             "native-evidence/loom-vault.spdx.json" --platform "$LOOM_PLATFORM" \
-            --namespace-seed "${{ github.sha }}"
+            --namespace-seed "$NAMESPACE_SEED"
           python -B tools/loom_cyclonedx.py . "native-evidence/loom-vault${{ runner.os == 'Windows' && '.exe' || '' }}" \
             "native-evidence/loom-vault.cdx.json" --platform "$LOOM_PLATFORM" \
-            --namespace-seed "${{ github.sha }}"
+            --namespace-seed "$NAMESPACE_SEED"
       - name: Record exact binary and source evidence
         env:
           LOOM_PLATFORM: ${{ inputs.platform }}

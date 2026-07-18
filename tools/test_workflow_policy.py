@@ -69,6 +69,10 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertEqual([], findings)
         release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         self.assertIn('[[ "$RELEASE_TAG" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]', release)
+        helper = (WORKFLOWS / "build-helper.yml").read_text(encoding="utf-8")
+        self.assertIn("LOOM_SOURCE_SHA: ${{ github.sha }}", helper)
+        self.assertIn("printf '%s' \"$LOOM_SOURCE_SHA\" | sha256sum", helper)
+        self.assertNotIn('--namespace-seed "${{ github.sha }}"', helper)
 
     def test_compatibility_matrix_builds_before_it_verifies_the_exact_cut(self):
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
