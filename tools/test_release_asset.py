@@ -85,6 +85,14 @@ class CanonicalReleaseAssetTests(unittest.TestCase):
                 with self.assertRaisesRegex(loom_release_verify.VerifyError, "redirected"):
                     loom_release_verify.verify(archive)
 
+    def test_only_exact_macos_root_aliases_are_trusted(self):
+        with mock.patch.object(loom_release_verify.sys, "platform", "darwin"):
+            with mock.patch.object(Path, "resolve", return_value=Path("/private/var")):
+                self.assertTrue(loom_release_verify._trusted_os_alias(Path("/var")))
+            with mock.patch.object(Path, "resolve", return_value=Path("/other/var")):
+                self.assertFalse(loom_release_verify._trusted_os_alias(Path("/var")))
+            self.assertFalse(loom_release_verify._trusted_os_alias(Path("/users")))
+
 
 if __name__ == "__main__":
     unittest.main()

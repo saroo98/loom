@@ -7,6 +7,7 @@ import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import unicodedata
 import zipfile
@@ -43,13 +44,29 @@ def _redirect(path):
         raise VerifyError(f"cannot inspect canonical plugin path: {path}: {exc}") from exc
 
 
+def _trusted_os_alias(path):
+    """Accept only macOS root aliases whose resolved targets are exact."""
+    if sys.platform != "darwin":
+        return False
+    expected = {
+        Path("/var"): Path("/private/var"),
+        Path("/tmp"): Path("/private/tmp"),
+    }.get(Path(path))
+    if expected is None:
+        return False
+    try:
+        return Path(path).resolve(strict=False) == expected
+    except OSError as exc:
+        raise VerifyError(f"cannot resolve operating-system alias: {path}: {exc}") from exc
+
+
 def _safe_archive(path):
     try:
         path = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
     except (TypeError, ValueError, OSError) as exc:
         raise VerifyError(f"canonical plugin ZIP path is invalid: {exc}") from exc
     for component in [*reversed(path.parents), path]:
-        if _redirect(component):
+        if _redirect(component) and not _trusted_os_alias(component):
             raise VerifyError("canonical plugin ZIP is missing or redirected")
     if not path.is_file():
         raise VerifyError("canonical plugin ZIP is missing or redirected")
