@@ -5,7 +5,9 @@ import argparse
 import hashlib
 import json
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+
+import loom_reliability
 
 
 STATUSES = {"supported", "experimental", "stale-proof", "unsupported", "unverified"}
@@ -27,8 +29,12 @@ def _strict_object(pairs):
 
 
 def _read(path):
-    path = Path(path).resolve()
-    if not path.is_file() or path.is_symlink() or path.stat().st_size > MAX_BYTES:
+    try:
+        path = loom_reliability._absolute(
+            path, "capability registry input", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise CapabilityRegistryError(str(exc)) from exc
+    if not path.is_file() or path.stat().st_size > MAX_BYTES:
         raise CapabilityRegistryError("registry input is missing, redirected, or oversized")
     try:
         return json.loads(path.read_text(encoding="utf-8"),
@@ -84,21 +90,38 @@ def _graph(value):
 def generate(declarations, graph=None, *, root=None):
     version, items = _declarations(declarations)
     graph = _graph(graph)
-    root = Path(root).resolve() if root is not None else None
+    if root is not None:
+        try:
+            root = loom_reliability._absolute(
+                root, "capability proof root", must_exist=True)
+        except loom_reliability.ReliabilityError as exc:
+            raise CapabilityRegistryError(str(exc)) from exc
     inactive_ids = {item.get("evidence_id") for item in graph["inactive"]} if graph else set()
     result = []
     for item in items:
         proof_files = []
         if root is not None:
-            missing = [relative for relative in item["enforcement"] + item["tests"]
-                       if not (root / relative).is_file()]
-            if missing:
-                raise CapabilityRegistryError(
-                    f"capability proof path is missing: {item['id']}: {missing[0]}")
             for role, paths in (("enforcement", item["enforcement"]),
                                 ("test", item["tests"])):
                 for relative in paths:
-                    raw = (root / relative).read_bytes()
+                    if "\\" in relative:
+                        raise CapabilityRegistryError(
+                            f"capability proof path is unsafe: {item['id']}: {relative}")
+                    path = PurePosixPath(relative)
+                    if path.is_absolute() or not path.parts \
+                            or any(part in {"", ".", ".."} for part in path.parts):
+                        raise CapabilityRegistryError(
+                            f"capability proof path is unsafe: {item['id']}: {relative}")
+                    try:
+                        target = loom_reliability._absolute(
+                            root.joinpath(*path.parts), "capability proof", must_exist=True)
+                    except loom_reliability.ReliabilityError as exc:
+                        raise CapabilityRegistryError(str(exc)) from exc
+                    if not target.is_file() or not target.is_relative_to(root):
+                        raise CapabilityRegistryError(
+                            f"capability proof path is missing or unsafe: "
+                            f"{item['id']}: {relative}")
+                    raw = target.read_bytes()
                     proof_files.append({"role": role, "path": relative,
                                         "bytes": len(raw),
                                         "sha256": hashlib.sha256(raw).hexdigest()})
@@ -156,8 +179,12 @@ def main(argv=None):
     except CapabilityRegistryError as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
-    output = Path(args.output).resolve()
-    output.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    try:
+        output = loom_reliability._absolute(args.output, "capability registry output")
+        loom_reliability.atomic_write_json(output, result)
+    except loom_reliability.ReliabilityError as exc:
+        print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
+        return 2
     print(json.dumps({"status": "generated", "output": str(output),
                       "capabilities": len(result["capabilities"])}, sort_keys=True))
     return 0

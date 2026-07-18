@@ -9,6 +9,8 @@ import re
 import tempfile
 from pathlib import Path
 
+import loom_reliability
+
 
 PUBLIC_SURFACE = ("README.md", "START-HERE.md", "skill/loom/SKILL.md", "docs/index.html")
 VERSION_SURFACE = PUBLIC_SURFACE + (
@@ -308,12 +310,13 @@ def main(argv=None):
         report = audit_docs(root)
     else:
         report = generate_evidence(root)
-        output = Path(args.output).resolve() if args.output else root / "docs/generated-evidence.json"
+        output = Path(args.output) if args.output else root / "docs/generated-evidence.json"
         try:
-            output.relative_to(root)
-        except ValueError as exc:
+            safe_output = loom_reliability._absolute(output, "documentation evidence output")
+            safe_output.relative_to(root)
+        except (ValueError, loom_reliability.ReliabilityError) as exc:
             raise SystemExit("output must stay inside the repository") from exc
-        _atomic_json(output, report)
+        loom_reliability.atomic_write_json(safe_output, report)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if args.command == "generate" or report["status"] == "passed" else 1
 

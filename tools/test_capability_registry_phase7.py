@@ -1,4 +1,5 @@
 import copy
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -59,6 +60,20 @@ class CapabilityRegistryPhase7Tests(unittest.TestCase):
         duplicated["capabilities"].append(copy.deepcopy(duplicated["capabilities"][0]))
         with self.assertRaises(loom_capability_registry.CapabilityRegistryError):
             loom_capability_registry.generate(duplicated)
+
+    def test_proof_binding_cannot_escape_the_declared_root(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            root = base / "root"
+            root.mkdir()
+            (base / "outside.py").write_text("private", encoding="utf-8")
+            declarations = self.declarations()
+            declarations["capabilities"][0]["enforcement"] = ["../outside.py"]
+            declarations["capabilities"][0]["tests"] = []
+            with self.assertRaisesRegex(
+                    loom_capability_registry.CapabilityRegistryError, "unsafe"):
+                loom_capability_registry.generate(
+                    declarations, self.graph(), root=root)
 
 
 if __name__ == "__main__":

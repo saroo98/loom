@@ -191,8 +191,11 @@ def main(argv=None):
     except CleanRoomError as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
-    Path(args.output).write_text(json.dumps(result, indent=2, sort_keys=True) + "\n",
-                                 encoding="utf-8")
+    try:
+        loom_reliability.atomic_write_json(Path(args.output), result)
+    except loom_reliability.ReliabilityError as exc:
+        print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
+        return 2
     print(json.dumps({"status": "verified", "receipt_sha256": result["receipt_sha256"]},
                      sort_keys=True))
     return 0
