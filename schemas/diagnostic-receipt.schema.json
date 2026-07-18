@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/diagnostic-receipt.schema.json",
+  "title": "Body-free private Loom diagnostic receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "runtime", "state", "adapters", "adapter_generation", "problems", "privacy"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["healthy", "blocked"]},
+    "runtime": {
+      "type": "object", "additionalProperties": false,
+      "required": ["version", "release_sequence", "previous_available", "pending_version", "update_state", "active_sessions"],
+      "properties": {
+        "version": {"type": ["string", "null"]},
+        "release_sequence": {"type": ["integer", "null"]},
+        "previous_available": {"type": "boolean"},
+        "pending_version": {"type": ["string", "null"]},
+        "update_state": {"type": ["string", "null"]},
+        "active_sessions": {"type": "integer", "minimum": 0}
+      }
+    },
+    "state": {
+      "type": "object", "additionalProperties": false,
+      "required": ["present", "integrity", "schema", "generation", "events", "quarantine"],
+      "properties": {
+        "present": {"type": "boolean"}, "integrity": {"type": "string"},
+        "schema": {"type": "integer", "minimum": 0},
+        "generation": {"type": "integer", "minimum": 0},
+        "events": {"type": "integer", "minimum": 0},
+        "quarantine": {"type": "integer", "minimum": 0}
+      }
+    },
+    "adapters": {
+      "type": "object", "additionalProperties": false,
+      "required": ["connected", "owned", "changed", "hosts"],
+      "properties": {
+        "connected": {"type": "integer", "minimum": 0},
+        "owned": {"type": "integer", "minimum": 0},
+        "changed": {"type": "integer", "minimum": 0},
+        "hosts": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      }
+    },
+    "adapter_generation": {"type": "integer", "minimum": 0},
+    "problems": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+    "privacy": {
+      "type": "object", "additionalProperties": false,
+      "required": ["memory_bodies", "prompts", "absolute_paths", "stable_owner_ids", "telemetry"],
+      "properties": {
+        "memory_bodies": {"const": false}, "prompts": {"const": false},
+        "absolute_paths": {"const": false}, "stable_owner_ids": {"const": false},
+        "telemetry": {"const": false}
+      }
+    }
+  }
+}

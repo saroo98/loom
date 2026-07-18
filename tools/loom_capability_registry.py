@@ -2,6 +2,7 @@
 """Generate capability status only from current evidence-graph predicates."""
 
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -44,10 +45,11 @@ def _declarations(value):
         raise CapabilityRegistryError("capability declarations are invalid")
     declarations, seen = [], set()
     for item in value["capabilities"]:
-        allowed = {"id", "kind", "enforcement", "tests"}
+        required = {"id", "kind", "enforcement", "tests"}
+        allowed = set(required)
         if value["schema_version"] == 2:
-            allowed |= {"status", "evidence_ids", "limitations"}
-        if not isinstance(item, dict) or set(item) != allowed \
+            allowed |= {"status", "evidence_ids", "limitations", "proof_binding"}
+        if not isinstance(item, dict) or not required <= set(item) or not set(item) <= allowed \
                 or not isinstance(item.get("id"), str) \
                 or not ID_RE.fullmatch(item["id"]) or item["id"] in seen \
                 or item.get("kind") not in {"mechanical", "advisory"} \
@@ -86,12 +88,20 @@ def generate(declarations, graph=None, *, root=None):
     inactive_ids = {item.get("evidence_id") for item in graph["inactive"]} if graph else set()
     result = []
     for item in items:
+        proof_files = []
         if root is not None:
             missing = [relative for relative in item["enforcement"] + item["tests"]
                        if not (root / relative).is_file()]
             if missing:
                 raise CapabilityRegistryError(
                     f"capability proof path is missing: {item['id']}: {missing[0]}")
+            for role, paths in (("enforcement", item["enforcement"]),
+                                ("test", item["tests"])):
+                for relative in paths:
+                    raw = (root / relative).read_bytes()
+                    proof_files.append({"role": role, "path": relative,
+                                        "bytes": len(raw),
+                                        "sha256": hashlib.sha256(raw).hexdigest()})
         predicate = f"capability:{item['id']}"
         active = sorted(graph["predicates"].get(predicate, [])) if graph else []
         stale = sorted(inactive_ids & set(
@@ -102,9 +112,13 @@ def generate(declarations, graph=None, *, root=None):
         if item["kind"] == "advisory":
             status = "unsupported"
             limitations = ["Human judgment is not machine-enforced."]
-        elif active:
+        elif active and root is not None:
             status = "supported"
             limitations = []
+        elif active:
+            status = "experimental"
+            limitations = [
+                "Evidence is current, but enforcement and test bytes were not bound during generation."]
         elif stale:
             status = "stale-proof"
             limitations = ["The last bound proof expired, was revoked, or lost a dependency."]
@@ -112,7 +126,12 @@ def generate(declarations, graph=None, *, root=None):
             status = "unverified"
             limitations = ["No current exact-subject evidence envelope is active."]
         result.append({**item, "status": status, "evidence_ids": active or stale,
-                       "limitations": limitations})
+                       "limitations": limitations,
+                       "proof_binding": {
+                           "subject_digest": graph["subject_digest"] if graph else None,
+                           "evidence_graph_sha256": graph["graph_sha256"] if graph else None,
+                           "files": proof_files,
+                       }})
     return {
         "schema_version": 2, "version": version,
         "generated_by": "tools/loom_capability_registry.py",

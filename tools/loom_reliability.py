@@ -9,6 +9,8 @@ import re
 import stat
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
 
 
@@ -20,6 +22,57 @@ MAX_MIGRATION_FILES = 256
 
 class ReliabilityError(RuntimeError):
     pass
+
+
+@contextmanager
+def exclusive_file_lock(path, *, timeout=10.0):
+    """Acquire one user-scoped interprocess lock or fail within a bounded timeout.
+
+    The operating system owns stale-lock recovery: process termination releases the
+    descriptor lock. The lock file itself is only a stable inode and carries no
+    authority or owner state.
+    """
+    if not isinstance(timeout, (int, float)) or not 0 < timeout <= 60:
+        raise ReliabilityError("lock timeout is invalid")
+    path = _absolute(path, "interprocess lock")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _absolute(path.parent, "interprocess lock parent", must_exist=True)
+    handle = open(path, "a+b")
+    if handle.seek(0, os.SEEK_END) == 0:
+        handle.write(b"\0")
+        handle.flush()
+        os.fsync(handle.fileno())
+    deadline = time.monotonic() + float(timeout)
+    acquired = False
+    try:
+        while not acquired:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+            except (BlockingIOError, OSError):
+                if time.monotonic() >= deadline:
+                    raise ReliabilityError("interprocess lock acquisition timed out")
+                time.sleep(0.05)
+        yield
+    finally:
+        if acquired:
+            try:
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+        handle.close()
 
 
 def _is_redirect(path):

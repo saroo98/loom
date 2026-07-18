@@ -39,6 +39,16 @@ class ReliabilityExcellenceTests(unittest.TestCase):
                 loom_reliability.atomic_write_bytes(target, b"new\n")
         self.assertEqual(target.read_text(encoding="utf-8"), "old\n")
 
+    def test_interprocess_lock_blocks_concurrent_writer_and_stale_descriptor_recovers(self):
+        lock = self.base / "locks" / "owner.lock"
+        with loom_reliability.exclusive_file_lock(lock, timeout=1):
+            with self.assertRaisesRegex(
+                    loom_reliability.ReliabilityError, "timed out"):
+                with loom_reliability.exclusive_file_lock(lock, timeout=0.1):
+                    self.fail("a concurrent writer acquired the same lock")
+        with loom_reliability.exclusive_file_lock(lock, timeout=1):
+            self.assertTrue(lock.is_file())
+
     def test_migration_is_dry_run_then_idempotent_and_rollback_restores(self):
         target = self.root / "config.json"
         target.write_text('{"version":1}\n', encoding="utf-8")

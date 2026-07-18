@@ -209,6 +209,20 @@ class DocumentationCoherenceTests(unittest.TestCase):
 
             self.assertEqual([], loom_docs.check_version_coherence(root, "1.6.0"))
 
+    def test_release_readiness_is_required_from_1_7(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for relative in loom_docs.VERSION_SURFACE:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("Loom 1.7.0\n", encoding="utf-8")
+
+            self.assertEqual(
+                [{"code": "VERSION_DRIFT", "path": "docs/release-readiness.json",
+                  "expected": "1.7.0"}],
+                loom_docs.check_version_coherence(root, "1.7.0"),
+            )
+
     def test_optional_visual_asset_is_checked_when_it_ships(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

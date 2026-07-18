@@ -1,4 +1,4 @@
-# Loom 1.6.0 advanced architecture
+# Loom 1.7.0 advanced architecture
 
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.
@@ -108,10 +108,13 @@ separate independently attested production-performance or production-memory-repl
 ## Runtime and owner vault
 
 The stable launcher under `~/.loom/bin` verifies one immutable runtime manifest and pins a session
-to that runtime generation. Marketplace payloads stage beside the active runtime; threshold-signed
+to both the runtime generation and the verified owner-vault schema/generation. Corrupt or unreadable
+vault state blocks session creation. Marketplace payloads stage beside the active runtime; signed
 metadata, exact hashes, semantic inventory comparison, and a disposable request must all pass
-before the pointer changes. A failed or repeatedly unhealthy runtime rolls back to the prior
-receipt-owned version.
+before the pointer changes. Update operations are serialized by an operating-system file lock and
+record a bounded state-machine history from download through verification, staging, activation,
+observation, commit, quarantine, or rollback. A failed or repeatedly unhealthy runtime rolls back
+to the prior receipt-owned version without changing a running session.
 
 Mutable owner intelligence lives in an encrypted SQLite vault outside the plugin cache. Owner,
 device, runtime, and project identities are separate. Memory bodies, preferences, outcomes,
@@ -125,15 +128,25 @@ the new generation.
 Pairing and recovery transfer encrypted checkpoints in bounded authenticated chunks. The recovery
 phrase only unlocks an external backup. Signed device deltas merge under entity-specific rules;
 forgetting dominates old copies, contradictory stated preferences quarantine, unknown schemas stay
-inactive, and materialized state remains bounded. Receipt-owned adapters for supported Agent Skills
-locations call the same stable launcher and roll back completely if any adapter write fails.
+inactive, and materialized state remains bounded. Receipt-owned adapters for eligible Agent Skills
+locations call the same stable launcher. Launcher installation, adapter connection, upgrade, and
+removal share one journaled transaction generation and roll back completely if any write fails.
 
 ## Truth surfaces
 
-`docs/capabilities.json` is the claim registry. A mechanical claim names implementation and tests;
-otherwise it is explicitly advisory. `tools/loom_docs.py` checks entry-point version agreement,
-links, command sprawl, legacy learning claims, and proof paths. `docs/generated-evidence.json` is
-regenerated from repository inventory so changing counts cannot leave hand-authored claims behind.
+`docs/capabilities.json` is the claim registry. A mechanical claim binds the exact implementation
+and test bytes and their digests; changing either downgrades the claim until the registry is
+regenerated and verified. `tools/loom_docs.py` checks entry-point version agreement, links, command
+sprawl, legacy learning claims, and proof paths. `docs/generated-evidence.json` is regenerated from
+repository inventory so changing counts cannot leave hand-authored claims behind.
+
+`RELEASE-SUBJECT.json` schema v2 binds the source tree, public cut, canonical plugin, helper
+artifacts, SBOMs, workflows, schemas, documentation, capability registry, provenance, and prior
+release subject. The verifier checks the internal subject digest, source commit/tag, and exact
+plugin bytes. `docs/release-readiness.json` and its Markdown projection are generated from the
+versioned host contract plus subject-bound evidence. Missing, stale, conflicting, or wrong-subject
+evidence cannot become a pass. Exact-cut CI always emits a bounded success or failure diagnostic,
+and successful timing receipts bind commit, public root, platform, architecture, and Python version.
 
 `tools/loom_adaptation_eval.py` runs disposable, deterministic longitudinal scenarios for domain
 switches, aging, project alternation, preference drift, scale bounds, interruption, concurrency,
@@ -179,12 +192,15 @@ and bounded by `schemas/adapter-message.schema.json` and `contracts/adapter-prot
 Initialization must negotiate protocol 2 before an invocation can reach the launcher. The bridge
 does not listen on a network socket and does not expose vault operations.
 
-Host discovery records the exact executable or configuration marker observed. Discovery is not a
-support claim. Codex, Claude Code, Gemini CLI, OpenCode, and Copilot currently have
-`simulated-conformant` adapter evidence from disposable profiles. Cursor and generic Agent Skills
-locations are experimental; Factory Droid is unsupported. None may be described as real-host
-verified until an exact host/version invocation produces the required evidence bundle. The complete
-status matrix and evidence boundary are in [Integration ecosystem](integration-ecosystem.md).
+`contracts/host-contracts-v2.json` is the bounded host authority for canonical and alternate global
+roots, project-local shadow routes, precedence, executable and headless probes, surfaces, proof TTL,
+and update/removal behavior. Discovery records the exact executable or configuration marker
+observed; it is not a support claim. Codex, Claude Code, OpenCode, and Copilot currently have
+`simulated-conformant` adapter evidence from disposable profiles. Cursor is experimental, Gemini's
+transition contract is stale, and Factory Droid plus generic Agent Skills are unsupported. None may
+be described as real-host verified until an exact host/version invocation produces a subject-bound
+evidence bundle. The complete status matrix and evidence boundary are in
+[Integration ecosystem](integration-ecosystem.md).
 
 ## Evidence-bound score plane
 

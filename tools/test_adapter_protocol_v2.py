@@ -88,6 +88,16 @@ class AdapterProtocolV2Tests(unittest.TestCase):
             if isinstance(definition, dict) and definition.get("type") == "object":
                 self.assertFalse(definition.get("additionalProperties", True))
 
+    def test_host_contract_is_versioned_and_all_routes_share_one_authority(self):
+        self.assertEqual("loom-host-contracts-v2", loom_host_registry.CONTRACT_ID)
+        self.assertIn(".agents/skills/loom/SKILL.md",
+                      loom_host_registry.HOSTS["codex"]["global_roots"])
+        self.assertIn(".codex/skills/loom/SKILL.md",
+                      loom_host_registry.project_skill_paths())
+        self.assertEqual("stale", loom_host_registry.HOSTS["gemini-cli"]["contract_status"])
+        self.assertFalse(loom_host_registry.detect(
+            Path("."), which=lambda _name: None))
+
     def test_bridge_requires_initialize_and_preserves_request_identity(self):
         session = {}
         status = {"schema_version": 2, "message_type": "status",

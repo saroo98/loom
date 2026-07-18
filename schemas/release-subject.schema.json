@@ -4,20 +4,28 @@
   "title": "Unified exact Loom release subject",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "repository", "commit", "tag", "release_sequence", "source_tree", "public_cut", "canonical_plugin", "helpers", "sboms", "workflows", "subject_sha256"],
+  "required": ["schema_version", "repository", "commit", "tag", "release_sequence", "previous_subject_sha256", "source_tree", "public_cut", "canonical_plugin", "helpers", "sboms", "workflows", "schemas", "documentation", "capability_registry", "provenance", "subject_sha256"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "repository": {"const": "https://github.com/saroo98/loom"},
     "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "release_sequence": {"type": "integer", "minimum": 1},
+    "previous_subject_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
     "source_tree": {"$ref": "#/$defs/artifact"},
     "public_cut": {"$ref": "#/$defs/artifact"},
     "canonical_plugin": {"$ref": "#/$defs/artifact"},
-    "helpers": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/artifact"}},
-    "sboms": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/artifact"}},
-    "workflows": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/artifact"}},
+    "helpers": {"$ref": "#/$defs/artifactMap"},
+    "sboms": {"$ref": "#/$defs/artifactMap"},
+    "workflows": {"$ref": "#/$defs/artifactMap"},
+    "schemas": {"$ref": "#/$defs/artifact"},
+    "documentation": {"$ref": "#/$defs/artifact"},
+    "capability_registry": {"$ref": "#/$defs/artifact"},
+    "provenance": {"$ref": "#/$defs/artifactMap"},
     "subject_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   },
-  "$defs": {"artifact": {"type": "object", "additionalProperties": false, "required": ["sha256", "bytes"], "properties": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "bytes": {"type": "integer", "minimum": 1}}}}
+  "$defs": {
+    "artifactMap": {"type": "object", "minProperties": 1, "maxProperties": 32, "additionalProperties": {"$ref": "#/$defs/artifact"}},
+    "artifact": {"type": "object", "additionalProperties": false, "required": ["sha256", "bytes"], "properties": {"sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}, "bytes": {"type": "integer", "minimum": 1}}}
+  }
 }

@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import os
+import sqlite3
 import tempfile
 import unittest
 import zipfile
@@ -104,6 +105,8 @@ class UpdateTests(unittest.TestCase):
 
     def test_update_waits_for_active_session_then_switches_atomically(self):
         session = self.runtime.begin_session()
+        self.assertEqual(0, session["state_generation"])
+        self.assertEqual(0, session["state_schema"])
         staged = self.stage()
         self.assertEqual("staged-active-session", staged["status"])
         self.assertEqual("1.0.0", self.runtime.current()["version"])
@@ -111,9 +114,37 @@ class UpdateTests(unittest.TestCase):
         activated = self.runtime.activate_pending()
         self.assertEqual("activated", activated["status"])
         self.assertEqual("1.1.0", self.runtime.current()["version"])
+        state = json.loads(self.runtime.update_state_path.read_text(encoding="utf-8"))
+        self.assertEqual("observing", state["state"])
+        self.assertEqual(
+            ["downloaded", "verified", "staged", "pending", "activated", "observing"],
+            [item["state"] for item in state["history"][-6:]])
         pinned = self.runtime.begin_session()
         self.assertEqual("1.1.0", pinned["version"])
         self.runtime.end_session(pinned["session_id"])
+
+    def test_session_pins_verified_owner_vault_generation(self):
+        database = self.runtime.home / "vault" / "owner.sqlite3"
+        database.parent.mkdir(parents=True)
+        connection = sqlite3.connect(database)
+        try:
+            connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+            connection.executemany("INSERT INTO metadata(key,value) VALUES(?,?)", [
+                ("generation", "7"), ("schema_version", "2")])
+            connection.commit()
+        finally:
+            connection.close()
+        lease = self.runtime.begin_session()
+        self.assertEqual(7, lease["state_generation"])
+        self.assertEqual(2, lease["state_schema"])
+        self.runtime.end_session(lease["session_id"])
+
+    def test_corrupt_owner_vault_blocks_session_start(self):
+        database = self.runtime.home / "vault" / "owner.sqlite3"
+        database.parent.mkdir(parents=True)
+        database.write_bytes(b"not sqlite")
+        with self.assertRaisesRegex(loom_update.UpdateError, "unverifiable|integrity"):
+            self.runtime.begin_session()
 
     def test_hash_downgrade_and_health_failures_leave_working_runtime_active(self):
         bad_bundle, _ = self.fixture.bundle(self.plugin, bad_hash=True)
@@ -147,6 +178,9 @@ class UpdateTests(unittest.TestCase):
                     "after_inventory_sha256": "b" * 64},
                 now="2026-07-15T12:00:00Z")
         self.assertEqual("1.0.0", self.runtime.current()["version"])
+        state = json.loads(self.runtime.update_state_path.read_text(encoding="utf-8"))
+        self.assertEqual("quarantined", state["state"])
+        self.assertRegex(state["reason_sha256"], r"^[0-9a-f]{64}$")
 
     def test_semantic_inventory_mismatch_blocks_activation(self):
         with self.assertRaisesRegex(loom_update.UpdateError, "health"):

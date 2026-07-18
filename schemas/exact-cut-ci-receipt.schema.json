@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/exact-cut-ci-receipt.schema.json",
+  "title": "Exact-cut CI result including bounded failure diagnostics",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "platform", "architecture", "python", "source_commit", "build_root_sha256", "verified_root_sha256", "suite", "error_type", "error_sha256", "traceback_tail"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["verified", "failed"]},
+    "platform": {"type": "string", "minLength": 1},
+    "architecture": {"type": "string", "minLength": 1},
+    "python": {"type": "string", "minLength": 1},
+    "source_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "build_root_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "verified_root_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "suite": {"type": ["object", "null"]},
+    "error_type": {"type": ["string", "null"], "maxLength": 128},
+    "error_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "traceback_tail": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 4096}}
+  }
+}

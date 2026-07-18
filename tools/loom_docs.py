@@ -14,6 +14,7 @@ PUBLIC_SURFACE = ("README.md", "START-HERE.md", "skill/loom/SKILL.md", "docs/ind
 VERSION_SURFACE = PUBLIC_SURFACE + (
     "docs/architecture.md", "docs/capabilities.json",
 )
+READINESS_VERSION_SURFACE = "docs/release-readiness.json"
 OPTIONAL_VERSION_SURFACE = ("docs/readme-hero.svg", "docs/social-card.svg")
 VERSION_BADGE_SURFACE = ("docs/index.html",)
 FORBIDDEN_PUBLIC_COMMANDS = (
@@ -97,7 +98,7 @@ def load_capabilities(root):
     for item in value["capabilities"]:
         fields = {"id", "kind", "enforcement", "tests"}
         if value["schema_version"] == 2:
-            fields |= {"status", "evidence_ids", "limitations"}
+            fields |= {"status", "evidence_ids", "limitations", "proof_binding"}
         if not isinstance(item, dict) or set(item) != fields \
                 or item["kind"] not in {"mechanical", "advisory"} \
                 or not isinstance(item["id"], str) or not item["id"] or item["id"] in seen \
@@ -107,7 +108,11 @@ def load_capabilities(root):
                     item["status"] not in {"supported", "experimental", "stale-proof",
                                            "unsupported", "unverified"}
                     or not isinstance(item["evidence_ids"], list)
-                    or not isinstance(item["limitations"], list)):
+                    or not isinstance(item["limitations"], list)
+                    or not isinstance(item["proof_binding"], dict)
+                    or set(item["proof_binding"]) != {
+                        "subject_digest", "evidence_graph_sha256", "files"}
+                    or not isinstance(item["proof_binding"]["files"], list)):
             raise DocsError("capability registry entry is invalid")
         seen.add(item["id"])
     return value
@@ -116,7 +121,13 @@ def load_capabilities(root):
 def check_version_coherence(root, version):
     findings = []
     marker = re.compile(rf"(?<![0-9.]){re.escape(version)}(?![0-9.])")
-    for relative in VERSION_SURFACE:
+    try:
+        require_readiness = tuple(int(item) for item in version.split(".")) >= (1, 7, 0)
+    except (TypeError, ValueError):
+        require_readiness = True
+    surfaces = VERSION_SURFACE + ((READINESS_VERSION_SURFACE,)
+                                  if require_readiness else ())
+    for relative in surfaces:
         path = _safe_relative(root, relative)
         if not path.is_file() or not marker.search(path.read_text(encoding="utf-8")):
             findings.append({"code": "VERSION_DRIFT", "path": relative, "expected": version})

@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/update-state.schema.json",
+  "title": "Bounded Loom update state receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "transaction_id", "state", "version", "release_sequence", "reason_sha256", "history"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "transaction_id": {"type": "string", "format": "uuid"},
+    "state": {"$ref": "#/$defs/state"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "release_sequence": {"type": "integer", "minimum": 1},
+    "reason_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "history": {"type": "array", "maxItems": 32, "items": {"$ref": "#/$defs/history"}}
+  },
+  "$defs": {
+    "state": {"enum": ["downloaded", "verified", "staged", "pending", "activated", "observing", "committed", "rolled-back", "quarantined"]},
+    "history": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "version", "release_sequence", "reason_sha256"],
+      "properties": {
+        "state": {"$ref": "#/$defs/state"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "release_sequence": {"type": "integer", "minimum": 1},
+        "reason_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

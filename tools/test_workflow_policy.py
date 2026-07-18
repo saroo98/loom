@@ -53,6 +53,14 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertLess(compatibility.index(build), compatibility.index(verify))
         self.assertNotIn("loom_release.py verify-cut ..", compatibility)
 
+    def test_exact_cut_forbidden_token_cannot_match_shipped_workflow_bytes(self):
+        quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
+        self.assertNotIn("__ci_public_scan_sentinel_9f4c2d__", quality)
+        self.assertIn(
+            'loom-ci-${{ github.run_id }}-${{ matrix.os }}-py${{ matrix.python }}',
+            quality,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

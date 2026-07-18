@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/runtime-session-lease.schema.json",
+  "title": "Loom runtime and owner-state session lease",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["session_id", "version", "release_sequence", "state_generation", "state_schema", "pid", "started_at"],
+  "properties": {
+    "session_id": {"type": "string", "format": "uuid"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "release_sequence": {"type": "integer", "minimum": 1},
+    "state_generation": {"type": "integer", "minimum": 0},
+    "state_schema": {"type": "integer", "minimum": 0},
+    "pid": {"type": "integer", "minimum": 1},
+    "started_at": {"type": "string", "format": "date-time"}
+  }
+}

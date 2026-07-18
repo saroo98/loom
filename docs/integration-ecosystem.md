@@ -10,12 +10,13 @@ read its vault, select memory, migrate state, or keep host-specific policy.
   16-level nesting limit, explicit protocol negotiation, bounded errors, and canonical hashing.
 - Connected adapters and capability receipts are bound to exact bytes. Changed or unowned files
   block update and uninstall.
-- Installation and upgrade are transactional across all detected eligible hosts. A failed write
-  restores prior adapter and receipt bytes.
+- Launcher installation, adapter connection, upgrade, and removal share an OS-locked transaction
+  generation. A failed or interrupted write restores prior launcher, adapter, capability, and
+  receipt bytes before the next writer proceeds.
 - An unowned host-local Loom adapter blocks connection because host precedence could otherwise
   route requests around the shared runtime.
 - The bridge is a local JSON-over-stdio process. It creates no network listener.
-- Disposable simulated profiles prove that all five current adapter templates select one runtime
+- Disposable simulated profiles prove that all four current eligible adapter templates select one runtime
   and protocol, produce ownership receipts, and leave the project directory unchanged.
 
 These proofs do not show that a real third-party host parsed or invoked the adapter. The conformance
@@ -28,16 +29,18 @@ result as real-host verification.
 | --- | --- | --- | --- |
 | Codex | `~/.codex/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
 | Claude Code | `~/.claude/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
-| Gemini CLI | `~/.gemini/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
+| Gemini CLI | `~/.gemini/skills/loom/SKILL.md` | stale | detected, not connected during host transition |
 | OpenCode | `~/.config/opencode/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
 | GitHub Copilot | `~/.copilot/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
 | Cursor | `~/.cursor/skills/loom/SKILL.md` | experimental | detected, not connected |
-| Generic Agent Skills host | `~/.agents/skills/loom/SKILL.md` | experimental | detected, not connected |
+| Generic Agent Skills host | `~/.agents/skills/loom/SKILL.md` | unsupported format-only contract | detected, not connected |
 | Factory Droid | `~/.factory/skills/loom/SKILL.md` | unsupported | detected, not connected |
 
 Detection records the observed configuration marker and executable separately. A directory name,
 installed executable, or generated adapter is never presented as evidence that the host actually
-used Loom.
+used Loom. Canonical roots, alternate roots, project shadows, precedence, version/headless probes,
+proof TTLs, and update/removal behavior come from `contracts/host-contracts-v2.json`; stale or
+unsupported contracts cannot become connectable through detection alone.
 
 ## Capability receipt
 

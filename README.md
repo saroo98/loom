@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>Loom 1.6.0 · Planning intelligence for AI coding agents.</strong><br>
+  <strong>Loom 1.7.0 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
@@ -180,6 +180,10 @@ for another.
 Current records:
 
 - [Capability registry](./docs/capabilities.json): each mechanical claim names enforcement code and tests.
+- [Start with Loom](./docs/start.md): the shortest path from installation to one safe request.
+- [Operational lifecycle](./docs/operations.md): update, rollback, uninstall, and conflict behavior.
+- [Release readiness](./docs/release-readiness.md): generated statuses with missing proof left visible.
+- [Private diagnostics](./docs/support-bundles.md): body-free health and encrypted local support export.
 - [Generated repository inventory](./docs/generated-evidence.json): live counts, explicitly not a test-pass claim.
 - [Competitive evidence snapshot](./benchmarks/competitive/2026-07-17/README.md): one rubric, exact peer revisions, N/A normalization, and visible **[UNVERIFIED]** cells.
 - [Current limitations](./docs/limitations.md): proof Loom does not yet have.

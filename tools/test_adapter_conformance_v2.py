@@ -19,7 +19,7 @@ class AdapterConformanceV2Tests(unittest.TestCase):
         self.assertTrue(result["project_untouched"])
         self.assertFalse(result["network_listener"])
         self.assertEqual(
-            ["claude-code", "codex", "copilot", "gemini-cli", "opencode"],
+            ["claude-code", "codex", "copilot", "opencode"],
             [item["id"] for item in result["hosts"]])
         self.assertTrue(all(item["same_runtime"] and item["same_protocol"]
                             and item["adapter_receipt"] for item in result["hosts"]))

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-readiness.schema.json",
+  "title": "Evidence-generated Loom release readiness",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "version", "release_subject", "generated_at", "registry_sha256", "overall", "claims", "counts", "promotion_blockers"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "release_subject": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "generated_at": {"type": "string", "format": "date-time"},
+    "registry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "overall": {"enum": ["ready", "not-ready"]},
+    "claims": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
+    "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+    "promotion_blockers": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+  },
+  "$defs": {
+    "claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "status", "required", "reason_codes", "receipt_ids", "release_subject", "valid_until", "public_summary"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "status": {"enum": ["supported", "experimental", "failed", "skipped", "expired", "stale", "unverified", "unsupported", "not_applicable", "revoked"]},
+        "required": {"type": "boolean"},
+        "reason_codes": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "receipt_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "release_subject": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "valid_until": {"type": ["string", "null"], "format": "date-time"},
+        "public_summary": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}
