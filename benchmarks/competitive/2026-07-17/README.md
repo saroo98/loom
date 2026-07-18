@@ -8,8 +8,8 @@ passed Loom's suite, privacy firewall, publication audit, and explicit private-t
 There is **no defensible absolute winner** in this snapshot. GSD Core is the strongest current peer
 on inspected source, with a known-evidence score of **66.67** and a possible range of **54.00–73.00**
 because its tool correctness, runtime speed, and hostile robustness were not rerun here. Loom's
-71.60 therefore leads the evidence actually reproduced in this audit, but it does not prove that
-Loom is better than a fully reproduced GSD Core release.
+71.60 therefore leads the evidence actually reproduced in this audit, but incomplete peer execution
+coverage means this snapshot does not establish absolute leadership.
 
 This is the useful conclusion: Loom is strongest in scoped owner learning, memory isolation,
 privacy, unknown-domain refusal, and evidence-bound claims. GSD Core is stronger in ecosystem
@@ -147,15 +147,19 @@ extensions/presets, multi-OS CI, pinned workflow actions, and excellent public d
 surface, and a documented force-upgrade path that can overwrite customized files. Runtime-heavy
 categories remain **[UNVERIFIED]**.
 
-## What Loom should copy, and what it should not
+## Loom-owned improvement priorities
 
-| Peer | Copy | Do not copy |
-|---|---|---|
-| GSD Core | Generated capability registries, broad adapter documentation, CI/release depth, explicit quick path | Command sprawl, heuristic context claims presented without full provider receipts, explicit-only learning |
-| Superpowers | Automatic discovery and near-zero command burden | Method-only enforcement and optional remote behavior without Loom's firewall guarantees |
-| BMAD | Domain-role depth, retrospective quality, scale-aware planning breadth | Large visible workflow surface and unbounded append-only memory |
-| OpenSpec | Practical status/validate UX, change archive clarity, mature npm release operations | Default telemetry and flexible lifecycle where high-risk work needs hard gates |
-| Spec Kit | Extension/preset packaging, coherent onboarding, pinned CI actions | Destructive force-upgrade semantics and manual memory preservation |
+The benchmark identifies capability gaps. Loom should close them through its own architecture and
+product principles:
+
+1. Generate a signed capability registry from executable conformance evidence.
+2. Expand adapter documentation and disposable real-host verification while retaining one command.
+3. Deepen cross-platform CI, immutable release provenance, rollback proof, and exact-cut testing.
+4. Make the Tier-S path measurably faster without weakening causal planning or verification.
+5. Broaden domain invariant discovery and retrospective evidence without adding visible workflow
+   complexity or unbounded memory.
+6. Provide concise status and validation receipts through `/loom`, with no telemetry and no
+   destructive upgrade behavior.
 
 ## Exact next score work
 
@@ -166,5 +170,4 @@ categories remain **[UNVERIFIED]**.
 5. Publish immutable signed releases from the default branch and track real adoption separately
    from engineering quality.
 
-Those steps can raise Loom's score. Rewriting marketing copy cannot.
-
+Those steps can raise Loom's score. Changing promotional language cannot.
