@@ -92,6 +92,23 @@ class UpdateTests(unittest.TestCase):
                 mock.patch.object(loom_update.platform, "machine", return_value="arm64"):
             self.assertEqual("macos-arm64", loom_update.platform_id())
 
+    def test_plugin_payload_accepts_only_a_verified_operating_system_alias(self):
+        alias = self.root.parents[-1]
+        with mock.patch.object(
+                loom_update, "_redirect", side_effect=lambda path: path == alias), \
+                mock.patch.object(
+                    loom_update.loom_reliability, "_is_trusted_os_alias",
+                    side_effect=lambda path: path == alias):
+            self.assertEqual(self.plugin, self.runtime._plugin_payload(self.plugin))
+
+        with mock.patch.object(
+                loom_update, "_redirect", side_effect=lambda path: path == alias), \
+                mock.patch.object(
+                    loom_update.loom_reliability, "_is_trusted_os_alias",
+                    return_value=False):
+            with self.assertRaisesRegex(loom_update.UpdateError, "symlink|junction"):
+                self.runtime._plugin_payload(self.plugin)
+
     def stage(self, **kwargs):
         health = {"healthy": True, "migration_complete": True,
                   "disposable_request_passed": True,

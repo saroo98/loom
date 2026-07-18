@@ -400,7 +400,8 @@ class SharedRuntime:
         if not value.is_dir() or not any(value.is_relative_to(root) for root in self.plugin_roots):
             raise UpdateError("runtime payload is outside allowlisted plugin caches")
         for component in [*reversed(value.parents), value]:
-            if _redirect(component):
+            if _redirect(component) \
+                    and not loom_reliability._is_trusted_os_alias(component):
                 raise UpdateError("runtime payload traverses a symlink or junction")
         return value
 
