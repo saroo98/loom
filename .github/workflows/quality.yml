@@ -107,7 +107,7 @@ jobs:
         working-directory: tools
         run: >-
           python -B loom_exact_cut_ci.py .. "${{ runner.temp }}/loom-public-cut"
-          --forbidden-token "__ci_public_scan_sentinel_9f4c2d__"
+          --forbidden-token "loom-ci-${{ github.run_id }}-${{ matrix.os }}-py${{ matrix.python }}"
           --output exact-cut-ci.json --suite-output full-test-timings.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()

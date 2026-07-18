@@ -2927,10 +2927,10 @@
             "sha256": "ddad7e3939dfa73ea1c0de5fef621e01bc15d31d044e7e88b5f94123bf12710f"
           },
           {
-            "bytes": 7064,
+            "bytes": 7098,
             "path": ".github/workflows/quality.yml",
             "role": "enforcement",
-            "sha256": "87a543470e881e5d270b45173a45bc4c0e7b3c3e9c3caf99d95a1c60d7c9bc23"
+            "sha256": "95555de2b23c223188c9bebfcc0eba495a1b4436a52aaf06615b482a3292a859"
           },
           {
             "bytes": 2286,
@@ -2939,10 +2939,10 @@
             "sha256": "d8cc6bb4ff2dfc77c41297a3a52f6f7b1e2e5ef458d49827cee598834b480b0b"
           },
           {
-            "bytes": 2808,
+            "bytes": 3175,
             "path": "tools/test_workflow_policy.py",
             "role": "test",
-            "sha256": "de5508b466a89696b936083144df0d514d73d15dbc90599f3a472126ece1734f"
+            "sha256": "335183af44d917beae61faa5af50da67d7eec62d3a655334ad8e966a75de2530"
           }
         ],
         "subject_digest": null
