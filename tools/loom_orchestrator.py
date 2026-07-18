@@ -1656,7 +1656,12 @@ def _disposable_test_legacy_backend_allowed(home):
         return False
     try:
         temporary = Path(tempfile.gettempdir()).resolve(strict=True)
-        candidate = Path(os.path.abspath(os.fspath(home)))
+        # Canonicalize both sides before containment. Hosted runners may expose the
+        # same temporary directory through an OS alias (for example macOS /var and
+        # /private/var) or a Windows short/redirected path. Comparing one canonical
+        # path with one lexical path incorrectly disabled the explicitly marked
+        # disposable test backend on those hosts.
+        candidate = Path(os.path.abspath(os.fspath(home))).resolve(strict=True)
         candidate.relative_to(temporary)
         marker = candidate / TEST_LEGACY_BACKEND_MARKER
         return marker.is_file() and not marker.is_symlink() \

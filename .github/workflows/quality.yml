@@ -55,6 +55,11 @@ jobs:
       - name: Run simulated adapter protocol conformance
         working-directory: tools
         run: python -B loom_adapter_conformance.py --root .. --output adapter-conformance.json
+      - name: Verify successful fast-gate artifacts
+        if: success()
+        working-directory: tools
+        shell: bash
+        run: test -f fast-test-timings.json -a -f adapter-conformance.json -a -f performance-micro.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -68,14 +73,14 @@ jobs:
           name: adapter-conformance-${{ matrix.os }}-py${{ matrix.python }}
           path: tools/adapter-conformance.json
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
           name: performance-micro-${{ matrix.os }}-py${{ matrix.python }}
           path: tools/performance-micro.json
           retention-days: 7
-          if-no-files-found: error
+          if-no-files-found: ignore
 
   full-release-suite:
     if: github.event_name == 'push'

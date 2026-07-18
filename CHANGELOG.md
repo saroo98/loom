@@ -13,6 +13,8 @@
 - Supervise Linux Python 3.14 privacy scanning fail-closed, preserve release-mode Rust hardening
   with a bounded compiler stack, isolate destructive reproducibility builds from the shared helper
   cache, and cover POSIX and Windows capability branches across the matrix.
+- Canonicalize disposable test-home containment across operating-system path aliases and preserve
+  the primary CI diagnostic when later evidence artifacts are legitimately absent after a failure.
 
 ## 1.7.0
 

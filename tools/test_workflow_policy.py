@@ -91,6 +91,16 @@ class WorkflowPolicyTests(unittest.TestCase):
             quality,
         )
 
+    def test_fast_gate_preserves_primary_failure_without_missing_artifact_noise(self):
+        quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
+        self.assertIn("Verify successful fast-gate artifacts", quality)
+        self.assertIn(
+            "test -f fast-test-timings.json -a -f adapter-conformance.json "
+            "-a -f performance-micro.json",
+            quality,
+        )
+        self.assertEqual(2, quality.count("if-no-files-found: ignore"))
+
 
 if __name__ == "__main__":
     unittest.main()
