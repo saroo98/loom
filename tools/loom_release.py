@@ -43,7 +43,11 @@ EXTERNAL_CHECKS = (
     "cross-platform-ci", "unfamiliar-user-usability", "independent-hostile-review",
     "production-performance", "production-memory-replay",
 )
-FULL_SUITE_MAX_SECONDS = 900
+# This is an exhaustion ceiling, not a product-performance target.  The
+# dedicated fast gate owns the 30-second regression budget.  Supported
+# Windows/Python combinations have measured complete, passing exact-cut runs
+# above 900 seconds, so the exhaustive verifier retains bounded headroom.
+FULL_SUITE_MAX_SECONDS = 1200
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",

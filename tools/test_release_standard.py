@@ -44,6 +44,9 @@ class ReleaseStandardTests(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def test_exhaustive_suite_ceiling_has_supported_runner_headroom(self):
+        self.assertEqual(1200, loom_release.FULL_SUITE_MAX_SECONDS)
+
     def test_suite_separates_correctness_from_cross_platform_capability_skips(self):
         tools = self.root / "tools"
         tools.mkdir()

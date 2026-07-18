@@ -84,7 +84,7 @@ jobs:
 
   full-release-suite:
     if: github.event_name == 'push'
-    timeout-minutes: 25
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

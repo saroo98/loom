@@ -23,7 +23,7 @@ jobs:
   release:
     if: inputs.confirm_draft_only == 'DRAFT-ONLY'
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 50
     environment: loom-release
     permissions:
       contents: write
