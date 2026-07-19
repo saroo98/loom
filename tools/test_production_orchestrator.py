@@ -938,6 +938,8 @@ planning_obligations: [{obligations}]
         path = Path(opened["action_path"])
         action = json.loads(path.read_text(encoding="utf-8"))
         action["schema_version"] = loom_orchestrator.LEGACY_ACTION_SCHEMA_VERSION
+        action.pop("pack_seed")
+        action.pop("recovery_receipt")
         action["action_hash"] = loom_orchestrator._action_hash(action)
         path.write_text(json.dumps(action), encoding="utf-8")
 

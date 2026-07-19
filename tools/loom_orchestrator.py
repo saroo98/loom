@@ -41,6 +41,7 @@ TEST_LEGACY_BACKEND_MARKER = ".loom-test-legacy-backend-v1"
 TEST_LEGACY_BACKEND_MARKER_BYTES = b"loom-disposable-test-backend-v1\n"
 import loom_performance
 import loom_project_inspection
+import loom_reliability
 import loom_runtime
 import loom_session
 import loom_survey
@@ -48,9 +49,10 @@ import loom_vault_adapter
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 7
+ACTION_SCHEMA_VERSION = 8
 LEGACY_ACTION_SCHEMA_VERSION = 6
-ACTION_FIELDS = {
+PRIOR_ACTION_SCHEMA_VERSION = 7
+ACTION_FIELDS_V7 = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
     "explicit_target", "intent", "tier", "domains", "survey_hash",
@@ -60,7 +62,16 @@ ACTION_FIELDS = {
     "repair_plan", "host_result", "plan_contract", "domain_contract", "context_manifest",
     "continuation_authority", "owner_message", "action_hash",
 }
-ACTION_STATUSES = {"pending", "completed", "cancelled", "expired", "failed"}
+ACTION_FIELDS = ACTION_FIELDS_V7 | {"pack_seed", "recovery_receipt"}
+ACTION_STATUSES = {
+    "initializing", "pending", "completed", "cancelled", "expired", "failed",
+    "abandoned", "superseded",
+}
+TERMINAL_ACTION_STATUSES = ACTION_STATUSES - {"initializing", "pending"}
+PACK_SEED_STATES = {"not-applicable", "recorded", "prepared", "installed", "recovered"}
+MAX_ORCHESTRATION_ACTIONS = 256
+ACTIVE_POINTER_FILE = "active-action.json"
+RECOVERY_DIRECTORY = "planning-recovery"
 MAX_ACTION_BYTES = 256 * 1024
 MAX_ENCRYPTED_ACTION_BYTES = 384 * 1024
 PLAN_CONTRACT_SCHEMA_VERSION = 4
@@ -116,12 +127,127 @@ def _action_path(owner_home, instance_id, project_id, action_id):
             "projects" / project_id / "orchestrations" / f"{action_id}.json")
 
 
+def _validate_seed_manifest(value):
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {
+            "schema_version", "files", "root_sha256"} \
+            or value.get("schema_version") != 1 \
+            or not isinstance(value.get("files"), list) \
+            or not 1 <= len(value["files"]) <= 8 \
+            or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("root_sha256", ""))):
+        raise OrchestratorError("ACTION_CORRUPT", "pack seed manifest is invalid")
+    seen = set()
+    for item in value["files"]:
+        if not isinstance(item, dict) or set(item) != {"path", "bytes", "sha256"} \
+                or not isinstance(item["path"], str) \
+                or not re.fullmatch(r"[A-Za-z0-9._/-]{1,128}", item["path"]) \
+                or item["path"].startswith(("/", "../")) \
+                or "/../" in item["path"] \
+                or item["path"] in seen \
+                or type(item["bytes"]) is not int \
+                or not 0 <= item["bytes"] <= 256 * 1024 \
+                or not re.fullmatch(r"[0-9a-f]{64}", str(item["sha256"])):
+            raise OrchestratorError("ACTION_CORRUPT", "pack seed file manifest is invalid")
+        seen.add(item["path"])
+    body = {"schema_version": 1, "files": value["files"]}
+    if value["root_sha256"] != _hash(body):
+        raise OrchestratorError("ACTION_CORRUPT", "pack seed manifest digest is invalid")
+    return value
+
+
+def _validate_pack_seed(value, *, intent, status, initial_pack_hash):
+    if not isinstance(value, dict) or set(value) != {
+            "state", "created_pack", "kind", "manifest"} \
+            or value.get("state") not in PACK_SEED_STATES \
+            or type(value.get("created_pack")) is not bool \
+            or value.get("kind") not in {None, "small", "planned"}:
+        raise OrchestratorError("ACTION_CORRUPT", "pack seed contract is invalid")
+    manifest = _validate_seed_manifest(value.get("manifest"))
+    if intent != "plan":
+        if value != {"state": "not-applicable", "created_pack": False,
+                     "kind": None, "manifest": None}:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "non-planning action carries a pack seed")
+        return value
+    if value["kind"] not in {"small", "planned"} \
+            or (value["state"] == "prepared" and manifest is None) \
+            or (value["state"] in {"installed", "recovered"}
+                and manifest is None and initial_pack_hash is None) \
+            or (value["state"] in {"recorded"} and manifest is not None) \
+            or (status == "initializing" and value["state"] not in {
+                "recorded", "prepared"}) \
+            or (status == "pending" and value["state"] != "installed") \
+            or (status in {"abandoned", "superseded"}
+                and value["state"] != "recovered"):
+        raise OrchestratorError("ACTION_CORRUPT", "planning pack seed state is invalid")
+    return value
+
+
+def _validate_recovery_receipt(value, *, action):
+    if value is None:
+        if action["status"] in {"abandoned", "superseded"}:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "recovered action has no recovery receipt")
+        return None
+    fields = {
+        "schema_version", "recovery_id", "action_id", "project_id", "reason",
+        "source_path", "quarantine_relative", "seed_manifest_sha256",
+        "quarantined_manifest_sha256", "complete_seed", "changes_made",
+        "reversible", "recovered_at", "receipt_hash",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("action_id") != action["action_id"] \
+            or value.get("project_id") != action["project_id"] \
+            or value.get("source_path") != "plans" \
+            or value.get("reason") not in {
+                "interrupted-initialization", "expired", "superseded"} \
+            or not re.fullmatch(r"recovery-[0-9a-f]{24}", str(value.get("recovery_id"))) \
+            or (value.get("quarantine_relative") is not None and not re.fullmatch(
+                r"instances/[0-9a-f-]{36}/runtime/projects/p-[0-9a-f]{32}/"
+                r"planning-recovery/[0-9a-f-]{36}/plans",
+                str(value["quarantine_relative"]))) \
+            or (value.get("seed_manifest_sha256") is not None and not re.fullmatch(
+                r"[0-9a-f]{64}", str(value["seed_manifest_sha256"]))) \
+            or (value.get("quarantined_manifest_sha256") is not None and not re.fullmatch(
+                r"[0-9a-f]{64}", str(value["quarantined_manifest_sha256"]))) \
+            or type(value.get("complete_seed")) is not bool \
+            or type(value.get("changes_made")) is not bool \
+            or type(value.get("reversible")) is not bool:
+        raise OrchestratorError("ACTION_CORRUPT", "recovery receipt contract is invalid")
+    try:
+        loom_runtime._parse_time(value["recovered_at"])
+    except (TypeError, ValueError, loom_runtime.RuntimeError) as exc:
+        raise OrchestratorError("ACTION_CORRUPT", "recovery receipt time is invalid") from exc
+    body = dict(value); claimed = body.pop("receipt_hash")
+    if claimed != _hash(body) \
+            or value["changes_made"] != (value["quarantine_relative"] is not None) \
+            or value["reversible"] != value["changes_made"]:
+        raise OrchestratorError("ACTION_CORRUPT", "recovery receipt digest is invalid")
+    return value
+
+
+def _legacy_pack_seed(value):
+    if value.get("intent") != "plan":
+        return {"state": "not-applicable", "created_pack": False,
+                "kind": None, "manifest": None}
+    return {
+        "state": "installed" if value.get("initial_pack_hash") else "recorded",
+        "created_pack": bool(value.get("remove_pristine_pack")),
+        "kind": "small" if value.get("tier") == "S" else "planned",
+        "manifest": None,
+    }
+
+
 def _validate_action(value, path):
     if not isinstance(value, dict):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
     if value.get("schema_version") == LEGACY_ACTION_SCHEMA_VERSION:
-        if set(value) != ACTION_FIELDS or value.get("action_hash") != _action_hash(value) \
-                or value.get("status") not in ACTION_STATUSES:
+        if set(value) != ACTION_FIELDS_V7 \
+                or value.get("action_hash") != _action_hash(value) \
+                or value.get("status") not in {
+                    "pending", "completed", "cancelled", "expired", "failed"}:
             raise OrchestratorError("ACTION_CORRUPT", "legacy action fields or hash are invalid")
         if value["status"] != "completed":
             raise OrchestratorError(
@@ -143,6 +269,28 @@ def _validate_action(value, path):
         if Path(path) != expected:
             raise OrchestratorError("ACTION_PATH_MISMATCH", "legacy action path is not scoped")
         return value
+    if value.get("schema_version") == PRIOR_ACTION_SCHEMA_VERSION:
+        if set(value) != ACTION_FIELDS_V7 \
+                or value.get("action_hash") != _action_hash(value) \
+                or value.get("status") not in {
+                    "pending", "completed", "cancelled", "expired", "failed"}:
+            raise OrchestratorError("ACTION_CORRUPT", "prior action fields or hash are invalid")
+        value = {
+            **value,
+            "schema_version": ACTION_SCHEMA_VERSION,
+            "pack_seed": _legacy_pack_seed(value),
+            "recovery_receipt": None,
+        }
+        value["owner_message"] = loom_message.build(
+            state="progress",
+            consequence={"S": "ordinary", "M": "material", "L": "high",
+                         "XL": "critical"}[value["tier"]],
+            verification="pending", freshness="current",
+            changes_made=False, undo_status="not-needed",
+            summary="Loom prepared the next safe frontier.",
+            next_action="Complete and verify the sealed frontier.",
+            receipt_id="action-" + value["action_id"])
+        value["action_hash"] = _action_hash(value)
     if value.get("schema_version") != ACTION_SCHEMA_VERSION:
         raise OrchestratorError(
             "ACTION_VERSION_UNSUPPORTED", "action schema version is not supported")
@@ -215,7 +363,8 @@ def _validate_action(value, path):
         state="progress",
         consequence={"S": "ordinary", "M": "material", "L": "high",
                      "XL": "critical"}[value["tier"]],
-        verification="pending", freshness="current", reversible=True,
+        verification="pending", freshness="current",
+        changes_made=False, undo_status="not-needed",
         summary="Loom prepared the next safe frontier.",
         next_action="Complete and verify the sealed frontier.",
         receipt_id="action-" + value["action_id"])
@@ -247,6 +396,10 @@ def _validate_action(value, path):
             and not (value["domains"] == ["unclassified"]
                      and value["domain_contract"]["active_task_domains"] == ["unclassified"]):
         raise OrchestratorError("ACTION_CORRUPT", "sealed domain route differs from action")
+    _validate_pack_seed(
+        value["pack_seed"], intent=value["intent"], status=value["status"],
+        initial_pack_hash=value["initial_pack_hash"])
+    _validate_recovery_receipt(value["recovery_receipt"], action=value)
     contract_expected = value["intent"] == "plan" \
         and not prepared.route_contract["blocked"] \
         and value["initial_pack_hash"] is not None
@@ -299,7 +452,8 @@ def _validate_action(value, path):
             or (value["explicit_target"] is not None and (
                 not isinstance(value["explicit_target"], str)
                 or not Path(value["explicit_target"]).is_absolute())) \
-            or (value["status"] == "pending" and value["result"] is not None) \
+            or (value["status"] in {"initializing", "pending"}
+                and value["result"] is not None) \
             or (value["status"] == "completed" and not isinstance(value["result"], dict)):
         raise OrchestratorError("ACTION_CORRUPT", "action state is invalid")
     expected = _action_path(
@@ -377,6 +531,357 @@ def _write_action(path, value, security=None):
                     "ciphertext": crypto.seal(raw, aad).decode("ascii")}
         loom_session._atomic_json(path, envelope)
     return value
+
+
+def _orchestration_directory(owner_home, instance_id, project_id):
+    return _action_path(
+        owner_home, instance_id, project_id,
+        "00000000-0000-4000-8000-000000000000").parent
+
+
+def _orchestration_lock(directory):
+    return Path(directory) / ".orchestration.lock"
+
+
+def _active_pointer_path(directory):
+    return Path(directory) / ACTIVE_POINTER_FILE
+
+
+def _pointer_hash(value):
+    body = dict(value); body.pop("pointer_hash", None)
+    return _hash(body)
+
+
+def _write_active_pointer(directory, *, action_id, project_id):
+    value = {
+        "schema_version": 1, "action_id": action_id, "project_id": project_id,
+        "state": "active",
+    }
+    value["pointer_hash"] = _pointer_hash(value)
+    loom_session._atomic_json(_active_pointer_path(directory), value)
+    return value
+
+
+def _read_active_pointer(directory):
+    path = _active_pointer_path(directory)
+    if not path.exists():
+        return None
+    try:
+        loom_memory._reject_link_ancestors(path, "active action pointer")
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4 * 1024:
+            raise ValueError("pointer is not a bounded regular file")
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            loom_memory.MemoryError, ValueError) as exc:
+        raise OrchestratorError(
+            "ACTION_POINTER_CORRUPT", f"active action pointer is invalid: {exc}") from exc
+    if not isinstance(value, dict) or set(value) != {
+            "schema_version", "action_id", "project_id", "state", "pointer_hash"} \
+            or value.get("schema_version") != 1 \
+            or value.get("state") != "active" \
+            or not re.fullmatch(r"[0-9a-f-]{36}", str(value.get("action_id", ""))) \
+            or not re.fullmatch(r"p-[0-9a-f]{32}", str(value.get("project_id", ""))) \
+            or value.get("pointer_hash") != _pointer_hash(value):
+        raise OrchestratorError("ACTION_POINTER_CORRUPT", "active action pointer is invalid")
+    return value
+
+
+def _clear_active_pointer(directory, action_id):
+    path = _active_pointer_path(directory)
+    pointer = _read_active_pointer(directory)
+    if pointer is None:
+        return False
+    if pointer["action_id"] != action_id:
+        raise OrchestratorError(
+            "ACTION_POINTER_CONFLICT", "another action owns the active pointer")
+    path.unlink()
+    try:
+        loom_reliability._sync_parent(path)
+    except OSError as exc:
+        raise OrchestratorError(
+            "ACTION_POINTER_DURABILITY", "active action pointer removal was not durable") from exc
+    return True
+
+
+def _stage_path(action_path):
+    return Path(action_path).parent / ".staging" / Path(action_path).stem / "plans"
+
+
+def _manifest_for_tree(path):
+    try:
+        return loom_reliability.deterministic_manifest(path)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError("PACK_UNSAFE", f"planning tree is unsafe: {exc}") from exc
+
+
+def _seed_stage(action_path, action, prepared):
+    stage = _stage_path(action_path)
+    if stage.exists() or stage.is_symlink():
+        raise OrchestratorError(
+            "BASELINE_STAGING_CONFLICT", "planning seed staging path already exists")
+    target = Path(action["explicit_target"] or action["cwd"])
+    if action["tier"] == "S":
+        record = stage / ".loom-small-lifecycle.json"
+        work_order = stage / "WO-001.md"
+        code, output = _capture(
+            loom_gate.small_start, record, target, work_order,
+            list(prepared.domains), prepared.prepared_at)
+    else:
+        _seed_manifest(
+            stage, target, action["install_root"], prepared, action["request"])
+        code, output = _capture(loom_gate.start, stage, target, "planned")
+    if code:
+        raise OrchestratorError("BASELINE_FAILED", output)
+    manifest = _manifest_for_tree(stage)
+    _validate_seed_manifest(manifest)
+    return stage, manifest
+
+
+def _copy_seed_stage(stage, pack, expected):
+    pack = Path(pack)
+    if pack.exists() or pack.is_symlink():
+        raise OrchestratorError("BASELINE_CONFLICT", "planning pack appeared during staging")
+    pack.mkdir(parents=True)
+    try:
+        for item in expected["files"]:
+            source = stage.joinpath(*item["path"].split("/"))
+            raw = source.read_bytes()
+            if len(raw) != item["bytes"] \
+                    or hashlib.sha256(raw).hexdigest() != item["sha256"]:
+                raise OrchestratorError(
+                    "BASELINE_STAGING_CHANGED", "planning seed changed during installation")
+            destination = pack.joinpath(*item["path"].split("/"))
+            loom_reliability.atomic_write_bytes(destination, raw)
+    except BaseException:
+        # The partial tree is intentionally retained. The sealed seed manifest lets the next
+        # invocation distinguish exact Loom bytes from any unproven content.
+        raise
+    if _manifest_for_tree(pack) != expected:
+        raise OrchestratorError("BASELINE_STAGING_CHANGED", "installed planning seed differs")
+
+
+def _remove_exact_tree(path, manifest):
+    path = Path(path)
+    if _manifest_for_tree(path) != manifest:
+        raise OrchestratorError("RECOVERY_RACE", "recovery tree changed before removal")
+    entries = sorted(path.rglob("*"), key=lambda item: len(item.parts), reverse=True)
+    for item in entries:
+        if item.is_symlink() or (not item.is_file() and not item.is_dir()):
+            raise OrchestratorError("PACK_UNSAFE", "recovery tree contains an unsafe entry")
+    for item in entries:
+        if item.is_file():
+            item.unlink()
+        else:
+            item.rmdir()
+    path.rmdir()
+
+
+def _manifest_is_seed_subset(actual, expected):
+    expected_files = {item["path"]: item for item in expected["files"]}
+    return all(expected_files.get(item["path"]) == item for item in actual["files"])
+
+
+def _recovery_receipt(action, *, reason, quarantine_relative, seed_sha256,
+                      quarantined_sha256, complete_seed, recovered_at):
+    body = {
+        "schema_version": 1,
+        "recovery_id": "recovery-" + hashlib.sha256(
+            f"{action['action_id']}:{reason}".encode()).hexdigest()[:24],
+        "action_id": action["action_id"], "project_id": action["project_id"],
+        "reason": reason, "source_path": "plans",
+        "quarantine_relative": quarantine_relative,
+        "seed_manifest_sha256": seed_sha256,
+        "quarantined_manifest_sha256": quarantined_sha256,
+        "complete_seed": bool(complete_seed),
+        "changes_made": quarantine_relative is not None,
+        "reversible": quarantine_relative is not None,
+        "recovered_at": _stamp(recovered_at),
+    }
+    return {**body, "receipt_hash": _hash(body)}
+
+
+def _copy_recovery_tree(source, destination, manifest):
+    destination = Path(destination)
+    if destination.exists():
+        if not destination.is_dir() or destination.is_symlink():
+            raise OrchestratorError(
+                "RECOVERY_QUARANTINE_CONFLICT", "recovery quarantine already differs")
+        present = _manifest_for_tree(destination)
+        if not _manifest_is_seed_subset(present, manifest):
+            raise OrchestratorError(
+                "RECOVERY_QUARANTINE_CONFLICT", "recovery quarantine already differs")
+    else:
+        destination.mkdir(parents=True)
+    for item in manifest["files"]:
+        source_path = Path(source).joinpath(*item["path"].split("/"))
+        raw = source_path.read_bytes()
+        if len(raw) != item["bytes"] \
+                or hashlib.sha256(raw).hexdigest() != item["sha256"]:
+            raise OrchestratorError("RECOVERY_RACE", "planning pack changed during quarantine")
+        loom_reliability.atomic_write_bytes(
+            destination.joinpath(*item["path"].split("/")), raw)
+    if _manifest_for_tree(destination) != manifest:
+        raise OrchestratorError("RECOVERY_RACE", "quarantined planning pack differs")
+
+
+def _recover_plan_action(path, action, security, *, now):
+    target = Path(action["explicit_target"] or action["cwd"])
+    pack = target / "plans"
+    stage = _stage_path(path)
+    tombstone = target / f".loom-recovery-{action['action_id']}"
+    seed = action["pack_seed"]
+    expected = seed.get("manifest")
+    reason = ("interrupted-initialization" if action["status"] == "initializing"
+              else "expired" if loom_runtime._parse_time(now) > loom_runtime._parse_time(
+                  action["expires_at"])
+              else "superseded")
+
+    actual = None
+    source = None
+    if pack.exists() and tombstone.exists():
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "both plans/ and its recovery tombstone exist; preserve both and inspect them")
+    if pack.exists():
+        if not pack.is_dir() or pack.is_symlink():
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED", "plans/ is not a safe regular directory")
+        actual = _manifest_for_tree(pack)
+        if expected is not None:
+            if not _manifest_is_seed_subset(actual, expected):
+                raise OrchestratorError(
+                    "RECOVERY_DECISION_REQUIRED",
+                    "plans/ contains content that is not byte-identical to the Loom seed")
+        elif action.get("initial_pack_hash") is None \
+                or _pack_hash(pack) != action["initial_pack_hash"]:
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED",
+                "plans/ cannot be proven pristine from the prior action")
+        source = pack
+    elif tombstone.exists():
+        if not tombstone.is_dir() or tombstone.is_symlink():
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED", "recovery tombstone is unsafe")
+        actual = _manifest_for_tree(tombstone)
+        if expected is not None and not _manifest_is_seed_subset(actual, expected):
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED", "recovery tombstone differs from the seed")
+        source = tombstone
+
+    recovery_root = Path(path).parent.parent / RECOVERY_DIRECTORY / action["action_id"]
+    quarantine = recovery_root / "plans"
+    quarantine_relative = None
+    quarantined_sha = None
+    complete_seed = False
+    if source is not None:
+        _copy_recovery_tree(source, quarantine, actual)
+        quarantine_relative = quarantine.relative_to(Path(action["owner_home"])).as_posix()
+        quarantined_sha = actual["root_sha256"]
+        complete_seed = expected is not None and actual == expected
+        if source == pack:
+            if _manifest_for_tree(pack) != actual:
+                raise OrchestratorError("RECOVERY_RACE", "plans/ changed before detachment")
+            os.replace(pack, tombstone)
+            try:
+                loom_reliability._sync_parent(tombstone)
+            except OSError as exc:
+                raise OrchestratorError(
+                    "RECOVERY_DURABILITY", "planning pack detachment was not durable") from exc
+            source = tombstone
+        _remove_exact_tree(source, actual)
+    elif quarantine.exists():
+        if not quarantine.is_dir() or quarantine.is_symlink():
+            raise OrchestratorError(
+                "RECOVERY_QUARANTINE_CONFLICT", "recovery quarantine is unsafe")
+        actual = _manifest_for_tree(quarantine)
+        if expected is not None and not _manifest_is_seed_subset(actual, expected):
+            raise OrchestratorError(
+                "RECOVERY_QUARANTINE_CONFLICT", "recovery quarantine differs from the seed")
+        quarantine_relative = quarantine.relative_to(Path(action["owner_home"])).as_posix()
+        quarantined_sha = actual["root_sha256"]
+        complete_seed = expected is not None and actual == expected
+
+    if stage.exists():
+        stage_manifest = _manifest_for_tree(stage)
+        if expected is not None and stage_manifest != expected:
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED", "planning seed staging state is unproven")
+        _remove_exact_tree(stage, stage_manifest)
+
+    receipt = _recovery_receipt(
+        action, reason=reason, quarantine_relative=quarantine_relative,
+        seed_sha256=(expected or {}).get("root_sha256") or action.get("initial_pack_hash"),
+        quarantined_sha256=quarantined_sha, complete_seed=complete_seed,
+        recovered_at=now)
+    action["schema_version"] = ACTION_SCHEMA_VERSION
+    action["pack_seed"] = {
+        **seed, "state": "recovered",
+        "manifest": expected,
+    }
+    action["recovery_receipt"] = receipt
+    action["status"] = {
+        "interrupted-initialization": "abandoned",
+        "expired": "expired",
+        "superseded": "superseded",
+    }[reason]
+    _write_action(path, action, security)
+    _clear_active_pointer(Path(path).parent, action["action_id"])
+    return receipt
+
+
+def _legacy_active_actions(directory, *, owner_home, install_root):
+    candidates = []
+    entries = []
+    for entry in os.scandir(directory):
+        if entry.name == ACTIVE_POINTER_FILE or not entry.name.endswith(".json"):
+            continue
+        if not re.fullmatch(r"[0-9a-f-]{36}\.json", entry.name):
+            continue
+        entries.append(Path(entry.path))
+        if len(entries) > MAX_ORCHESTRATION_ACTIONS:
+            raise OrchestratorError(
+                "RECOVERY_CAPACITY", "legacy active-action scan exceeds its hard bound")
+    for path in sorted(entries, key=lambda item: item.name):
+        _path, action, security = _read_action(
+            path, owner_home=owner_home, install_root=install_root)
+        if action["status"] in {"initializing", "pending"}:
+            candidates.append((_path, action, security))
+    return candidates
+
+
+def _reconcile_active_action(*, owner_home, install_root, instance_id,
+                             project_id, now):
+    directory = _orchestration_directory(owner_home, instance_id, project_id)
+    directory.mkdir(parents=True, exist_ok=True)
+    pointer = _read_active_pointer(directory)
+    candidates = []
+    if pointer is not None:
+        if pointer["project_id"] != project_id:
+            raise OrchestratorError(
+                "ACTION_POINTER_CONFLICT", "active action pointer belongs to another project")
+        path = directory / f"{pointer['action_id']}.json"
+        if not path.exists():
+            _clear_active_pointer(directory, pointer["action_id"])
+            return None
+        _path, action, security = _read_action(
+            path, owner_home=owner_home, install_root=install_root)
+        if action["status"] in TERMINAL_ACTION_STATUSES:
+            _clear_active_pointer(directory, action["action_id"])
+            return None
+        candidates.append((_path, action, security))
+    else:
+        candidates = _legacy_active_actions(
+            directory, owner_home=owner_home, install_root=install_root)
+    if not candidates:
+        return None
+    if len(candidates) != 1:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
+    path, action, security = candidates[0]
+    if action["intent"] != "plan" or not action["pack_seed"]["created_pack"]:
+        raise OrchestratorError(
+            "ACTION_IN_PROGRESS", "a non-planning action remains active for this project")
+    return _recover_plan_action(path, action, security, now=now)
 
 
 def _capture(function, *args, **kwargs):
@@ -1720,6 +2225,32 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         raise OrchestratorError(
             "INSTALL_UNVERIFIED", f"installation receipt check failed: {exc}") from exc
     instance_id, memory = _memory_backend(home, install_root, target)
+    try:
+        project = loom_runtime.resolve_project(
+            instance_id, explicit_target=target, cwd=cwd)
+    except loom_runtime.RuntimeBlocked as exc:
+        raise OrchestratorError(exc.code, exc.message) from exc
+    directory = _orchestration_directory(home, instance_id, project.project_id)
+    instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
+    try:
+        with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
+            recovery = _reconcile_active_action(
+                owner_home=home, install_root=install_root, instance_id=instance_id,
+                project_id=project.project_id, now=instant)
+            result = _invoke_under_lock(
+                request=request, cwd=cwd, home=home, install_root=install_root,
+                target=target, timeout_seconds=timeout_seconds, now=instant,
+                instance_id=instance_id, memory=memory)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
+    if recovery is not None and isinstance(result, dict):
+        result = {**result, "prior_recovery": recovery}
+    return result
+
+
+def _invoke_under_lock(*, request, cwd, home, install_root, target,
+                       timeout_seconds, now, instance_id, memory):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = str(uuid.uuid4())
@@ -1756,7 +2287,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     path = _action_path(home, instance_id, prepared.project_id, action_id)
     action = {
         "schema_version": ACTION_SCHEMA_VERSION, "action_id": action_id,
-        "status": "pending", "instance_id": instance_id,
+        "status": "initializing" if prepared.intent == "plan" else "pending",
+        "instance_id": instance_id,
         "project_id": prepared.project_id, "request": request,
         "invocation_id": invocation_id, "owner_home": str(home),
         "install_root": str(install_root), "cwd": str(cwd),
@@ -1785,11 +2317,22 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             state="progress",
             consequence={"S": "ordinary", "M": "material", "L": "high",
                          "XL": "critical"}[prepared.route_contract["tier"]],
-            verification="pending", freshness="current", reversible=True,
+            verification="pending", freshness="current",
+            changes_made=False, undo_status="not-needed",
             summary="Loom prepared the next safe frontier.",
             next_action="Complete and verify the sealed frontier.",
             receipt_id="action-" + action_id),
         "result": None,
+        "pack_seed": ({
+            "state": "recorded",
+            "created_pack": not (target / "plans").exists(),
+            "kind": "small" if prepared.route_contract["tier"] == "S" else "planned",
+            "manifest": None,
+        } if prepared.intent == "plan" else {
+            "state": "not-applicable", "created_pack": False,
+            "kind": None, "manifest": None,
+        }),
+        "recovery_receipt": None,
     }
     if prepared.route_contract["blocked"]:
         receipt = controller.run(
@@ -1809,28 +2352,46 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         return immediate.to_dict()
     if prepared.intent == "plan":
         pack = target / "plans"
-        pack_was_absent = not pack.exists()
-        if action["tier"] == "S":
-            record, work_order = pack / ".loom-small-lifecycle.json", pack / "WO-001.md"
-            if not record.exists() and not work_order.exists():
-                code, output = _capture(
-                    loom_gate.small_start, record, target, work_order,
-                    list(prepared.domains), prepared.prepared_at)
-                if code:
-                    raise OrchestratorError("BASELINE_FAILED", output)
+        directory = path.parent
+        _write_active_pointer(
+            directory, action_id=action_id, project_id=prepared.project_id)
+        action = _write_action(path, action, action_security)
+        if action["pack_seed"]["created_pack"]:
+            stage, manifest = _seed_stage(path, action, prepared)
+            action["pack_seed"] = {**action["pack_seed"], "state": "prepared",
+                                   "manifest": manifest}
+            action = _write_action(path, action, action_security)
+            _copy_seed_stage(stage, pack, manifest)
+            action["initial_pack_hash"] = _pack_hash(pack)
+            action["remove_pristine_pack"] = True
+            action["pack_seed"] = {**action["pack_seed"], "state": "installed"}
+            action["plan_contract"] = _make_plan_contract(action, prepared)
+            action["status"] = "pending"
+            action = _write_action(path, action, action_security)
+            _remove_exact_tree(stage, manifest)
         else:
-            lifecycle = pack / loom_gate.LIFECYCLE_FILE
-            if not lifecycle.exists():
-                manifest = pack / "MANIFEST.md"
-                if not manifest.exists():
-                    _seed_manifest(
-                        pack, target, install_root, prepared, request)
-                code, output = _capture(loom_gate.start, pack, target, "planned")
-                if code:
-                    raise OrchestratorError("BASELINE_FAILED", output)
-        action["initial_pack_hash"] = _pack_hash(pack)
-        action["remove_pristine_pack"] = pack_was_absent
-        action["plan_contract"] = _make_plan_contract(action, prepared)
+            if action["tier"] == "S":
+                record, work_order = pack / ".loom-small-lifecycle.json", pack / "WO-001.md"
+                if not record.exists() and not work_order.exists():
+                    code, output = _capture(
+                        loom_gate.small_start, record, target, work_order,
+                        list(prepared.domains), prepared.prepared_at)
+                    if code:
+                        raise OrchestratorError("BASELINE_FAILED", output)
+            else:
+                lifecycle = pack / loom_gate.LIFECYCLE_FILE
+                if not lifecycle.exists():
+                    manifest_path = pack / "MANIFEST.md"
+                    if not manifest_path.exists():
+                        _seed_manifest(
+                            pack, target, install_root, prepared, request)
+                    code, output = _capture(loom_gate.start, pack, target, "planned")
+                    if code:
+                        raise OrchestratorError("BASELINE_FAILED", output)
+            action["initial_pack_hash"] = _pack_hash(pack)
+            action["pack_seed"] = {**action["pack_seed"], "state": "installed"}
+            action["plan_contract"] = _make_plan_contract(action, prepared)
+            action["status"] = "pending"
     elif prepared.intent == "execute":
         work_order_id, work_order_path = _active_work_order(
             target / "plans", action["tier"])
@@ -1884,6 +2445,9 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             action["repair_plan"] = {
                 **preview, "force_full": force_full, "program_impact": program_impact}
     action = _write_action(path, action, action_security)
+    if prepared.intent != "plan":
+        _write_active_pointer(
+            path.parent, action_id=action_id, project_id=prepared.project_id)
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
         "action_id": action_id, "action_path": str(path),
@@ -1925,6 +2489,20 @@ def _reopen(action):
 
 def complete(action_path, usage_path=None, *, result_path=None, now=None,
              owner_home=None, install_root=None):
+    action_path = _absolute(action_path, "action")
+    try:
+        with loom_reliability.exclusive_file_lock(
+                _orchestration_lock(action_path.parent)):
+            return _complete_under_lock(
+                action_path, usage_path, result_path=result_path, now=now,
+                owner_home=owner_home, install_root=install_root)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
+
+
+def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=None,
+                         owner_home=None, install_root=None):
     path, action, action_security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
     try:
@@ -1951,6 +2529,7 @@ def complete(action_path, usage_path=None, *, result_path=None, now=None,
         _remove_pristine_pack(action)
         action["status"] = "expired"
         _write_action(path, action, action_security)
+        _clear_active_pointer(path.parent, action["action_id"])
         raise OrchestratorError("ACTION_TIMEOUT", "action deadline expired", status="expired")
     if usage_path is None:
         usage = None
@@ -2038,6 +2617,8 @@ def complete(action_path, usage_path=None, *, result_path=None, now=None,
         if action["attempts"] >= action["max_attempts"]:
             action["status"] = "failed"
         _write_action(path, action, action_security)
+        if action["status"] == "failed":
+            _clear_active_pointer(path.parent, action["action_id"])
         raise OrchestratorError(
             "HANDLER_INTERRUPTED", str(exc), status=action["status"]) from exc
     result = receipt.to_dict()
@@ -2054,10 +2635,24 @@ def complete(action_path, usage_path=None, *, result_path=None, now=None,
         result["production_replay"] = production_replay
     action["status"], action["result"] = "completed", result
     _write_action(path, action, action_security)
+    _clear_active_pointer(path.parent, action["action_id"])
     return result
 
 
 def cancel(action_path, *, now=None, owner_home=None, install_root=None):
+    action_path = _absolute(action_path, "action")
+    try:
+        with loom_reliability.exclusive_file_lock(
+                _orchestration_lock(action_path.parent)):
+            return _cancel_under_lock(
+                action_path, now=now, owner_home=owner_home,
+                install_root=install_root)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
+
+
+def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=None):
     path, action, action_security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
     try:
@@ -2073,6 +2668,7 @@ def cancel(action_path, *, now=None, owner_home=None, install_root=None):
     _remove_pristine_pack(action)
     action["status"] = "cancelled"
     _write_action(path, action, action_security)
+    _clear_active_pointer(path.parent, action["action_id"])
     return {"status": "cancelled", "action_id": action["action_id"],
             "session_id": action["session_id"]}
 
