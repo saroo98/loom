@@ -2,12 +2,14 @@
   "schema_version": 1,
   "protocol_version": 2,
   "compatible_protocols": {"minimum": 2, "maximum": 2},
-  "adapter_version": "2.0.0",
+  "adapter_version": "2.1.0",
   "maximum_message_bytes": 65536,
   "maximum_nesting_depth": 16,
   "transport": "local-json-stdio",
   "network_listener": false,
-  "runtime_authority": "~/.loom/bin/loom",
+  "runtime_authority": "~/.loom/bin/loom.py",
+  "request_transport": "bounded-utf8-json-stdio-end-to-end",
+  "request_identity": "sha256-exact-decoded-utf8-bytes",
   "adapter_forbidden_responsibilities": ["planning", "memory-selection", "vault-access", "privacy-policy", "migration", "verification-policy", "runtime-update"],
   "evidence_states": ["contract-only", "simulated-conformant", "real-host-verified", "experimental", "unsupported"]
 }

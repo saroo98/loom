@@ -3,10 +3,8 @@
 
 import argparse
 import json
-import os
 import subprocess
 import sys
-import re
 import hashlib
 from pathlib import Path
 
@@ -121,11 +119,7 @@ def main(argv=None):
     probe.add_argument("--protocol-min", type=int, default=2)
     probe.add_argument("--protocol-max", type=int, default=2)
     sub.add_parser("bridge")
-    invoke = sub.add_parser("invoke")
-    invoke.add_argument("--request", required=True)
-    invoke.add_argument("--cwd", required=True)
-    invoke.add_argument("--agent", required=True)
-    invoke.add_argument("--agent-version", default="unknown")
+    sub.add_parser("invoke-stdio")
     complete = sub.add_parser("complete")
     complete.add_argument("--action", required=True)
     complete.add_argument("--usage")
@@ -135,15 +129,19 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "bridge":
         return loom_adapter_bridge.serve(args.home, Path(__file__).resolve())
+    envelope = None
     manager = None
     lease_data = None
     runtime_healthy = False
     trust_failure = None
     try:
+        if args.command == "invoke-stdio":
+            envelope = loom_adapter_protocol.read_single_frame(
+                sys.stdin.buffer, message_type="request-envelope")
         manager = loom_update.SharedRuntime(args.home)
-        if args.command in {"invoke", "complete", "cancel"}:
-            if args.command == "invoke":
-                _reject_local_shadow(args.cwd)
+        if args.command in {"invoke-stdio", "complete", "cancel"}:
+            if args.command == "invoke-stdio":
+                _reject_local_shadow(envelope["cwd"])
             lease_data = manager.begin_session()
             current, runtime = _current(args.home)
             if current["version"] != lease_data["version"]:
@@ -161,16 +159,9 @@ def main(argv=None):
         orchestrator = runtime / "tools" / "loom_orchestrator.py"
         if not orchestrator.is_file():
             raise RuntimeError("active Loom runtime has no orchestrator")
-        environment = os.environ.copy()
-        if args.command == "invoke":
-            if not re.fullmatch(r"[a-z0-9][a-z0-9.-]{0,63}", args.agent) \
-                    or not 1 <= len(args.agent_version) <= 128:
-                raise RuntimeError("agent provenance is invalid")
-            environment["LOOM_AGENT_HOST"] = args.agent
-            environment["LOOM_AGENT_VERSION"] = args.agent_version
+        if args.command == "invoke-stdio":
             command = [
-                sys.executable, "-B", str(orchestrator), "invoke",
-                "--request", args.request, "--cwd", str(Path(args.cwd).resolve()),
+                sys.executable, "-B", str(orchestrator), "invoke-stdio",
                 "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
         elif args.command == "complete":
             command = [sys.executable, "-B", str(orchestrator), "complete",
@@ -185,7 +176,10 @@ def main(argv=None):
             command = [sys.executable, "-B", str(orchestrator), "cancel",
                        "--action", args.action, "--home", str(Path(args.home).resolve()),
                        "--install-root", str(runtime)]
-        result = subprocess.run(command, check=False, env=environment)
+        run_options = {"check": False}
+        if envelope is not None:
+            run_options["input"] = loom_adapter_protocol.canonical_bytes(envelope) + b"\n"
+        result = subprocess.run(command, **run_options)
         runtime_healthy = result.returncode in {0, 2}
         if not runtime_healthy:
             trust_failure = f"runtime-exit-{result.returncode}"

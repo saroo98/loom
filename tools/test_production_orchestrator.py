@@ -17,6 +17,7 @@ import loom_install  # noqa: E402
 import loom_improvement  # noqa: E402
 import loom_lifecycle  # noqa: E402
 import loom_lint  # noqa: E402
+import loom_adapter_protocol  # noqa: E402
 import loom_memory  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_performance  # noqa: E402
@@ -374,10 +375,32 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.temp.cleanup()
 
     def cli(self, *args):
+        values = list(map(str, args))
+        stdin = None
+        if values and values[0] == "invoke":
+            if len(values[1:]) % 2:
+                raise AssertionError("invoke test arguments must be flag/value pairs")
+            options = dict(zip(values[1::2], values[2::2]))
+            message = {
+                "schema_version": 2, "message_type": "invoke",
+                "request_id": "req-production-test", "request": options["--request"],
+                "cwd": options["--cwd"],
+            }
+            envelope = loom_adapter_protocol.request_envelope(
+                message, {"id": "codex", "version": "test"})
+            stdin = (loom_adapter_protocol.canonical_bytes(envelope) + b"\n").decode(
+                "utf-8")
+            values = [
+                "invoke-stdio", "--home", options["--home"],
+                "--install-root", options["--install-root"],
+            ]
+            for flag in ("--target", "--timeout-seconds"):
+                if flag in options:
+                    values.extend([flag, options[flag]])
         return subprocess.run(
             [sys.executable, "-B",
              str(self.installed / "tools" / "loom_orchestrator.py"),
-             *map(str, args)], capture_output=True, text=True, encoding="utf-8",
+             *values], input=stdin, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=60)
 
     def test_legacy_test_backend_requires_exact_disposable_marker(self):

@@ -14,6 +14,11 @@ class BridgeError(RuntimeError):
 
 
 def _payload(stdout):
+    if isinstance(stdout, bytes):
+        try:
+            stdout = stdout.decode("utf-8")
+        except UnicodeError as exc:
+            raise BridgeError("launcher returned non-UTF-8 output") from exc
     text = stdout.strip()
     if not text:
         return {}
@@ -34,6 +39,20 @@ def _run(launcher, arguments, *, timeout=120):
     except subprocess.TimeoutExpired as exc:
         raise loom_adapter_protocol.ProtocolError(
             "TIMEOUT", "stable launcher operation exceeded its timeout") from exc
+    return result.returncode, _payload(result.stdout)
+
+
+def _run_request(launcher, home, envelope, *, timeout=120):
+    """Forward owner text only as one bounded protocol-v2 stdin frame."""
+    frame = loom_adapter_protocol.canonical_bytes(envelope) + b"\n"
+    try:
+        result = subprocess.run(
+            [sys.executable, "-B", str(launcher), "--home", str(home),
+             "invoke-stdio"],
+            input=frame, capture_output=True, timeout=timeout, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise loom_adapter_protocol.ProtocolError(
+            "TIMEOUT", "stable launcher request exceeded its timeout") from exc
     return result.returncode, _payload(result.stdout)
 
 
@@ -77,10 +96,8 @@ def dispatch(message, *, home, launcher, session):
             "CAPABILITY_MISSING", f"host did not declare the {kind} capability")
     host = session["host"]
     if kind == "invoke":
-        arguments = [
-            "--home", str(home), "invoke", "--request", message["request"],
-            "--cwd", message["cwd"], "--agent", host["id"],
-            "--agent-version", host["version"]]
+        envelope = loom_adapter_protocol.request_envelope(message, host)
+        code, payload = _run_request(launcher, home, envelope)
     elif kind == "complete":
         arguments = ["--home", str(home), "complete", "--action", message["action"]]
         if message["usage"] is not None:
@@ -93,7 +110,8 @@ def dispatch(message, *, home, launcher, session):
         arguments = [
             "--home", str(home), "adapter-probe", "--protocol-min", "2",
             "--protocol-max", "2"]
-    code, payload = _run(launcher, arguments)
+    if kind != "invoke":
+        code, payload = _run(launcher, arguments)
     result = {"schema_version": 2, "message_type": "result",
               "request_id": request_id, "returncode": code, "payload": payload}
     return loom_adapter_protocol.validate_message(result)
@@ -104,6 +122,7 @@ def serve(home, launcher, *, input_stream=None, output_stream=None):
     target = output_stream or sys.stdout.buffer
     session = {}
     while True:
+        message = None
         try:
             message = loom_adapter_protocol.read_frame(source)
             if message is None:
@@ -113,7 +132,7 @@ def serve(home, launcher, *, input_stream=None, output_stream=None):
                 session=session)
         except loom_adapter_protocol.ProtocolError as exc:
             request_id = "bridge-error"
-            if "message" in locals() and isinstance(message, dict) \
+            if isinstance(message, dict) \
                     and isinstance(message.get("request_id"), str):
                 request_id = message["request_id"]
             response = {

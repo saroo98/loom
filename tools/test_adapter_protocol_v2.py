@@ -1,10 +1,12 @@
 """Closed protocol-v2 and truthful host-registry regressions."""
 
 import io
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_adapter_bridge
 import loom_adapter_protocol
@@ -27,7 +29,7 @@ def initialize(**overrides):
         "schema_version": 2, "message_type": "initialize",
         "request_id": "req-0000000000000001",
         "protocol": {"minimum": 2, "maximum": 2},
-        "adapter": {"id": "codex", "version": "2.0.0"},
+        "adapter": {"id": "codex", "version": loom_adapter_protocol.ADAPTER_VERSION},
         "host": {"id": "codex", "version": "test"},
         "capabilities": capabilities(),
     }
@@ -59,6 +61,10 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         raw = b"{" + b"x" * loom_adapter_protocol.MAX_MESSAGE_BYTES + b"\n"
         with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "oversized"):
             loom_adapter_protocol.read_frame(io.BytesIO(raw))
+        for malformed in (b"{not-json}\n", b'{"request":"\xff"}\n', b"{}"):
+            with self.subTest(malformed=malformed):
+                with self.assertRaises(loom_adapter_protocol.ProtocolError):
+                    loom_adapter_protocol.read_frame(io.BytesIO(malformed))
 
     def test_host_registry_never_calls_experimental_or_unsupported_supported(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -83,6 +89,9 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertEqual(2, contract["protocol_version"])
         self.assertFalse(contract["network_listener"])
         self.assertEqual(65536, contract["maximum_message_bytes"])
+        self.assertEqual("bounded-utf8-json-stdio-end-to-end",
+                         contract["request_transport"])
+        self.assertIn("requestEnvelope", message["$defs"])
         self.assertFalse(ownership["additionalProperties"])
         for definition in message["$defs"].values():
             if isinstance(definition, dict) and definition.get("type") == "object":
@@ -98,7 +107,7 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertFalse(loom_host_registry.detect(
             Path("."), which=lambda _name: None))
 
-    def test_bridge_requires_initialize_and_preserves_request_identity(self):
+    def test_bridge_requires_initialize_before_any_request(self):
         session = {}
         status = {"schema_version": 2, "message_type": "status",
                   "request_id": "req-status"}
@@ -106,11 +115,104 @@ class AdapterProtocolV2Tests(unittest.TestCase):
             loom_adapter_bridge.dispatch(
                 status, home=Path("."), launcher=Path("loom"), session=session)
 
+    def test_request_identity_uses_exact_decoded_utf8_bytes(self):
+        request = "  line one\r\nline two % ! & | < > ^ ( ) \"'\nSorani: کوردی  "
+        identity = loom_adapter_protocol.request_identity(request)
+        raw = request.encode("utf-8")
+        self.assertEqual(len(raw), identity["utf8_bytes"])
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), identity["sha256"])
+
+    def test_request_envelope_is_closed_bounded_and_rejects_identity_changes(self):
+        request = {
+            "schema_version": 2, "message_type": "invoke",
+            "request_id": "req-transport", "request": "\nPlan exactly.\n",
+            "cwd": "C:/disposable/project",
+        }
+        envelope = loom_adapter_protocol.request_envelope(
+            request, {"id": "codex", "version": "test"})
+        self.assertEqual("request-envelope", envelope["message_type"])
+        self.assertEqual(request["request"], envelope["request"])
+        self.assertEqual(envelope, loom_adapter_protocol.round_trip(envelope))
+        changed = json.loads(json.dumps(envelope))
+        changed["request_identity"]["sha256"] = "0" * 64
+        with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "identity"):
+            loom_adapter_protocol.validate_message(changed)
+
+    def test_request_character_and_frame_byte_bounds_are_independent(self):
+        host = {"id": "codex", "version": "test"}
+        maximum = {
+            "schema_version": 2, "message_type": "invoke",
+            "request_id": "req-maximum", "request": "x" * 32768,
+            "cwd": "C:/disposable/project",
+        }
+        self.assertEqual(32768, len(loom_adapter_protocol.request_envelope(
+            maximum, host)["request"]))
+        with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "request"):
+            loom_adapter_protocol.request_envelope(
+                dict(maximum, request="x" * 32769), host)
+        with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "byte bound"):
+            loom_adapter_protocol.request_envelope(
+                dict(maximum, request="🧵" * 20000), host)
+        with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "Unicode scalar"):
+            loom_adapter_protocol.validate_message(
+                dict(maximum, request="escaped surrogate: \ud800"))
+
+    def test_internal_reader_rejects_missing_wrong_and_trailing_frames(self):
+        message = {
+            "schema_version": 2, "message_type": "invoke",
+            "request_id": "req-single", "request": "exactly one",
+            "cwd": "C:/disposable/project",
+        }
+        frame = loom_adapter_protocol.canonical_bytes(
+            loom_adapter_protocol.request_envelope(
+                message, {"id": "codex", "version": "test"})) + b"\n"
+        with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "missing"):
+            loom_adapter_protocol.read_single_frame(
+                io.BytesIO(), message_type="request-envelope")
+        with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "type"):
+            loom_adapter_protocol.read_single_frame(
+                io.BytesIO(loom_adapter_protocol.canonical_bytes(message) + b"\n"),
+                message_type="request-envelope")
+        with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "trailing"):
+            loom_adapter_protocol.read_single_frame(
+                io.BytesIO(frame + frame), message_type="request-envelope")
+
+    def test_bridge_preserves_request_identity_and_never_places_request_in_argv(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {"id": "codex", "version": "2.1.0"},
+            "capabilities": capabilities(), "protocol_version": 2,
+        }
+        request = "first line\nsecond line & % ! کوردی"
+        message = {
+            "schema_version": 2, "message_type": "invoke",
+            "request_id": "req-exact", "request": request,
+            "cwd": "C:/disposable/project",
+        }
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(0, {"status": "action-required"})) as run_request:
+            result = loom_adapter_bridge.dispatch(
+                message, home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+        self.assertEqual(0, result["returncode"])
+        envelope = run_request.call_args.args[2]
+        self.assertEqual(request, envelope["request"])
+        self.assertEqual(
+            loom_adapter_protocol.request_identity(request),
+            envelope["request_identity"])
+
     def test_adapter_template_is_stateless_and_names_protocol_v2(self):
         import loom_adapters
         text = loom_adapters._adapter("codex").decode("utf-8")
         self.assertIn("protocol v2", text)
         self.assertIn("stateless", text)
+        self.assertIn("loom.py --home", text)
+        self.assertIn("<absolute-user-home>/.loom bridge", text)
+        self.assertNotIn("--request", text)
+        self.assertIn("Never place request text", text)
+        self.assertIn("never use `loom.cmd`", text)
         self.assertNotIn("sqlite", text.lower())
         self.assertNotIn("memory IDs", text)
 

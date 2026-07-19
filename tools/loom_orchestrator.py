@@ -31,6 +31,7 @@ import loom_install
 import loom_improvement
 import loom_lifecycle
 import loom_lint
+import loom_adapter_protocol
 import loom_memory
 import loom_message
 import loom_owner
@@ -2079,9 +2080,7 @@ def cancel(action_path, *, now=None, owner_home=None, install_root=None):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    invoke_parser = commands.add_parser("invoke")
-    invoke_parser.add_argument("--request", required=True)
-    invoke_parser.add_argument("--cwd", required=True)
+    invoke_parser = commands.add_parser("invoke-stdio")
     invoke_parser.add_argument("--home", required=True)
     invoke_parser.add_argument("--install-root", required=True)
     invoke_parser.add_argument("--target")
@@ -2098,9 +2097,11 @@ def main(argv=None):
     cancel_parser.add_argument("--install-root")
     args = parser.parse_args(argv)
     try:
-        if args.command == "invoke":
+        if args.command == "invoke-stdio":
+            envelope = loom_adapter_protocol.read_single_frame(
+                sys.stdin.buffer, message_type="request-envelope")
             result = invoke(
-                request=args.request, cwd=args.cwd, home=args.home,
+                request=envelope["request"], cwd=envelope["cwd"], home=args.home,
                 install_root=args.install_root, explicit_target=args.target,
                 timeout_seconds=args.timeout_seconds)
         elif args.command == "complete":
@@ -2114,6 +2115,12 @@ def main(argv=None):
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": exc.status,
             "code": exc.code, "error": exc.message,
+        }, sort_keys=True))
+        return 2
+    except loom_adapter_protocol.ProtocolError as exc:
+        print(json.dumps({
+            "schema_version": SCHEMA_VERSION, "status": "blocked",
+            "code": exc.code, "error": str(exc),
         }, sort_keys=True))
         return 2
     except (loom_memory.MemoryError, loom_crypto.CryptoError, loom_owner.OwnerError,

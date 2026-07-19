@@ -146,10 +146,14 @@ def _finish_transaction(journal, journal_path, generation_path, status):
 
 def _adapter(agent):
     return ("---\nname: loom\ndescription: Route one request through the shared local Loom runtime.\n"
-            "---\n\nUse one surface: `/loom <request>`. Run the stable user-scoped launcher at "
-            f"`~/.loom/bin/loom --home ~/.loom invoke --agent {agent} --agent-version "
-            "<current-host-version> --request <verbatim-request> --cwd <absolute-project-root>`. "
-            "This is Loom adapter protocol v2; the adapter is stateless and must not plan, "
+            "---\n\nUse one surface: `/loom <request>`. Resolve the user home, then start the "
+            "receipt-owned Python launcher with a process API and fixed arguments only: "
+            "`<Python 3> -B <absolute-user-home>/.loom/bin/loom.py --home "
+            "<absolute-user-home>/.loom bridge`. "
+            f"Send protocol-v2 `initialize` for host `{agent}`, then one `invoke` frame, through "
+            "the process stdin as bounded UTF-8 JSON. Never place request text in a shell command, "
+            "argv, an environment variable, or a temporary file, and never use `loom.cmd` for a "
+            "request. This is Loom adapter protocol v2. The adapter is stateless and must not plan, "
             "select memory, inspect the vault, migrate state, or cache policy. "
             "Never invoke a plugin-cache "
             "path or create repository-local Loom files. Return the launcher's compact receipt.\n") \
@@ -179,9 +183,13 @@ def _preflight(target, receipt_path, capability_path):
     if version not in {1, 2} or receipt.get("path") != str(target) \
             or receipt.get("sha256") != _sha(target.read_bytes()):
         raise AdapterError(f"owned adapter changed; refusing to overwrite {target}")
+    compatible_authorities = {
+        ("2.0.0", "~/.loom/bin/loom"),
+        (loom_adapter_protocol.ADAPTER_VERSION, "~/.loom/bin/loom.py"),
+    }
     if version == 2 and (receipt.get("protocol_version") != 2
-                         or receipt.get("adapter_version") != loom_adapter_protocol.ADAPTER_VERSION
-                         or receipt.get("launcher") != "~/.loom/bin/loom"):
+                         or (receipt.get("adapter_version"), receipt.get("launcher"))
+                         not in compatible_authorities):
         raise AdapterError(f"adapter ownership receipt is incompatible: {target}")
     if version == 2 and (not capability_path.is_file()
                          or receipt.get("capability_receipt_sha256") != _sha(
@@ -189,8 +197,7 @@ def _preflight(target, receipt_path, capability_path):
         raise AdapterError(f"adapter capability receipt is invalid: {target}")
     if version == 1 and capability_path.exists():
         raise AdapterError(f"unowned adapter capability receipt exists: {target}")
-    return _sha(receipt_path.read_bytes()) if version == 1 else receipt.get(
-        "legacy_receipt_sha256")
+    return _sha(receipt_path.read_bytes())
 
 
 def _install_launcher_locked(loom_home, launcher_source):
@@ -220,7 +227,11 @@ def _install_launcher_locked(loom_home, launcher_source):
     targets = {
         python_launcher: source.read_bytes(),
         posix: b'#!/bin/sh\nexec python3 "$(dirname "$0")/loom.py" "$@"\n',
-        windows: b'@echo off\r\npy -3 "%~dp0loom.py" %*\r\n',
+        windows: (
+            b'@echo off\r\n'
+            b'echo Loom request transport is JSON-over-stdio through loom.py; '
+            b'this command wrapper is disabled. 1^>^&2\r\n'
+            b'exit /b 2\r\n'),
         **dependencies,
     }
     if receipt_path.exists():
@@ -345,7 +356,7 @@ def _connect_all_locked(user_home, loom_home, *, approved, which=None, versions=
                          "agent": agent, "host_version": record["version"],
                          "adapter_version": loom_adapter_protocol.ADAPTER_VERSION,
                          "path": str(target), "sha256": _sha(content),
-                         "launcher": "~/.loom/bin/loom",
+                         "launcher": "~/.loom/bin/loom.py",
                          "evidence_status": record["evidence_status"],
                          "capability_receipt_sha256": _sha(capability_content),
                          "legacy_receipt_sha256": legacy}

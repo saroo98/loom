@@ -6,6 +6,7 @@
     {"$ref": "#/$defs/initialize"},
     {"$ref": "#/$defs/initializeResult"},
     {"$ref": "#/$defs/invoke"},
+    {"$ref": "#/$defs/requestEnvelope"},
     {"$ref": "#/$defs/complete"},
     {"$ref": "#/$defs/cancel"},
     {"$ref": "#/$defs/status"},
@@ -90,6 +91,30 @@
         "request_id": {"$ref": "#/$defs/id"},
         "request": {"type": "string", "minLength": 1, "maxLength": 32768},
         "cwd": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    },
+    "requestIdentity": {
+      "type": "object", "additionalProperties": false,
+      "required": ["utf8_bytes", "sha256"],
+      "properties": {
+        "utf8_bytes": {"type": "integer", "minimum": 1, "maximum": 131072},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "requestEnvelope": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "message_type", "request_id", "request", "cwd", "host", "request_identity"],
+      "properties": {
+        "schema_version": {"const": 2}, "message_type": {"const": "request-envelope"},
+        "request_id": {"$ref": "#/$defs/id"},
+        "request": {"type": "string", "minLength": 1, "maxLength": 32768},
+        "cwd": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "host": {
+          "type": "object", "additionalProperties": false,
+          "required": ["id", "version"],
+          "properties": {"id": {"$ref": "#/$defs/id"}, "version": {"$ref": "#/$defs/hostVersion"}}
+        },
+        "request_identity": {"$ref": "#/$defs/requestIdentity"}
       }
     },
     "complete": {

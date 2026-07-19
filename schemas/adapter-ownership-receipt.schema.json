@@ -13,7 +13,7 @@
     "adapter_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "path": {"type": "string", "minLength": 1, "maxLength": 4096},
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "launcher": {"const": "~/.loom/bin/loom"},
+    "launcher": {"const": "~/.loom/bin/loom.py"},
     "evidence_status": {"enum": ["contract-only", "simulated-conformant", "real-host-verified"]},
     "capability_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "legacy_receipt_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}

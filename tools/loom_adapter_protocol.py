@@ -8,9 +8,10 @@ import re
 
 
 PROTOCOL_VERSION = 2
-ADAPTER_VERSION = "2.0.0"
+ADAPTER_VERSION = "2.1.0"
 MAX_MESSAGE_BYTES = 65536
 MAX_DEPTH = 16
+MAX_REQUEST_CHARACTERS = 32768
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
 CAPABILITY_KEYS = {
@@ -53,6 +54,34 @@ def canonical_bytes(value):
 
 def digest(value):
     return hashlib.sha256(canonical_bytes(value)).hexdigest()
+
+
+def request_identity(request):
+    """Identify the exact UTF-8 bytes of the decoded owner request."""
+    _text(request, "request", 1, MAX_REQUEST_CHARACTERS)
+    try:
+        raw = request.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ProtocolError(
+            "MESSAGE_INVALID", "request is not valid Unicode scalar text") from exc
+    return {"utf8_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+
+
+def request_envelope(invoke_message, host):
+    """Seal one validated invoke message for internal process forwarding."""
+    validate_message(invoke_message)
+    if invoke_message["message_type"] != "invoke":
+        raise ProtocolError("MESSAGE_INVALID", "request envelope source is not invoke")
+    value = {
+        "schema_version": PROTOCOL_VERSION,
+        "message_type": "request-envelope",
+        "request_id": invoke_message["request_id"],
+        "request": invoke_message["request"],
+        "cwd": invoke_message["cwd"],
+        "host": dict(host),
+        "request_identity": request_identity(invoke_message["request"]),
+    }
+    return validate_message(value)
 
 
 def _exact(value, fields, label):
@@ -117,8 +146,25 @@ def validate_message(value):
             raise ProtocolError("MESSAGE_INVALID", "initialize limitations are invalid")
     elif message_type == "invoke":
         _exact(value, common | {"request", "cwd"}, "invoke")
-        _text(value["request"], "request", 1, 32768)
+        _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
         _text(value["cwd"], "project path", 1, 4096)
+    elif message_type == "request-envelope":
+        _exact(value, common | {"request", "cwd", "host", "request_identity"},
+               "request envelope")
+        _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
+        _text(value["cwd"], "project path", 1, 4096)
+        _exact(value["host"], {"id", "version"}, "request host")
+        _identifier(value["host"]["id"], "request host ID")
+        _text(value["host"]["version"], "request host version", 1, 128)
+        identity = value["request_identity"]
+        _exact(identity, {"utf8_bytes", "sha256"}, "request identity")
+        expected = request_identity(value["request"])
+        if type(identity["utf8_bytes"]) is not int \
+                or identity["utf8_bytes"] != expected["utf8_bytes"] \
+                or not isinstance(identity["sha256"], str) \
+                or identity["sha256"] != expected["sha256"]:
+            raise ProtocolError(
+                "MESSAGE_INVALID", "request identity does not match exact UTF-8 bytes")
     elif message_type == "complete":
         _exact(value, common | {"action", "usage", "result"}, "complete")
         _text(value["action"], "action path", 1, 4096)
@@ -142,8 +188,12 @@ def validate_message(value):
         _text(value["message"], "error message", 1, 512)
     else:
         raise ProtocolError("MESSAGE_INVALID", "adapter message type is unsupported")
-    raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
-                     ensure_ascii=False).encode("utf-8")
+    try:
+        raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ProtocolError(
+            "MESSAGE_INVALID", "adapter message is not valid Unicode scalar text") from exc
     if len(raw) > MAX_MESSAGE_BYTES:
         raise ProtocolError("MESSAGE_TOO_LARGE", "adapter message exceeds its byte bound")
     return value
@@ -170,6 +220,18 @@ def read_frame(stream):
     except (UnicodeError, json.JSONDecodeError) as exc:
         raise ProtocolError("MESSAGE_INVALID", "adapter frame is not valid UTF-8 JSON") from exc
     return validate_message(value)
+
+
+def read_single_frame(stream, *, message_type):
+    """Read one bounded internal frame and require EOF after its newline."""
+    value = read_frame(stream)
+    if value is None:
+        raise ProtocolError("MESSAGE_INVALID", "request frame is missing")
+    if value["message_type"] != message_type:
+        raise ProtocolError("MESSAGE_INVALID", "request frame type is invalid")
+    if stream.read(1) != b"":
+        raise ProtocolError("MESSAGE_INVALID", "request transport contains trailing data")
+    return value
 
 
 def write_frame(stream, value):

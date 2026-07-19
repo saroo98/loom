@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import io
 import subprocess
 import sys
 import tempfile
@@ -10,6 +11,7 @@ from unittest import mock
 from pathlib import Path
 
 import loom_adapters
+import loom_adapter_protocol
 import loom_launcher
 import loom_update
 
@@ -76,6 +78,13 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(0, probe.returncode, probe.stderr)
         self.assertEqual("1.1.0", json.loads(probe.stdout)["version"])
         self.assertEqual(2, json.loads(probe.stdout)["protocol_version"])
+
+    def test_windows_command_wrapper_refuses_instead_of_reparsing_arguments(self):
+        wrapper = Path(self.launcher["windows_launcher"]).read_text(encoding="utf-8")
+        self.assertNotIn("%*", wrapper)
+        self.assertNotIn("loom.py\" %", wrapper)
+        self.assertIn("disabled", wrapper.lower())
+        self.assertIn("exit /b 2", wrapper.lower())
 
     def test_unowned_conflict_blocks_split_brain_and_is_not_overwritten(self):
         conflict = self.home / ".codex" / "skills" / "loom" / "SKILL.md"
@@ -251,7 +260,44 @@ class AdapterTests(unittest.TestCase):
         migrated = json.loads(receipt.read_text(encoding="utf-8"))
         self.assertEqual(2, migrated["schema_version"])
         self.assertEqual(2, migrated["protocol_version"])
+        self.assertEqual("~/.loom/bin/loom.py", migrated["launcher"])
         self.assertRegex(migrated["legacy_receipt_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_owned_protocol_2_adapter_upgrades_from_argv_to_stdio_authority(self):
+        target = self.home / ".codex" / "skills" / "loom" / "SKILL.md"
+        target.parent.mkdir(parents=True)
+        old_content = (
+            "---\nname: loom\n---\n"
+            "Run ~/.loom/bin/loom invoke --request <verbatim-request>.\n").encode("utf-8")
+        target.write_bytes(old_content)
+        capability_path = loom_adapters._capability_path(self.home / ".loom", "codex")
+        capability_path.parent.mkdir(parents=True)
+        capability = b'{"adapter_version":"2.0.0"}\n'
+        capability_path.write_bytes(capability)
+        receipt_path = loom_adapters._receipt_path(self.home / ".loom", "codex")
+        receipt_path.parent.mkdir(parents=True, exist_ok=True)
+        old_receipt = {
+            "schema_version": 2, "protocol_version": 2, "agent": "codex",
+            "host_version": "test", "adapter_version": "2.0.0",
+            "path": str(target), "sha256": loom_adapters._sha(old_content),
+            "launcher": "~/.loom/bin/loom", "evidence_status": "simulated-conformant",
+            "capability_receipt_sha256": loom_adapters._sha(capability),
+            "legacy_receipt_sha256": None,
+        }
+        old_receipt_bytes = loom_adapters._json_bytes(old_receipt)
+        receipt_path.write_bytes(old_receipt_bytes)
+
+        loom_adapters.connect_all(
+            self.home, self.home / ".loom", approved=True,
+            versions={"codex": "test"})
+
+        upgraded = json.loads(receipt_path.read_text(encoding="utf-8"))
+        self.assertEqual(loom_adapter_protocol.ADAPTER_VERSION,
+                         upgraded["adapter_version"])
+        self.assertEqual("~/.loom/bin/loom.py", upgraded["launcher"])
+        self.assertEqual(loom_adapters._sha(old_receipt_bytes),
+                         upgraded["legacy_receipt_sha256"])
+        self.assertNotIn(b"--request", target.read_bytes())
 
     def test_repo_local_unowned_skill_is_rejected_as_split_brain(self):
         project = self.root / "project"
@@ -300,10 +346,18 @@ class AdapterTests(unittest.TestCase):
                     return_value=({"version": "1.1.0", "release_sequence": 2}, runtime)), \
                 mock.patch.object(loom_launcher, "_reject_local_shadow"), \
                 mock.patch.object(loom_launcher.subprocess, "run", return_value=failed):
-            result = loom_launcher.main([
-                "--home", str(self.home / ".loom"), "invoke",
-                "--request", "plan safely", "--cwd", str(self.root),
-                "--agent", "codex", "--agent-version", "test"])
+            message = {
+                "schema_version": 2, "message_type": "invoke",
+                "request_id": "req-crash", "request": "plan safely",
+                "cwd": str(self.root),
+            }
+            frame = loom_adapter_protocol.canonical_bytes(
+                loom_adapter_protocol.request_envelope(
+                    message, {"id": "codex", "version": "test"})) + b"\n"
+            stdin = mock.Mock(buffer=io.BytesIO(frame))
+            with mock.patch.object(loom_launcher.sys, "stdin", stdin):
+                result = loom_launcher.main([
+                    "--home", str(self.home / ".loom"), "invoke-stdio"])
 
         self.assertEqual(1, result)
         manager.end_session.assert_called_once_with(

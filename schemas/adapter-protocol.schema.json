@@ -16,7 +16,7 @@
         "config_root": {"type": "string", "maxLength": 1024}
       }
     },
-    "launcher": {"const": "~/.loom/bin/loom"},
+    "launcher": {"const": "~/.loom/bin/loom.py"},
     "owner_receipt": {
       "type": "object", "additionalProperties": false,
       "required": ["relative_path", "sha256", "backup_sha256"],

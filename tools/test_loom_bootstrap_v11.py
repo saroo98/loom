@@ -14,6 +14,7 @@ from unittest import mock
 from pathlib import Path
 
 import loom_plugin_package
+import loom_adapter_protocol
 import loom_install
 import loom_orchestrator
 import loom_release
@@ -222,15 +223,23 @@ class BootstrapIntegrationTests(unittest.TestCase):
             (home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
                 loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
             environment = {**os.environ, "LOOM_TEST_ALLOW_LEGACY_BACKEND": "1"}
+            message = {
+                "schema_version": 2, "message_type": "invoke",
+                "request_id": "req-bounded-inspection", "request": request,
+                "cwd": str(project),
+            }
+            frame = loom_adapter_protocol.canonical_bytes(
+                loom_adapter_protocol.request_envelope(
+                    message, {"id": "codex", "version": "test"})) + b"\n"
             invoked = subprocess.run([
                 sys.executable, "-B", str(home / "bin" / "loom.py"),
-                "--home", str(home), "invoke", "--request", request,
-                "--cwd", str(project), "--agent", "codex", "--agent-version", "test"],
-                capture_output=True, text=True, timeout=120, check=False,
+                "--home", str(home), "invoke-stdio"],
+                input=frame, capture_output=True, timeout=120, check=False,
                 env=environment)
 
-            self.assertEqual(0, invoked.returncode, invoked.stdout + invoked.stderr)
-            result = json.loads(invoked.stdout)
+            self.assertEqual(0, invoked.returncode, (invoked.stdout + invoked.stderr).decode(
+                "utf-8", errors="replace"))
+            result = json.loads(invoked.stdout.decode("utf-8"))
             self.assertEqual("action-required", result["status"])
             self.assertIn("llm-agent", result["domains"])
             self.assertNotIn("website", result["domains"])
