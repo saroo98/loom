@@ -11,7 +11,8 @@ class OwnerMessageTests(unittest.TestCase):
             with self.subTest(state=state):
                 value = loom_message.build(
                     state=state, consequence="material", verification="pending",
-                    freshness="unknown", reversible=False, summary="Work state changed.",
+                    freshness="unknown", changes_made=False, undo_status="not-needed",
+                    summary="Work state changed.",
                     decision="Choose the safe branch." if intervention else None,
                     recommendation="Keep external effects blocked." if intervention else None,
                     next_action="Continue only after the stated condition.",
@@ -25,12 +26,13 @@ class OwnerMessageTests(unittest.TestCase):
             with self.assertRaises(loom_message.MessageError):
                 loom_message.build(
                     state=state, consequence="high", verification="blocked",
-                    freshness="unknown", reversible=False, summary="Stopped.",
+                    freshness="unknown", changes_made=False, undo_status="not-needed",
+                    summary="Stopped.",
                     next_action="Wait.", receipt_id="msg-blocked")
 
     def test_session_projection_hides_internal_tier_gate_and_schema_terms(self):
         value = loom_message.from_session(
-            status="completed", code="plan-complete", tier="L",
+            status="completed", code="plan-complete", intent="plan", tier="L",
             owner_input_required=False, reversible_action_ids=[],
             detail="internal detail", receipt_id="session-123")
         self.assertEqual("high", value["consequence"])
@@ -38,7 +40,7 @@ class OwnerMessageTests(unittest.TestCase):
 
     def test_relevant_preference_conflict_asks_one_choice_without_guessing(self):
         value = loom_message.from_session(
-            status="blocked", code="preference-conflict", tier="M",
+            status="blocked", code="preference-conflict", intent="plan", tier="M",
             owner_input_required=False, reversible_action_ids=[], detail="",
             receipt_id="session-conflict")
         self.assertEqual("decision-needed", value["state"])
@@ -49,11 +51,23 @@ class OwnerMessageTests(unittest.TestCase):
     def test_human_rendering_cannot_diverge_from_machine_fields(self):
         value = loom_message.build(
             state="completed", consequence="ordinary", verification="verified",
-            freshness="current", reversible=True, summary="Done safely.",
+            freshness="current", changes_made=True, undo_status="available",
+            summary="Done safely.",
             next_action="Continue when ready.", receipt_id="message-bound")
         value["human"] = value["human"].replace("verified", "unknown")
         with self.assertRaises(loom_message.MessageError):
             loom_message.validate(value)
+
+    def test_blocked_message_reports_no_change_without_claiming_irreversibility(self):
+        value = loom_message.from_session(
+            status="blocked", code="invalid-lifecycle", intent="plan", tier="M",
+            owner_input_required=True, reversible_action_ids=[],
+            detail="plans/lifecycle.json is invalid JSON; no fallback was authorized",
+            receipt_id="session-blocked")
+        self.assertFalse(value["changes_made"])
+        self.assertEqual("not-needed", value["undo_status"])
+        self.assertIn("invalid JSON", value["human"])
+        self.assertNotIn("reversible: no", value["human"])
 
 
 if __name__ == "__main__":

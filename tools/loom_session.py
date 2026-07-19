@@ -617,12 +617,19 @@ def _receipt_from_data(value, *, repeated):
     data["reversible_action_ids"] = tuple(data["reversible_action_ids"])
     data["uncertainty_codes"] = tuple(data["uncertainty_codes"])
     loom_message.validate(data["owner_message"])
-    expected_owner_message = loom_message.from_session(
-        status=data["status"], code=data["code"], tier=data["tier"],
-        owner_input_required=data["owner_input_required"],
-        reversible_action_ids=data["reversible_action_ids"],
-        detail=data["user_message"],
-        receipt_id="session-" + data["operation_id"][:16])
+    message_factory = (loom_message.legacy_from_session
+                       if data["owner_message"].get("schema_version") == 1
+                       else loom_message.from_session)
+    message_arguments = {
+        "status": data["status"], "code": data["code"], "tier": data["tier"],
+        "owner_input_required": data["owner_input_required"],
+        "reversible_action_ids": data["reversible_action_ids"],
+        "detail": data["user_message"],
+        "receipt_id": "session-" + data["operation_id"][:16],
+    }
+    if message_factory is loom_message.from_session:
+        message_arguments["intent"] = data["intent"]
+    expected_owner_message = message_factory(**message_arguments)
     if data["owner_message"] != expected_owner_message:
         raise SessionBlocked(
             "RECEIPT_CORRUPT", "owner message does not match the sealed receipt")
@@ -1405,6 +1412,7 @@ class SessionController:
                if isinstance(memory_result, dict) else [])))
         owner_message = loom_message.from_session(
             status=result["status"], code=result["code"],
+            intent=prepared.intent,
             tier=prepared.route_contract["tier"],
             owner_input_required=prepared.route_contract["needs_owner"],
             reversible_action_ids=reversible_action_ids,
