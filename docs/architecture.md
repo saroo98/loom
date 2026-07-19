@@ -116,7 +116,7 @@ separate independently attested production-performance or production-memory-repl
 
 ## Runtime and owner vault
 
-The stable launcher under `~/.loom/bin` verifies one immutable runtime manifest and pins a session
+The receipt-owned Python launcher under `~/.loom/bin/loom.py` verifies one immutable runtime manifest and pins a session
 to both the runtime generation and the verified owner-vault schema/generation. Corrupt or unreadable
 vault state blocks session creation. Marketplace payloads stage beside the active runtime; signed
 metadata, exact hashes, semantic inventory comparison, and a disposable request must all pass
@@ -201,7 +201,12 @@ memory, migration code, policy, or cached state. It points to the stable user la
 launcher alone selects the verified runtime and owner vault. An unowned local Loom skill is treated
 as a split-brain condition and blocks connection instead of being overwritten or silently used.
 
-The local bridge uses newline-delimited JSON over standard input and output. The message vocabulary,
+The local bridge uses newline-delimited JSON over standard input and output. It hashes the exact
+UTF-8 bytes of the decoded request once at ingress. The closed `request-envelope` carries that byte
+length and SHA-256 through a fixed-argument launcher process and a second fixed-argument
+orchestrator process. Both receivers recompute the identity before work begins. No production
+request crosses `cmd.exe`, argv, environment variables, or a temporary file; `loom.cmd` refuses
+invocation rather than forwarding `%*`. The message vocabulary,
 field sets, depth, byte size, identifiers, protocol range, capabilities, and error codes are closed
 and bounded by `schemas/adapter-message.schema.json` and `contracts/adapter-protocol-v2.json`.
 Initialization must negotiate protocol 2 before an invocation can reach the launcher. The bridge

@@ -11,8 +11,10 @@ runtime below. Never read every Loom file into context.
 
 ## One-run protocol
 
-1. Run the installed skill's bounded bootstrap, then invoke only the stable launcher at
-   `~/.loom/bin/loom`. Bootstrap accepts either a signed release payload or a complete, unchanged
+1. Run the installed skill's bounded bootstrap, then start only the receipt-owned Python launcher
+   at `~/.loom/bin/loom.py` in bridge mode with fixed arguments. Send the initialized protocol-v2
+   `invoke` frame through its stdin. Owner request text must never cross a shell, argv, environment
+   variable, command wrapper, or temporary file. Bootstrap accepts either a signed release payload or a complete, unchanged
    installer ownership receipt explicitly labeled `direct-source-install-unattested`; incomplete
    signed metadata, changed bytes, or unowned bytes block. The launcher pins the verified runtime,
    checks the installation receipt, opens an authenticated session, calls `loom_runtime` through

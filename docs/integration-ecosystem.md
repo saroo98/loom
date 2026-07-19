@@ -1,7 +1,7 @@
 # Loom integration ecosystem
 
 Loom has one engine, one owner vault, and one public action: `/loom <request>`. Agent integrations
-are intentionally small. They route a request to `~/.loom/bin/loom`; they do not copy Loom's engine,
+are intentionally small. They route a request to `~/.loom/bin/loom.py`; they do not copy Loom's engine,
 read its vault, select memory, migrate state, or keep host-specific policy.
 
 ## What is mechanically proven
@@ -16,6 +16,9 @@ read its vault, select memory, migrate state, or keep host-specific policy.
 - An unowned host-local Loom adapter blocks connection because host precedence could otherwise
   route requests around the shared runtime.
 - The bridge is a local JSON-over-stdio process. It creates no network listener.
+- Request text remains bounded UTF-8 JSON across both subprocess boundaries. Ingress records its
+  exact decoded UTF-8 byte length and SHA-256; the launcher and orchestrator reject any mismatch.
+  The Windows command wrapper is not an invocation surface and refuses instead of forwarding `%*`.
 - Disposable simulated profiles prove that all four current eligible adapter templates select one runtime
   and protocol, produce ownership receipts, and leave the project directory unchanged.
 
@@ -56,7 +59,8 @@ A host/version can move from simulated to real-host verified only when a disposa
 proves all of the following against the exact release:
 
 1. the real host discovers the documented adapter location;
-2. `/loom <request>` reaches the stable launcher, not a plugin-cache or repository-local copy;
+2. `/loom <request>` reaches the receipt-owned Python bridge through a host process API that writes
+   JSON directly to stdin, not a shell command, argv, environment variable, or temporary file;
 3. initialization negotiates protocol 2 and reports the pinned runtime generation;
 4. invoke, status, completion, cancellation, timeout, malformed input, and protocol mismatch follow
    the same contract;
@@ -66,3 +70,5 @@ proves all of the following against the exact release:
    evidence rather than inferred from local behavior.
 
 Until that matrix exists, Loom makes no universal-host, live-provider, or MCP-conformance claim.
+The source tests prove the Windows process boundaries themselves; they do not prove that every
+third-party host exposes a safe direct-stdin process API.

@@ -3,7 +3,9 @@
 ## Install
 
 Install Loom through a supported host package. The installed adapter must route to the stable
-user-scoped launcher at `~/.loom/bin/loom`. The owner vault stays under `~/.loom/vault` and is never
+user-scoped launcher at `~/.loom/bin/loom.py`. Request invocation uses its fixed-argument `bridge`
+mode and bounded JSON stdin; `loom.cmd` is a refusal-only compatibility file, not an invocation
+path. The owner vault stays under `~/.loom/vault` and is never
 stored in a project or versioned plugin cache.
 
 The public source tree can also be copied with `tools/loom_install.py`. On first `/loom`, bootstrap
