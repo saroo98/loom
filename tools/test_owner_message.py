@@ -11,7 +11,8 @@ class OwnerMessageTests(unittest.TestCase):
             with self.subTest(state=state):
                 value = loom_message.build(
                     state=state, consequence="material", verification="pending",
-                    freshness="unknown", changes_made=False, undo_status="not-needed",
+                    freshness="unknown", changes_made=False,
+                    undo_status="not-applicable",
                     summary="Work state changed.",
                     decision="Choose the safe branch." if intervention else None,
                     recommendation="Keep external effects blocked." if intervention else None,
@@ -26,7 +27,8 @@ class OwnerMessageTests(unittest.TestCase):
             with self.assertRaises(loom_message.MessageError):
                 loom_message.build(
                     state=state, consequence="high", verification="blocked",
-                    freshness="unknown", changes_made=False, undo_status="not-needed",
+                    freshness="unknown", changes_made=False,
+                    undo_status="not-applicable",
                     summary="Stopped.",
                     next_action="Wait.", receipt_id="msg-blocked")
 
@@ -65,7 +67,7 @@ class OwnerMessageTests(unittest.TestCase):
             detail="plans/lifecycle.json is invalid JSON; no fallback was authorized",
             receipt_id="session-blocked")
         self.assertFalse(value["changes_made"])
-        self.assertEqual("not-needed", value["undo_status"])
+        self.assertEqual("not-applicable", value["undo_status"])
         self.assertIn("invalid JSON", value["human"])
         self.assertNotIn("reversible: no", value["human"])
 

@@ -286,7 +286,7 @@ def _validate_action(value, path):
             consequence={"S": "ordinary", "M": "material", "L": "high",
                          "XL": "critical"}[value["tier"]],
             verification="pending", freshness="current",
-            changes_made=False, undo_status="not-needed",
+            changes_made=False, undo_status="not-applicable",
             summary="Loom prepared the next safe frontier.",
             next_action="Complete and verify the sealed frontier.",
             receipt_id="action-" + value["action_id"])
@@ -359,12 +359,17 @@ def _validate_action(value, path):
     except loom_message.MessageError as exc:
         raise OrchestratorError(
             "ACTION_CORRUPT", f"sealed owner message is invalid: {exc}") from exc
-    expected_owner_message = loom_message.build(
+    message_builder = (loom_message.v2_build
+                       if value["owner_message"].get("schema_version") == 2
+                       else loom_message.build)
+    expected_owner_message = message_builder(
         state="progress",
         consequence={"S": "ordinary", "M": "material", "L": "high",
                      "XL": "critical"}[value["tier"]],
         verification="pending", freshness="current",
-        changes_made=False, undo_status="not-needed",
+        changes_made=False,
+        undo_status=("not-needed" if message_builder is loom_message.v2_build
+                     else "not-applicable"),
         summary="Loom prepared the next safe frontier.",
         next_action="Complete and verify the sealed frontier.",
         receipt_id="action-" + value["action_id"])
@@ -415,7 +420,7 @@ def _validate_action(value, path):
         raise OrchestratorError(
             "ACTION_CORRUPT", "non-planning action carries a plan contract")
     repair_plan = value["repair_plan"]
-    if value["intent"] == "repair":
+    if value["intent"] == "repair" and not prepared.route_contract["blocked"]:
         repair_fields = {
             "changed_paths", "affected_plan_sections", "regate_scope",
             "prior_state_hash", "current_state_hash", "force_full"}
@@ -2318,7 +2323,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             consequence={"S": "ordinary", "M": "material", "L": "high",
                          "XL": "critical"}[prepared.route_contract["tier"]],
             verification="pending", freshness="current",
-            changes_made=False, undo_status="not-needed",
+            changes_made=False, undo_status="not-applicable",
             summary="Loom prepared the next safe frontier.",
             next_action="Complete and verify the sealed frontier.",
             receipt_id="action-" + action_id),
@@ -2460,6 +2465,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                           else action["plan_contract"]),
         "context_manifest": action["context_manifest"],
         "continuation_authority": action["continuation_authority"],
+        "resolved_terminal_block": loom_runtime._thaw(
+            opened.resolved_terminal_block),
         "owner_message": action["owner_message"],
         "context": {
             "memory": context_capsule["memory"],
@@ -2472,7 +2479,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "static Loom guidance. For plan, author the exact plan_contract; otherwise perform only the "
             "routed intent. Do not mutate undeclared target paths. Then call complete with all five "
             "measured token categories. The orchestrator owns validation, gates, learning, "
-            "and the final receipt."),
+            "and the final receipt. A prior terminal block never authorizes fallback work; only "
+            "this fresh sealed action can authorize its declared frontier."),
     }
 
 

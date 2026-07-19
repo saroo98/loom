@@ -13,7 +13,7 @@
                "event_count", "world_fingerprint", "started_at", "completed_at",
                "receipt_hash"],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"enum": [1, 2]},
     "session_id": {"type": "string", "format": "uuid"},
     "operation_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "invocation_id": {"type": "string", "format": "uuid"},
@@ -42,6 +42,12 @@
     "owner_input_required": {"type": "boolean"},
     "user_message": {"type": "string", "maxLength": 1000},
     "owner_message": {"$ref": "owner-message.schema.json"},
+    "block_reason": {
+      "oneOf": [{"type": "null"}, {"$ref": "block-reason.schema.json"}]
+    },
+    "terminal_authority": {
+      "oneOf": [{"type": "null"}, {"$ref": "terminal-authority.schema.json"}]
+    },
     "usage": {"$ref": "#/$defs/usage"},
     "event_count": {"type": "integer", "minimum": 1, "maximum": 4096},
     "world_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -49,6 +55,16 @@
     "completed_at": {"type": "string", "format": "date-time"},
     "receipt_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
   },
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": 2}}},
+      "then": {"required": ["block_reason", "terminal_authority"]},
+      "else": {"not": {"anyOf": [
+        {"required": ["block_reason"]},
+        {"required": ["terminal_authority"]}
+      ]}}
+    }
+  ],
   "$defs": {
     "usage": {
       "type": "object",

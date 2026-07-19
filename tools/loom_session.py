@@ -14,6 +14,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 import loom_runtime
+import loom_block_reason
 import loom_memory
 import loom_learning
 import loom_message
@@ -23,10 +24,13 @@ import loom_performance
 import loom_transparency
 import loom_improvement
 import loom_vault_adapter
+import loom_terminal_authority
 from loom_reliability import _is_trusted_os_alias
 
 
 SCHEMA_VERSION = 1
+RECEIPT_SCHEMA_VERSION = 2
+LEGACY_RECEIPT_SCHEMA_VERSION = 1
 JOURNAL_FILE = "session-journal.json"
 MAX_JOURNAL_BYTES = 8 * 1024 * 1024
 MAX_EVENTS = 4096
@@ -34,7 +38,7 @@ SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RECEIPT_STATUSES = {"completed", "blocked", "interrupted"}
 EVENT_KINDS = {
     "session-opened", "session-interrupted", "session-reconciled",
-    "session-receipt-sealed",
+    "session-receipt-sealed", "terminal-block-resolved",
 }
 
 if os.name == "nt":
@@ -509,6 +513,8 @@ class SessionReceipt:
     owner_input_required: bool
     user_message: str
     owner_message: MappingProxyType
+    block_reason: MappingProxyType | None
+    terminal_authority: MappingProxyType | None
     usage: MappingProxyType
     event_count: int
     world_fingerprint: str
@@ -517,7 +523,7 @@ class SessionReceipt:
     receipt_hash: str
 
     def to_dict(self):
-        return {
+        value = {
             "schema_version": self.schema_version,
             "session_id": self.session_id,
             "operation_id": self.operation_id,
@@ -541,6 +547,8 @@ class SessionReceipt:
             "owner_input_required": self.owner_input_required,
             "user_message": self.user_message,
             "owner_message": _thaw(self.owner_message),
+            "block_reason": _thaw(self.block_reason),
+            "terminal_authority": _thaw(self.terminal_authority),
             "usage": _thaw(self.usage),
             "event_count": self.event_count,
             "world_fingerprint": self.world_fingerprint,
@@ -548,6 +556,10 @@ class SessionReceipt:
             "completed_at": self.completed_at,
             "receipt_hash": self.receipt_hash,
         }
+        if self.schema_version == LEGACY_RECEIPT_SCHEMA_VERSION:
+            value.pop("block_reason")
+            value.pop("terminal_authority")
+        return value
 
     def owner_view(self):
         return self.owner_message["human"]
@@ -590,7 +602,7 @@ def _latest_sealed_receipt(journal, opener=None):
 
 
 def _receipt_from_data(value, *, repeated):
-    fields = {
+    legacy_fields = {
         "schema_version", "session_id", "operation_id", "invocation_id",
         "project_id", "intent", "status", "code", "repeated",
         "reconciled_session_id", "selected_memory_ids", "outcome_ids",
@@ -601,8 +613,12 @@ def _receipt_from_data(value, *, repeated):
         "event_count", "world_fingerprint", "started_at", "completed_at",
         "receipt_hash",
     }
-    if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != SCHEMA_VERSION \
+    fields = legacy_fields | {"block_reason", "terminal_authority"}
+    if not isinstance(value, dict) \
+            or value.get("schema_version") not in {
+                RECEIPT_SCHEMA_VERSION, LEGACY_RECEIPT_SCHEMA_VERSION} \
+            or set(value) != (fields if value["schema_version"] == RECEIPT_SCHEMA_VERSION
+                              else legacy_fields) \
             or value.get("status") not in RECEIPT_STATUSES \
             or value.get("receipt_hash") != _receipt_hash(value):
         raise SessionBlocked("SESSION_CORRUPT", "sealed session receipt is invalid")
@@ -617,9 +633,11 @@ def _receipt_from_data(value, *, repeated):
     data["reversible_action_ids"] = tuple(data["reversible_action_ids"])
     data["uncertainty_codes"] = tuple(data["uncertainty_codes"])
     loom_message.validate(data["owner_message"])
-    message_factory = (loom_message.legacy_from_session
-                       if data["owner_message"].get("schema_version") == 1
-                       else loom_message.from_session)
+    message_version = data["owner_message"].get("schema_version")
+    message_factory = (
+        loom_message.legacy_from_session if message_version == 1 else
+        loom_message.v2_from_session if message_version == 2 else
+        loom_message.from_session)
     message_arguments = {
         "status": data["status"], "code": data["code"], "tier": data["tier"],
         "owner_input_required": data["owner_input_required"],
@@ -627,13 +645,42 @@ def _receipt_from_data(value, *, repeated):
         "detail": data["user_message"],
         "receipt_id": "session-" + data["operation_id"][:16],
     }
-    if message_factory is loom_message.from_session:
+    if message_factory in {loom_message.v2_from_session, loom_message.from_session}:
         message_arguments["intent"] = data["intent"]
+    if data["schema_version"] == RECEIPT_SCHEMA_VERSION:
+        if message_factory is not loom_message.from_session:
+            raise SessionBlocked(
+                "SESSION_CORRUPT", "current session receipt requires current owner message")
+        reason = data["block_reason"]
+        authority = data["terminal_authority"]
+        try:
+            if reason is not None:
+                loom_block_reason.validate(reason)
+            loom_terminal_authority.validate(authority)
+        except (loom_block_reason.BlockReasonError,
+                loom_terminal_authority.TerminalAuthorityError) as exc:
+            raise SessionBlocked("SESSION_CORRUPT", f"terminal receipt is invalid: {exc}") \
+                from exc
+        if (data["status"] == "blocked") != (reason is not None) \
+                or authority != loom_terminal_authority.build(
+                    status=data["status"], operation_id=data["operation_id"],
+                    block_reason=reason):
+            raise SessionBlocked(
+                "SESSION_CORRUPT", "terminal authority does not match the session result")
+        message_arguments["block_reason"] = reason
+    else:
+        if message_factory is loom_message.from_session:
+            raise SessionBlocked(
+                "SESSION_CORRUPT", "legacy session receipt cannot carry a current owner message")
+        data["block_reason"] = None
+        data["terminal_authority"] = None
     expected_owner_message = message_factory(**message_arguments)
     if data["owner_message"] != expected_owner_message:
         raise SessionBlocked(
             "RECEIPT_CORRUPT", "owner message does not match the sealed receipt")
     data["owner_message"] = _freeze(data["owner_message"])
+    data["block_reason"] = _freeze(data["block_reason"])
+    data["terminal_authority"] = _freeze(data["terminal_authority"])
     data["usage"] = _freeze(data["usage"])
     return SessionReceipt(**data)
 
@@ -657,6 +704,7 @@ class OpenSession:
     journal_path: str
     started_at: str
     terminal_receipt: SessionReceipt | None
+    resolved_terminal_block: MappingProxyType | None
 
     def environment(self):
         return {
@@ -1136,7 +1184,37 @@ class SessionController:
                     receipt = _receipt_from_data(payload.get("receipt"), repeated=True)
                     return OpenSession(
                         prepared, session_id, operation_id, str(path),
-                        receipt.started_at, receipt)
+                        receipt.started_at, receipt, None)
+            resolved_terminal_block = None
+            latest = _latest_sealed_receipt(journal, self._open_payload)
+            if isinstance(latest, dict) and latest.get("status") == "blocked" \
+                    and latest.get("operation_id") != operation_id \
+                    and not prepared.route_contract["blocked"]:
+                prior_receipt = _receipt_from_data(latest, repeated=False)
+                already_resolved = False
+                for event in journal["events"]:
+                    if event["kind"] != "terminal-block-resolved":
+                        continue
+                    payload = self._open_payload(event["operation_id"], event["payload"])
+                    if payload.get("prior_receipt_hash") == prior_receipt.receipt_hash:
+                        already_resolved = True
+                        break
+                resolution = {
+                    "prior_operation_id": prior_receipt.operation_id,
+                    "prior_receipt_hash": prior_receipt.receipt_hash,
+                    "prior_authority_hash": (
+                        prior_receipt.terminal_authority["authority_hash"]
+                        if prior_receipt.terminal_authority is not None else None),
+                    "resolution": "fresh-valid-invocation",
+                    "new_invocation_id": invocation_id,
+                    "new_request_hash": prepared.request_hash,
+                }
+                if not already_resolved:
+                    _append_event(
+                        journal, "terminal-block-resolved", prior_receipt.session_id,
+                        prior_receipt.operation_id, instant,
+                        self._protect_payload(prior_receipt.operation_id, resolution))
+                resolved_terminal_block = _freeze(resolution)
             prior = [event for event in journal["events"]
                      if event["operation_id"] == operation_id]
             if prior:
@@ -1159,7 +1237,8 @@ class SessionController:
                 }))
             _atomic_json(path, journal)
         return OpenSession(
-            prepared, session_id, operation_id, str(path), started, None)
+            prepared, session_id, operation_id, str(path), started, None,
+            resolved_terminal_block)
 
     def interrupt(self, open_session, *, code, now=None):
         """Close an open delegated action as interrupted, idempotently."""
@@ -1410,6 +1489,19 @@ class SessionController:
             result.get("reversible_action_ids", [])
             + (memory_result.get("reversible_action_ids", [])
                if isinstance(memory_result, dict) else [])))
+        block_reason = None
+        if result["status"] == "blocked":
+            block_reason = loom_runtime._thaw(
+                prepared.route_contract.get("block_reason"))
+            if block_reason is None:
+                block_reason = loom_block_reason.generic(
+                    result["code"], result.get(
+                        "user_message", "The routed operation could not continue."),
+                    category="handler")
+            loom_block_reason.validate(block_reason)
+        terminal_authority = loom_terminal_authority.build(
+            status=result["status"], operation_id=operation_id,
+            block_reason=block_reason)
         owner_message = loom_message.from_session(
             status=result["status"], code=result["code"],
             intent=prepared.intent,
@@ -1417,9 +1509,10 @@ class SessionController:
             owner_input_required=prepared.route_contract["needs_owner"],
             reversible_action_ids=reversible_action_ids,
             detail=result.get("user_message", ""),
-            receipt_id="session-" + operation_id[:16])
+            receipt_id="session-" + operation_id[:16],
+            block_reason=block_reason)
         receipt_data = {
-            "schema_version": SCHEMA_VERSION,
+            "schema_version": RECEIPT_SCHEMA_VERSION,
             "session_id": session_id,
             "operation_id": operation_id,
             "invocation_id": invocation_id,
@@ -1450,6 +1543,8 @@ class SessionController:
             "owner_input_required": prepared.route_contract["needs_owner"],
             "user_message": result.get("user_message", ""),
             "owner_message": owner_message,
+            "block_reason": block_reason,
+            "terminal_authority": terminal_authority,
             "usage": result["usage"],
             "event_count": len(journal["events"]) + 1,
             "world_fingerprint": prepared.world_fingerprint,

@@ -17,7 +17,7 @@ import inspect
 
 class PerformanceExcellenceTests(unittest.TestCase):
     def test_normal_completion_reuses_one_post_host_stable_preparation(self):
-        source = inspect.getsource(loom_orchestrator.complete)
+        source = inspect.getsource(loom_orchestrator._complete_under_lock)
         self.assertEqual(1, source.count("loom_runtime.prepare_invocation("))
 
     def test_static_prefix_and_dynamic_capsules_have_independent_authority_keys(self):

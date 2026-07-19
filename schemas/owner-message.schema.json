@@ -4,6 +4,7 @@
   "title": "Loom bounded owner-facing message",
   "oneOf": [
     {"$ref": "#/$defs/current"},
+    {"$ref": "#/$defs/transitional"},
     {"$ref": "#/$defs/legacy"}
   ],
   "$defs": {
@@ -23,6 +24,46 @@
       }
     },
     "current": {
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema_version", "state", "consequence", "verification", "freshness", "changes_made", "undo_status", "summary", "decision", "recommendation", "next_action", "receipt_id", "human"],
+          "properties": {
+            "schema_version": {"const": 3},
+            "state": {"enum": ["progress", "completed", "decision-needed", "blocked", "stale", "uncertain", "promoted", "failed"]},
+            "consequence": {"enum": ["ordinary", "material", "high", "critical"]},
+            "verification": {"enum": ["pending", "verified", "blocked", "failed", "unknown"]},
+            "freshness": {"enum": ["current", "stale", "unknown", "not-applicable"]},
+            "changes_made": {"type": ["boolean", "null"]},
+            "undo_status": {"enum": ["available", "not-applicable", "unavailable", "unknown"]},
+            "summary": {"type": "string", "minLength": 1, "maxLength": 240},
+            "decision": {"type": ["string", "null"], "maxLength": 240},
+            "recommendation": {"type": ["string", "null"], "maxLength": 240},
+            "next_action": {"type": "string", "minLength": 1, "maxLength": 240},
+            "receipt_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+            "human": {"type": "string", "minLength": 1, "maxLength": 600}
+          }
+        },
+        {
+          "if": {"properties": {"state": {"enum": ["decision-needed", "blocked", "stale", "uncertain", "failed"]}}},
+          "then": {
+            "properties": {
+              "decision": {"type": "string", "minLength": 1, "maxLength": 240},
+              "recommendation": {"type": "string", "minLength": 1, "maxLength": 240}
+            }
+          },
+          "else": {
+            "properties": {
+              "decision": {"type": "null"},
+              "recommendation": {"type": "null"}
+            }
+          }
+        }
+      ]
+    },
+    "transitional": {
       "allOf": [
         {"$ref": "#/$defs/base"},
         {

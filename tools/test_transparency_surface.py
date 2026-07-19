@@ -121,7 +121,7 @@ class TransparencySurfaceTests(unittest.TestCase):
         self.assertEqual(2, len(view.splitlines()))
         self.assertIn("verification: verified", view)
         self.assertIn("freshness: current", view)
-        self.assertIn("reversible: yes", view)
+        self.assertIn("undo: available", view)
         self.assertIn("Receipt: session-", view)
         self.assertLessEqual(len(view), 600)
 

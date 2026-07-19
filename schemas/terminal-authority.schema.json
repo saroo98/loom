@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/terminal-authority.schema.json",
+  "title": "Loom terminal session authority",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "state", "blocked_operation_id",
+    "implementation_authorized", "requires_new_action", "allowed_next",
+    "reason_hash", "authority_hash"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "state": {"enum": ["closed", "terminal-block"]},
+    "blocked_operation_id": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "implementation_authorized": {"type": ["boolean", "null"]},
+    "requires_new_action": {"type": "boolean"},
+    "allowed_next": {"enum": ["normal", "diagnose-resolve-and-reinvoke"]},
+    "reason_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "authority_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"state": {"const": "terminal-block"}}},
+      "then": {
+        "properties": {
+          "blocked_operation_id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "implementation_authorized": {"const": false},
+          "requires_new_action": {"const": true},
+          "allowed_next": {"const": "diagnose-resolve-and-reinvoke"},
+          "reason_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      },
+      "else": {
+        "properties": {
+          "blocked_operation_id": {"type": "null"},
+          "implementation_authorized": {"type": "null"},
+          "requires_new_action": {"const": false},
+          "allowed_next": {"const": "normal"},
+          "reason_hash": {"type": "null"}
+        }
+      }
+    }
+  ]
+}

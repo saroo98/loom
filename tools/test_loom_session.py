@@ -396,7 +396,9 @@ controller.run("Build a command-line tool",
             (schema_root / "session-receipt.schema.json").read_text(encoding="utf-8"))
         self.assertEqual(set(journal_schema["required"]), {
             "schema_version", "instance_id", "project_id", "events"})
-        self.assertEqual(set(receipt_schema["required"]), set(
+        current_required = set(receipt_schema["required"]) | {
+            "block_reason", "terminal_authority"}
+        self.assertEqual(current_required, set(
             loom_session.SessionReceipt.__dataclass_fields__))
         self.assertEqual(
             set(journal_schema["$defs"]["event"]["properties"]), {

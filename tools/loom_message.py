@@ -3,6 +3,8 @@
 
 import re
 
+import loom_block_reason
+
 
 STATES = {
     "progress", "completed", "decision-needed", "blocked", "stale",
@@ -14,7 +16,8 @@ FRESHNESS = {"current", "stale", "unknown", "not-applicable"}
 INTERVENTIONS = {"decision-needed", "blocked", "stale", "uncertain", "failed"}
 SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 MAX_HUMAN_CHARS = 600
-UNDO_STATUSES = {"available", "not-available", "not-needed", "unknown"}
+UNDO_STATUSES = {"available", "not-applicable", "unavailable", "unknown"}
+TRANSITIONAL_UNDO_STATUSES = {"available", "not-available", "not-needed", "unknown"}
 
 
 class MessageError(ValueError):
@@ -51,13 +54,15 @@ def _render(value):
 def validate(value):
     if isinstance(value, dict) and value.get("schema_version") == 1:
         return _validate_legacy(value)
+    if isinstance(value, dict) and value.get("schema_version") == 2:
+        return _validate_v2(value)
     fields = {
         "schema_version", "state", "consequence", "verification", "freshness",
         "changes_made", "undo_status", "summary", "decision", "recommendation", "next_action",
         "receipt_id", "human",
     }
     if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != 2 \
+            or value.get("schema_version") != 3 \
             or value.get("state") not in STATES \
             or value.get("consequence") not in CONSEQUENCES \
             or value.get("verification") not in VERIFICATION \
@@ -68,10 +73,10 @@ def validate(value):
             or not isinstance(value.get("receipt_id"), str) \
             or not SAFE_ID.fullmatch(value["receipt_id"]):
         raise MessageError("owner message fields are invalid")
-    if (value["changes_made"] is False and value["undo_status"] != "not-needed") \
+    if (value["changes_made"] is False and value["undo_status"] != "not-applicable") \
             or (value["changes_made"] is None and value["undo_status"] != "unknown") \
             or (value["changes_made"] is True and value["undo_status"] not in {
-                "available", "not-available"}):
+                "available", "unavailable"}):
         raise MessageError("owner message change and undo status disagree")
     _text(value["summary"], "summary")
     _text(value["next_action"], "next action")
@@ -96,7 +101,7 @@ def build(*, state, consequence, verification, freshness, changes_made, undo_sta
     decision = _text(decision, "decision", nullable=True)
     recommendation = _text(recommendation, "recommendation", nullable=True)
     value = {
-        "schema_version": 2, "state": state, "consequence": consequence,
+        "schema_version": 3, "state": state, "consequence": consequence,
         "verification": verification, "freshness": freshness,
         "changes_made": changes_made, "undo_status": undo_status, "summary": summary,
         "decision": decision, "recommendation": recommendation,
@@ -108,7 +113,7 @@ def build(*, state, consequence, verification, freshness, changes_made, undo_sta
 
 
 def from_session(*, status, code, intent, tier, owner_input_required, reversible_action_ids,
-                 detail, receipt_id):
+                 detail, receipt_id, block_reason=None):
     """Project a sealed session result into one safe owner-facing envelope."""
     if status not in {"completed", "blocked", "interrupted"} \
             or intent not in {
@@ -122,6 +127,8 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
     low = str(code).casefold()
     normalized_detail = " ".join(str(detail or "").split())[:180].strip()
     if status == "completed":
+        if block_reason is not None:
+            raise MessageError("completed session cannot carry a block reason")
         state = "promoted" if "promot" in low else "completed"
         verification = "verified"
         freshness = "current"
@@ -131,7 +138,7 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
         changes_made = intent in {
             "plan", "execute", "repair", "close", "remember", "forget", "undo"}
         undo_status = ("available" if reversible_action_ids else
-                       "not-available" if changes_made else "not-needed")
+                       "unavailable" if changes_made else "not-applicable")
     else:
         preference_conflict = "preference-conflict" in low
         state = ("decision-needed" if preference_conflict else
@@ -140,7 +147,18 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
                  "decision-needed" if owner_input_required else "blocked")
         verification = "failed" if status == "interrupted" else "blocked"
         freshness = "stale" if state == "stale" else "unknown"
-        if preference_conflict:
+        if block_reason is not None:
+            try:
+                loom_block_reason.validate(block_reason)
+            except loom_block_reason.BlockReasonError as exc:
+                raise MessageError(f"session block reason is invalid: {exc}") from exc
+            location = f" at {block_reason['safe_path']}" \
+                if block_reason["safe_path"] else ""
+            summary = f"Loom stopped{location}: {block_reason['observed']}"[:240].rstrip()
+            decision = "No implementation or fallback is authorized by this receipt."
+            recommendation = "Follow the receipt's exact bounded next action."
+            next_action = block_reason["next_action"]
+        elif preference_conflict:
             summary = "Two stated preferences conflict, so Loom did not choose one silently."
             decision = "State which preference should apply to this work."
             recommendation = "Keep both conflicting preferences inactive until you choose."
@@ -155,12 +173,82 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
         if status == "interrupted":
             changes_made, undo_status = None, "unknown"
         else:
-            changes_made, undo_status = False, "not-needed"
+            changes_made, undo_status = False, "not-applicable"
     return build(
         state=state, consequence=consequence, verification=verification,
         freshness=freshness, changes_made=changes_made, undo_status=undo_status,
         summary=summary, decision=decision, recommendation=recommendation,
         next_action=next_action, receipt_id=receipt_id)
+
+
+def _validate_v2(value):
+    fields = {
+        "schema_version", "state", "consequence", "verification", "freshness",
+        "changes_made", "undo_status", "summary", "decision", "recommendation",
+        "next_action", "receipt_id", "human",
+    }
+    if set(value) != fields or value.get("schema_version") != 2 \
+            or value.get("state") not in STATES \
+            or value.get("consequence") not in CONSEQUENCES \
+            or value.get("verification") not in VERIFICATION \
+            or value.get("freshness") not in FRESHNESS \
+            or (value.get("changes_made") is not None
+                and type(value.get("changes_made")) is not bool) \
+            or value.get("undo_status") not in TRANSITIONAL_UNDO_STATUSES \
+            or not isinstance(value.get("receipt_id"), str) \
+            or not SAFE_ID.fullmatch(value["receipt_id"]):
+        raise MessageError("transitional owner message fields are invalid")
+    if (value["changes_made"] is False and value["undo_status"] != "not-needed") \
+            or (value["changes_made"] is None and value["undo_status"] != "unknown") \
+            or (value["changes_made"] is True and value["undo_status"] not in {
+                "available", "not-available"}):
+        raise MessageError("transitional owner message change and undo status disagree")
+    _text(value["summary"], "summary")
+    _text(value["next_action"], "next action")
+    intervention = value["state"] in INTERVENTIONS
+    if intervention:
+        _text(value["decision"], "decision")
+        _text(value["recommendation"], "recommendation")
+    elif value["decision"] is not None or value["recommendation"] is not None:
+        raise MessageError("transitional non-intervention message has an owner decision")
+    if not isinstance(value.get("human"), str) or value["human"] != _render(value):
+        raise MessageError("transitional owner message rendering is invalid")
+    return value
+
+
+def v2_from_session(*, status, code, intent, tier, owner_input_required,
+                    reversible_action_ids, detail, receipt_id):
+    """Reconstruct the short-lived v2 projection for sealed receipt compatibility."""
+    current = from_session(
+        status=status, code=code, intent=intent, tier=tier,
+        owner_input_required=owner_input_required,
+        reversible_action_ids=reversible_action_ids, detail=detail,
+        receipt_id=receipt_id, block_reason=None)
+    value = dict(current)
+    value["schema_version"] = 2
+    value["undo_status"] = {
+        "not-applicable": "not-needed", "unavailable": "not-available",
+    }.get(value["undo_status"], value["undo_status"])
+    value["human"] = _render(value)
+    return _validate_v2(value)
+
+
+def v2_build(*, state, consequence, verification, freshness, changes_made,
+             undo_status, summary, next_action, receipt_id, decision=None,
+             recommendation=None):
+    """Reconstruct a v2 action message only to authenticate existing actions."""
+    value = {
+        "schema_version": 2, "state": state, "consequence": consequence,
+        "verification": verification, "freshness": freshness,
+        "changes_made": changes_made, "undo_status": undo_status,
+        "summary": _text(summary, "summary"),
+        "decision": _text(decision, "decision", nullable=True),
+        "recommendation": _text(recommendation, "recommendation", nullable=True),
+        "next_action": _text(next_action, "next action"),
+        "receipt_id": receipt_id, "human": "",
+    }
+    value["human"] = _render(value)
+    return _validate_v2(value)
 
 
 def _legacy_render(value):
