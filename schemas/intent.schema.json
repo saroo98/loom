@@ -11,7 +11,7 @@
     "config_source", "retry_key", "prepared_at", "project_inspection", "prepared_hash"
   ],
   "properties": {
-    "schema_version": { "const": 2 },
+    "schema_version": { "enum": [2, 3] },
     "instance_id": { "type": "string", "format": "uuid" },
     "project_id": { "type": "string", "pattern": "^p-[0-9a-f]{32}$" },
     "invocation_id": { "type": "string", "format": "uuid" },
@@ -70,7 +70,13 @@
         "project_inspection_digest": {
           "type": "string", "pattern": "^sha256:[0-9a-f]{64}$"
         },
-        "project_inspection_g1_eligible": { "type": "boolean" }
+        "project_inspection_g1_eligible": { "type": "boolean" },
+        "block_reason": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "block-reason.schema.json"}
+          ]
+        }
       }
     },
     "hard_stops": {
@@ -89,5 +95,12 @@
     "prepared_at": { "type": "string", "format": "date-time" },
     "project_inspection": { "$ref": "project-inspection.schema.json" },
     "prepared_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
-  }
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": 3}}},
+      "then": {"properties": {"route_contract": {"required": ["block_reason"]}}},
+      "else": {"properties": {"route_contract": {"not": {"required": ["block_reason"]}}}}
+    }
+  ]
 }

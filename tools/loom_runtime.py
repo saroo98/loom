@@ -19,6 +19,7 @@ from types import MappingProxyType
 
 import loom_domain
 import loom_gate
+import loom_block_reason
 import loom_lifecycle
 import loom_lint
 import loom_memory
@@ -28,7 +29,8 @@ import loom_tier
 from loom_reliability import _is_trusted_os_alias
 
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
+LEGACY_SCHEMA_VERSION = 2
 MAX_CONFIG_BYTES = 256 * 1024
 MAX_FRONTIER_FILES = 2048
 MAX_FRONTIER_BYTES = 16 * 1024 * 1024
@@ -65,8 +67,9 @@ ROUTE_FIELDS = {
     "needs_owner", "routine_question_count", *EFFECT_COUNT_FIELDS,
     "tier", "autonomy", "use_profile", "requires_domain_discovery",
     "project_inspection_state", "project_inspection_digest",
-    "project_inspection_g1_eligible",
+    "project_inspection_g1_eligible", "block_reason",
 }
+LEGACY_ROUTE_FIELDS = ROUTE_FIELDS - {"block_reason"}
 WORLD_COMPONENT_FIELDS = {
     "target_survey_hash", "pack_hash", "config_hash", "lifecycle_hash",
     "capsule_version", "profile_version", "prior_session_hash",
@@ -399,7 +402,7 @@ def _decision(intent, *, blocked=False, code="ROUTED", recommendation="",
               evidence=(), confidence=1.0, needs_owner=False):
     if intent not in INTENTS:
         raise RuntimeError("unsupported internal intent")
-    return {
+    value = {
         "intent": intent,
         "blocked": bool(blocked),
         "code": str(code),
@@ -417,7 +420,12 @@ def _decision(intent, *, blocked=False, code="ROUTED", recommendation="",
         "autonomy": "A1",
         "use_profile": True,
         "requires_domain_discovery": False,
+        "block_reason": None,
     }
+    if value["blocked"]:
+        value["block_reason"] = loom_block_reason.generic(
+            value["code"], value["recommendation"], category="intent")
+    return value
 
 
 def _request_span(text, match=None):
@@ -675,7 +683,7 @@ def resolve_intent(request, state=None):
                 "before any irreversible action."),
             "evidence": ["high-consequence", _request_span(text, high_consequence)],
         })
-    return decision
+    return _synchronize_block_reason(decision, category="intent")
 
 
 def compose_world_fingerprint(components):
@@ -691,8 +699,12 @@ def compose_world_fingerprint(components):
     return _sha(_canonical_json(components))
 
 
-def _validate_route(route):
-    if not isinstance(route, dict) or set(route) != ROUTE_FIELDS:
+def _validate_route(route, *, schema_version=SCHEMA_VERSION):
+    expected_fields = (ROUTE_FIELDS if schema_version == SCHEMA_VERSION
+                       else LEGACY_ROUTE_FIELDS if schema_version == LEGACY_SCHEMA_VERSION
+                       else None)
+    if expected_fields is None or not isinstance(route, dict) \
+            or set(route) != expected_fields:
         raise RuntimeError("route contract fields are unknown or missing")
     if route.get("intent") not in INTENTS:
         raise RuntimeError("route intent is invalid")
@@ -725,6 +737,17 @@ def _validate_route(route):
     if route["blocked"] and (not route["needs_owner"]
                               or not route["recommendation"].strip()):
         raise RuntimeError("blocked route requires one owner recommendation")
+    if schema_version == SCHEMA_VERSION:
+        reason = route["block_reason"]
+        if route["blocked"]:
+            try:
+                loom_block_reason.validate(reason)
+            except loom_block_reason.BlockReasonError as exc:
+                raise RuntimeError(f"route block reason is invalid: {exc}") from exc
+            if reason["code"] != route["code"].casefold().replace("_", "-"):
+                raise RuntimeError("route block reason code does not match route")
+        elif reason is not None:
+            raise RuntimeError("unblocked route cannot carry a block reason")
     confidence = route.get("confidence")
     if type(confidence) not in (int, float) or not math.isfinite(confidence) \
             or not 0 <= confidence <= 1:
@@ -781,7 +804,7 @@ class PreparedInvocation:
         except (TypeError, ValueError) as exc:
             raise RuntimeError(f"prepared invocation is not strict JSON: {exc}") from exc
         if type(data.get("schema_version")) is not int \
-                or data["schema_version"] != SCHEMA_VERSION:
+                or data["schema_version"] not in {SCHEMA_VERSION, LEGACY_SCHEMA_VERSION}:
             raise RuntimeError("prepared schema_version is invalid")
         _canonical_uuid(data.get("instance_id"), "instance_id")
         _canonical_uuid(data.get("invocation_id"), "invocation_id")
@@ -803,7 +826,8 @@ class PreparedInvocation:
                            for item in domains) \
                 or len(set(domains)) != len(domains):
             raise RuntimeError("prepared domains are invalid")
-        _validate_route(data.get("route_contract"))
+        _validate_route(
+            data.get("route_contract"), schema_version=data["schema_version"])
         if data["route_contract"]["intent"] != data["intent"]:
             raise RuntimeError("prepared intent/route mismatch")
         try:
@@ -1053,6 +1077,11 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
         "pack_exists": True, "authorized": False, "active_frontier": False,
         "terminal": False, "drift": False, "failed": True,
         "state_error": "INVALID_LIFECYCLE",
+        "state_detail": "the compact planning lifecycle is invalid",
+        "state_path": "plans/.loom-small-lifecycle.json",
+        "state_lifecycle": "invalid",
+        "state_finding_codes": ["INVALID_SMALL_LIFECYCLE"],
+        "state_finding_count": 1,
     }
     if not record.is_file() or record.is_symlink() \
             or not work_order.is_file() or work_order.is_symlink():
@@ -1084,6 +1113,11 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
             "active_frontier": False, "terminal": False,
             "drift": True, "failed": False,
             "state_error": "STALE_LIFECYCLE",
+            "state_detail": "repository state differs from the compact lifecycle checkpoint",
+            "state_path": "plans/.loom-small-lifecycle.json",
+            "state_lifecycle": "stale",
+            "state_finding_codes": ["REPOSITORY_DRIFT"],
+            "state_finding_count": 1,
         }
     result = {
         "pack_exists": True,
@@ -1099,6 +1133,11 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
         result.update({
             "authorized": False, "active_frontier": False,
             "drift": True, "state_error": "STALE_TIME",
+            "state_detail": "compact planning evidence exceeded its freshness window",
+            "state_path": "plans/.loom-small-lifecycle.json",
+            "state_lifecycle": "stale",
+            "state_finding_codes": ["FRESHNESS_EXPIRED"],
+            "state_finding_count": 1,
         })
     return result
 
@@ -1166,12 +1205,35 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
             "drift": False, "failed": True,
             "state_error": "INVALID_LIFECYCLE",
             "state_detail": "plans/lifecycle.json is missing from an existing planning pack",
+            "state_path": "plans/lifecycle.json",
+            "state_lifecycle": "missing",
+            "state_finding_codes": ["MISSING_LIFECYCLE"],
+            "state_finding_count": 1,
         }
     if lifecycle.is_file():
         try:
             findings = loom_gate.verify(pack, repo=None)
             if findings:
-                raise RuntimeError("; ".join(findings[:5]))
+                codes = []
+                for finding in findings:
+                    match = re.match(r"\s*([A-Z][A-Z0-9._-]{0,63})(?::|\b)", finding)
+                    code = match.group(1) if match else "INVALID_LIFECYCLE"
+                    if code not in codes:
+                        codes.append(code)
+                    if len(codes) >= loom_block_reason.MAX_FINDINGS:
+                        break
+                return {
+                    "pack_exists": True, "authorized": False,
+                    "active_frontier": False, "terminal": False,
+                    "drift": False, "failed": True,
+                    "state_error": "INVALID_LIFECYCLE",
+                    "state_detail": (
+                        f"lifecycle verification reported {len(findings)} finding(s)"),
+                    "state_path": "plans/lifecycle.json",
+                    "state_lifecycle": "invalid",
+                    "state_finding_codes": codes,
+                    "state_finding_count": min(len(findings), 4096),
+                }
             value = json.loads(_bounded_read(
                 lifecycle, MAX_CONFIG_BYTES, "lifecycle state").decode("utf-8"))
             events = value["events"]
@@ -1202,15 +1264,27 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                     "state_error": "STALE_LIFECYCLE",
                     "state_detail": (
                         "repository state differs from the latest sealed lifecycle checkpoint"),
+                    "state_path": "plans/lifecycle.json",
+                    "state_lifecycle": "stale",
+                    "state_finding_codes": ["REPOSITORY_DRIFT"],
+                    "state_finding_count": 1,
                 }
         except (UnicodeError, json.JSONDecodeError, RuntimeError) as exc:
+            detail = loom_block_reason.safe_text(
+                "lifecycle verification failed: " + " ".join(str(exc).split())[:180],
+                "lifecycle verification failed and the unsafe detail was withheld")
             return {
                 "pack_exists": True, "authorized": False,
                 "active_frontier": False, "terminal": False,
                 "drift": False, "failed": True,
                 "state_error": "INVALID_LIFECYCLE",
-                "state_detail": ("lifecycle verification failed: "
-                                 + " ".join(str(exc).split())[:360]),
+                "state_detail": detail,
+                "state_path": "plans/lifecycle.json",
+                "state_lifecycle": "invalid",
+                "state_finding_codes": [
+                    "INVALID_JSON" if isinstance(exc, json.JSONDecodeError)
+                    else "INVALID_LIFECYCLE"],
+                "state_finding_count": 1,
             }
     result = {
         "pack_exists": exists,
@@ -1223,6 +1297,11 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
     if result["failed"]:
         result["state_error"] = "INVALID_LIFECYCLE"
         result["state_detail"] = "one or more work-order frontier records are invalid"
+        result["state_path"] = "plans/work-orders"
+        result["state_lifecycle"] = "invalid"
+        result["state_finding_codes"] = ["INVALID_WORK_ORDER"]
+        result["state_finding_count"] = min(
+            sum(item == "invalid" for item in statuses), 4096)
     if authorized and not result["failed"]:
         manifest = pack / "MANIFEST.md"
         try:
@@ -1245,6 +1324,10 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                     "state_detail": (
                         f"planning evidence is {(current - verified).days} days old; "
                         f"the sealed freshness window is {window} days"),
+                    "state_path": "plans/MANIFEST.md",
+                    "state_lifecycle": "stale",
+                    "state_finding_codes": ["FRESHNESS_EXPIRED"],
+                    "state_finding_count": 1,
                 })
         except (OSError, UnicodeError, KeyError, TypeError, ValueError) as exc:
             result.update({
@@ -1255,6 +1338,10 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                 "state_error": "INVALID_LIFECYCLE",
                 "state_detail": ("planning-pack freshness metadata is invalid: "
                                  + " ".join(str(exc).split())[:320]),
+                "state_path": "plans/MANIFEST.md",
+                "state_lifecycle": "invalid",
+                "state_finding_codes": ["INVALID_FRESHNESS"],
+                "state_finding_count": 1,
             })
     return result
 
@@ -1322,6 +1409,54 @@ def _state_block_recommendation(state):
     return (
         f"Project state is not trustworthy: {detail}. Loom authorized no project work and no "
         "fallback; inspect the sealed receipt before continuing.")
+
+
+def _lifecycle_block_reason(state):
+    code = str(state.get("state_error", "INVALID_LIFECYCLE"))
+    lifecycle_state = str(state.get("state_lifecycle", "unknown"))
+    observed = loom_block_reason.safe_text(
+        state.get("state_detail", "planning lifecycle state is not trustworthy"),
+        "planning lifecycle state is not trustworthy and unsafe detail was withheld")
+    return loom_block_reason.build(
+        code=code, category="lifecycle",
+        expected="A current, valid planning lifecycle bound to the observed repository state.",
+        observed=observed,
+        safe_path=state.get("state_path", "plans/lifecycle.json"),
+        lifecycle_state=lifecycle_state,
+        finding_codes=state.get("state_finding_codes", [code]),
+        finding_count=state.get("state_finding_count", 1),
+        ownership="unknown", pristine_proof="unknown",
+        automatic_recovery="unsafe",
+        next_action=(
+            "Inspect the named planning state, preserve authored content, repair the exact "
+            "finding, then start a fresh Loom request."))
+
+
+def _config_block_reason(config_error):
+    observed = loom_block_reason.safe_text(
+        "selected Loom configuration is invalid: "
+        + " ".join(str(config_error).split())[:160],
+        "selected Loom configuration is invalid and unsafe detail was withheld")
+    return loom_block_reason.build(
+        code="INVALID_CONFIG", category="configuration",
+        expected="A valid closed Loom configuration for the selected project.",
+        observed=observed, lifecycle_state="not-applicable",
+        finding_codes=["INVALID_CONFIG"], finding_count=1,
+        ownership="unknown", pristine_proof="not-applicable",
+        automatic_recovery="unsafe",
+        next_action="Repair the selected configuration, then start a fresh Loom request.")
+
+
+def _synchronize_block_reason(decision, *, category="intent"):
+    if decision["blocked"]:
+        reason = decision.get("block_reason")
+        normalized_code = decision["code"].casefold().replace("_", "-")
+        if not isinstance(reason, dict) or reason.get("code") != normalized_code:
+            decision["block_reason"] = loom_block_reason.generic(
+                decision["code"], decision["recommendation"], category=category)
+    else:
+        decision["block_reason"] = None
+    return decision
 
 
 def _canonical_owner_root(owner_home, invocation_cwd=None):
@@ -1518,6 +1653,7 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
                 + " ".join(str(config_error).split())[:420]
                 + ". No project work or fallback was authorized; repair that config first."),
             "evidence": ["invalid-config"],
+            "block_reason": _config_block_reason(config_error),
         })
     elif state.get("state_error") in {"STALE_LIFECYCLE", "STALE_TIME"}:
         decision.update({
@@ -1540,8 +1676,13 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "confidence": 0.0,
             "recommendation": _state_block_recommendation(state),
             "evidence": ["invalid-lifecycle-state"],
+            "block_reason": _lifecycle_block_reason(state),
         })
-    _validate_route(decision)
+    _synchronize_block_reason(
+        decision,
+        category=("configuration" if config_error else
+                  "lifecycle" if state.get("state_error") else "intent"))
+    _validate_route(decision, schema_version=SCHEMA_VERSION)
     freshness_seconds = config["freshness_window_days"] * 86_400
     staleness_bucket = int(prepared_time.timestamp() // freshness_seconds)
     components["staleness_bucket"] = staleness_bucket

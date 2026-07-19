@@ -473,7 +473,11 @@ class PreparedInvocationTests(RuntimeFixture):
         self.assertEqual(set(schema["required"]), loom_runtime.PREPARED_FIELDS)
         route_schema = schema["properties"]["route_contract"]
         self.assertEqual(set(route_schema["properties"]), loom_runtime.ROUTE_FIELDS)
-        self.assertEqual(set(route_schema["required"]), loom_runtime.ROUTE_FIELDS)
+        self.assertEqual(
+            set(route_schema["required"]), loom_runtime.ROUTE_FIELDS - {"block_reason"})
+        self.assertEqual(
+            schema["allOf"][0]["then"]["properties"]["route_contract"]["required"],
+            ["block_reason"])
         session_schema = json.loads((Path(__file__).resolve().parent.parent /
                                      "schemas" / "session.schema.json").read_text(
                                          encoding="utf-8"))

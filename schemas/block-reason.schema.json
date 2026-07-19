@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/block-reason.schema.json",
+  "title": "Loom bounded terminal block reason",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "code", "category", "expected", "observed",
+    "safe_path", "lifecycle_state", "finding_codes", "finding_count", "ownership",
+    "pristine_proof", "changes_made", "automatic_recovery", "next_action",
+    "implementation_authorized", "requires_new_action", "reason_hash"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "code": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
+    "category": {"enum": ["authority", "configuration", "domain", "handler", "intent", "lifecycle", "memory", "project", "recovery", "unknown"]},
+    "expected": {"type": "string", "minLength": 1, "maxLength": 240},
+    "observed": {"type": "string", "minLength": 1, "maxLength": 240},
+    "safe_path": {"type": ["string", "null"], "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*[:\\\\])[A-Za-z0-9_. -]+(?:/[A-Za-z0-9_. -]+)*$", "maxLength": 240},
+    "lifecycle_state": {"enum": ["current", "invalid", "missing", "not-applicable", "stale", "unknown"]},
+    "finding_codes": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9._-]{0,63}$"}},
+    "finding_count": {"type": "integer", "minimum": 0, "maximum": 4096},
+    "ownership": {"enum": ["loom-owned", "not-applicable", "owner-modified", "unknown", "unowned"]},
+    "pristine_proof": {"enum": ["failed", "not-applicable", "proved", "unknown"]},
+    "changes_made": {"const": false},
+    "automatic_recovery": {"enum": ["not-applicable", "owner-decision", "safe", "unsafe", "unknown"]},
+    "next_action": {"type": "string", "minLength": 1, "maxLength": 240},
+    "implementation_authorized": {"const": false},
+    "requires_new_action": {"const": true},
+    "reason_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
