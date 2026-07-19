@@ -441,12 +441,14 @@ def _route(text, intent, match=None, *, code=None, **kwargs):
 
 
 _BUILD_REQUEST_RE = re.compile(
-    r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|add|generate|plan)\b")
+    r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
+    r"add|generate|plan|fix|update|change|modify|refactor|migrate|upgrade|replace|remove)\b")
 _BUILD_CONTROL_RE = re.compile(
     r"^(?:please\s+)?(?:build|implement)\s+(?:the\s+)?(?:next|remaining|rest)\b")
 _QUESTION_BUILD_RE = re.compile(
     r"^(?:please\s+)?(?:can|could|would)\s+you\s+"
-    r"(?:build|create|make|implement|develop|write|design|add)\b")
+    r"(?:build|create|make|implement|develop|write|design|add|fix|update|change|"
+    r"modify|refactor|migrate|upgrade|replace|remove)\b")
 _ARTIFACT_NOUN_RE = re.compile(
     r"\b(?:dashboard|page|screen|tool|app|application|service|system|pipeline|"
     r"log|report|support|feature|workflow|integration|library|utility|module|"
@@ -468,10 +470,31 @@ _HIGH_CONSEQUENCE_RE = re.compile(
     r"message|notify|post|rotate|revoke|reset|flash|wipe)\b"
     r"|\b(?:force[- ]push|reset\s+--hard|clean\s+-fdx|rewrite\s+(?:the\s+)?"
     r"(?:git\s+)?history|wipe\s+(?:the\s+)?(?:disk|drive|database))\b")
+_LIFECYCLE_REPAIR_RE = re.compile(
+    r"^(?:please\s+)?(?:fix|repair)\s+(?:the\s+)?"
+    r"(?:(?:stale|broken|invalid|drifted)\s+)?(?:loom\s+)?"
+    r"(?:plan|planning pack|lifecycle)\b")
+_STATUS_QUERY_RE = re.compile(
+    r"^(?:please\s+)?(?:update\s+me\s+(?:on|about)|give\s+me\s+an?\s+update)\b")
+_MEMORY_REMEMBER_RE = re.compile(
+    r"^(?:please\s+)?(?:remember(?:\s+(?:that|this))?|be more careful|"
+    r"be less autonomous|correct\s+(?:what you learned|my preference|that preference|"
+    r"the preference)|retain\s+(?:this|that)\s+preference|"
+    r"(?:i|we)\s+prefer\b|from now on\b)")
+_EMBEDDED_MEMORY_REMEMBER_RE = re.compile(
+    r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?(?:remember\s+(?:that|this)|"
+    r"correct\s+(?:what you learned|my preference|that preference|the preference)|"
+    r"retain\s+(?:this|that)\s+preference|(?:i|we)\s+prefer\b|from now on\b)")
+_MEMORY_FORGET_RE = re.compile(
+    r"^(?:please\s+)?(?:forget\b|stop remembering\b)")
+_EMBEDDED_MEMORY_FORGET_RE = re.compile(
+    r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?"
+    r"(?:forget\b|stop remembering\b)")
 
 
 def _is_build_request(text):
-    if _BUILD_CONTROL_RE.search(text):
+    if _BUILD_CONTROL_RE.search(text) or _LIFECYCLE_REPAIR_RE.search(text) \
+            or _STATUS_QUERY_RE.search(text):
         return False
     if _BUILD_REQUEST_RE.search(text) or _QUESTION_BUILD_RE.search(text):
         return True
@@ -509,8 +532,8 @@ def resolve_intent(request, state=None):
         raise RuntimeError("request must be non-empty natural language")
     state = dict(state or {})
     text = " ".join(request.casefold().split())
+    task_text = " ".join(loom_domain.task_language(request).casefold().split())
     safety_preference = _SAFETY_PREFERENCE_RE.search(text)
-    remember_wrapper = bool(re.search(r"\bremember(?:\s+that|\s+this)?\b", text))
     negated_forget = re.search(
         r"\b(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?\s+forget\b|"
         r"\bforget\s+(?:nothing|none\b|anything)\b", text)
@@ -522,7 +545,7 @@ def resolve_intent(request, state=None):
             recommendation="Keep remembered state unchanged; state what should be retained.")
     negated_memory = bool(re.search(
         r"\b(?:do not|don't|never)\s+remember(?:\s+that)?\b", text))
-    build_request = _is_build_request(text)
+    build_request = _is_build_request(task_text)
     profile_query = bool(re.search(
         r"\bshow (?:me )?what you remember about me\b|"
         r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
@@ -530,13 +553,12 @@ def resolve_intent(request, state=None):
         r"\binspect what (?:loom|you) learned\b|\bwhat did (?:loom|you) learn\b|"
         r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b",
         text))
-    explicit_forget = bool(re.search(r"\bforget\b|\bstop remembering\b", text)) \
-        and not build_request
-    explicit_remember = bool(re.search(
-        r"\bremember(?: that| this)?\b|\bbe more careful\b|\bfrom now on\b|\bprefer\b|"
-        r"\bbe less autonomous\b|\bcorrect (?:that|my|the|what you learned)\b|"
-        r"\bretain (?:that|this|what you learned)\b",
-        text)) and not build_request and not profile_query
+    direct_forget = bool(_MEMORY_FORGET_RE.search(text))
+    embedded_forget = bool(_EMBEDDED_MEMORY_FORGET_RE.search(text))
+    direct_remember = bool(_MEMORY_REMEMBER_RE.search(text))
+    embedded_remember = bool(_EMBEDDED_MEMORY_REMEMBER_RE.search(text))
+    explicit_forget = direct_forget and not build_request
+    explicit_remember = (direct_remember and not build_request and not profile_query)
     memory_direct = None
     if profile_query:
         memory_direct = "status"
@@ -548,7 +570,8 @@ def resolve_intent(request, state=None):
         r"(?:[,;]|\bthen\b|\band\b)\s*(?:please\s+)?(?:continue|keep going|"
         r"build|implement|review|inspect|audit|close|finish|repair|fix|undo)\b",
         text)
-    if memory_direct is not None and secondary_action:
+    if (build_request and (embedded_remember or embedded_forget)) \
+            or (memory_direct is not None and secondary_action):
         return _decision(
             "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
             confidence=0.0, evidence=("multiple-requested-outcomes",),
@@ -576,23 +599,25 @@ def resolve_intent(request, state=None):
         signals = {
             "remember": False,
             "forget": False,
-            "why": bool(re.search(r"\bwhy (?:did|do|was)\b|\bexplain why\b", text)),
-            "undo": bool(re.search(r"\bundo\b|\btake back\b|\breverse (?:the )?last", text)),
+            "why": bool(re.search(r"\bwhy (?:did|do|was)\b|\bexplain why\b", task_text)),
+            "undo": bool(re.search(
+                r"\bundo\b|\btake back\b|\breverse (?:the )?last", task_text)),
             "status": bool(re.search(
                 r"\bshow me where\b|\bwhere are we\b|\bwhat has happened\b|"
                 r"\bshow (?:me )?the progress\b|\bwhat(?:'s| is) the status\b|"
                 r"\bprogress\b|\bstatus\b|\btoken usage\b|\bperformance report\b|"
-                r"\bcost report\b", text)),
-            "review": bool(re.search(r"\breview\b|\binspect\b|\baudit\b", text)),
+                r"\bcost report\b", task_text)),
+            "review": bool(re.search(
+                r"\breview\b|\binspect\b|\baudit\b", task_text)),
             "repair": bool(re.search(
                 r"\brepair\b|\bfix (?:the )?(?:stale |broken )?plan\b|"
-                r"\bstale plan\b", text)),
+                r"\bstale plan\b", task_text)),
             "close": bool(re.search(
                 r"\bwe are done\b|\bclose this\b|\bproject is over\b|"
-                r"\bfinish the project\b", text)),
+                r"\bfinish the project\b", task_text)),
             "continue": bool(re.search(
                 r"\bcontinue\b|\bkeep going\b|\bresume\b|\bpick up\b|\bcarry on\b|"
-                r"\bbuild the next\b|\bnext part\b", text)),
+                r"\bbuild the next\b|\bnext part\b", task_text)),
         }
     if build_request:
         # Product nouns such as review, status, audit, repair, undo, and forget
@@ -1140,6 +1165,7 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
             "active_frontier": False, "terminal": False,
             "drift": False, "failed": True,
             "state_error": "INVALID_LIFECYCLE",
+            "state_detail": "plans/lifecycle.json is missing from an existing planning pack",
         }
     if lifecycle.is_file():
         try:
@@ -1174,13 +1200,17 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                     "active_frontier": False, "terminal": False,
                     "drift": True, "failed": False,
                     "state_error": "STALE_LIFECYCLE",
+                    "state_detail": (
+                        "repository state differs from the latest sealed lifecycle checkpoint"),
                 }
-        except (UnicodeError, json.JSONDecodeError, RuntimeError):
+        except (UnicodeError, json.JSONDecodeError, RuntimeError) as exc:
             return {
                 "pack_exists": True, "authorized": False,
                 "active_frontier": False, "terminal": False,
                 "drift": False, "failed": True,
                 "state_error": "INVALID_LIFECYCLE",
+                "state_detail": ("lifecycle verification failed: "
+                                 + " ".join(str(exc).split())[:360]),
             }
     result = {
         "pack_exists": exists,
@@ -1192,6 +1222,7 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
     }
     if result["failed"]:
         result["state_error"] = "INVALID_LIFECYCLE"
+        result["state_detail"] = "one or more work-order frontier records are invalid"
     if authorized and not result["failed"]:
         manifest = pack / "MANIFEST.md"
         try:
@@ -1211,14 +1242,19 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                     "terminal": False,
                     "drift": True,
                     "state_error": "STALE_TIME",
+                    "state_detail": (
+                        f"planning evidence is {(current - verified).days} days old; "
+                        f"the sealed freshness window is {window} days"),
                 })
-        except (OSError, UnicodeError, KeyError, TypeError, ValueError):
+        except (OSError, UnicodeError, KeyError, TypeError, ValueError) as exc:
             result.update({
                 "authorized": False,
                 "active_frontier": False,
                 "terminal": False,
                 "failed": True,
                 "state_error": "INVALID_LIFECYCLE",
+                "state_detail": ("planning-pack freshness metadata is invalid: "
+                                 + " ".join(str(exc).split())[:320]),
             })
     return result
 
@@ -1274,6 +1310,18 @@ def _pack_route_contract(pack, state):
             return None
         raise RuntimeError("planning-pack diagnostic route identity is missing or invalid")
     return {"tier": tier, "domains": domains}
+
+
+def _state_block_recommendation(state):
+    code = str(state.get("state_error", "unknown-state"))
+    detail = " ".join(str(state.get("state_detail", "cause is unavailable")).split())[:420]
+    if code == "INVALID_LIFECYCLE":
+        return (
+            f"Lifecycle state is invalid: {detail}. Loom authorized no project work and no "
+            "fallback. Inspect plans/, then repair or explicitly replace only the invalid state.")
+    return (
+        f"Project state is not trustworthy: {detail}. Loom authorized no project work and no "
+        "fallback; inspect the sealed receipt before continuing.")
 
 
 def _canonical_owner_root(owner_home, invocation_cwd=None):
@@ -1465,7 +1513,10 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "code": "INVALID_CONFIG",
             "needs_owner": True,
             "confidence": 0.0,
-            "recommendation": "Repair the invalid selected Loom config before continuing.",
+            "recommendation": (
+                "Selected Loom config is invalid: "
+                + " ".join(str(config_error).split())[:420]
+                + ". No project work or fallback was authorized; repair that config first."),
             "evidence": ["invalid-config"],
         })
     elif state.get("state_error") in {"STALE_LIFECYCLE", "STALE_TIME"}:
@@ -1487,7 +1538,7 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "code": str(state["state_error"]),
             "needs_owner": True,
             "confidence": 0.0,
-            "recommendation": "Repair or replace the invalid lifecycle state before continuing.",
+            "recommendation": _state_block_recommendation(state),
             "evidence": ["invalid-lifecycle-state"],
         })
     _validate_route(decision)

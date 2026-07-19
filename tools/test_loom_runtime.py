@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
+import loom_domain
 import loom_memory
 import loom_runtime
 import loom_survey
@@ -238,6 +239,47 @@ class IntentRoutingTests(unittest.TestCase):
         decision = loom_runtime.resolve_intent("Show my token usage", {})
         self.assertEqual("status", decision["intent"])
         self.assertFalse(decision["blocked"])
+
+    def test_software_fix_language_outranks_task_local_preference_words(self):
+        request = (
+            "Fix the Windows request-transport defect before the next release. "
+            "Use the existing JSON-over-stdio protocol end to end. Prefer process "
+            "isolation and correct the misleading existing test. Do not activate "
+            "website concerns."
+        )
+
+        decision = loom_runtime.resolve_intent(request, {})
+        domains = loom_domain.select_domains(request)["active_task_domains"]
+
+        self.assertEqual("plan", decision["intent"])
+        self.assertFalse(decision["blocked"])
+        self.assertNotIn("website", domains)
+
+    def test_fixing_lifecycle_state_remains_repair_not_implementation(self):
+        for request in ("Fix the stale plan", "Repair the broken Loom lifecycle"):
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request, {"drift": True})
+                self.assertEqual("repair", decision["intent"])
+                self.assertFalse(decision["blocked"])
+        detector = loom_runtime.resolve_intent("Fix a stale-plan detector", {})
+        self.assertEqual("plan", detector["intent"])
+        self.assertFalse(detector["blocked"])
+
+    def test_durable_preference_is_distinct_from_a_task_constraint(self):
+        cases = [
+            ("I prefer careful review from now on", "remember", False),
+            ("Prefer SQLite for this implementation", "plan", False),
+            ("Correct the misleading test and update the bridge", "plan", False),
+            ("Implement the bridge and remember that I prefer concise receipts",
+             "status", True),
+        ]
+        for request, intent, blocked in cases:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request, {})
+                self.assertEqual(intent, decision["intent"])
+                self.assertEqual(blocked, decision["blocked"])
+        conflict = loom_runtime.resolve_intent(cases[-1][0], {})
+        self.assertEqual("INTENT_AMBIGUOUS", conflict["code"])
 
     def test_internal_command_vocabulary_is_not_required(self):
         requests = [
