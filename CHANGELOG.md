@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.8.4
+
+- Make interrupted control-plane recovery transactional and receipt-bound across same-volume and
+  cross-volume filesystems, with strict v3 validation, fail-closed legacy compatibility, and
+  private Windows ACL enforcement.
+- Separate operation identity from the full observed world so exact retries remain idempotent while
+  lifecycle or repository advancement creates the next authorized operation instead of replaying a
+  stale receipt.
+- Add explicit verification-only causal scope and generate release evidence after the final test
+  inventory, preventing pre-existing implementation from receiving causal credit and stale counts
+  from reaching CI.
+
 ## 1.8.3
 
 - Bind draft-release certification to the exact successful main quality and compatibility runs.

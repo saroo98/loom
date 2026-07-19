@@ -11,7 +11,7 @@
   <g transform="translate(74 64)">
     <g fill="none" stroke-linecap="square" stroke-width="3"><path d="M7 0v40M20 0v40M33 0v40M46 0v40" stroke="#f0ecdf"/><path d="M0 10h53M0 21h53M0 32h53" stroke="#d66d49"/></g>
     <text x="72" y="32" fill="#f0ecdf" font-family="Segoe UI Variable, Arial, sans-serif" font-size="32" font-weight="700" letter-spacing="-1">Loom</text>
-    <text x="164" y="30" fill="#9e9c93" font-family="Cascadia Code, monospace" font-size="12" letter-spacing="1.5">1.8.3</text>
+  <text x="164" y="30" fill="#9e9c93" font-family="Cascadia Code, monospace" font-size="12" letter-spacing="1.5">1.8.4</text>
   </g>
   <text x="74" y="216" fill="#d66d49" font-family="Cascadia Code, monospace" font-size="14" font-weight="700" letter-spacing="2.6">PLAN BEFORE THE AGENT BUILDS</text>
   <text x="74" y="302" fill="#f0ecdf" font-family="Segoe UI Variable, Arial, sans-serif" font-size="66" font-weight="680" letter-spacing="-3.8">One request.</text>
