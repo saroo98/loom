@@ -34,6 +34,10 @@ invisible to the owner:
    hash as the stable static-context cache key. The sealed capsule and plan contract are complete;
    do not reload Loom guidance after invocation. For `plan`, use the returned content-hashed
    `plan_contract` directly; do not reload the artifact matrix or guess a plan.
+   If the receipt is blocked or its terminal authority requires a new action, return its bounded
+   owner message and stop. Never reinterpret that receipt as implementation authority, switch to
+   an undocumented fallback, or reuse its operation. Resolve only the named condition, then invoke
+   Loom again; only a fresh sealed `action-required` receipt authorizes a new frontier.
    Match all 15 produce/skip rows exactly, verify every required domain invariant/current fact,
    plan the named real media, stay within its lexical-token/character budget and work-order
    topology, use a genuinely independent reviewer for G1, and do not mutate implementation

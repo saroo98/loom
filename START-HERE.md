@@ -59,6 +59,8 @@ runtime below. Never read every Loom file into context.
 - Epistemic status is explicit: fact with evidence, assumption with a verification route,
   speculation, unknown, or human decision.
 - No implementation authorization from stale, unknown, corrupt, or time-drifted state.
+- A terminal block authorizes no fallback work. Resolve its bounded reason and start a fresh Loom
+  request; only that fresh sealed action can authorize implementation.
 - No artifact without a named consumer and decision. No work order without acceptance evidence.
 - General memory contains no domain, project, or component identity. Domain, project, component,
   temporary, and device memory load only for an exact active-task scope. Ambient repository
