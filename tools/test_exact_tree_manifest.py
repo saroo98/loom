@@ -194,6 +194,16 @@ class ExactTreeManifestTests(unittest.TestCase):
                 finally:
                     os.removexattr(candidate, "user.loom-test")
 
+    def test_macos_without_python_listxattr_uses_nofollow_native_fallback(self):
+        with mock.patch.object(loom_reliability.os, "name", "posix"), \
+                mock.patch.object(loom_reliability.sys, "platform", "darwin"), \
+                mock.patch.object(loom_reliability.os, "listxattr", None, create=True), \
+                mock.patch.object(loom_reliability, "_darwin_xattrs",
+                                  return_value=(b"com.example.owner",)) as fallback:
+            self.assertEqual((b"com.example.owner",),
+                             loom_reliability._posix_xattrs(self.root))
+        fallback.assert_called_once_with(self.root)
+
     @unittest.skipUnless(os.name == "nt", "alternate data streams require Windows")
     def test_windows_ads_on_root_directory_or_file_are_rejected(self):
         directory = self.root / "nested"

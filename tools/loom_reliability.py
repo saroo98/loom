@@ -1737,11 +1737,63 @@ def _windows_named_stream_count(path):
     return count
 
 
+def _darwin_xattrs(path):
+    """Enumerate macOS xattrs without following redirects when Python omits os.listxattr."""
+    import ctypes
+
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        listxattr = libc.listxattr
+    except (AttributeError, OSError) as exc:
+        raise ReliabilityError(
+            "cannot certify exact-tree macOS extended attributes") from exc
+    listxattr.argtypes = [ctypes.c_char_p, ctypes.c_void_p,
+                          ctypes.c_size_t, ctypes.c_int]
+    listxattr.restype = ctypes.c_ssize_t
+    encoded = os.fsencode(path)
+    nofollow = 0x0001
+    unsupported = {errno.ENOTSUP, getattr(errno, "EOPNOTSUPP", errno.ENOTSUP),
+                   errno.EPERM}
+    for _attempt in range(3):
+        ctypes.set_errno(0)
+        required = listxattr(encoded, None, 0, nofollow)
+        if required < 0:
+            error = ctypes.get_errno()
+            if error in unsupported:
+                return ()
+            raise ReliabilityError(
+                f"cannot enumerate exact-tree macOS extended attributes (error {error})")
+        if required == 0:
+            return ()
+        buffer = ctypes.create_string_buffer(required)
+        ctypes.set_errno(0)
+        observed = listxattr(encoded, buffer, required, nofollow)
+        if observed < 0:
+            error = ctypes.get_errno()
+            if error == errno.ERANGE:
+                continue
+            if error in unsupported:
+                return ()
+            raise ReliabilityError(
+                f"cannot enumerate exact-tree macOS extended attributes (error {error})")
+        if observed > required:
+            continue
+        raw = buffer.raw[:observed]
+        if raw and not raw.endswith(b"\0"):
+            raise ReliabilityError(
+                "cannot certify exact-tree macOS extended attribute framing")
+        return tuple(name for name in raw.split(b"\0") if name)
+    raise ReliabilityError(
+        "cannot certify exact-tree macOS extended attributes after concurrent changes")
+
+
 def _posix_xattrs(path):
     if os.name != "posix":
         return ()
     listxattr = getattr(os, "listxattr", None)
     if listxattr is None:
+        if sys.platform == "darwin":
+            return _darwin_xattrs(path)
         raise ReliabilityError("cannot certify exact-tree POSIX extended attributes")
     try:
         try:
