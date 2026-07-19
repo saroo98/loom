@@ -22,8 +22,8 @@ import loom_release_sign
 import loom_reliability
 import loom_update
 from v11_test_support import (
-    _build_environment_identity, build_vault_helper, package_evidence,
-    package_source_commit,
+    RUSTC_IDENTITY_TIMEOUT_SECONDS, _build_environment_identity, _rustc_identity,
+    build_vault_helper, package_evidence, package_source_commit,
 )
 
 
@@ -84,6 +84,21 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertNotEqual(baseline, temp_changed)
         self.assertNotEqual(baseline, home_changed)
         self.assertNotEqual(baseline, profile_changed)
+
+    def test_rustc_identity_probe_is_bounded_and_cached_per_process(self):
+        _rustc_identity.cache_clear()
+        try:
+            completed = mock.Mock(stdout="rustc 1.97.1\nhost: fixture\n")
+            with mock.patch("v11_test_support.subprocess.run",
+                            return_value=completed) as run:
+                first = _rustc_identity()
+                second = _rustc_identity()
+            self.assertEqual(first, second)
+            run.assert_called_once()
+            self.assertEqual(RUSTC_IDENTITY_TIMEOUT_SECONDS,
+                             run.call_args.kwargs["timeout"])
+        finally:
+            _rustc_identity.cache_clear()
 
     def test_receipt_proven_direct_install_bootstraps_without_signed_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -8,6 +8,7 @@ import struct
 import subprocess
 import tempfile
 import shutil
+from functools import lru_cache
 from pathlib import Path
 
 import loom_reliability
@@ -16,6 +17,7 @@ import loom_reliability
 MAX_CARGO_DIAGNOSTIC_CHARS = 4000
 SOURCE_KEY_HEX_LENGTH = 64
 RUST_COMPILER_STACK_BYTES = 64 * 1024 * 1024
+RUSTC_IDENTITY_TIMEOUT_SECONDS = 60
 BUILD_ENVIRONMENT_KEYS = (
     "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTFLAGS",
     "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
@@ -50,6 +52,21 @@ def _build_environment_identity(environment=None):
     return json.dumps(
         {"environment": values, "cargo_configs": configs},
         sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+@lru_cache(maxsize=1)
+def _rustc_identity():
+    """Read the compiler identity once per suite with a contention-tolerant bound."""
+    try:
+        result = subprocess.run(
+            ["rustc", "--version", "--verbose"], capture_output=True, text=True,
+            timeout=RUSTC_IDENTITY_TIMEOUT_SECONDS, check=True)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            "rustc identity probe exceeded its 60-second bound") from exc
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise RuntimeError("rustc identity probe failed") from exc
+    return result.stdout.encode("utf-8")
 
 
 def _compile_vault_helper(root, crate, target):
@@ -119,9 +136,7 @@ def build_vault_helper(root):
         (crate / "src").rglob("*.rs"))]
     if any(not path.is_file() for path in source_files):
         raise RuntimeError("vault-helper test source is incomplete")
-    rustc = subprocess.run(
-        ["rustc", "--version", "--verbose"], capture_output=True, text=True,
-        timeout=15, check=True).stdout.encode("utf-8")
+    rustc = _rustc_identity()
     build_policy = (b"release-v4-stack64-windows-brepro"
                     if os.name == "nt" else b"release-v4-stack64")
     digest = hashlib.sha256(
