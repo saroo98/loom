@@ -126,6 +126,23 @@
           "previous_completion_hash", "completion_hash"
         ],
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": ["causal_scope"],
+            "properties": {
+              "causal_scope": { "const": "verification-only" },
+              "changed_paths": { "maxItems": 0 },
+              "after_hashes": { "maxProperties": 0 }
+            }
+          },
+          {
+            "properties": {
+              "causal_scope": { "const": "implementation" },
+              "changed_paths": { "minItems": 1 },
+              "after_hashes": { "minProperties": 1 }
+            }
+          }
+        ],
         "properties": {
           "work_order": { "type": "string", "pattern": "^WO-[0-9]{3,}$" },
           "work_order_file": { "type": "string", "minLength": 1 },
@@ -137,15 +154,16 @@
             "type": ["string", "null"],
             "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"
           },
+          "causal_scope": {
+            "enum": ["implementation", "verification-only"]
+          },
           "changed_paths": {
             "type": "array",
-            "minItems": 1,
             "uniqueItems": true,
             "items": { "type": "string", "minLength": 1 }
           },
           "after_hashes": {
             "type": "object",
-            "minProperties": 1,
             "additionalProperties": {
               "type": ["string", "null"],
               "pattern": "^[0-9a-f]{64}$"

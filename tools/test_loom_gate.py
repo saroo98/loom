@@ -286,6 +286,75 @@ class LifecycleTests(unittest.TestCase):
         data = json.loads((self.pack / "lifecycle.json").read_text(encoding="utf-8"))
         self.assertEqual(data["work_order_completions"], [])
 
+    def test_verification_only_evidence_closes_without_source_causal_credit(self):
+        wo = self.pack / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(wo.read_text(encoding="utf-8").replace(
+            "touches: [src/ui.py]", "touches: [plans/evidence/WO-001.json]"),
+            encoding="utf-8")
+        dependencies = self.pack / "plan-dependencies.json"
+        value = json.loads(dependencies.read_text(encoding="utf-8"))
+        value["sections"][0]["target_patterns"] = ["plans/evidence/WO-001.json"]
+        dependencies.write_text(json.dumps(value), encoding="utf-8")
+        self.authorize()
+        wo = self.mark_done(wo)
+        self.capture(wo)
+        self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 0)
+        data = json.loads((self.pack / "lifecycle.json").read_text(encoding="utf-8"))
+        completion = data["work_order_completions"][0]
+        self.assertEqual(completion["causal_scope"], "verification-only")
+        self.assertEqual(completion["changed_paths"], [])
+        self.assertEqual(completion["after_hashes"], {})
+        self.assertEqual(loom_gate.verify(self.pack, self.repo), [])
+        self.assertNotIn("E18", {item["code"] for item in loom_lint.lint(
+            self.pack, self.repo).errors})
+
+    def test_lifecycle_schema_enforces_completion_causal_scope_shapes(self):
+        wo = self.pack / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(wo.read_text(encoding="utf-8").replace(
+            "touches: [src/ui.py]", "touches: [plans/evidence/WO-001.json]"),
+            encoding="utf-8")
+        dependencies = self.pack / "plan-dependencies.json"
+        value = json.loads(dependencies.read_text(encoding="utf-8"))
+        value["sections"][0]["target_patterns"] = ["plans/evidence/WO-001.json"]
+        dependencies.write_text(json.dumps(value), encoding="utf-8")
+        self.authorize()
+        wo = self.mark_done(wo)
+        self.capture(wo)
+        self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 0)
+        lifecycle = self.pack / "lifecycle.json"
+        original = json.loads(lifecycle.read_text(encoding="utf-8"))
+
+        invalid = json.loads(json.dumps(original))
+        invalid["work_order_completions"][0]["causal_scope"] = "implementation"
+        lifecycle.write_text(json.dumps(invalid), encoding="utf-8")
+        self.assertIn("E18", {item["code"] for item in loom_lint.lint(
+            self.pack, self.repo).errors})
+
+        invalid = json.loads(json.dumps(original))
+        completion = invalid["work_order_completions"][0]
+        completion["changed_paths"] = ["src/ui.py"]
+        completion["after_hashes"] = {"src/ui.py": "a" * 64}
+        lifecycle.write_text(json.dumps(invalid), encoding="utf-8")
+        self.assertIn("E18", {item["code"] for item in loom_lint.lint(
+            self.pack, self.repo).errors})
+
+    def test_mixed_source_and_evidence_touches_cannot_claim_verification_only(self):
+        wo = self.pack / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(wo.read_text(encoding="utf-8").replace(
+            "touches: [src/ui.py]",
+            "touches: [plans/evidence/WO-001.json, src/ui.py]"), encoding="utf-8")
+        dependencies = self.pack / "plan-dependencies.json"
+        value = json.loads(dependencies.read_text(encoding="utf-8"))
+        value["sections"][0]["target_patterns"] = [
+            "plans/evidence/WO-001.json", "src/ui.py"]
+        dependencies.write_text(json.dumps(value), encoding="utf-8")
+        self.authorize()
+        wo = self.mark_done(wo)
+        self.capture(wo)
+        self.assertEqual(loom_gate.close_wo(self.pack, self.repo, wo), 1)
+        data = json.loads((self.pack / "lifecycle.json").read_text(encoding="utf-8"))
+        self.assertEqual(data["work_order_completions"], [])
+
     def test_post_authorization_change_seals_work_order_completion(self):
         self.authorize()
         (self.repo / "src").mkdir()
@@ -297,9 +366,15 @@ class LifecycleTests(unittest.TestCase):
         self.assertEqual(loom_gate.verify(self.pack, self.repo), [])
         data = json.loads((self.pack / "lifecycle.json").read_text(encoding="utf-8"))
         self.assertEqual(data["work_order_completions"][0]["work_order"], "WO-001")
+        self.assertEqual(
+            data["work_order_completions"][0]["causal_scope"], "implementation")
         self.assertEqual(data["work_order_completions"][0]["changed_paths"], ["src/ui.py"])
         manifest = (self.pack / "MANIFEST.md").read_text(encoding="utf-8")
         self.assertRegex(manifest, r"(?m)^\| WO-001 \| done \|")
+        data["work_order_completions"][0].pop("causal_scope")
+        (self.pack / "lifecycle.json").write_text(json.dumps(data), encoding="utf-8")
+        self.assertNotIn("E18", {item["code"] for item in loom_lint.lint(
+            self.pack, self.repo).errors})
         self.assertIn(f'repo_state_hash: "{data["work_order_completions"][0]["repo_state_hash"]}"',
                       manifest)
 

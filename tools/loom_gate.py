@@ -48,6 +48,7 @@ COMPLETION_FIELDS = {
     "after_hashes", "acceptance_evidence", "acceptance_evidence_sha256",
     "previous_completion_hash", "completion_hash",
 }
+COMPLETION_FIELDS_WITH_SCOPE = COMPLETION_FIELDS | {"causal_scope"}
 SNAPSHOT_FILE_CAP = 100000
 WORK_ORDER_PLAN_CAP = 10000
 SMALL_WO_MAX_CHARS = 3000
@@ -326,6 +327,24 @@ def _completion_hash(event):
     return _mapping_hash(payload)
 
 
+def _verification_only_touches(pack, touches):
+    """True only when every declared output is confined to this pack's evidence tree."""
+    if isinstance(touches, str):
+        touches = [touches] if touches else []
+    if not isinstance(touches, list) or not touches:
+        return False
+    prefix = (Path(pack).name, "evidence")
+    for value in touches:
+        if not isinstance(value, str):
+            return False
+        normalized = value.replace("\\", "/")
+        path = PurePosixPath(normalized)
+        if path.is_absolute() or ".." in path.parts or len(path.parts) < 3 \
+                or tuple(path.parts[:2]) != prefix:
+            return False
+    return True
+
+
 def _work_order_contract(wo, required_status=None, *, compact=False):
     import loom_lint
     text = Path(wo).read_text(encoding="utf-8")
@@ -428,6 +447,7 @@ def _pack_work_order_contracts(pack):
             "relative": rel,
             "status": fm.get("status"),
             "routing": str(fm.get("routing", "")),
+            "touches": fm.get("touches", []),
         }
 
     frontier = {}
@@ -769,7 +789,8 @@ def _verify(pack, repo=None, require_authorized=False, *, pending_completion=Non
         if not isinstance(completion, dict):
             findings.append(f"completion {index} must be an object")
             continue
-        if set(completion) != COMPLETION_FIELDS:
+        if frozenset(completion) not in {frozenset(COMPLETION_FIELDS),
+                                         frozenset(COMPLETION_FIELDS_WITH_SCOPE)}:
             findings.append(f"completion {index} fields are unknown or missing")
         wid = str(completion.get("work_order", ""))
         if not re.fullmatch(r"WO-\d{3,}", wid):
@@ -805,9 +826,19 @@ def _verify(pack, repo=None, require_authorized=False, *, pending_completion=Non
         if not isinstance(completion.get("work_order_sha256"), str) \
                 or not DIGEST_RE.fullmatch(completion["work_order_sha256"]):
             findings.append(f"completion {index} work-order hash is invalid")
+        record = work_orders.get(wid)
         changed = completion.get("changed_paths")
         after_hashes = completion.get("after_hashes")
-        if not isinstance(changed, list) or not changed \
+        verification_only = record is not None and _verification_only_touches(
+            pack, record.get("touches"))
+        causal_scope = completion.get("causal_scope", "implementation")
+        if causal_scope not in {"implementation", "verification-only"} \
+                or (causal_scope == "verification-only" and (
+                    changed or not verification_only)) \
+                or (causal_scope == "implementation" and not changed):
+            findings.append(f"completion {index} causal scope is invalid")
+        if not isinstance(changed, list) \
+                or (not changed and not verification_only) \
                 or not all(_safe_relative_path(path) for path in changed) \
                 or len(changed) != len(set(changed)) \
                 or not isinstance(after_hashes, dict) \
@@ -830,7 +861,6 @@ def _verify(pack, repo=None, require_authorized=False, *, pending_completion=Non
                 if completion.get("work_order_sha256") != current_wo_hash:
                     findings.append(
                         f"completion {index} work-order evidence hash does not match")
-        record = work_orders.get(wid)
         if record is None:
             findings.append(f"completion {index} references missing work order {wid}")
         else:
@@ -1115,6 +1145,7 @@ def close_wo(pack, repo, wo):
     except ValueError:
         print("loom_gate: REFUSED — work order has unsafe touches", file=sys.stderr)
         return 1
+    verification_only = _verification_only_touches(pack, touches)
     try:
         current_state, current_files = _stable_snapshot(repo, pack)
     except loom_survey.SurveyError as exc:
@@ -1146,7 +1177,7 @@ def close_wo(pack, repo, wo):
         print("loom_gate: REFUSED — repository changes fall outside this work "
               f"order's declared touches: {shown}{suffix}", file=sys.stderr)
         return 1
-    if not changed:
+    if not changed and not verification_only:
         print(
             "loom_gate: REFUSED — no declared target changed after authorization; "
             "pre-existing deliverables cannot receive causal plan credit",
@@ -1161,6 +1192,8 @@ def close_wo(pack, repo, wo):
         "repo_state_mode": current_state.mode,
         "repo_state_hash": current_state.state_hash,
         "repo_head": current_state.head or None,
+        "causal_scope": "verification-only" if verification_only and not changed
+                        else "implementation",
         "changed_paths": changed,
         "after_hashes": {path: current_files.get(path) for path in changed},
         "acceptance_evidence": evidence_rel,
@@ -1181,7 +1214,8 @@ def close_wo(pack, repo, wo):
         print(f"loom_gate: INDETERMINATE — cannot record completion checkpoint: {exc}",
               file=sys.stderr)
         return 2
-    print(f"loom_gate: {wid} completion sealed ({len(changed)} changed path(s))")
+    suffix = "; verification-only evidence" if verification_only and not changed else ""
+    print(f"loom_gate: {wid} completion sealed ({len(changed)} changed path(s){suffix})")
     return 0
 
 
