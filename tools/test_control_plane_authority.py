@@ -31,6 +31,127 @@ def _invalid_pack(project):
     (orders / "WO-001.md").write_text("status: ready\n", encoding="utf-8")
 
 
+ORIGINAL_CONTROL_PLANE_REQUEST = (
+    "Implement one software change: make interrupted Loom planning sessions recover "
+    "safely, make software-fix requests route correctly, and make blocked results "
+    "explain the exact safe cause. This is not a memory request. Preserve fail-closed "
+    "safety. Do not commit, publish, release, install, or access real owner state."
+)
+
+
+class ControlPlaneIntentTests(unittest.TestCase):
+    def assertPlanning(self, request, state=None):
+        decision = loom_runtime.resolve_intent(request, state or {})
+        repeated = loom_runtime.resolve_intent(request, state or {})
+        self.assertEqual(decision, repeated)
+        self.assertEqual("plan", decision["intent"])
+        self.assertFalse(decision["blocked"])
+        self.assertFalse(decision["needs_owner"])
+        self.assertIsNone(decision["block_reason"])
+        self.assertLessEqual(len(decision["evidence"]), 16)
+        self.assertTrue(all(
+            isinstance(item, str) and 0 < len(item) <= 200
+            for item in decision["evidence"]))
+        for field in loom_runtime.EFFECT_COUNT_FIELDS:
+            self.assertEqual(0, decision[field], field)
+        return decision
+
+    def test_exact_multiline_and_reordered_software_outcomes_route_to_planning(self):
+        variants = [
+            ORIGINAL_CONTROL_PLANE_REQUEST,
+            (
+                "Fix the Windows request-transport defect.\n"
+                "Prefer process isolation for this fix.\n"
+                "Correct the failing test.\n"
+                "Verify, implement, test, and report.\n"
+                "Do not commit, publish, release, or install."
+            ),
+            (
+                "Do not commit, publish, release, install, or access real owner state. "
+                "Make blocked results explain the exact safe cause, make software-fix "
+                "requests route correctly, and implement safe recovery for interrupted "
+                "Loom planning sessions."
+            ),
+            (
+                "Make blocked results explain the exact safe cause. Preserve fail-closed "
+                "safety. Implement safe interruption recovery and correct software-fix "
+                "routing. Do not install, release, publish, or commit."
+            ),
+        ]
+        for request in variants:
+            with self.subTest(request=request):
+                self.assertPlanning(request)
+
+    def test_task_local_prefer_and_software_correct_are_planning_constraints(self):
+        requests = [
+            "Prefer process isolation while implementing the request transport.",
+            "Correct the misleading transport test and implement the bridge.",
+            "Implement the bridge; prefer one bounded stdin frame for this task.",
+            "Fix the request transport and correct its failing Windows regression.",
+        ]
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertPlanning(request)
+
+    def test_persistent_memory_repair_and_true_conflicts_remain_distinct(self):
+        memory = loom_runtime.resolve_intent(
+            "Remember that I prefer concise reports for future projects.", {})
+        durable_preference = loom_runtime.resolve_intent(
+            "I prefer careful review from now on.", {})
+        stale_repair = loom_runtime.resolve_intent(
+            "Fix the stale plan.", {"drift": True})
+        continued_repair = loom_runtime.resolve_intent(
+            "Continue.", {"pack_exists": True, "drift": True})
+        conflict = loom_runtime.resolve_intent(
+            "Implement the bridge and remember that I prefer concise reports.", {})
+
+        self.assertEqual("remember", memory["intent"])
+        self.assertFalse(memory["blocked"])
+        self.assertEqual("remember", durable_preference["intent"])
+        self.assertFalse(durable_preference["blocked"])
+        self.assertEqual("repair", stale_repair["intent"])
+        self.assertFalse(stale_repair["blocked"])
+        self.assertEqual("repair", continued_repair["intent"])
+        self.assertFalse(continued_repair["blocked"])
+        self.assertEqual("status", conflict["intent"])
+        self.assertTrue(conflict["blocked"])
+        self.assertTrue(conflict["needs_owner"])
+        self.assertEqual("INTENT_AMBIGUOUS", conflict["code"])
+        self.assertIsNotNone(conflict["block_reason"])
+
+    def test_prohibitions_never_become_requested_effects(self):
+        requests = [
+            ORIGINAL_CONTROL_PLANE_REQUEST,
+            (
+                "Implement the bridge. Do not commit, push, publish, release, install, "
+                "or access private owner state."
+            ),
+            (
+                "Never publish, install, release, or commit. Correct the transport test "
+                "and implement the bounded stdin path."
+            ),
+        ]
+        for request in requests:
+            with self.subTest(request=request):
+                decision = self.assertPlanning(request)
+                self.assertNotIn(
+                    decision["intent"], {"execute", "remember", "forget", "close"})
+
+    def test_true_negated_lifecycle_commands_remain_blocked(self):
+        for request in (
+                "Do not implement this change.",
+                "Never build the next phase.",
+                "Do not continue."):
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request, {})
+                self.assertEqual("status", decision["intent"])
+                self.assertTrue(decision["blocked"])
+                self.assertEqual("INTENT_NEGATED", decision["code"])
+                self.assertTrue(decision["needs_owner"])
+                for field in loom_runtime.EFFECT_COUNT_FIELDS:
+                    self.assertEqual(0, decision[field], field)
+
+
 class ControlPlaneMessageTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

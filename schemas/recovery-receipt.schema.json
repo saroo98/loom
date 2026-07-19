@@ -1,0 +1,515 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/recovery-receipt.schema.json",
+  "title": "Authenticated orchestration recovery receipt",
+  "oneOf": [
+    {"$ref": "#/$defs/v1"},
+    {"$ref": "#/$defs/v2"},
+    {"$ref": "#/$defs/v3"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableDigest": {
+      "anyOf": [
+        {"$ref": "#/$defs/digest"},
+        {"type": "null"}
+      ]
+    },
+    "actionId": {"type": "string", "format": "uuid"},
+    "projectId": {"type": "string", "pattern": "^p-[0-9a-f]{32}$"},
+    "recoveryId": {"type": "string", "pattern": "^recovery-[0-9a-f]{24}$"},
+    "quarantineRelative": {
+      "type": "string",
+      "pattern": "^instances/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/runtime/projects/p-[0-9a-f]{32}/planning-recovery/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/plans$",
+      "maxLength": 512
+    },
+    "nullableQuarantineRelative": {
+      "anyOf": [
+        {"$ref": "#/$defs/quarantineRelative"},
+        {"type": "null"}
+      ]
+    },
+    "projectQuarantineRelative": {
+      "type": "string",
+      "pattern": "^\\.loom-recovery-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+      "maxLength": 64
+    },
+    "nullableProjectQuarantineRelative": {
+      "anyOf": [
+        {"$ref": "#/$defs/projectQuarantineRelative"},
+        {"type": "null"}
+      ]
+    },
+    "preservedRelative": {
+      "type": "string",
+      "pattern": "^instances/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/runtime/projects/p-[0-9a-f]{32}/planning-recovery/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/[A-Za-z0-9._-]{1,64}$",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "preservedOwnerStageRelative": {
+      "type": "string",
+      "pattern": "^instances/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/runtime/projects/p-[0-9a-f]{32}/orchestrations/\\.staging/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/plans$",
+      "maxLength": 512
+    },
+    "preservedOwnerRelative": {
+      "anyOf": [
+        {"$ref": "#/$defs/preservedRelative"},
+        {"$ref": "#/$defs/preservedOwnerStageRelative"}
+      ]
+    },
+    "preservedProjectRelative": {
+      "type": "string",
+      "pattern": "^(plans|\\.loom-(plan-stage|recovery)-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|\\.loom-plan-recovery-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}-plans)$",
+      "maxLength": 80
+    },
+    "atomicRenameObservation": {
+      "enum": ["absent", "expected_object", "other_object", "redirected", "unknown"]
+    },
+    "atomicRenameRole": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+      "maxLength": 64
+    },
+    "atomicRenameParentSync": {
+      "oneOf": [
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["role", "status"],
+          "properties": {
+            "role": {"enum": ["source_parent", "destination_parent"]},
+            "status": {"const": "confirmed"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["role", "status", "same_as"],
+          "properties": {
+            "role": {"enum": ["source_parent", "destination_parent"]},
+            "status": {"const": "same_parent"},
+            "same_as": {"enum": ["source_parent", "destination_parent"]}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["role", "status", "reason"],
+          "properties": {
+            "role": {"enum": ["source_parent", "destination_parent"]},
+            "status": {"const": "unconfirmed"},
+            "reason": {"const": "windows_directory_flush_unimplemented"}
+          }
+        },
+        {
+          "type": "object", "additionalProperties": false,
+          "required": ["role", "status", "error_type"],
+          "properties": {
+            "role": {"enum": ["source_parent", "destination_parent"]},
+            "status": {"const": "failed"},
+            "error_type": {
+              "type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_]{0,63}$", "maxLength": 64
+            },
+            "errno": {"type": "integer", "minimum": -2147483648, "maximum": 2147483647}
+          }
+        }
+      ]
+    },
+    "atomicRenameState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "operation_id", "source_role", "destination_role",
+        "namespace_state", "durability", "changes_made", "source_observed",
+        "destination_observed", "parent_sync"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "operation_id": {"$ref": "#/$defs/digest"},
+        "source_role": {"$ref": "#/$defs/atomicRenameRole"},
+        "destination_role": {"$ref": "#/$defs/atomicRenameRole"},
+        "namespace_state": {"enum": ["committed", "ambiguous"]},
+        "durability": {"enum": ["confirmed", "unconfirmed"]},
+        "changes_made": {"const": true},
+        "source_observed": {"$ref": "#/$defs/atomicRenameObservation"},
+        "destination_observed": {"$ref": "#/$defs/atomicRenameObservation"},
+        "parent_sync": {
+          "type": "array", "minItems": 2, "maxItems": 2,
+          "prefixItems": [
+            {
+              "allOf": [
+                {"$ref": "#/$defs/atomicRenameParentSync"},
+                {"properties": {"role": {"const": "source_parent"}}, "required": ["role"]}
+              ]
+            },
+            {
+              "allOf": [
+                {"$ref": "#/$defs/atomicRenameParentSync"},
+                {"properties": {"role": {"const": "destination_parent"}}, "required": ["role"]}
+              ]
+            }
+          ],
+          "items": false
+        }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"namespace_state": {"const": "committed"}}},
+          "then": {"properties": {"destination_observed": {"const": "expected_object"}}},
+          "else": {"properties": {"destination_observed": {"enum": ["absent", "other_object", "redirected", "unknown"]}}}
+        },
+        {
+          "if": {"properties": {"durability": {"const": "confirmed"}}},
+          "then": {
+            "properties": {
+              "parent_sync": {
+                "items": {"properties": {"status": {"enum": ["confirmed", "same_parent"]}}, "required": ["status"]}
+              }
+            }
+          },
+          "else": {
+            "anyOf": [
+              {
+                "properties": {
+                  "parent_sync": {
+                    "prefixItems": [
+                      {"properties": {"status": {"enum": ["unconfirmed", "failed"]}}, "required": ["status"]},
+                      {}
+                    ]
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "parent_sync": {
+                    "prefixItems": [
+                      {},
+                      {"properties": {"status": {"enum": ["unconfirmed", "failed"]}}, "required": ["status"]}
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "nullableAtomicRenameState": {
+      "anyOf": [
+        {"$ref": "#/$defs/atomicRenameState"},
+        {"type": "null"}
+      ]
+    },
+    "v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "recovery_id", "action_id", "project_id", "reason",
+        "source_path", "quarantine_relative", "seed_manifest_sha256",
+        "quarantined_manifest_sha256", "complete_seed", "changes_made",
+        "reversible", "recovered_at", "receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "recovery_id": {"$ref": "#/$defs/recoveryId"},
+        "action_id": {"$ref": "#/$defs/actionId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "reason": {"enum": ["interrupted-initialization", "expired", "superseded"]},
+        "source_path": {"const": "plans"},
+        "quarantine_relative": {"$ref": "#/$defs/nullableQuarantineRelative"},
+        "seed_manifest_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "quarantined_manifest_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "complete_seed": {"type": "boolean"},
+        "changes_made": {"type": "boolean"},
+        "reversible": {"type": "boolean"},
+        "recovered_at": {"type": "string", "format": "date-time"},
+        "receipt_hash": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "recovery_id", "action_id", "project_id", "reason",
+        "source_path", "quarantine_relative", "preserved_relatives",
+        "seed_manifest_sha256", "quarantined_manifest_sha256",
+        "manifest_schema_version", "complete_seed", "changes_made", "reversible",
+        "source_disposition", "cleanup_phase", "recovered_at", "receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "recovery_id": {"$ref": "#/$defs/recoveryId"},
+        "action_id": {"$ref": "#/$defs/actionId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "reason": {"enum": ["interrupted-initialization", "expired", "superseded", "cancelled"]},
+        "source_path": {"enum": ["plans", "install-stage", "owner-stage", "legacy-tombstone", "none"]},
+        "quarantine_relative": {"$ref": "#/$defs/nullableQuarantineRelative"},
+        "preserved_relatives": {
+          "type": "array", "maxItems": 3, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/preservedRelative"}
+        },
+        "seed_manifest_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "quarantined_manifest_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "manifest_schema_version": {
+          "anyOf": [
+            {"enum": [1, 2]},
+            {"type": "null"}
+          ]
+        },
+        "complete_seed": {"type": "boolean"},
+        "changes_made": {"type": "boolean"},
+        "reversible": {"type": "boolean"},
+        "source_disposition": {"enum": ["not-present", "quarantined", "preserved-in-place"]},
+        "cleanup_phase": {"enum": ["gc-complete", "preserved-in-place"]},
+        "recovered_at": {"type": "string", "format": "date-time"},
+        "receipt_hash": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source_disposition": {"const": "quarantined"}}},
+          "then": {
+            "properties": {
+              "quarantine_relative": {"$ref": "#/$defs/quarantineRelative"},
+              "changes_made": {"const": true},
+              "reversible": {"const": true},
+              "cleanup_phase": {"const": "gc-complete"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"source_disposition": {"const": "preserved-in-place"}}},
+          "then": {
+            "properties": {
+              "quarantine_relative": {"type": "null"},
+              "quarantined_manifest_sha256": {"type": "null"},
+              "preserved_relatives": {"type": "array", "maxItems": 0},
+              "changes_made": {"const": false},
+              "reversible": {"const": false},
+              "cleanup_phase": {"const": "preserved-in-place"}
+            }
+          }
+        },
+        {
+          "if": {"properties": {"source_disposition": {"const": "not-present"}}},
+          "then": {
+            "properties": {
+              "quarantine_relative": {"type": "null"},
+              "quarantined_manifest_sha256": {"type": "null"},
+              "preserved_relatives": {"type": "array", "maxItems": 0},
+              "changes_made": {"const": false},
+              "reversible": {"const": false},
+              "cleanup_phase": {"const": "gc-complete"}
+            }
+          }
+        }
+      ]
+    },
+    "v3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "recovery_id", "action_id", "project_id", "reason",
+        "source_path", "quarantine_scope", "owner_quarantine_relative",
+        "project_quarantine_relative", "preserved_relatives",
+        "preserved_project_relatives", "seed_manifest_sha256",
+        "quarantined_manifest_sha256", "manifest_schema_version", "complete_seed",
+        "changes_made", "reversible", "source_disposition", "cleanup_phase",
+        "project_namespace_changed", "owner_control_changed",
+        "activation_atomic_rename", "quarantine_atomic_rename",
+        "recovered_at", "receipt_hash"
+      ],
+      "properties": {
+        "schema_version": {"const": 3},
+        "recovery_id": {"$ref": "#/$defs/recoveryId"},
+        "action_id": {"$ref": "#/$defs/actionId"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "reason": {"enum": ["interrupted-initialization", "expired", "superseded", "cancelled"]},
+        "source_path": {"enum": ["plans", "install-stage", "owner-stage", "legacy-tombstone", "none"]},
+        "quarantine_scope": {
+          "anyOf": [
+            {"enum": ["owner-home", "project-local"]},
+            {"type": "null"}
+          ]
+        },
+        "owner_quarantine_relative": {"$ref": "#/$defs/nullableQuarantineRelative"},
+        "project_quarantine_relative": {"$ref": "#/$defs/nullableProjectQuarantineRelative"},
+        "preserved_relatives": {
+          "type": "array", "maxItems": 3, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/preservedOwnerRelative"}
+        },
+        "preserved_project_relatives": {
+          "type": "array", "maxItems": 4, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/preservedProjectRelative"}
+        },
+        "seed_manifest_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "quarantined_manifest_sha256": {"$ref": "#/$defs/nullableDigest"},
+        "manifest_schema_version": {
+          "anyOf": [
+            {"enum": [1, 2]},
+            {"type": "null"}
+          ]
+        },
+        "complete_seed": {"type": "boolean"},
+        "changes_made": {"type": "boolean"},
+        "reversible": {"type": "boolean"},
+        "source_disposition": {"enum": ["not-present", "quarantined", "preserved-in-place"]},
+        "cleanup_phase": {"enum": ["gc-complete", "preserved-in-place", "reconciliation-required"]},
+        "project_namespace_changed": {"type": "boolean"},
+        "owner_control_changed": {"type": "boolean"},
+        "activation_atomic_rename": {"$ref": "#/$defs/nullableAtomicRenameState"},
+        "quarantine_atomic_rename": {"$ref": "#/$defs/nullableAtomicRenameState"},
+        "recovered_at": {"type": "string", "format": "date-time"},
+        "receipt_hash": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source_disposition": {"const": "quarantined"}}},
+          "then": {
+            "properties": {
+              "changes_made": {"const": true},
+              "reversible": {"const": true},
+              "cleanup_phase": {"enum": ["gc-complete", "reconciliation-required"]}
+            },
+            "oneOf": [
+              {
+                "properties": {
+                  "source_path": {"const": "owner-stage"},
+                  "quarantine_scope": {"const": "owner-home"},
+                  "owner_quarantine_relative": {"$ref": "#/$defs/quarantineRelative"},
+                  "project_quarantine_relative": {"type": "null"},
+                  "project_namespace_changed": {"const": false},
+                  "owner_control_changed": {"const": true}
+                }
+              },
+              {
+                "properties": {
+                  "source_path": {"enum": ["plans", "install-stage"]},
+                  "quarantine_scope": {"const": "owner-home"},
+                  "owner_quarantine_relative": {"$ref": "#/$defs/quarantineRelative"},
+                  "project_quarantine_relative": {"type": "null"},
+                  "project_namespace_changed": {"const": true},
+                  "owner_control_changed": {"const": true}
+                }
+              },
+              {
+                "properties": {
+                  "source_path": {"enum": ["plans", "install-stage", "legacy-tombstone"]},
+                  "quarantine_scope": {"const": "project-local"},
+                  "owner_quarantine_relative": {"type": "null"},
+                  "project_quarantine_relative": {"$ref": "#/$defs/projectQuarantineRelative"},
+                  "project_namespace_changed": {"const": true},
+                  "owner_control_changed": {"const": false}
+                }
+              }
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"source_disposition": {"const": "preserved-in-place"}}},
+          "then": {
+            "properties": {
+              "quarantine_scope": {"type": "null"},
+              "owner_quarantine_relative": {"type": "null"},
+              "project_quarantine_relative": {"type": "null"},
+              "quarantined_manifest_sha256": {"type": "null"},
+              "complete_seed": {"const": false},
+              "changes_made": {"const": false},
+              "reversible": {"const": false},
+              "project_namespace_changed": {"const": false},
+              "owner_control_changed": {"const": false},
+              "quarantine_atomic_rename": {"type": "null"}
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "activation_atomic_rename": {
+                      "type": "object",
+                      "properties": {"durability": {"const": "unconfirmed"}},
+                      "required": ["durability"]
+                    }
+                  },
+                  "required": ["activation_atomic_rename"]
+                },
+                "then": {"properties": {"cleanup_phase": {"const": "reconciliation-required"}}},
+                "else": {"properties": {"cleanup_phase": {"const": "preserved-in-place"}}}
+              }
+            ],
+            "anyOf": [
+              {"properties": {"preserved_relatives": {"type": "array", "minItems": 1}}},
+              {"properties": {"preserved_project_relatives": {"type": "array", "minItems": 1}}}
+            ]
+          }
+        },
+        {
+          "if": {"properties": {"source_disposition": {"const": "not-present"}}},
+          "then": {
+            "properties": {
+              "quarantine_scope": {"type": "null"},
+              "owner_quarantine_relative": {"type": "null"},
+              "project_quarantine_relative": {"type": "null"},
+              "preserved_relatives": {"type": "array", "maxItems": 0},
+              "preserved_project_relatives": {"type": "array", "maxItems": 0},
+              "quarantined_manifest_sha256": {"type": "null"},
+              "complete_seed": {"const": false},
+              "changes_made": {"const": false},
+              "reversible": {"const": false},
+              "project_namespace_changed": {"const": false},
+              "owner_control_changed": {"const": false},
+              "quarantine_atomic_rename": {"type": "null"}
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "activation_atomic_rename": {
+                      "type": "object",
+                      "properties": {"durability": {"const": "unconfirmed"}},
+                      "required": ["durability"]
+                    }
+                  },
+                  "required": ["activation_atomic_rename"]
+                },
+                "then": {"properties": {"cleanup_phase": {"const": "reconciliation-required"}}},
+                "else": {"properties": {"cleanup_phase": {"const": "gc-complete"}}}
+              }
+            ]
+          }
+        },
+        {
+          "if": {
+            "anyOf": [
+              {
+                "properties": {
+                  "activation_atomic_rename": {
+                    "type": "object",
+                    "properties": {"durability": {"const": "unconfirmed"}},
+                    "required": ["durability"]
+                  }
+                },
+                "required": ["activation_atomic_rename"]
+              },
+              {
+                "properties": {
+                  "quarantine_atomic_rename": {
+                    "type": "object",
+                    "properties": {"durability": {"const": "unconfirmed"}},
+                    "required": ["durability"]
+                  }
+                },
+                "required": ["quarantine_atomic_rename"]
+              }
+            ]
+          },
+          "then": {"properties": {"cleanup_phase": {"const": "reconciliation-required"}}}
+        },
+        {
+          "if": {
+            "allOf": [
+              {"properties": {"source_disposition": {"const": "quarantined"}}, "required": ["source_disposition"]},
+              {"properties": {"quarantine_atomic_rename": {"type": "null"}}, "required": ["quarantine_atomic_rename"]}
+            ]
+          },
+          "then": {"properties": {"cleanup_phase": {"const": "reconciliation-required"}}}
+        }
+      ]
+    }
+  }
+}

@@ -66,13 +66,24 @@ class BootstrapIntegrationTests(unittest.TestCase):
 
     def test_native_helper_cache_identity_binds_cargo_and_temp_environments(self):
         baseline = _build_environment_identity({
-            "CARGO_HOME": "/one/cargo", "TMPDIR": "/one/tmp"})
+            "CARGO_HOME": "/one/cargo", "TMPDIR": "/one/tmp",
+            "HOME": "/one/home", "USERPROFILE": "/one/profile"})
         cargo_changed = _build_environment_identity({
-            "CARGO_HOME": "/two/cargo", "TMPDIR": "/one/tmp"})
+            "CARGO_HOME": "/two/cargo", "TMPDIR": "/one/tmp",
+            "HOME": "/one/home", "USERPROFILE": "/one/profile"})
         temp_changed = _build_environment_identity({
-            "CARGO_HOME": "/one/cargo", "TMPDIR": "/two/tmp"})
+            "CARGO_HOME": "/one/cargo", "TMPDIR": "/two/tmp",
+            "HOME": "/one/home", "USERPROFILE": "/one/profile"})
+        home_changed = _build_environment_identity({
+            "CARGO_HOME": "/one/cargo", "TMPDIR": "/one/tmp",
+            "HOME": "/two/home", "USERPROFILE": "/one/profile"})
+        profile_changed = _build_environment_identity({
+            "CARGO_HOME": "/one/cargo", "TMPDIR": "/one/tmp",
+            "HOME": "/one/home", "USERPROFILE": "/two/profile"})
         self.assertNotEqual(baseline, cargo_changed)
         self.assertNotEqual(baseline, temp_changed)
+        self.assertNotEqual(baseline, home_changed)
+        self.assertNotEqual(baseline, profile_changed)
 
     def test_receipt_proven_direct_install_bootstraps_without_signed_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:

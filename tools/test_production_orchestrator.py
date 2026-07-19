@@ -1268,6 +1268,16 @@ planning_obligations: [{obligations}]
         self.assertEqual("done", loom_lint.parse_frontmatter(
             work_order.read_text(encoding="utf-8"))[0]["status"])
 
+        advanced = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        advanced_operation = advanced["session_environment"][
+            "LOOM_SESSION_OPERATION_ID"]
+        self.assertNotEqual(receipt["operation_id"], advanced_operation)
+        self.assertEqual("close", advanced["intent"])
+        self.assertNotEqual("execute-complete", advanced.get("code"))
+        self.assertFalse(advanced.get("repeated", False))
+
     def test_execute_refuses_noop_completion(self):
         opened = json.loads(self.cli(
             "invoke", "--request", self.request, "--cwd", self.repo,

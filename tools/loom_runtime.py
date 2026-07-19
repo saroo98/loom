@@ -13,7 +13,7 @@ import os
 import re
 import stat
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 
@@ -74,6 +74,9 @@ WORLD_COMPONENT_FIELDS = {
     "target_survey_hash", "pack_hash", "config_hash", "lifecycle_hash",
     "capsule_version", "profile_version", "prior_session_hash",
     "staleness_bucket", "project_inspection_hash",
+}
+OPERATION_COMPONENT_FIELDS = WORLD_COMPONENT_FIELDS - {
+    "capsule_version", "profile_version", "prior_session_hash",
 }
 PREPARED_FIELDS = {
     "schema_version", "instance_id", "project_id", "invocation_id",
@@ -498,6 +501,20 @@ _MEMORY_FORGET_RE = re.compile(
 _EMBEDDED_MEMORY_FORGET_RE = re.compile(
     r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?"
     r"(?:forget\b|stop remembering\b)")
+_POSITIVE_SOFTWARE_CLAUSE_RE = re.compile(
+    r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
+    r"add|generate|plan|fix|update|change|modify|refactor|migrate|upgrade|replace|"
+    r"remove|correct\s+(?!(?:what you learned|my preference|that preference|"
+    r"the preference)\b))\b")
+_CLAUSE_SEPARATOR_RE = re.compile(
+    r"(?P<hard>\r?\n+|[.;!?]+|,\s*(?:(?:and|but|then)\b\s*)?|\b(?:but|then)\b)"
+    r"|(?P<and>\band\b)|(?P<or>\bor\b)")
+_NEGATED_CONTROL_PREFIX_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"(?:i|we)\s+(?:do not|don't|never)\s+want\s+you\s+to|"
+    r"(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?)\s+"
+    r"(?P<body>.+)$")
+MAX_ROUTE_CLAUSES = 16
 
 
 def _is_build_request(text):
@@ -509,6 +526,149 @@ def _is_build_request(text):
     return bool(
         re.search(r"^(?:please\s+)?(?:i|we)\s+(?:need|want)\b", text)
         and _ARTIFACT_NOUN_RE.search(text))
+
+
+def _has_positive_software_clause(text):
+    """Recognize a later positive software clause without escaping negation scope."""
+    clauses = re.split(r"[.!?;:]+|\bthen\b", text)
+    for clause in clauses:
+        clause = clause.strip()
+        if not clause or re.match(r"^(?:please\s+)?(?:do not|don't|never)\b", clause):
+            continue
+        if _BUILD_CONTROL_RE.search(clause) or _LIFECYCLE_REPAIR_RE.search(clause) \
+                or _STATUS_QUERY_RE.search(clause):
+            continue
+        if _POSITIVE_SOFTWARE_CLAUSE_RE.search(clause):
+            return True
+    return False
+
+
+def _split_control_clauses(request):
+    """Return bounded clauses and the coordination immediately before each clause."""
+    normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
+    clauses = []
+    start = 0
+    pending = None
+    overflow = False
+    for match in _CLAUSE_SEPARATOR_RE.finditer(normalized):
+        value = " ".join(normalized[start:match.start()].split())
+        if value:
+            clauses.append((pending, value))
+            if len(clauses) > MAX_ROUTE_CLAUSES:
+                overflow = True
+                break
+        pending = "hard" if match.lastgroup == "hard" else match.lastgroup
+        start = match.end()
+    if not overflow:
+        value = " ".join(normalized[start:].split())
+        if value:
+            clauses.append((pending, value))
+        overflow = len(clauses) > MAX_ROUTE_CLAUSES
+    return clauses[:MAX_ROUTE_CLAUSES], overflow
+
+
+def _classify_control_clause(clause):
+    """Classify one bounded clause as a positive or explicitly negated control."""
+    clause = re.sub(r"^(?:either|instead)\s+", "", clause.strip())
+    negated = _NEGATED_CONTROL_PREFIX_RE.match(clause)
+    body = negated.group("body").strip() if negated else clause
+    body = re.sub(r"^(?:either|instead)\s+", "", body)
+    if re.match(
+            r"^(?:remember\b|retain\s+(?:this|that)\s+preference\b|"
+            r"correct\s+(?:what you learned|my preference|that preference|"
+            r"the preference)\b|(?:i|we)\s+prefer\b|from now on\b|"
+            r"be (?:more careful|less autonomous)\b)", body):
+        intent = "remember"
+    elif re.match(r"^(?:forget\b|stop remembering\b)", body):
+        intent = "forget"
+    elif _LIFECYCLE_REPAIR_RE.search(body) or re.match(
+            r"^(?:repair|fix)\s+(?:the\s+)?(?:stale|broken|invalid|drifted)\s+"
+            r"(?:loom\s+)?(?:plan|planning pack|lifecycle)\b", body):
+        intent = "repair"
+    elif _BUILD_CONTROL_RE.search(body) or re.match(
+            r"^(?:continue|keep going|resume|pick up|carry on|build the next|"
+            r"next part)\b", body):
+        intent = "continue"
+    elif re.match(r"^(?:undo|take back|reverse (?:the )?last)\b", body):
+        intent = "undo"
+    elif re.match(r"^(?:review|inspect|audit)\b", body):
+        intent = "review"
+    elif re.match(r"^(?:close this|finish the project|we are done|project is over)\b", body):
+        intent = "close"
+    elif _is_build_request(body) or _POSITIVE_SOFTWARE_CLAUSE_RE.search(body):
+        intent = "plan"
+    else:
+        return None
+    return {"intent": intent, "negated": negated is not None}
+
+
+def _continue_route_intent(state):
+    if state.get("drift") or state.get("failed"):
+        return "repair"
+    if state.get("terminal"):
+        return "close"
+    if state.get("pack_exists") and state.get("authorized") \
+            and state.get("active_frontier"):
+        return "execute"
+    if state.get("pack_exists"):
+        return "resume"
+    return "plan"
+
+
+def _resolve_clause_roles(request, state):
+    """Resolve explicit clause polarity; return None when legacy routing is sufficient."""
+    clauses, overflow = _split_control_clauses(request)
+    if overflow:
+        return _decision(
+            "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
+            confidence=0.0, evidence=("clause-limit",),
+            recommendation="State one bounded positive outcome and its prohibitions.")
+    classified = []
+    for index, (separator, clause) in enumerate(clauses):
+        role = _classify_control_clause(clause)
+        if role is not None:
+            classified.append({
+                **role, "separator": separator, "index": index,
+            })
+    if not classified:
+        return None
+    positives = [item for item in classified if not item["negated"]]
+    negatives = [item for item in classified if item["negated"]]
+    positive_intents = {item["intent"] for item in positives}
+    negative_intents = {item["intent"] for item in negatives}
+    has_or = any(item["separator"] == "or" for item in classified[1:])
+    has_soft_and = any(item["separator"] == "and" for item in classified[1:])
+    conflicting_polarity = bool(positive_intents & negative_intents)
+    multiple_positive_outcomes = len(positive_intents) > 1
+    unclear_coordination = bool(positives and negatives and has_soft_and)
+    opposed_lifecycle = (
+        ("close" in negative_intents and "continue" in positive_intents)
+        or ("continue" in negative_intents and "close" in positive_intents))
+    if opposed_lifecycle:
+        return _decision(
+            "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
+            confidence=0.0, evidence=("negated-lifecycle",),
+            recommendation="Keep lifecycle state unchanged; state one positive next action.")
+    if has_or and len(classified) > 1 \
+            or conflicting_polarity or multiple_positive_outcomes \
+            or unclear_coordination:
+        return _decision(
+            "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
+            confidence=0.0, evidence=("clause-role-conflict",),
+            recommendation="State one positive outcome; keep prohibitions in a separate clause.")
+    if not positives and negatives:
+        return _decision(
+            "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
+            confidence=0.0, evidence=("negated-control",),
+            recommendation="Keep state unchanged; state the positive outcome you want Loom to pursue.")
+    if not negatives and not multiple_positive_outcomes and not has_or:
+        return None
+    intent = next(iter(positive_intents))
+    if intent == "continue":
+        intent = _continue_route_intent(state)
+    return _decision(
+        intent, code=f"ROUTE_{intent.upper()}",
+        evidence=(f"role:{intent}", "role:prohibition"))
 
 
 def _high_consequence_match(text):
@@ -541,6 +701,9 @@ def resolve_intent(request, state=None):
     state = dict(state or {})
     text = " ".join(request.casefold().split())
     task_text = " ".join(loom_domain.task_language(request).casefold().split())
+    clause_decision = _resolve_clause_roles(request, state)
+    if clause_decision is not None:
+        return _synchronize_block_reason(clause_decision, category="intent")
     safety_preference = _SAFETY_PREFERENCE_RE.search(text)
     negated_forget = re.search(
         r"\b(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?\s+forget\b|"
@@ -553,7 +716,13 @@ def resolve_intent(request, state=None):
             recommendation="Keep remembered state unchanged; state what should be retained.")
     negated_memory = bool(re.search(
         r"\b(?:do not|don't|never)\s+remember(?:\s+that)?\b", text))
-    build_request = _is_build_request(task_text)
+    if negated_memory:
+        return _decision(
+            "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
+            confidence=0.0, evidence=("negated-remember",),
+            recommendation="Keep remembered state unchanged; state what should be retained.")
+    build_request = (
+        _is_build_request(task_text) or _has_positive_software_clause(task_text))
     profile_query = bool(re.search(
         r"\bshow (?:me )?what you remember about me\b|"
         r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
@@ -570,7 +739,7 @@ def resolve_intent(request, state=None):
     memory_direct = None
     if profile_query:
         memory_direct = "status"
-    elif negated_memory or explicit_forget:
+    elif explicit_forget:
         memory_direct = "forget"
     elif explicit_remember or (safety_preference and not build_request):
         memory_direct = "remember"
@@ -586,7 +755,8 @@ def resolve_intent(request, state=None):
             recommendation=(
                 "Record or forget the preference first; pursue the separate action next."))
     lifecycle_negation = re.search(
-        r"\b(?:do not|don't|never)\s+(?:close|continue|keep going|build|review|"
+        r"\b(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?\s+"
+        r"(?:close|continue|keep going|resume|repair|fix|build|implement|review|"
         r"inspect|forget|remember|undo)\b",
         text)
     if lifecycle_negation and memory_direct is None:
@@ -607,7 +777,9 @@ def resolve_intent(request, state=None):
         signals = {
             "remember": False,
             "forget": False,
-            "why": bool(re.search(r"\bwhy (?:did|do|was)\b|\bexplain why\b", task_text)),
+            "why": bool(re.search(
+                r"\bwhy (?:did|do|does|is|are|was|were|has|have)\b|\bexplain why\b",
+                task_text)),
             "undo": bool(re.search(
                 r"\bundo\b|\btake back\b|\breverse (?:the )?last", task_text)),
             "status": bool(re.search(
@@ -699,6 +871,13 @@ def compose_world_fingerprint(components):
     return _sha(_canonical_json(components))
 
 
+def compose_operation_fingerprint(components):
+    """Bind execution identity to project state, not post-run owner learning."""
+    compose_world_fingerprint(components)
+    return _sha(_canonical_json({
+        key: components[key] for key in OPERATION_COMPONENT_FIELDS}))
+
+
 def _validate_route(route, *, schema_version=SCHEMA_VERSION):
     expected_fields = (ROUTE_FIELDS if schema_version == SCHEMA_VERSION
                        else LEGACY_ROUTE_FIELDS if schema_version == LEGACY_SCHEMA_VERSION
@@ -773,6 +952,7 @@ class PreparedInvocation:
     prepared_at: str
     project_inspection: MappingProxyType
     prepared_hash: str
+    operation_fingerprint: str | None = None
 
     def to_dict(self):
         return {
@@ -784,6 +964,10 @@ class PreparedInvocation:
     def build(cls, **values):
         if "prepared_hash" in values:
             raise RuntimeError("prepared_hash is computed, not caller supplied")
+        operation_fingerprint = values.pop("operation_fingerprint", None)
+        if not isinstance(operation_fingerprint, str) \
+                or not DIGEST_RE.fullmatch(operation_fingerprint):
+            raise RuntimeError("operation_fingerprint is invalid")
         expected = PREPARED_FIELDS - {"prepared_hash"}
         if set(values) != expected:
             raise RuntimeError("prepared invocation fields are unknown or missing")
@@ -793,7 +977,8 @@ class PreparedInvocation:
         data["hard_stops"] = list(data["hard_stops"])
         data["project_inspection"] = _thaw(data["project_inspection"])
         data["prepared_hash"] = _sha(_canonical_json(data))
-        return cls.from_dict(data)
+        return replace(
+            cls.from_dict(data), operation_fingerprint=operation_fingerprint)
 
     @classmethod
     def from_dict(cls, value):
@@ -1687,6 +1872,7 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
     staleness_bucket = int(prepared_time.timestamp() // freshness_seconds)
     components["staleness_bucket"] = staleness_bucket
     world = compose_world_fingerprint(components)
+    operation_fingerprint = compose_operation_fingerprint(components)
     normalized = " ".join(request.split())
     request_hash = _sha(normalized)
     retry_key = _sha(_canonical_json({
@@ -1708,6 +1894,7 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
         canonical_target_identity=project.canonical_target_identity,
         survey_hash=repo_state.state_hash,
         world_fingerprint=world,
+        operation_fingerprint=operation_fingerprint,
         intent=decision["intent"],
         domains=domains,
         route_contract=decision,

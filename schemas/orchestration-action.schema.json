@@ -1,0 +1,366 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/orchestration-action.schema.json",
+  "title": "Decrypted Loom orchestration action v8",
+  "description": "Closed contract for the authenticated plaintext inside a loom-encrypted-action-v1 envelope. This schema does not describe the persisted encrypted file.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "action_id", "status", "instance_id", "project_id",
+    "request", "invocation_id", "owner_home", "install_root", "cwd",
+    "explicit_target", "intent", "tier", "domains", "survey_hash",
+    "created_at", "expires_at", "attempts", "max_attempts", "session_id",
+    "operation_id", "journal_path", "initial_pack_hash", "remove_pristine_pack",
+    "work_order", "prepared", "context", "result", "repair_plan", "host_result",
+    "plan_contract", "domain_contract", "context_manifest",
+    "continuation_authority", "owner_message", "action_hash", "pack_seed",
+    "recovery_receipt"
+  ],
+  "properties": {
+    "schema_version": {"const": 8},
+    "action_id": {"type": "string", "format": "uuid"},
+    "status": {"enum": ["initializing", "pending", "completed", "cancelled", "expired", "failed", "abandoned", "superseded"]},
+    "instance_id": {"type": "string", "format": "uuid"},
+    "project_id": {"$ref": "#/$defs/projectId"},
+    "request": {"type": "string", "minLength": 1, "maxLength": 20000},
+    "invocation_id": {"type": "string", "format": "uuid"},
+    "owner_home": {"$ref": "#/$defs/absolutePath"},
+    "install_root": {"$ref": "#/$defs/absolutePath"},
+    "cwd": {"$ref": "#/$defs/absolutePath"},
+    "explicit_target": {
+      "anyOf": [
+        {"$ref": "#/$defs/absolutePath"},
+        {"type": "null"}
+      ]
+    },
+    "intent": {"$ref": "#/$defs/intent"},
+    "tier": {"enum": ["S", "M", "L", "XL"]},
+    "domains": {"$ref": "#/$defs/domains"},
+    "survey_hash": {"$ref": "#/$defs/digest"},
+    "created_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "attempts": {"type": "integer", "minimum": 0, "maximum": 3},
+    "max_attempts": {"const": 3},
+    "session_id": {"type": "string", "format": "uuid"},
+    "operation_id": {"$ref": "#/$defs/digest"},
+    "journal_path": {"$ref": "#/$defs/absolutePath"},
+    "initial_pack_hash": {"$ref": "#/$defs/nullableDigest"},
+    "remove_pristine_pack": {"type": "boolean"},
+    "work_order": {
+      "anyOf": [
+        {"type": "string", "pattern": "^(?:work-orders/)?WO-[0-9]{3,}(?:-[A-Za-z0-9._-]+)?\\.md$", "maxLength": 256},
+        {"type": "null"}
+      ]
+    },
+    "prepared": {"$ref": "#/$defs/preparedInvocation"},
+    "context": {"$ref": "#/$defs/context"},
+    "result": {"type": ["object", "null"]},
+    "repair_plan": {"type": ["object", "null"]},
+    "host_result": {"type": ["object", "null"]},
+    "plan_contract": {
+      "anyOf": [
+        {"$ref": "plan-contract.schema.json"},
+        {"type": "null"}
+      ]
+    },
+    "domain_contract": {"$ref": "domain-route.schema.json"},
+    "context_manifest": {"$ref": "#/$defs/contextManifest"},
+    "continuation_authority": {"$ref": "continuation-authority.schema.json"},
+    "owner_message": {"$ref": "owner-message.schema.json"},
+    "action_hash": {"$ref": "#/$defs/digest"},
+    "pack_seed": {"$ref": "#/$defs/packSeed"},
+    "recovery_receipt": {
+      "anyOf": [
+        {"$ref": "recovery-receipt.schema.json"},
+        {"type": "null"}
+      ]
+    }
+  },
+  "$defs": {
+    "absolutePath": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "nullableDigest": {
+      "anyOf": [
+        {"$ref": "#/$defs/digest"},
+        {"type": "null"}
+      ]
+    },
+    "projectId": {"type": "string", "pattern": "^p-[0-9a-f]{32}$"},
+    "domain": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "domains": {
+      "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
+      "items": {"$ref": "#/$defs/domain"}
+    },
+    "intent": {"enum": ["plan", "resume", "execute", "review", "repair", "close", "status", "remember", "forget", "why", "undo"]},
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["memory", "preferences", "archived_count"],
+      "properties": {
+        "memory": {"type": "array", "maxItems": 16},
+        "preferences": {"type": "array", "maxItems": 32},
+        "archived_count": {"type": "integer", "minimum": 0}
+      }
+    },
+    "contextEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"enum": ["skill/loom/SKILL.md", "START-HERE.md", "contracts/cache-classes-v1.json"]},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "bytes": {"type": "integer", "minimum": 0, "maximum": 262144}
+      }
+    },
+    "loadMetrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["disk_reads", "cache_hits", "disk_bytes", "cache_bytes", "entries"],
+      "properties": {
+        "disk_reads": {"type": "integer", "minimum": 0, "maximum": 3},
+        "cache_hits": {"type": "integer", "minimum": 0},
+        "disk_bytes": {"type": "integer", "minimum": 0, "maximum": 786432},
+        "cache_bytes": {"type": "integer", "minimum": 0},
+        "entries": {"const": 3}
+      }
+    },
+    "contextManifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "entries", "total_bytes", "context_hash", "load_metrics"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "entries": {
+          "type": "array", "minItems": 3, "maxItems": 3, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/contextEntry"}
+        },
+        "total_bytes": {"type": "integer", "minimum": 1, "maximum": 786432},
+        "context_hash": {"$ref": "#/$defs/digest"},
+        "load_metrics": {"$ref": "#/$defs/loadMetrics"}
+      }
+    },
+    "routeV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent", "blocked", "code", "recommendation", "evidence", "confidence",
+        "needs_owner", "routine_question_count", "target_mutation_count",
+        "journal_mutation_count", "network_call_count", "contribution_count",
+        "real_home_call_count", "tier", "autonomy", "use_profile",
+        "requires_domain_discovery", "project_inspection_state",
+        "project_inspection_digest", "project_inspection_g1_eligible"
+      ],
+      "properties": {
+        "intent": {"$ref": "#/$defs/intent"},
+        "blocked": {"type": "boolean"},
+        "code": {"type": "string", "minLength": 1, "maxLength": 128},
+        "recommendation": {"type": "string", "maxLength": 1000},
+        "evidence": {"type": "array", "maxItems": 16, "items": {"type": "string", "maxLength": 200}},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "needs_owner": {"type": "boolean"},
+        "routine_question_count": {"const": 0},
+        "target_mutation_count": {"const": 0},
+        "journal_mutation_count": {"const": 0},
+        "network_call_count": {"const": 0},
+        "contribution_count": {"const": 0},
+        "real_home_call_count": {"const": 0},
+        "tier": {"enum": ["S", "M", "L", "XL"]},
+        "autonomy": {"enum": ["A0", "A1", "A2", "A3"]},
+        "use_profile": {"type": "boolean"},
+        "requires_domain_discovery": {"type": "boolean"},
+        "project_inspection_state": {"enum": ["complete", "partial-safe", "partial-requires-discovery", "blocked-unsafe", "unsupported"]},
+        "project_inspection_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "project_inspection_g1_eligible": {"type": "boolean"}
+      }
+    },
+    "routeV3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "intent", "blocked", "code", "recommendation", "evidence", "confidence",
+        "needs_owner", "routine_question_count", "target_mutation_count",
+        "journal_mutation_count", "network_call_count", "contribution_count",
+        "real_home_call_count", "tier", "autonomy", "use_profile",
+        "requires_domain_discovery", "project_inspection_state",
+        "project_inspection_digest", "project_inspection_g1_eligible", "block_reason"
+      ],
+      "properties": {
+        "intent": {"$ref": "#/$defs/intent"},
+        "blocked": {"type": "boolean"},
+        "code": {"type": "string", "minLength": 1, "maxLength": 128},
+        "recommendation": {"type": "string", "maxLength": 1000},
+        "evidence": {"type": "array", "maxItems": 16, "items": {"type": "string", "maxLength": 200}},
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+        "needs_owner": {"type": "boolean"},
+        "routine_question_count": {"const": 0},
+        "target_mutation_count": {"const": 0},
+        "journal_mutation_count": {"const": 0},
+        "network_call_count": {"const": 0},
+        "contribution_count": {"const": 0},
+        "real_home_call_count": {"const": 0},
+        "tier": {"enum": ["S", "M", "L", "XL"]},
+        "autonomy": {"enum": ["A0", "A1", "A2", "A3"]},
+        "use_profile": {"type": "boolean"},
+        "requires_domain_discovery": {"type": "boolean"},
+        "project_inspection_state": {"enum": ["complete", "partial-safe", "partial-requires-discovery", "blocked-unsafe", "unsupported"]},
+        "project_inspection_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "project_inspection_g1_eligible": {"type": "boolean"},
+        "block_reason": {
+          "anyOf": [
+            {"$ref": "block-reason.schema.json"},
+            {"type": "null"}
+          ]
+        }
+      }
+    },
+    "preparedInvocation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "instance_id", "project_id", "invocation_id",
+        "request_hash", "canonical_target_identity", "survey_hash",
+        "world_fingerprint", "intent", "domains", "route_contract", "hard_stops",
+        "config_source", "retry_key", "prepared_at", "project_inspection",
+        "prepared_hash"
+      ],
+      "properties": {
+        "schema_version": {"enum": [2, 3]},
+        "instance_id": {"type": "string", "format": "uuid"},
+        "project_id": {"$ref": "#/$defs/projectId"},
+        "invocation_id": {"type": "string", "format": "uuid"},
+        "request_hash": {"$ref": "#/$defs/digest"},
+        "canonical_target_identity": {"type": "string", "pattern": "^target-sha256:[0-9a-f]{64}$"},
+        "survey_hash": {"$ref": "#/$defs/digest"},
+        "world_fingerprint": {"$ref": "#/$defs/digest"},
+        "intent": {"$ref": "#/$defs/intent"},
+        "domains": {"$ref": "#/$defs/domains"},
+        "route_contract": {
+          "oneOf": [
+            {"$ref": "#/$defs/routeV2"},
+            {"$ref": "#/$defs/routeV3"}
+          ]
+        },
+        "hard_stops": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 1000}},
+        "config_source": {"enum": ["explicit", "repository", "owner", "builtin-safe-default"]},
+        "retry_key": {"$ref": "#/$defs/digest"},
+        "prepared_at": {"type": "string", "format": "date-time"},
+        "project_inspection": {"$ref": "project-inspection.schema.json"},
+        "prepared_hash": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"schema_version": {"const": 2}}},
+          "then": {"properties": {"route_contract": {"$ref": "#/$defs/routeV2"}}},
+          "else": {"properties": {"route_contract": {"$ref": "#/$defs/routeV3"}}}
+        }
+      ]
+    },
+    "seedFileV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]{1,128}$"},
+        "bytes": {"type": "integer", "minimum": 0, "maximum": 262144},
+        "sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "seedManifestV1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "files", "root_sha256"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "files": {
+          "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/seedFileV1"}
+        },
+        "root_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "seedDirectoryV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "mode"],
+      "properties": {
+        "path": {"$ref": "#/$defs/seedPathV2"},
+        "kind": {"const": "directory"},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4095}
+      }
+    },
+    "seedFileV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "kind", "mode", "bytes", "sha256", "links"],
+      "properties": {
+        "path": {"$ref": "#/$defs/seedPathV2"},
+        "kind": {"const": "file"},
+        "mode": {"type": "integer", "minimum": 0, "maximum": 4095},
+        "bytes": {"type": "integer", "minimum": 0, "maximum": 262144},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "links": {"const": 1}
+      }
+    },
+    "seedPathV2": {
+      "type": "string",
+      "pattern": "^(?:\\.|(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*)$",
+      "maxLength": 256
+    },
+    "seedManifestV2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "policy", "platform", "entries", "file_count",
+        "directory_count", "total_bytes", "root_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "policy": {"const": "exact-tree-no-extended-data-v1"},
+        "platform": {"enum": ["windows", "posix"]},
+        "entries": {
+          "type": "array", "minItems": 1, "maxItems": 64, "uniqueItems": true,
+          "items": {
+            "oneOf": [
+              {"$ref": "#/$defs/seedDirectoryV2"},
+              {"$ref": "#/$defs/seedFileV2"}
+            ]
+          }
+        },
+        "file_count": {"type": "integer", "minimum": 0, "maximum": 8},
+        "directory_count": {"type": "integer", "minimum": 1, "maximum": 64},
+        "total_bytes": {"type": "integer", "minimum": 0, "maximum": 2097152},
+        "root_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "seedManifest": {
+      "oneOf": [
+        {"$ref": "#/$defs/seedManifestV1"},
+        {"$ref": "#/$defs/seedManifestV2"}
+      ]
+    },
+    "packSeed": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state", "created_pack", "kind", "manifest", "activation_atomic_rename"
+      ],
+      "properties": {
+        "state": {"enum": ["not-applicable", "recorded", "prepared", "installed", "recovered"]},
+        "created_pack": {"type": "boolean"},
+        "kind": {"enum": [null, "small", "planned"]},
+        "manifest": {
+          "anyOf": [
+            {"$ref": "#/$defs/seedManifest"},
+            {"type": "null"}
+          ]
+        },
+        "activation_atomic_rename": {
+          "anyOf": [
+            {"$ref": "recovery-receipt.schema.json#/$defs/atomicRenameState"},
+            {"type": "null"}
+          ]
+        }
+      }
+    }
+  }
+}

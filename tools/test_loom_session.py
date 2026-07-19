@@ -98,6 +98,122 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertEqual(second.receipt_hash, first.receipt_hash)
         self.assertTrue(second.repeated)
 
+    def test_same_request_after_world_change_creates_a_new_operation(self):
+        calls = []
+
+        def plan(_context):
+            calls.append("executed")
+            return {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+            }
+
+        controller = loom_session.SessionController(
+            owner_home=self.owner_home,
+            instance_id=self.instance_id,
+            handlers={"plan": plan},
+            memory=loom_session.NoopMemoryAdapter(),
+        )
+        first = controller.run(
+            "Build a command-line tool",
+            invocation_id="00000000-0000-4000-8000-000000000203",
+            cwd=self.project,
+            now="2026-07-14T12:00:00Z",
+        )
+        (self.project / "README.md").write_text("changed world\n", encoding="utf-8")
+        second = controller.run(
+            "Build a command-line tool",
+            invocation_id="00000000-0000-4000-8000-000000000204",
+            cwd=self.project,
+            now="2026-07-14T12:01:00Z",
+        )
+
+        self.assertEqual(calls, ["executed", "executed"])
+        self.assertNotEqual(first.operation_id, second.operation_id)
+        self.assertNotEqual(first.session_id, second.session_id)
+        self.assertFalse(second.repeated)
+
+    def test_legacy_receipt_replays_only_in_its_original_world(self):
+        calls = []
+
+        def plan(_context):
+            calls.append("executed")
+            return {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+            }
+
+        controller = loom_session.SessionController(
+            owner_home=self.owner_home,
+            instance_id=self.instance_id,
+            handlers={"plan": plan},
+            memory=loom_session.NoopMemoryAdapter(),
+        )
+        with mock.patch.object(
+                loom_session, "_operation_identity",
+                side_effect=loom_session._legacy_operation_identity):
+            legacy = controller.run(
+                "Build a command-line tool",
+                invocation_id="00000000-0000-4000-8000-000000000206",
+                cwd=self.project,
+                now="2026-07-14T12:00:00Z",
+            )
+        unchanged = controller.run(
+            "Build a command-line tool",
+            invocation_id="00000000-0000-4000-8000-000000000207",
+            cwd=self.project,
+            now="2026-07-14T12:01:00Z",
+        )
+        (self.project / "README.md").write_text("new world\n", encoding="utf-8")
+        changed = controller.run(
+            "Build a command-line tool",
+            invocation_id="00000000-0000-4000-8000-000000000208",
+            cwd=self.project,
+            now="2026-07-14T12:02:00Z",
+        )
+
+        self.assertEqual(legacy.operation_id, unchanged.operation_id)
+        self.assertTrue(unchanged.repeated)
+        self.assertNotEqual(legacy.operation_id, changed.operation_id)
+        self.assertFalse(changed.repeated)
+        self.assertEqual(["executed", "executed"], calls)
+
+    def test_active_session_seals_against_its_original_world_identity(self):
+        observed = []
+
+        def plan(context):
+            observed.append(context.operation_id)
+            return {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+            }
+
+        controller = loom_session.SessionController(
+            owner_home=self.owner_home,
+            instance_id=self.instance_id,
+            handlers={"plan": plan},
+            memory=loom_session.NoopMemoryAdapter(),
+        )
+        opened = controller.open(
+            "Build a command-line tool",
+            invocation_id="00000000-0000-4000-8000-000000000205",
+            cwd=self.project,
+            now="2026-07-14T12:00:00Z",
+        )
+        context = controller.prepare_context(opened, "Build a command-line tool")
+        (self.project / "README.md").write_text("delegated change\n", encoding="utf-8")
+        reopened = controller.reopen_sealed(
+            opened.prepared, session_id=opened.session_id,
+            operation_id=opened.operation_id, journal_path=opened.journal_path)
+        receipt = controller.seal(
+            reopened, "Build a command-line tool",
+            now="2026-07-14T12:01:00Z", selected_context=context)
+
+        self.assertEqual([opened.operation_id], observed)
+        self.assertEqual(opened.operation_id, receipt.operation_id)
+        self.assertEqual(opened.session_id, receipt.session_id)
+        self.assertFalse(receipt.repeated)
+
     def test_interrupted_handler_is_reconciled_on_the_next_invocation(self):
         calls = []
 

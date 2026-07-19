@@ -690,10 +690,45 @@ def _operation_identity(prepared):
         "project_id": prepared.project_id,
         "request_hash": prepared.request_hash,
         "survey_hash": prepared.survey_hash,
+        "operation_fingerprint": (
+            prepared.operation_fingerprint or prepared.world_fingerprint),
         "intent": prepared.intent,
         "domains": list(prepared.domains),
     })
     return operation_id, str(uuid.uuid5(uuid.UUID(prepared.instance_id), operation_id))
+
+
+def _legacy_operation_identity(prepared):
+    """Return the pre-world-fingerprint identity for safe receipt compatibility."""
+    operation_id = _sha({
+        "project_id": prepared.project_id,
+        "request_hash": prepared.request_hash,
+        "survey_hash": prepared.survey_hash,
+        "intent": prepared.intent,
+        "domains": list(prepared.domains),
+    })
+    return operation_id, str(uuid.uuid5(uuid.UUID(prepared.instance_id), operation_id))
+
+
+def _compatible_operation_identity(prepared, journal, open_payload):
+    """Prefer v2 identity, or reuse a v1 identity only in its exact original world."""
+    current = _operation_identity(prepared)
+    if any(event["operation_id"] == current[0] for event in journal["events"]):
+        return current
+    legacy = _legacy_operation_identity(prepared)
+    opened = next((event for event in journal["events"]
+                   if event["operation_id"] == legacy[0]
+                   and event["kind"] == "session-opened"), None)
+    if opened is None:
+        return current
+    payload = open_payload(legacy[0], opened["payload"])
+    if not isinstance(payload, dict) \
+            or payload.get("request_hash") != prepared.request_hash \
+            or payload.get("world_fingerprint") != prepared.world_fingerprint \
+            or payload.get("intent") != prepared.intent \
+            or payload.get("domains") != list(prepared.domains):
+        return current
+    return legacy
 
 
 @dataclass(frozen=True)
@@ -1101,7 +1136,8 @@ class LocalMemoryAdapter:
             self.owner_home, self.instance_id, text, selected)
 
 
-def validate_active_session(journal_path, session_id, operation_id, *, project_id=None):
+def validate_active_session(journal_path, session_id, operation_id, *, project_id=None,
+                            allow_interrupted=False):
     """Validate a currently open session capability without trusting environment prose."""
     try:
         uuid.UUID(str(session_id))
@@ -1127,8 +1163,11 @@ def validate_active_session(journal_path, session_id, operation_id, *, project_i
     matching = [event for event in journal["events"]
                 if event["session_id"] == session_id
                 and event["operation_id"] == operation_id]
+    allowed_terminal = {"session-opened", "session-reconciled"}
+    if allow_interrupted:
+        allowed_terminal.add("session-interrupted")
     if not matching or matching[0]["kind"] != "session-opened" \
-            or matching[-1]["kind"] not in {"session-opened", "session-reconciled"}:
+            or matching[-1]["kind"] not in allowed_terminal:
         raise SessionBlocked("SESSION_NOT_ACTIVE", "session is not currently active")
     return {"session_id": session_id, "operation_id": operation_id,
             "project_id": actual_project, "instance_id": raw["instance_id"]}
@@ -1174,9 +1213,10 @@ class SessionController:
             cwd=cwd, explicit_target=explicit_target, explicit_config=explicit_config,
             owner_home=self.owner_home, now=instant)
         path = self._journal_path(prepared.project_id)
-        operation_id, session_id = _operation_identity(prepared)
         with _SessionFileLock(path.with_name(".session.lock")):
             journal = _load_journal(path, self.instance_id, prepared.project_id)
+            operation_id, session_id = _compatible_operation_identity(
+                prepared, journal, self._open_payload)
             for event in reversed(journal["events"]):
                 if event["kind"] == "session-receipt-sealed" \
                         and event["operation_id"] == operation_id:
@@ -1232,6 +1272,8 @@ class SessionController:
                     "invocation_id": invocation_id,
                     "request_hash": prepared.request_hash,
                     "world_fingerprint": prepared.world_fingerprint,
+                    "operation_fingerprint": (
+                        prepared.operation_fingerprint or prepared.world_fingerprint),
                     "intent": prepared.intent,
                     "domains": list(prepared.domains),
                 }))
@@ -1239,6 +1281,57 @@ class SessionController:
         return OpenSession(
             prepared, session_id, operation_id, str(path), started, None,
             resolved_terminal_block)
+
+    def reopen_sealed(self, prepared, *, session_id, operation_id, journal_path):
+        """Reopen one already-authorized session without re-surveying a changed world."""
+        if not isinstance(prepared, loom_runtime.PreparedInvocation) \
+                or prepared.instance_id != self.instance_id:
+            raise SessionBlocked(
+                "SEALED_PREPARATION_MISMATCH",
+                "sealed preparation does not belong to this controller")
+        path = Path(journal_path)
+        expected = self._journal_path(prepared.project_id)
+        if path != expected:
+            raise SessionBlocked(
+                "SESSION_IDENTITY_INVALID",
+                "sealed session journal does not match the project journal")
+        state = validate_active_session(
+            path, session_id, operation_id, project_id=prepared.project_id,
+            allow_interrupted=True)
+        if state["instance_id"] != self.instance_id:
+            raise SessionBlocked(
+                "SESSION_IDENTITY_INVALID", "session belongs to another Loom instance")
+        journal = _load_journal(path, self.instance_id, prepared.project_id)
+        matching = [event for event in journal["events"]
+                    if event["session_id"] == session_id
+                    and event["operation_id"] == operation_id]
+        started = next(event["recorded_at"] for event in matching
+                       if event["kind"] == "session-opened")
+        return OpenSession(
+            prepared, session_id, operation_id, str(path), started, None, None)
+
+    def seal(self, open_session, request, *, now=None, selected_context=None):
+        """Seal the exact active session identity established before delegated work."""
+        if not isinstance(open_session, OpenSession) \
+                or open_session.terminal_receipt is not None \
+                or open_session.prepared.instance_id != self.instance_id \
+                or not isinstance(request, str) \
+                or open_session.prepared.request_hash != loom_runtime._sha(
+                    " ".join(request.split())):
+            raise SessionBlocked(
+                "SEALED_PREPARATION_MISMATCH",
+                "sealed session does not match this controller or request")
+        path = Path(open_session.journal_path)
+        if path != self._journal_path(open_session.prepared.project_id):
+            raise SessionBlocked(
+                "SESSION_IDENTITY_INVALID",
+                "sealed session journal does not match the project journal")
+        instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
+        with _SessionFileLock(path.with_name(".session.lock")):
+            return self._run_locked(
+                open_session.prepared, open_session.prepared.invocation_id,
+                instant, path, request, continue_open=True,
+                selected_context=selected_context, sealed_session=open_session)
 
     def interrupt(self, open_session, *, code, now=None):
         """Close an open delegated action as interrupted, idempotently."""
@@ -1367,9 +1460,15 @@ class SessionController:
                 continue_open=continue_open, selected_context=selected_context)
 
     def _run_locked(self, prepared, invocation_id, instant, path, request,
-                    *, continue_open=False, selected_context=None):
-        operation_id, session_id = _operation_identity(prepared)
+                    *, continue_open=False, selected_context=None,
+                    sealed_session=None):
         journal = _load_journal(path, self.instance_id, prepared.project_id)
+        if sealed_session is None:
+            operation_id, session_id = _compatible_operation_identity(
+                prepared, journal, self._open_payload)
+        else:
+            operation_id = sealed_session.operation_id
+            session_id = sealed_session.session_id
         for event in reversed(journal["events"]):
             if event["kind"] == "session-receipt-sealed" \
                     and event["operation_id"] == operation_id:
@@ -1379,6 +1478,13 @@ class SessionController:
         prior = [event for event in journal["events"]
                  if event["operation_id"] == operation_id]
         reconciled_session_id = None
+        if sealed_session is not None and (
+                not prior or prior[0]["kind"] != "session-opened"
+                or prior[0]["session_id"] != session_id
+                or prior[-1]["kind"] not in {
+                    "session-opened", "session-reconciled", "session-interrupted"}):
+            raise SessionBlocked(
+                "SESSION_NOT_ACTIVE", "sealed session is no longer active")
         if prior:
             if continue_open and prior[-1]["kind"] in {
                     "session-opened", "session-reconciled"}:
@@ -1407,6 +1513,8 @@ class SessionController:
                 "invocation_id": invocation_id,
                 "request_hash": prepared.request_hash,
                 "world_fingerprint": prepared.world_fingerprint,
+                "operation_fingerprint": (
+                    prepared.operation_fingerprint or prepared.world_fingerprint),
                 "intent": prepared.intent,
                 "domains": list(prepared.domains),
             }))

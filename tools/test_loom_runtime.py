@@ -330,12 +330,19 @@ class WorldFingerprintTests(RuntimeFixture):
             "staleness_bucket": 100,
         }
         original = loom_runtime.compose_world_fingerprint(base)
+        operation = loom_runtime.compose_operation_fingerprint(base)
         for key in base:
             changed = dict(base)
             changed[key] = (101 if key == "staleness_bucket" else f"changed-{key}")
             with self.subTest(key=key):
                 self.assertNotEqual(
                     loom_runtime.compose_world_fingerprint(changed), original)
+                if key in loom_runtime.OPERATION_COMPONENT_FIELDS:
+                    self.assertNotEqual(
+                        loom_runtime.compose_operation_fingerprint(changed), operation)
+                else:
+                    self.assertEqual(
+                        loom_runtime.compose_operation_fingerprint(changed), operation)
 
     def test_unknown_or_missing_world_components_are_rejected(self):
         valid = {key: "x" for key in loom_runtime.WORLD_COMPONENT_FIELDS}
@@ -374,12 +381,14 @@ class WorldFingerprintTests(RuntimeFixture):
         prior = project_runtime / "runtime.json"
         prior.write_text('{"version":"session-1"}', encoding="utf-8")
         baseline = self.prepare()
+        baseline_operation = baseline.operation_fingerprint
 
         readme = self.repo / "README.md"
         original_readme = readme.read_text(encoding="utf-8")
         readme.write_text(original_readme + "target mutation\n", encoding="utf-8")
-        self.assertNotEqual(
-            self.prepare().world_fingerprint, baseline.world_fingerprint)
+        changed_target = self.prepare()
+        self.assertNotEqual(changed_target.world_fingerprint, baseline.world_fingerprint)
+        self.assertNotEqual(changed_target.operation_fingerprint, baseline_operation)
         readme.write_text(original_readme, encoding="utf-8")
         self.assertEqual(
             self.prepare().world_fingerprint, baseline.world_fingerprint)
@@ -416,8 +425,11 @@ class WorldFingerprintTests(RuntimeFixture):
             original = path.read_text(encoding="utf-8")
             path.write_text(value, encoding="utf-8")
             with self.subTest(key=key):
+                changed_owner = self.prepare()
                 self.assertNotEqual(
-                    self.prepare().world_fingerprint, baseline.world_fingerprint)
+                    changed_owner.world_fingerprint, baseline.world_fingerprint)
+                self.assertEqual(
+                    changed_owner.operation_fingerprint, baseline_operation)
             path.write_text(original, encoding="utf-8")
             self.assertEqual(
                 self.prepare().world_fingerprint, baseline.world_fingerprint)
@@ -656,10 +668,11 @@ class UncertainRouteTests(unittest.TestCase):
                 decision = loom_runtime.resolve_intent(request, {})
                 self.assertEqual(decision["intent"], "remember")
                 self.assertFalse(decision["blocked"])
-        self.assertEqual(
-            loom_runtime.resolve_intent(
-                "Don't remember that I never want you to deploy", {})["intent"],
-            "forget")
+        negated_remember = loom_runtime.resolve_intent(
+            "Don't remember that I never want you to deploy", {})
+        self.assertEqual("status", negated_remember["intent"])
+        self.assertTrue(negated_remember["blocked"])
+        self.assertEqual("INTENT_NEGATED", negated_remember["code"])
         scoped = loom_runtime.resolve_intent(
             "Remember that I don't want you to review automatically", {})
         self.assertEqual(scoped["intent"], "remember")
