@@ -11,6 +11,8 @@ import time
 import unittest
 from pathlib import Path
 
+import loom_docs
+
 
 CONTAINMENT_FAST_TEST = (
     "test_automatic_lifecycle.AutomaticLifecycleTests."
@@ -149,6 +151,23 @@ def run(mode, *, max_seconds=None, verbosity=1):
     return report
 
 
+def refresh_final_evidence(root, report):
+    """Refresh inventory after a complete correctness-clean suite, never a partial run."""
+    correctness_clean = report.get("mode") == "full" \
+        and report.get("failures") == 0 and report.get("errors") == 0 \
+        and report.get("within_budget") is True \
+        and type(report.get("tests_run")) is int and report["tests_run"] > 0
+    if not correctness_clean:
+        raise loom_docs.DocsError(
+            "generated evidence requires a correctness-clean complete test suite")
+    evidence = loom_docs.refresh_evidence(
+        root, expected_test_methods=report.get("tests_run"))
+    return {
+        "status": "refreshed",
+        "discovered_test_methods": evidence["discovered_test_methods"],
+    }
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Run Loom's bounded fast gate or complete release suite.")
@@ -156,10 +175,28 @@ def main(argv=None):
     parser.add_argument("--max-seconds", type=float)
     parser.add_argument("--output")
     parser.add_argument("--quiet", action="store_true")
+    parser.add_argument("--refresh-generated-evidence", action="store_true")
     args = parser.parse_args(argv)
+    evidence_root = Path(__file__).resolve().parents[1]
+    if args.refresh_generated_evidence and args.mode != "full":
+        parser.error("generated evidence refresh requires full mode")
+    if args.refresh_generated_evidence:
+        try:
+            loom_docs.refresh_evidence(evidence_root)
+        except loom_docs.DocsError as exc:
+            parser.error(str(exc))
     report = run(
         args.mode, max_seconds=args.max_seconds,
         verbosity=0 if args.quiet else 1)
+    if args.refresh_generated_evidence:
+        try:
+            report["generated_evidence"] = refresh_final_evidence(
+                evidence_root, report)
+        except loom_docs.DocsError as exc:
+            report["generated_evidence"] = {
+                "status": "failed", "detail": str(exc)}
+            report["successful"] = False
+            report["status"] = "failed"
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if args.output:
         Path(args.output).write_text(text, encoding="utf-8")

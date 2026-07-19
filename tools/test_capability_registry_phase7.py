@@ -1,4 +1,5 @@
 import copy
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -74,6 +75,21 @@ class CapabilityRegistryPhase7Tests(unittest.TestCase):
                     loom_capability_registry.CapabilityRegistryError, "unsafe"):
                 loom_capability_registry.generate(
                     declarations, self.graph(), root=root)
+
+    def test_cli_uses_root_version_authority_instead_of_stale_generated_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            declarations = root / "capabilities.json"
+            output = root / "generated.json"
+            (root / "VERSION").write_text("1.8.4\n", encoding="utf-8")
+            stale = self.declarations()
+            stale["capabilities"] = []
+            declarations.write_text(json.dumps(stale), encoding="utf-8")
+
+            self.assertEqual(0, loom_capability_registry.main([
+                str(declarations), "--root", str(root), "--output", str(output)]))
+            self.assertEqual("1.8.4", json.loads(
+                output.read_text(encoding="utf-8"))["version"])
 
 
 if __name__ == "__main__":

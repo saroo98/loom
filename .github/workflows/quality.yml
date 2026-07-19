@@ -40,6 +40,10 @@ jobs:
       - name: Run bounded trust-critical gate
         working-directory: tools
         run: python -B loom_test.py fast --max-seconds 30 --output fast-test-timings.json
+      - name: Regenerate final inventory and require committed parity
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.10'
+        working-directory: tools
+        run: python -B loom_docs.py generate --root .. && git diff --exit-code -- ../docs/generated-evidence.json
       - name: Validate the fixed evidence score rubric
         working-directory: tools
         run: python -B loom_scorecard.py validate-rubric

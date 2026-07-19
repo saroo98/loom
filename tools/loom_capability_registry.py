@@ -13,6 +13,7 @@ import loom_reliability
 STATUSES = {"supported", "experimental", "stale-proof", "unsupported", "unverified"}
 ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,95}$")
 MAX_BYTES = 4 * 1024 * 1024
+SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 class CapabilityRegistryError(RuntimeError):
@@ -41,6 +42,20 @@ def _read(path):
                           object_pairs_hook=_strict_object)
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise CapabilityRegistryError(f"registry input is invalid: {exc}") from exc
+
+
+def _root_version(root):
+    try:
+        root_path = loom_reliability._absolute(root, "capability registry root",
+                                               must_exist=True)
+        version_path = loom_reliability._absolute(
+            root_path / "VERSION", "capability registry VERSION", must_exist=True)
+        value = version_path.read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError, loom_reliability.ReliabilityError) as exc:
+        raise CapabilityRegistryError(f"VERSION authority is unavailable: {exc}") from exc
+    if not version_path.is_file() or not SEMVER_RE.fullmatch(value):
+        raise CapabilityRegistryError("VERSION authority is invalid")
+    return value
 
 
 def _declarations(value):
@@ -174,6 +189,9 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         declarations = _read(args.declarations)
+        if args.root:
+            declarations = dict(declarations)
+            declarations["version"] = _root_version(args.root)
         graph = _read(args.graph) if args.graph else None
         result = generate(declarations, graph, root=args.root)
     except CapabilityRegistryError as exc:

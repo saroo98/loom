@@ -283,6 +283,24 @@ def generate_evidence(root):
     }
 
 
+def refresh_evidence(root, *, expected_test_methods=None):
+    """Atomically refresh the inventory and prove it still matches the final tree."""
+    root = Path(root).resolve()
+    evidence = generate_evidence(root)
+    if expected_test_methods is not None \
+            and evidence["discovered_test_methods"] != expected_test_methods:
+        raise DocsError(
+            "final test execution count does not match the discovered test inventory")
+    output = root / "docs" / "generated-evidence.json"
+    loom_reliability.atomic_write_json(output, evidence)
+    observed = json.loads(
+        output.read_text(encoding="utf-8"), object_pairs_hook=_strict_object)
+    final = generate_evidence(root)
+    if observed != evidence or final != evidence:
+        raise DocsError("generated evidence changed during final inventory refresh")
+    return evidence
+
+
 def _atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -309,14 +327,17 @@ def main(argv=None):
     if args.command == "audit":
         report = audit_docs(root)
     else:
-        report = generate_evidence(root)
         output = Path(args.output) if args.output else root / "docs/generated-evidence.json"
         try:
             safe_output = loom_reliability._absolute(output, "documentation evidence output")
             safe_output.relative_to(root)
         except (ValueError, loom_reliability.ReliabilityError) as exc:
             raise SystemExit("output must stay inside the repository") from exc
-        loom_reliability.atomic_write_json(safe_output, report)
+        if safe_output == root / "docs" / "generated-evidence.json":
+            report = refresh_evidence(root)
+        else:
+            report = generate_evidence(root)
+            loom_reliability.atomic_write_json(safe_output, report)
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if args.command == "generate" or report["status"] == "passed" else 1
 
