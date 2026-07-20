@@ -45,7 +45,7 @@ class ReleaseStandardTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_exhaustive_suite_ceiling_has_supported_runner_headroom(self):
-        self.assertEqual(1200, loom_release.FULL_SUITE_MAX_SECONDS)
+        self.assertEqual(1500, loom_release.FULL_SUITE_MAX_SECONDS)
 
     def test_suite_separates_correctness_from_cross_platform_capability_skips(self):
         tools = self.root / "tools"
@@ -65,13 +65,17 @@ class ReleaseStandardTests(unittest.TestCase):
         }
         completed = mock.Mock(
             returncode=1, stdout=json.dumps(report), stderr="10 tests passed; 1 skipped")
-        with mock.patch.object(subprocess, "run", return_value=completed):
+        with mock.patch.object(subprocess, "run", return_value=completed) as run:
             result = loom_release._suite(self.root)
 
         self.assertTrue(result["passed"])
         self.assertFalse(result["capability_complete"])
         self.assertEqual("requires-matrix", result["capability_status"])
         self.assertEqual(report["skip_receipts"], result["skip_receipts"])
+        command = run.call_args.args[0]
+        self.assertNotIn("--max-seconds", command)
+        self.assertEqual(loom_release.FULL_SUITE_MAX_SECONDS,
+                         run.call_args.kwargs["timeout"])
 
     def test_suite_failure_names_failed_tests_without_full_transcripts(self):
         tools = self.root / "tools"

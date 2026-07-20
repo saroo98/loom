@@ -65,7 +65,7 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
 
     def test_clean_room_timeout_covers_the_exact_cut_suite_budget(self):
         self.assertGreaterEqual(
-            loom_clean_room.verify.__kwdefaults__["timeout"], 1500)
+            loom_clean_room.verify.__kwdefaults__["timeout"], 1800)
 
     def test_clean_room_invokes_from_the_public_tools_directory(self):
         with tempfile.TemporaryDirectory() as temporary:

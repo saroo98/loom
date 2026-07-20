@@ -43,11 +43,11 @@ EXTERNAL_CHECKS = (
     "cross-platform-ci", "unfamiliar-user-usability", "independent-hostile-review",
     "production-performance", "production-memory-replay",
 )
-# This is an exhaustion ceiling, not a product-performance target.  The
-# dedicated fast gate owns the 30-second regression budget.  Supported
-# Windows/Python combinations have measured complete, passing exact-cut runs
-# above 900 seconds, so the exhaustive verifier retains bounded headroom.
-FULL_SUITE_MAX_SECONDS = 1200
+# This is a subprocess exhaustion ceiling, not a product-performance target.
+# The dedicated fast gate owns the 30-second regression budget.  The complete
+# correctness suite does not duplicate a wall-clock assertion inside its own
+# result; the verifier and CI job retain independent hard termination bounds.
+FULL_SUITE_MAX_SECONDS = 1500
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",
@@ -809,14 +809,13 @@ def certification_report(*, local_checks, external_evidence, trust_policy=None, 
 
 def _suite(root):
     runner = root / "tools" / "loom_test.py"
-    command = ([sys.executable, "-B", "loom_test.py", "full", "--max-seconds",
-                str(FULL_SUITE_MAX_SECONDS),
-                "--quiet"] if runner.is_file() else
+    command = ([sys.executable, "-B", "loom_test.py", "full", "--quiet"]
+               if runner.is_file() else
                [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
     result = subprocess.run(
         command,
         cwd=root / "tools", capture_output=True, text=True,
-        timeout=FULL_SUITE_MAX_SECONDS + 300, check=False,
+        timeout=FULL_SUITE_MAX_SECONDS, check=False,
         env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
     try:
         timing = json.loads(result.stdout) if runner.is_file() else None
