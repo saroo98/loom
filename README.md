@@ -11,6 +11,7 @@
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.4">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -38,6 +39,26 @@ or be refused.
 
 Loom is not another coding agent, a project board, or a template collection. It sits between what a
 person asks for and what an agent is allowed to build.
+
+## What changed in 1.8.4
+
+Loom 1.8.4 hardens the control plane that decides whether work may continue:
+
+- **Recovery is transactional.** Interrupted cancellation records the source, quarantine, and
+  absence state consistently across same-volume and cross-volume filesystems. Malformed,
+  contradictory, or unsupported recovery receipts fail closed.
+- **A repeated request means the right thing.** Retrying the same request in an unchanged world is
+  idempotent. Repeating it after the repository or lifecycle advances creates the next operation
+  instead of replaying a stale sealed receipt.
+- **Verification-only work stays honest.** Loom can verify implementation that predates the current
+  lifecycle without claiming that the new plan caused the old work.
+- **Release evidence comes from the final tree.** Generated inventory is refreshed after the last
+  test is added, so published counts cannot silently lag behind the release being described.
+
+The signed `v1.8.4` release is bound to commit
+[`d8f552606d64fcf2936cb4a3958a294af4ac87f2`](https://github.com/saroo98/loom/commit/d8f552606d64fcf2936cb4a3958a294af4ac87f2).
+Its installable plugin archive has SHA-256
+`34678cd745e4e7a5557da44d187b9f68f5b3cc50f7fd4cdb05730c01befdfcfa`.
 
 ## Install
 
@@ -74,6 +95,10 @@ metadata is incomplete.
 
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
+
+For the verified release artifact, download `loom-plugin-v1.8.4.zip` from
+[the v1.8.4 release](https://github.com/saroo98/loom/releases/tag/v1.8.4), verify it before
+installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request
 
