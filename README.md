@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-<strong>Loom 1.8.4 · Planning intelligence for AI coding agents.</strong><br>
+<strong>Loom 1.8.5 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
@@ -39,6 +39,24 @@ or be refused.
 
 Loom is not another coding agent, a project board, or a template collection. It sits between what a
 person asks for and what an agent is allowed to build.
+
+## What changed in 1.8.5
+
+Loom 1.8.5 gives Codex a native sealed invocation path without exposing request text to a shell,
+command line, environment variable, or temporary file:
+
+- **Codex can invoke Loom itself.** A trusted `UserPromptSubmit` hook receives explicit `/loom`
+  requests as bounded JSON on stdin and injects the sealed Loom receipt before agent work begins.
+- **Request identity survives intact.** Multiline text, Unicode, whitespace, quotes, and shell
+  metacharacters remain inside protocol-v2 JSON across both process boundaries.
+- **Ordinary prompts remain ordinary.** The hook is silent and creates no Loom state unless the
+  user explicitly invokes `/loom` or the Loom skill.
+- **Global installation no longer looks like split brain.** A user-global Loom skill at the owner
+  home boundary is not misclassified as a project-local shadow, while genuine local conflicts
+  still fail closed.
+
+The most recent published signed artifact remains `v1.8.4` until the `v1.8.5` release candidate is
+committed, attested, and published from `main`.
 
 ## What changed in 1.8.4
 

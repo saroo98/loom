@@ -307,6 +307,23 @@ class AdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "split-brain"):
             loom_launcher._reject_local_shadow(project)
 
+    def test_owner_global_skill_is_not_misclassified_for_non_git_project(self):
+        owner = self.root / "owner"
+        project = owner / "projects" / "plain"
+        project.mkdir(parents=True)
+        global_skill = owner / ".codex" / "skills" / "loom" / "SKILL.md"
+        global_skill.parent.mkdir(parents=True)
+        global_skill.write_text("global Loom", encoding="utf-8")
+        with mock.patch.object(loom_launcher.Path, "home", return_value=owner):
+            loom_launcher._reject_local_shadow(project)
+
+        local_skill = project / ".codex" / "skills" / "loom" / "SKILL.md"
+        local_skill.parent.mkdir(parents=True)
+        local_skill.write_text("local Loom", encoding="utf-8")
+        with mock.patch.object(loom_launcher.Path, "home", return_value=owner), \
+                self.assertRaisesRegex(RuntimeError, "split-brain"):
+            loom_launcher._reject_local_shadow(project)
+
     def test_active_runtime_tampering_or_unlisted_file_blocks_launch(self):
         runtime = self.root / "verified-runtime"
         tool = runtime / "tools" / "loom.py"

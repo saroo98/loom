@@ -1,4 +1,4 @@
-# Loom 1.8.4 agent kernel
+# Loom 1.8.5 agent kernel
 
 The entire owner-facing interface is:
 
@@ -11,7 +11,12 @@ runtime below. Never read every Loom file into context.
 
 ## One-run protocol
 
-1. Run the installed skill's bounded bootstrap, then start only the receipt-owned Python launcher
+1. On Codex, an explicit `/loom` or Loom-skill prompt is transported by the trusted plugin
+   `UserPromptSubmit` hook. Codex supplies the prompt to that hook as JSON on stdin; the hook
+   bootstraps and invokes the receipt-owned bridge, then injects a bounded
+   `LOOM_CODEX_HOOK_RECEIPT_V1` developer-context record. Use that sealed action exactly once. Its
+   absence means the Codex invocation is not sealed, and prose conformance is not a substitute.
+   On other supported hosts, run the installed skill's bounded bootstrap, then start only the receipt-owned Python launcher
    at `~/.loom/bin/loom.py` in bridge mode with fixed arguments. Send the initialized protocol-v2
    `invoke` frame through its stdin. Owner request text must never cross a shell, argv, environment
    variable, command wrapper, or temporary file. Bootstrap accepts either a signed release payload or a complete, unchanged

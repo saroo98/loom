@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.8.5
+
+- Add a Codex `UserPromptSubmit` hook that routes explicit Loom requests through bounded
+  protocol-v2 JSON stdin from host to launcher to orchestrator, without request text in a shell,
+  argument, environment variable, wrapper, or temporary file.
+- Bind injected developer context to the exact UTF-8 request digest and encrypted action-file
+  digest, reject malformed or redirected action envelopes, and leave non-Loom prompts silent and
+  side-effect free.
+- Stop project-shadow detection at the owner-home boundary so a valid global Loom installation is
+  not mistaken for a project-local conflict in non-Git projects.
+
 ## 1.8.4
 
 - Make interrupted control-plane recovery transactional and receipt-bound across same-volume and
