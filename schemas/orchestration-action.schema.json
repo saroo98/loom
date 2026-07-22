@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "loom/schemas/orchestration-action.schema.json",
-  "title": "Decrypted Loom orchestration action v8",
+  "title": "Decrypted Loom orchestration action v9",
   "description": "Closed contract for the authenticated plaintext inside a loom-encrypted-action-v1 envelope. This schema does not describe the persisted encrypted file.",
   "type": "object",
   "additionalProperties": false,
@@ -14,10 +14,10 @@
     "work_order", "prepared", "context", "result", "repair_plan", "host_result",
     "plan_contract", "domain_contract", "context_manifest",
     "continuation_authority", "owner_message", "action_hash", "pack_seed",
-    "recovery_receipt"
+    "recovery_receipt", "assurance"
   ],
   "properties": {
-    "schema_version": {"const": 8},
+    "schema_version": {"const": 9},
     "action_id": {"type": "string", "format": "uuid"},
     "status": {"enum": ["initializing", "pending", "completed", "cancelled", "expired", "failed", "abandoned", "superseded"]},
     "instance_id": {"type": "string", "format": "uuid"},
@@ -74,9 +74,37 @@
         {"$ref": "recovery-receipt.schema.json"},
         {"type": "null"}
       ]
-    }
+    },
+    "assurance": {"$ref": "#/$defs/assurance"}
   },
   "$defs": {
+    "lifecycleCapabilities": {
+      "type": "object", "additionalProperties": false,
+      "required": ["session_start", "pre_tool_guard", "post_tool_freshness", "compaction_resume", "automatic_learning", "subagent_propagation"],
+      "properties": {
+        "session_start": {"type": "boolean"},
+        "pre_tool_guard": {"type": "boolean"},
+        "post_tool_freshness": {"type": "boolean"},
+        "compaction_resume": {"type": "boolean"},
+        "automatic_learning": {"type": "boolean"},
+        "subagent_propagation": {"type": "boolean"}
+      }
+    },
+    "assurance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "ingress", "request_identity_scope", "request_utf8_bytes", "request_sha256", "host_id", "host_version", "capability_receipt_sha256", "lifecycle_capabilities"],
+      "properties": {
+        "mode": {"enum": ["standard", "verified", "legacy-unclassified"]},
+        "ingress": {"enum": ["codex-local-tool-v1", "codex-user-prompt-hook-v2", "legacy-v1"]},
+        "request_identity_scope": {"enum": ["tool-argument", "host-prompt", "legacy-unknown"]},
+        "request_utf8_bytes": {"type": "integer", "minimum": 1, "maximum": 131072},
+        "request_sha256": {"$ref": "#/$defs/digest"},
+        "host_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "host_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "capability_receipt_sha256": {"$ref": "#/$defs/digest"},
+        "lifecycle_capabilities": {"$ref": "#/$defs/lifecycleCapabilities"}
+      }
+    },
     "absolutePath": {"type": "string", "minLength": 1, "maxLength": 4096},
     "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "nullableDigest": {

@@ -350,6 +350,9 @@ class ControlPlaneAuthorityTests(unittest.TestCase):
         _invalid_pack(self.project)
         blocked = self.invoke("Continue")
         tampered = json.loads(json.dumps(blocked))
+        # The transport result adds assurance outside the sealed session receipt.
+        # Remove that overlay before testing a correctly re-sealed receipt body.
+        tampered.pop("assurance")
         tampered["terminal_authority"]["implementation_authorized"] = True
         tampered["receipt_hash"] = loom_session._receipt_hash(tampered)
         with self.assertRaisesRegex(loom_session.SessionBlocked, "terminal receipt"):

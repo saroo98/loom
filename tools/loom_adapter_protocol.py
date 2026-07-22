@@ -18,6 +18,15 @@ CAPABILITY_KEYS = {
     "invoke", "complete", "cancel", "status", "markdown", "usage_receipt",
     "response_identity", "latency_events",
 }
+ASSURANCE_MODES = {"standard", "verified"}
+ASSURANCE_INGRESS = {
+    "standard": "codex-local-tool-v1",
+    "verified": "codex-user-prompt-hook-v2",
+}
+LIFECYCLE_CAPABILITY_KEYS = {
+    "session_start", "pre_tool_guard", "post_tool_freshness",
+    "compaction_resume", "automatic_learning", "subagent_propagation",
+}
 ERROR_CODES = {
     "PROTOCOL_INCOMPATIBLE", "MESSAGE_INVALID", "MESSAGE_TOO_LARGE",
     "CAPABILITY_MISSING", "HOST_UNVERIFIED", "RUNTIME_BLOCKED",
@@ -67,11 +76,43 @@ def request_identity(request):
     return {"utf8_bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
 
 
-def request_envelope(invoke_message, host):
+def assurance(adapter, host, capabilities):
+    """Describe only the assurance proven by the observed ingress."""
+    mode = "verified" if adapter["id"] == "codex-prompt-hook" else "standard"
+    lifecycle = {key: False for key in sorted(LIFECYCLE_CAPABILITY_KEYS)}
+    capability_body = {
+        "adapter": dict(adapter), "host": dict(host),
+        "capabilities": dict(capabilities), "lifecycle_capabilities": lifecycle,
+    }
+    return {
+        "mode": mode,
+        "ingress": ASSURANCE_INGRESS[mode],
+        "request_identity_scope": "host-prompt" if mode == "verified" else "tool-argument",
+        "host_id": host["id"],
+        "host_version": host["version"],
+        "capability_receipt_sha256": hashlib.sha256(
+            json.dumps(capability_body, sort_keys=True, separators=(",", ":"),
+                       ensure_ascii=False).encode("utf-8")).hexdigest(),
+        "lifecycle_capabilities": lifecycle,
+    }
+
+
+def request_envelope(invoke_message, host, *, adapter=None, capabilities=None):
     """Seal one validated invoke message for internal process forwarding."""
     validate_message(invoke_message)
     if invoke_message["message_type"] != "invoke":
         raise ProtocolError("MESSAGE_INVALID", "request envelope source is not invoke")
+    if adapter is None:
+        adapter = {"id": "legacy-adapter", "version": ADAPTER_VERSION}
+    if capabilities is None:
+        capabilities = {key: False for key in CAPABILITY_KEYS}
+        capabilities["invoke"] = True
+    identity = request_identity(invoke_message["request"])
+    assurance_value = assurance(adapter, host, capabilities)
+    assurance_value.update({
+        "request_utf8_bytes": identity["utf8_bytes"],
+        "request_sha256": identity["sha256"],
+    })
     value = {
         "schema_version": PROTOCOL_VERSION,
         "message_type": "request-envelope",
@@ -79,7 +120,8 @@ def request_envelope(invoke_message, host):
         "request": invoke_message["request"],
         "cwd": invoke_message["cwd"],
         "host": dict(host),
-        "request_identity": request_identity(invoke_message["request"]),
+        "request_identity": identity,
+        "assurance": assurance_value,
     }
     return validate_message(value)
 
@@ -103,6 +145,31 @@ def _capabilities(value):
     _exact(value, CAPABILITY_KEYS, "adapter capabilities")
     if any(type(item) is not bool for item in value.values()):
         raise ProtocolError("MESSAGE_INVALID", "adapter capabilities are invalid")
+
+
+def _assurance(value, request, host):
+    _exact(value, {
+        "mode", "ingress", "request_identity_scope", "request_utf8_bytes",
+        "request_sha256", "host_id", "host_version",
+        "capability_receipt_sha256", "lifecycle_capabilities",
+    }, "request assurance")
+    mode = value["mode"]
+    if mode not in ASSURANCE_MODES or value["ingress"] != ASSURANCE_INGRESS[mode] \
+            or value["request_identity_scope"] != (
+                "host-prompt" if mode == "verified" else "tool-argument") \
+            or value["host_id"] != host["id"] \
+            or value["host_version"] != host["version"]:
+        raise ProtocolError("MESSAGE_INVALID", "request assurance identity is inconsistent")
+    identity = request_identity(request)
+    if value["request_utf8_bytes"] != identity["utf8_bytes"] \
+            or value["request_sha256"] != identity["sha256"] \
+            or not isinstance(value["capability_receipt_sha256"], str) \
+            or not re.fullmatch(r"[0-9a-f]{64}", value["capability_receipt_sha256"]):
+        raise ProtocolError("MESSAGE_INVALID", "request assurance digest is invalid")
+    lifecycle = value["lifecycle_capabilities"]
+    _exact(lifecycle, LIFECYCLE_CAPABILITY_KEYS, "lifecycle capabilities")
+    if any(type(item) is not bool for item in lifecycle.values()):
+        raise ProtocolError("MESSAGE_INVALID", "lifecycle capabilities are invalid")
 
 
 def validate_message(value):
@@ -149,7 +216,7 @@ def validate_message(value):
         _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
         _text(value["cwd"], "project path", 1, 4096)
     elif message_type == "request-envelope":
-        _exact(value, common | {"request", "cwd", "host", "request_identity"},
+        _exact(value, common | {"request", "cwd", "host", "request_identity", "assurance"},
                "request envelope")
         _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
         _text(value["cwd"], "project path", 1, 4096)
@@ -165,6 +232,7 @@ def validate_message(value):
                 or identity["sha256"] != expected["sha256"]:
             raise ProtocolError(
                 "MESSAGE_INVALID", "request identity does not match exact UTF-8 bytes")
+        _assurance(value["assurance"], value["request"], value["host"])
     elif message_type == "complete":
         _exact(value, common | {"action", "usage", "result"}, "complete")
         _text(value["action"], "action path", 1, 4096)

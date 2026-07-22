@@ -96,7 +96,9 @@ def dispatch(message, *, home, launcher, session):
             "CAPABILITY_MISSING", f"host did not declare the {kind} capability")
     host = session["host"]
     if kind == "invoke":
-        envelope = loom_adapter_protocol.request_envelope(message, host)
+        envelope = loom_adapter_protocol.request_envelope(
+            message, host, adapter=session["adapter"],
+            capabilities=session["capabilities"])
         code, payload = _run_request(launcher, home, envelope)
     elif kind == "complete":
         arguments = ["--home", str(home), "complete", "--action", message["action"]]

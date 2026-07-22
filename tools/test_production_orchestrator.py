@@ -1013,6 +1013,7 @@ planning_obligations: [{obligations}]
         action["schema_version"] = loom_orchestrator.LEGACY_ACTION_SCHEMA_VERSION
         action.pop("pack_seed")
         action.pop("recovery_receipt")
+        action.pop("assurance")
         action["action_hash"] = loom_orchestrator._action_hash(action)
         path.write_text(json.dumps(action), encoding="utf-8")
 
