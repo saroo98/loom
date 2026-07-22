@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "loom": {
+      "command": "python",
+      "args": ["-B", "./scripts/loom_codex_mcp.py"],
+      "cwd": ".",
+      "tool_timeout_sec": 900
+    }
+  }
+}

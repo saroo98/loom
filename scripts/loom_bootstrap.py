@@ -701,13 +701,24 @@ def _hook_event():
     plugin_root = Path(os.environ.get("PLUGIN_ROOT", Path(__file__).resolve().parents[1]))
     try:
         plugin = _load(plugin_root / ".codex-plugin" / "plugin.json", "plugin manifest")
-        pointer_path = Path.home() / ".loom" / "runtime" / "current.json"
+        loom_home = Path(os.environ.get("LOOM_HOME", Path.home() / ".loom")).resolve()
+        pointer_path = loom_home / "runtime" / "current.json"
         current = _load(pointer_path, "runtime pointer") if pointer_path.is_file() else None
+        integration_path = loom_home / "adapters" / "receipts" / "codex-integration.json"
+        integration = (_load(integration_path, "Codex integration receipt")
+                       if integration_path.is_file() else None)
     except Exception:
         return 0
     if current is None or current.get("version") != plugin.get("version"):
         print(json.dumps({"continue": True, "systemMessage":
             "A Loom update is available. It will be verified before the next /loom request."},
+            separators=(",", ":")))
+    elif integration is not None and (
+            integration.get("schema_version") not in {1, 2, 3}
+            or integration.get("mcp_name") not in {None, "loom"}
+            or not isinstance(integration.get("entries"), dict)):
+        print(json.dumps({"continue": True, "systemMessage":
+            "Loom integration health is unknown. Run /loom show status before relying on verified mode."},
             separators=(",", ":")))
     return 0
 

@@ -1,31 +1,4 @@
 {
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "startup|resume|clear|compact",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/loom_bootstrap.py\"",
-            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\loom_bootstrap.py\"",
-            "timeout": 2,
-            "statusMessage": "Checking Loom runtime"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"$PLUGIN_ROOT/scripts/loom_codex_prompt.py\"",
-            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\loom_codex_prompt.py\"",
-            "timeout": 180,
-            "statusMessage": "Sealing Loom request"
-          }
-        ]
-      }
-    ]
-  }
+  "description": "Loom lifecycle hooks are installed transactionally at user scope after explicit approval.",
+  "hooks": {}
 }

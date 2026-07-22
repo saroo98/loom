@@ -35,6 +35,21 @@ def event(prompt, cwd, *, session="session-a", turn="turn-a"):
     }
 
 
+def verified_assurance(request_sha256):
+    return {
+        "mode": "verified", "ingress": "codex-user-prompt-hook-v2",
+        "request_identity_scope": "host-prompt", "request_utf8_bytes": 1,
+        "request_sha256": request_sha256, "host_id": "codex",
+        "host_version": "user-prompt-submit-v1",
+        "capability_receipt_sha256": "c" * 64,
+        "lifecycle_capabilities": {
+            "session_start": False, "pre_tool_guard": False,
+            "post_tool_freshness": False, "compaction_resume": False,
+            "automatic_learning": False, "subagent_propagation": False,
+        },
+    }
+
+
 class PromptExtractionTests(unittest.TestCase):
     def test_slash_surface_preserves_multiline_unicode_and_metacharacters(self):
         request = "first line\n  second % ! & | < > ^ ( ) ' \" café کوردی"
@@ -142,6 +157,8 @@ class HookContractTests(unittest.TestCase):
                 "intent": "plan", "tier": "S", "domains": ["cli"],
                 "plan_contract": plan_contract,
                 "owner_message": {"human": "Plan is ready."},
+                "assurance": verified_assurance(
+                    hashlib.sha256(request.encode("utf-8")).hexdigest()),
             })
 
         stdin = io.BytesIO(json.dumps(event("/loom " + request, self.root)).encode())
@@ -176,6 +193,7 @@ class HookContractTests(unittest.TestCase):
             "required_outcome": "Author the sealed contract before completion.",
             "request": "private owner request must never be reinjected",
             "unknown_private_field": {"secret": "must not cross the hook boundary"},
+            "assurance": verified_assurance("a" * 64),
         }
         context = json.loads(loom_codex_prompt._bounded_context(
             payload, request_sha256="a" * 64, runtime_version="1.8.5",
@@ -238,18 +256,13 @@ class HookContractTests(unittest.TestCase):
         self.assertEqual("", completed.stdout)
         self.assertFalse(self.home.exists())
 
-    def test_plugin_declares_fixed_prompt_hook(self):
+    def test_plugin_does_not_activate_a_duplicate_prompt_hook(self):
         manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(
             encoding="utf-8"))
-        self.assertEqual("./hooks/hooks.json", manifest["hooks"])
+        self.assertNotIn("hooks", manifest)
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(
             encoding="utf-8"))
-        handler = hooks["hooks"]["UserPromptSubmit"][0]["hooks"][0]
-        self.assertNotIn("request", handler["command"].lower())
-        self.assertNotIn("request", handler["commandWindows"].lower())
-        self.assertIn("loom_codex_prompt.py", handler["command"])
-        self.assertIn("loom_codex_prompt.py", handler["commandWindows"])
-        self.assertLessEqual(handler["timeout"], 180)
+        self.assertEqual({}, hooks["hooks"])
 
 
 if __name__ == "__main__":

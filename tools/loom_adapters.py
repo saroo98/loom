@@ -57,9 +57,15 @@ def _allowed_transaction_path(path, user_home, loom_home):
         "loom.py", "loom", "loom.cmd", ".loom-launcher-receipt.json",
         "loom_update.py", "loom_reliability.py", "loom_adapter_protocol.py",
         "loom_adapter_bridge.py", "loom_host_registry.py", "host-contracts-v2.json",
+        "loom_mcp_server.py", "loom_codex_integration.py", "loom_adapters.py",
+        "loom_codex_lifecycle.py",
     }
     launcher_targets = {loom_home / "bin" / name for name in launcher_files}
-    return path in adapter_targets | adapter_state | launcher_targets
+    codex_integration_targets = {
+        user_home / ".codex" / "hooks.json",
+        loom_home / "adapters" / "receipts" / "codex-integration.json",
+    }
+    return path in adapter_targets | adapter_state | launcher_targets | codex_integration_targets
 
 
 def _recover_transaction(user_home, loom_home):
@@ -214,7 +220,8 @@ def _install_launcher_locked(loom_home, launcher_source):
     windows = binary / "loom.cmd"
     dependencies = {}
     for name in ("loom_update.py", "loom_reliability.py",
-                 "loom_adapter_protocol.py", "loom_adapter_bridge.py",
+                 "loom_adapter_protocol.py", "loom_adapter_bridge.py", "loom_mcp_server.py",
+                 "loom_codex_integration.py", "loom_adapters.py",
                  "loom_host_registry.py"):
         dependency = source.parent / name
         if not dependency.is_file() or dependency.is_symlink():

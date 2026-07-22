@@ -11,7 +11,7 @@
   "license": "Apache-2.0",
   "keywords": ["planning", "agents", "verification", "local-first"],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Loom",
     "shortDescription": "Planning intelligence that learns locally",
