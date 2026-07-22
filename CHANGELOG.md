@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## 1.8.6
+
+- Give the Codex hook a complete, bounded semantic frontier so the agent can author the required
+  plan artifacts without reading private encrypted action state or guessing missing context.
+- Make transport retries idempotent only for the same operation in the same world, while an
+  identical natural-language request after repository or lifecycle drift creates a new operation
+  or fails closed instead of replaying stale authorization.
+- Preserve non-Git project completion identity, improve actionable hook diagnostics, and add
+  family-level transport, routing, recovery, and malformed-input regression coverage.
+- Run required pull-request gates once and reserve the exhaustive 15-cell release matrix for
+  `main`, reducing duplicate CI without weakening branch protection or exact-cut certification.
+
 ## 1.8.5
 
 - Add a Codex `UserPromptSubmit` hook that routes explicit Loom requests through bounded

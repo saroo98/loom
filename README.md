@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-<strong>Loom 1.8.5 · Planning intelligence for AI coding agents.</strong><br>
+<strong>Loom 1.8.6 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.4">Latest release</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.5">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -40,6 +40,26 @@ or be refused.
 Loom is not another coding agent, a project board, or a template collection. It sits between what a
 person asks for and what an agent is allowed to build.
 
+## What changed in 1.8.6
+
+Loom 1.8.6 makes the native Codex path complete and repeatable without weakening its sealed
+request boundary:
+
+- **The agent receives the whole public planning frontier.** Bounded hook context now carries the
+  request, current-world evidence, plan contract, and required outcome needed to author real plan
+  artifacts. Private encrypted action state remains private.
+- **Retries follow operations, not merely words.** A duplicate delivery in an unchanged world is
+  idempotent. The same natural-language request after repository or lifecycle advancement creates
+  the next operation or fails closed instead of replaying stale authorization.
+- **Non-Git projects retain completion identity.** Stable initial-pack evidence prevents valid
+  repair or execution completion from becoming unverifiable merely because a project has no Git
+  commit.
+- **CI spends exhaustive effort once.** Required pull-request gates protect `main`; the full
+  15-cell release matrix runs on the merged candidate used by exact-cut certification.
+
+The most recent published signed artifact remains `v1.8.5` until the `v1.8.6` candidate is
+committed, attested, and published from `main`.
+
 ## What changed in 1.8.5
 
 Loom 1.8.5 gives Codex a native sealed invocation path without exposing request text to a shell,
@@ -55,8 +75,10 @@ command line, environment variable, or temporary file:
   home boundary is not misclassified as a project-local shadow, while genuine local conflicts
   still fail closed.
 
-The most recent published signed artifact remains `v1.8.4` until the `v1.8.5` release candidate is
-committed, attested, and published from `main`.
+The signed `v1.8.5` release is bound to commit
+[`2f5a85f7335aa7b4d75f298ca9c1df8d3f46078d`](https://github.com/saroo98/loom/commit/2f5a85f7335aa7b4d75f298ca9c1df8d3f46078d).
+Its installable plugin archive has SHA-256
+`8c4c2595eff776728686cad8cdbfbf00a3fc2f58ca3f10b3857fce102c7332a7`.
 
 ## What changed in 1.8.4
 
@@ -114,8 +136,8 @@ metadata is incomplete.
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
-For the verified release artifact, download `loom-plugin-v1.8.4.zip` from
-[the v1.8.4 release](https://github.com/saroo98/loom/releases/tag/v1.8.4), verify it before
+For the verified release artifact, download `loom-plugin-v1.8.5.zip` from
+[the v1.8.5 release](https://github.com/saroo98/loom/releases/tag/v1.8.5), verify it before
 installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request

@@ -55,6 +55,19 @@ class FakeManager:
 
 
 class RequestTransportV2Tests(unittest.TestCase):
+    def test_transport_invocation_identity_is_stable_and_operation_scoped(self):
+        first = envelope("same request", "C:/disposable/project", "req-one")
+        repeated = envelope("same request", "C:/disposable/project", "req-one")
+        next_operation = envelope("same request", "C:/disposable/project", "req-two")
+        other_target = envelope("same request", "C:/disposable/other", "req-one")
+
+        identity = loom_orchestrator._transport_invocation_id(first)
+        self.assertEqual(identity, loom_orchestrator._transport_invocation_id(repeated))
+        self.assertNotEqual(
+            identity, loom_orchestrator._transport_invocation_id(next_operation))
+        self.assertNotEqual(
+            identity, loom_orchestrator._transport_invocation_id(other_target))
+
     def test_launcher_forwards_only_a_bounded_frame_to_orchestrator(self):
         request = "  first\r\nsecond % ! & | < > ^ ( ) کوردی  "
         item = envelope(request, "C:/disposable/project")

@@ -1,6 +1,6 @@
 [package]
 name = "loom-vault"
-version = "1.8.5"
+version = "1.8.6"
 edition = "2021"
 license = "Apache-2.0"
 description = "Narrow cryptographic helper for the Loom owner vault"

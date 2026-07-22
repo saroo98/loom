@@ -366,6 +366,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "baseline"],
                        check=True)
         self.request = "Plan a financial double-entry accounting change to src/app.py"
+        self.request_sequence = 0
 
     def tearDown(self):
         if self.prior_legacy_test_backend is None:
@@ -381,9 +382,12 @@ class ProductionOrchestratorTests(unittest.TestCase):
             if len(values[1:]) % 2:
                 raise AssertionError("invoke test arguments must be flag/value pairs")
             options = dict(zip(values[1::2], values[2::2]))
+            self.request_sequence += 1
             message = {
                 "schema_version": 2, "message_type": "invoke",
-                "request_id": "req-production-test", "request": options["--request"],
+                "request_id": options.get(
+                    "--request-id", f"req-production-{self.request_sequence}"),
+                "request": options["--request"],
                 "cwd": options["--cwd"],
             }
             envelope = loom_adapter_protocol.request_envelope(
@@ -523,6 +527,75 @@ class ProductionOrchestratorTests(unittest.TestCase):
         removed = loom_install.uninstall(
             cycle_install, confirmation=receipt["install_id"])
         self.assertTrue(removed["target_removed"])
+
+    def test_non_git_plan_reports_missing_authored_contract_before_route_drift(self):
+        """Loom's own seed pack must not turn premature completion into target drift."""
+        non_git = self.root / "empty-non-git-target"
+        non_git.mkdir()
+        request = "Plan a very simple test project."
+        opened = self.cli(
+            "invoke", "--request", request, "--cwd", non_git,
+            "--home", self.home, "--install-root", self.installed,
+            "--timeout-seconds", "300")
+        self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
+        action = json.loads(opened.stdout)
+        self.assertEqual("action-required", action["status"])
+        self.assertEqual("plan", action["intent"])
+
+        premature = self.cli("complete", "--action", action["action_path"])
+        self.assertNotEqual(0, premature.returncode, premature.stdout)
+        error = json.loads(premature.stdout)
+        self.assertEqual("PLAN_CONTRACT_MISMATCH", error["code"])
+        self.assertNotEqual("TARGET_DRIFT", error["code"])
+
+    def test_duplicate_pending_plan_reuses_exact_frontier_in_unchanged_world(self):
+        non_git = self.root / "duplicate-hook-target"
+        non_git.mkdir()
+        request = "Plan a very simple test project."
+        first = loom_orchestrator.invoke(
+            request=request, cwd=non_git, home=self.home,
+            install_root=self.installed,
+            transport_invocation_id="90a28883-6a01-5ffd-a9d9-4da1f69f1e77")
+        second = loom_orchestrator.invoke(
+            request=request, cwd=non_git, home=self.home,
+            install_root=self.installed,
+            transport_invocation_id="90a28883-6a01-5ffd-a9d9-4da1f69f1e77")
+        self.assertEqual(first["action_id"], second["action_id"])
+        self.assertEqual(first["action_path"], second["action_path"])
+        self.assertEqual(first["plan_contract"], second["plan_contract"])
+        self.assertNotIn("prior_recovery", second)
+
+    def test_same_plan_request_after_world_change_creates_new_frontier(self):
+        non_git = self.root / "changed-world-target"
+        non_git.mkdir()
+        request = "Plan a very simple test project."
+        first = loom_orchestrator.invoke(
+            request=request, cwd=non_git, home=self.home,
+            install_root=self.installed)
+        (non_git / "new-requirement.txt").write_text("changed\n", encoding="utf-8")
+        second = loom_orchestrator.invoke(
+            request=request, cwd=non_git, home=self.home,
+            install_root=self.installed)
+        self.assertNotEqual(first["action_id"], second["action_id"])
+        self.assertIn("prior_recovery", second)
+
+    def test_replayed_transport_id_after_world_change_fails_closed(self):
+        non_git = self.root / "replayed-transport-target"
+        non_git.mkdir()
+        request = "Plan a very simple test project."
+        transport_id = "90a28883-6a01-5ffd-a9d9-4da1f69f1e78"
+        loom_orchestrator.invoke(
+            request=request, cwd=non_git, home=self.home,
+            install_root=self.installed,
+            transport_invocation_id=transport_id)
+        (non_git / "changed.txt").write_text("changed\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError, "repeated transport operation") as caught:
+            loom_orchestrator.invoke(
+                request=request, cwd=non_git, home=self.home,
+                install_root=self.installed,
+                transport_invocation_id=transport_id)
+        self.assertEqual("TARGET_DRIFT", caught.exception.code)
 
     def test_partial_project_inspection_routes_but_cannot_seal_g1(self):
         _write(self.repo / ".gitignore", "unknown-output/\n")
@@ -1247,9 +1320,16 @@ planning_obligations: [{obligations}]
 
         execute = json.loads(self.cli(
             "invoke", "--request", "Continue", "--cwd", self.repo,
-            "--home", self.home, "--install-root", self.installed).stdout)
+            "--home", self.home, "--install-root", self.installed,
+            "--request-id", "req-duplicate-execute").stdout)
         self.assertEqual("execute", execute["intent"])
         self.assertEqual("WO-001", execute["work_order"])
+        duplicate = json.loads(self.cli(
+            "invoke", "--request", "Continue", "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed,
+            "--request-id", "req-duplicate-execute").stdout)
+        self.assertEqual(execute["action_id"], duplicate["action_id"])
+        self.assertEqual("WO-001", duplicate["work_order"])
         (self.repo / "src" / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
         work_order = _mark_medium_wo_done(self.repo / "plans")
         loom_lifecycle.capture_acceptance(
