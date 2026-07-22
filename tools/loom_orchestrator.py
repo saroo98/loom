@@ -106,6 +106,18 @@ def _hash(value):
     return hashlib.sha256(_canonical_bytes(value)).hexdigest()
 
 
+def _transport_invocation_id(envelope):
+    """Bind duplicate delivery to one protocol operation without storing host text."""
+    identity = _hash({
+        "protocol": "adapter-request-envelope-v2",
+        "request_id": envelope["request_id"],
+        "request_identity": envelope["request_identity"],
+        "cwd": envelope["cwd"],
+        "host": envelope["host"],
+    })
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, "loom-transport:" + identity))
+
+
 def _stamp(value=None):
     instant = loom_runtime._parse_time(value or dt.datetime.now(dt.timezone.utc))
     return loom_runtime._format_time(instant)
@@ -1414,7 +1426,8 @@ def _legacy_active_actions(directory, *, owner_home, install_root):
 
 
 def _reconcile_active_action(*, owner_home, install_root, instance_id,
-                             project_id, now, incoming_intent):
+                             project_id, now, incoming_intent, request, cwd, target,
+                             transport_invocation_id=None):
     directory = _orchestration_directory(owner_home, instance_id, project_id)
     directory.mkdir(parents=True, exist_ok=True)
     pointer = _read_active_pointer(directory)
@@ -1432,20 +1445,63 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             path, owner_home=owner_home, install_root=install_root)
         if action["status"] in TERMINAL_ACTION_STATUSES:
             _clear_active_pointer(directory, action["action_id"])
-            return action.get("recovery_receipt")
+            return action.get("recovery_receipt"), None
         candidates = [(_path, action, security)]
     else:
         candidates = _legacy_active_actions(
             directory, owner_home=owner_home, install_root=install_root)
         if not candidates:
-            return None
+            return None, None
         if len(candidates) != 1:
             raise OrchestratorError(
                 "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
     path, action, security = candidates[0]
     if incoming_intent is None \
             or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
-        return None
+        return None, None
+    if transport_invocation_id is not None \
+            and action["invocation_id"] == transport_invocation_id \
+            and action["status"] == "pending" \
+            and loom_runtime._parse_time(now) <= loom_runtime._parse_time(
+                action["expires_at"]):
+        try:
+            prepared = loom_runtime.prepare_invocation(
+                request, instance_id=instance_id, invocation_id=str(uuid.uuid4()),
+                cwd=cwd, explicit_target=target, owner_home=owner_home, now=now)
+        except loom_runtime.RuntimeBlocked as exc:
+            raise OrchestratorError(exc.code, exc.message) from exc
+        sealed = action["prepared"]
+        same_frontier = action["request"] == request \
+                and action["cwd"] == str(cwd) \
+                and action["explicit_target"] == str(target) \
+                and action["project_id"] == prepared.project_id \
+                and action["survey_hash"] == prepared.survey_hash \
+                and sealed["request_hash"] == prepared.request_hash \
+                and sealed["intent"] == prepared.intent \
+                and sealed["domains"] == list(prepared.domains)
+        unchanged_world = sealed["world_fingerprint"] == prepared.world_fingerprint
+        current_pack_matches = action["initial_pack_hash"] is not None \
+            and _pack_hash(Path(target) / "plans") == action["initial_pack_hash"]
+        repair_record = Path(target) / "plans" / ".loom-small-lifecycle.json"
+        tier_s_repair_current = False
+        if action["intent"] == "repair" and action["tier"] == "S" \
+                and isinstance(action["repair_plan"], dict) \
+                and _path_present(repair_record):
+            try:
+                tier_s_repair_current = hashlib.sha256(
+                    repair_record.read_bytes()).hexdigest() == \
+                    action["repair_plan"].get("lifecycle_sha256")
+            except OSError as exc:
+                raise OrchestratorError(
+                    "TARGET_INDETERMINATE",
+                    "the repeated transport operation's Tier-S lifecycle is unreadable") \
+                    from exc
+        if action["intent"] == prepared.intent and same_frontier and (
+                unchanged_world or current_pack_matches or tier_s_repair_current):
+            return None, action
+        raise OrchestratorError(
+            "TARGET_DRIFT",
+            "a repeated transport operation no longer matches its sealed target state")
     if action["intent"] != "plan" or not action["pack_seed"]["created_pack"]:
         raise OrchestratorError(
             "ACTION_IN_PROGRESS", "a non-planning action remains active for this project")
@@ -1455,7 +1511,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         raise OrchestratorError(
             "ACTION_IN_PROGRESS",
             "the current planning action must complete or be cancelled before this request")
-    return _recover_plan_action(path, action, security, now=now)
+    return _recover_plan_action(path, action, security, now=now), None
 
 
 def _capture(function, *args, **kwargs):
@@ -2765,9 +2821,17 @@ def _controller(action, *, usage=None):
 
 
 def invoke(*, request, cwd, home, install_root, explicit_target=None,
-           timeout_seconds=900, now=None):
+           timeout_seconds=900, now=None, transport_invocation_id=None):
     if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
         raise OrchestratorError("INVALID_TIMEOUT", "timeout must be between 60 and 3600 seconds")
+    if transport_invocation_id is not None:
+        try:
+            if str(uuid.UUID(transport_invocation_id)) != transport_invocation_id:
+                raise ValueError
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise OrchestratorError(
+                "REQUEST_IDENTITY_INVALID",
+                "transport invocation identity is not a canonical UUID") from exc
     cwd = _absolute(cwd, "cwd")
     home = _absolute(home, "owner home", must_exist=False)
     install_root = _absolute(install_root, "installation root")
@@ -2790,14 +2854,19 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         None if intent_decision["blocked"] else intent_decision["intent"])
     try:
         with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
-            recovery = _reconcile_active_action(
+            recovery, reused_action = _reconcile_active_action(
                 owner_home=home, install_root=install_root, instance_id=instance_id,
                 project_id=project.project_id, now=instant,
-                incoming_intent=incoming_intent)
-            result = _invoke_under_lock(
-                request=request, cwd=cwd, home=home, install_root=install_root,
-                target=target, timeout_seconds=timeout_seconds, now=instant,
-                instance_id=instance_id, memory=memory)
+                incoming_intent=incoming_intent, request=request, cwd=cwd,
+                target=target, transport_invocation_id=transport_invocation_id)
+            if reused_action is not None:
+                result = _pending_action_result(reused_action)
+            else:
+                result = _invoke_under_lock(
+                    request=request, cwd=cwd, home=home, install_root=install_root,
+                    target=target, timeout_seconds=timeout_seconds, now=instant,
+                    instance_id=instance_id, memory=memory,
+                    transport_invocation_id=transport_invocation_id)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
@@ -2806,11 +2875,69 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     return result
 
 
+def _pending_action_result(action, *, resolved_terminal_block=None,
+                           session_environment=None, work_order=None):
+    """Return the bounded public frontier for a new or idempotently reused action."""
+    if session_environment is None:
+        session_environment = {
+            "LOOM_SESSION_JOURNAL": action["journal_path"],
+            "LOOM_SESSION_ID": action["session_id"],
+            "LOOM_SESSION_OPERATION_ID": action["operation_id"],
+            "LOOM_SESSION_DOMAIN": action["domains"][0],
+        }
+    if work_order is None and action["work_order"] is not None:
+        work_order_path = (Path(action["explicit_target"]) / "plans" /
+                           action["work_order"])
+        try:
+            frontmatter, _ = loom_lint.parse_frontmatter(
+                work_order_path.read_text(encoding="utf-8"))
+            work_order = frontmatter.get("id") if frontmatter else None
+        except (OSError, UnicodeError) as exc:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "pending work-order identity is unreadable") from exc
+        if not isinstance(work_order, str) \
+                or not re.fullmatch(r"WO-[0-9]{3,}", work_order):
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "pending work-order identity is invalid")
+    return {
+        "schema_version": SCHEMA_VERSION, "status": "action-required",
+        "action_id": action["action_id"],
+        "action_path": str(_action_path(
+            action["owner_home"], action["instance_id"],
+            action["project_id"], action["action_id"])),
+        "intent": action["intent"], "tier": action["tier"],
+        "domains": action["domains"], "expires_at": action["expires_at"],
+        "work_order": work_order,
+        "repair_plan": action["repair_plan"],
+        "plan_contract": (_tier_s_host_capsule(action["plan_contract"])
+                          if action["tier"] == "S" and action["plan_contract"] is not None
+                          else action["plan_contract"]),
+        "context_manifest": action["context_manifest"],
+        "continuation_authority": action["continuation_authority"],
+        "resolved_terminal_block": resolved_terminal_block,
+        "owner_message": action["owner_message"],
+        "context": {
+            "memory": action["context"]["memory"],
+            "preferences": action["context"]["preferences"],
+        },
+        "attempts_remaining": action["max_attempts"] - action["attempts"],
+        "session_environment": session_environment,
+        "required_outcome": (
+            "The sealed plan_contract and bounded context capsule are complete; do not reload "
+            "static Loom guidance. For plan, author the exact plan_contract; otherwise perform "
+            "only the routed intent. Do not mutate undeclared target paths. Then call complete "
+            "with all five measured token categories. The orchestrator owns validation, gates, "
+            "learning, and the final receipt. A prior terminal block never authorizes fallback "
+            "work; only this fresh sealed action can authorize its declared frontier."),
+    }
+
+
 def _invoke_under_lock(*, request, cwd, home, install_root, target,
-                       timeout_seconds, now, instance_id, memory):
+                       timeout_seconds, now, instance_id, memory,
+                       transport_invocation_id=None):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
-    invocation_id = str(uuid.uuid4())
+    invocation_id = transport_invocation_id or str(uuid.uuid4())
     controller = loom_session.SessionController(
         owner_home=home, instance_id=instance_id, handlers={},
         memory=memory)
@@ -2997,39 +3124,17 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 target / "plans", preview["changed_paths"], force_full=force_full)
             action["repair_plan"] = {
                 **preview, "force_full": force_full, "program_impact": program_impact}
+    if prepared.intent != "plan":
+        action["initial_pack_hash"] = _pack_hash(Path(target) / "plans")
     action = _write_action(path, action, action_security)
     if prepared.intent != "plan":
         _write_active_pointer(
             path.parent, action_id=action_id, project_id=prepared.project_id)
-    return {
-        "schema_version": SCHEMA_VERSION, "status": "action-required",
-        "action_id": action_id, "action_path": str(path),
-        "intent": action["intent"], "tier": action["tier"],
-        "domains": action["domains"], "expires_at": expires_at,
-        "work_order": work_order_id if prepared.intent == "execute" else None,
-        "repair_plan": action["repair_plan"],
-        "plan_contract": (_tier_s_host_capsule(action["plan_contract"])
-                          if action["tier"] == "S" and action["plan_contract"] is not None
-                          else action["plan_contract"]),
-        "context_manifest": action["context_manifest"],
-        "continuation_authority": action["continuation_authority"],
-        "resolved_terminal_block": loom_runtime._thaw(
-            opened.resolved_terminal_block),
-        "owner_message": action["owner_message"],
-        "context": {
-            "memory": context_capsule["memory"],
-            "preferences": context_capsule["preferences"],
-        },
-        "attempts_remaining": action["max_attempts"] - action["attempts"],
-        "session_environment": opened.environment(),
-        "required_outcome": (
-            "The sealed plan_contract and bounded context capsule are complete; do not reload "
-            "static Loom guidance. For plan, author the exact plan_contract; otherwise perform only the "
-            "routed intent. Do not mutate undeclared target paths. Then call complete with all five "
-            "measured token categories. The orchestrator owns validation, gates, learning, "
-            "and the final receipt. A prior terminal block never authorizes fallback work; only "
-            "this fresh sealed action can authorize its declared frontier."),
-    }
+    return _pending_action_result(
+        action,
+        resolved_terminal_block=loom_runtime._thaw(opened.resolved_terminal_block),
+        session_environment=opened.environment(),
+        work_order=work_order_id if prepared.intent == "execute" else None)
 
 
 def _reopen(action, *, controller=None):
@@ -3264,7 +3369,8 @@ def main(argv=None):
             result = invoke(
                 request=envelope["request"], cwd=envelope["cwd"], home=args.home,
                 install_root=args.install_root, explicit_target=args.target,
-                timeout_seconds=args.timeout_seconds)
+                timeout_seconds=args.timeout_seconds,
+                transport_invocation_id=_transport_invocation_id(envelope))
         elif args.command == "complete":
             result = complete(
                 args.action, args.usage, result_path=args.result,

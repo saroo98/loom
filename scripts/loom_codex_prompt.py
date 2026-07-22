@@ -17,6 +17,7 @@ MAX_BRIDGE_BYTES = 2 * 1024 * 1024
 MAX_FRAME_BYTES = 65536
 MAX_REQUEST_CHARACTERS = 32768
 MAX_ACTION_BYTES = 384 * 1024
+MAX_CONTEXT_BYTES = 128 * 1024
 HOOK_PROTOCOL = "LOOM_CODEX_HOOK_RECEIPT_V1"
 SKILL_PREFIX = re.compile(
     r"^\s*\[\$(?:loom(?::loom)?)\]\([^\r\n)]*SKILL\.md\)",
@@ -272,20 +273,43 @@ def _bounded_context(payload, *, request_sha256, runtime_version, loom_home):
         "runtime_version": runtime_version,
         "request_sha256": request_sha256,
         "status": payload.get("status"),
+        "action_id": action_id,
         "action_path": action_path,
         "action_file_sha256": action_file_sha256,
         "owner_message": owner_message,
-        "instruction": (
-            "Loom executed this request before agent work. Treat this as the sealed authority. "
-            "If action_path is present, read that exact private action file, verify "
-            "action_file_sha256, "
-            "and follow the installed Loom skill. Never invoke Loom again for this turn, invent a "
-            "fallback, or claim authority beyond this receipt."
-        ),
     }
-    encoded = json.dumps(context, sort_keys=True, separators=(",", ":"),
-                         ensure_ascii=False)
-    if len(encoded.encode("utf-8")) > 12 * 1024:
+    public_fields = {
+        "intent": str, "tier": str, "domains": list, "expires_at": str,
+        "work_order": (str, type(None)), "repair_plan": (dict, type(None)),
+        "plan_contract": (dict, type(None)), "context_manifest": dict,
+        "continuation_authority": dict,
+        "resolved_terminal_block": (dict, type(None)), "context": dict,
+        "attempts_remaining": int, "session_environment": dict,
+        "required_outcome": str, "prior_recovery": dict,
+    }
+    for field, expected_type in public_fields.items():
+        if field not in payload:
+            continue
+        value = payload[field]
+        if (expected_type is int and type(value) is not int) \
+                or (expected_type is not int and not isinstance(value, expected_type)):
+            raise HookError(f"sealed Loom public frontier field is invalid: {field}")
+        context[field] = value
+    context["instruction"] = (
+        "Loom executed this request before agent work. The allowlisted public fields in this "
+        "context are the complete semantic frontier; the encrypted action file is identity and "
+        "digest evidence, not readable planning input. Never invoke Loom again for this turn or "
+        "invent a fallback. For a plan action, author the exact plan_contract under its declared "
+        "paths before calling complete. Do not call complete until the required artifacts exist. "
+        "For every other intent, perform only required_outcome, then complete through the "
+        "installed Loom skill."
+    )
+    try:
+        encoded = json.dumps(context, sort_keys=True, separators=(",", ":"),
+                             ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise HookError("sealed Loom public frontier is not strict JSON") from exc
+    if len(encoded.encode("utf-8")) > MAX_CONTEXT_BYTES:
         raise HookError("bounded Loom hook context exceeds its limit")
     return encoded
 

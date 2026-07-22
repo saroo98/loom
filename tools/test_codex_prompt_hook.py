@@ -123,6 +123,15 @@ class HookContractTests(unittest.TestCase):
     def test_success_injects_sealed_context_and_never_reinvokes(self):
         request = "Plan exactly\n  preserve this"
         captured = {}
+        plan_contract = {
+            "schema_version": 1,
+            "contract_hash": "b" * 64,
+            "work_order_topology": {"minimum": 1, "maximum": 1},
+            "artifact_matrix": [{
+                "artifact": "work orders", "action": "produce",
+                "consumer": "implementer", "decision": "execution frontier",
+            }],
+        }
 
         def bridge(_launcher, _home, frames):
             messages = [json.loads(line) for line in frames.splitlines()]
@@ -130,6 +139,8 @@ class HookContractTests(unittest.TestCase):
             return ({"runtime_version": "1.8.5"}, {
                 "status": "action-required", "action_id": self.action_id,
                 "action_path": str(self.action),
+                "intent": "plan", "tier": "S", "domains": ["cli"],
+                "plan_contract": plan_contract,
                 "owner_message": {"human": "Plan is ready."},
             })
 
@@ -150,7 +161,39 @@ class HookContractTests(unittest.TestCase):
         self.assertEqual(request, captured["request"])
         self.assertEqual(loom_codex_prompt.HOOK_PROTOCOL, context["protocol"])
         self.assertEqual(self.action_file_sha256, context["action_file_sha256"])
+        self.assertEqual("plan", context["intent"])
+        self.assertEqual(plan_contract, context["plan_contract"])
+        self.assertIn("author", context["instruction"].lower())
+        self.assertIn("before calling complete", context["instruction"].lower())
         self.assertNotIn(request, output["hookSpecificOutput"]["additionalContext"])
+
+    def test_context_allowlists_public_frontier_and_rejects_oversize(self):
+        payload = {
+            "status": "action-required", "action_id": self.action_id,
+            "action_path": str(self.action), "intent": "plan", "tier": "M",
+            "domains": ["unclassified"],
+            "plan_contract": {"schema_version": 4, "contract_hash": "b" * 64},
+            "required_outcome": "Author the sealed contract before completion.",
+            "request": "private owner request must never be reinjected",
+            "unknown_private_field": {"secret": "must not cross the hook boundary"},
+        }
+        context = json.loads(loom_codex_prompt._bounded_context(
+            payload, request_sha256="a" * 64, runtime_version="1.8.5",
+            loom_home=self.home))
+        self.assertEqual("plan", context["intent"])
+        self.assertEqual(payload["plan_contract"], context["plan_contract"])
+        self.assertNotIn("request", context)
+        self.assertNotIn("unknown_private_field", context)
+
+        oversized = dict(payload)
+        oversized["plan_contract"] = {
+            "schema_version": 4, "contract_hash": "b" * 64,
+            "planning_intelligence": {"payload": "x" * (256 * 1024)},
+        }
+        with self.assertRaisesRegex(loom_codex_prompt.HookError, "exceeds"):
+            loom_codex_prompt._bounded_context(
+                oversized, request_sha256="a" * 64,
+                runtime_version="1.8.5", loom_home=self.home)
 
     def test_explicit_loom_bootstrap_failure_blocks_without_fallback(self):
         stdin = io.BytesIO(json.dumps(event("/loom plan safely", self.root)).encode())
