@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-<strong>Loom 1.8.6 · Planning intelligence for AI coding agents.</strong><br>
+<strong>Loom 1.8.7 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.6">Latest release</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.7">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -55,6 +55,23 @@ sandbox: Codex documents that specialized tool paths may bypass ordinary tool ho
 Both modes use the same runtime, owner vault, planning method, memory selection, and sealed action
 format. A receipt labels the mode, so Standard work can never be reported as Verified work.
 
+## What changed in 1.8.7
+
+Loom 1.8.7 gives Codex two honest assurance levels behind the same `/loom <request>` surface:
+
+- **Standard mode works immediately.** The plugin exposes a bounded local MCP server over stdio,
+  opens no network listener, and requires no lifecycle-hook trust.
+- **Verified mode is explicit.** One reviewed approval installs receipt-owned user hooks for exact
+  request sealing, session and compaction continuity, structured-write scope checks, and lifecycle
+  observations. Loom preserves unrelated hooks and refuses ambiguous ownership.
+- **Assurance cannot be overstated.** Actions and receipts record the actual mode, so Standard work
+  cannot be presented as Verified work.
+- **Integration is reversible.** Install, upgrade, interruption recovery, rollback, and uninstall
+  are transactional and preserve the owner vault.
+
+This candidate becomes the published signed `v1.8.7` artifact only after it is verified and
+published from `main`.
+
 ## What changed in 1.8.6
 
 Loom 1.8.6 makes the native Codex path complete and repeatable without weakening its sealed
@@ -72,8 +89,7 @@ request boundary:
 - **CI spends exhaustive effort once.** Required pull-request gates protect `main`; the full
   15-cell release matrix runs on the merged candidate used by exact-cut certification.
 
-The published signed `v1.8.6` artifact is bound to the default-branch release commit. The dual-mode
-Codex integration described above is current source work and is not a published release claim yet.
+The signed `v1.8.6` artifact is bound to the default-branch release commit.
 
 ## What changed in 1.8.5
 
@@ -160,8 +176,8 @@ metadata is incomplete.
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
-For the verified release artifact, download `loom-plugin-v1.8.6.zip` from
-[the v1.8.6 release](https://github.com/saroo98/loom/releases/tag/v1.8.6), verify it before
+For the verified release artifact, download `loom-plugin-v1.8.7.zip` from
+[the v1.8.7 release](https://github.com/saroo98/loom/releases/tag/v1.8.7), verify it before
 installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request
