@@ -4,6 +4,12 @@ import loom_readiness
 
 
 class ReadinessPhase10Tests(unittest.TestCase):
+    def test_codex_host_documentation_preserves_dual_assurance_contract(self):
+        rendered = loom_readiness.render_host("codex")
+        self.assertIn("**Standard:**", rendered)
+        self.assertIn("**Verified:**", rendered)
+        self.assertIn("guardrail, not a sandbox", rendered)
+
     def test_missing_receipts_never_become_supported(self):
         value = loom_readiness.generate(version="1.6.0")
         self.assertEqual("not-ready", value["overall"])

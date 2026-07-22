@@ -1,7 +1,7 @@
 # opencode integration
 
-Contract status: **documented**  
-Evidence status: **simulated-conformant**  
+Contract status: **documented**<br>
+Evidence status: **simulated-conformant**<br>
 Proof expiry: **30 days**
 
 ## Global routes

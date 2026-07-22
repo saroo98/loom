@@ -45,7 +45,7 @@ class ReleaseStandardTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_exhaustive_suite_ceiling_has_supported_runner_headroom(self):
-        self.assertEqual(1500, loom_release.FULL_SUITE_MAX_SECONDS)
+        self.assertEqual(1800, loom_release.FULL_SUITE_MAX_SECONDS)
 
     def test_suite_separates_correctness_from_cross_platform_capability_skips(self):
         tools = self.root / "tools"
@@ -115,6 +115,8 @@ class ReleaseStandardTests(unittest.TestCase):
             "Loom 1.0.0 /loom <request>\n", encoding="utf-8")
         (source / "VERSION").write_text("1.0.0\n", encoding="utf-8")
         (source / ".gitignore").write_text("__pycache__/\n*.py[cod]\n", encoding="utf-8")
+        (source / ".mcp.json").write_text(
+            json.dumps({"mcpServers": {}}) + "\n", encoding="utf-8")
         (source / "LICENSE").write_text("fixture license\n", encoding="utf-8")
         (source / "CHANGELOG.md").write_text("# Changelog\n", encoding="utf-8")
         (source / "CONTRIBUTING.md").write_text("# Contributing\n", encoding="utf-8")

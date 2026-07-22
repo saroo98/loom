@@ -4,7 +4,7 @@ project: "<name>"
 tier: <S|M|L|XL>
 status: draft            # draft | gated | active | stale | maintenance | archived
 last_verified: <YYYY-MM-DD>
-loom_version: "1.8.6"
+loom_version: "1.8.7"
 execution_mode: planned   # planned | build-first | historical
 domain_id: "<primary active_task_domain or explicit safe id>"
 domain_ids: [<every active_task_domains id; primary first>]

@@ -49,9 +49,10 @@ import loom_vault_adapter
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 8
+ACTION_SCHEMA_VERSION = 9
 LEGACY_ACTION_SCHEMA_VERSION = 6
-PRIOR_ACTION_SCHEMA_VERSION = 7
+INTERMEDIATE_ACTION_SCHEMA_VERSION = 7
+PRIOR_ACTION_SCHEMA_VERSION = 8
 ACTION_FIELDS_V7 = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -62,7 +63,8 @@ ACTION_FIELDS_V7 = {
     "repair_plan", "host_result", "plan_contract", "domain_contract", "context_manifest",
     "continuation_authority", "owner_message", "action_hash",
 }
-ACTION_FIELDS = ACTION_FIELDS_V7 | {"pack_seed", "recovery_receipt"}
+ACTION_FIELDS_V8 = ACTION_FIELDS_V7 | {"pack_seed", "recovery_receipt"}
+ACTION_FIELDS = ACTION_FIELDS_V8 | {"assurance"}
 ACTION_STATUSES = {
     "initializing", "pending", "completed", "cancelled", "expired", "failed",
     "abandoned", "superseded",
@@ -114,6 +116,7 @@ def _transport_invocation_id(envelope):
         "request_identity": envelope["request_identity"],
         "cwd": envelope["cwd"],
         "host": envelope["host"],
+        "assurance": envelope["assurance"],
     })
     return str(uuid.uuid5(uuid.NAMESPACE_URL, "loom-transport:" + identity))
 
@@ -127,6 +130,78 @@ def _action_hash(value):
     body = dict(value)
     body.pop("action_hash", None)
     return _hash(body)
+
+
+def _legacy_assurance(request):
+    raw = request.encode("utf-8")
+    return {
+        "mode": "legacy-unclassified", "ingress": "legacy-v1",
+        "request_identity_scope": "legacy-unknown",
+        "request_utf8_bytes": len(raw),
+        "request_sha256": hashlib.sha256(raw).hexdigest(),
+        "host_id": "legacy", "host_version": "unclassified",
+        "capability_receipt_sha256": "0" * 64,
+        "lifecycle_capabilities": {
+            "session_start": False, "pre_tool_guard": False,
+            "post_tool_freshness": False, "compaction_resume": False,
+            "automatic_learning": False, "subagent_propagation": False,
+        },
+    }
+
+
+def _default_assurance(request):
+    raw = request.encode("utf-8")
+    capabilities = {
+        "session_start": False, "pre_tool_guard": False,
+        "post_tool_freshness": False, "compaction_resume": False,
+        "automatic_learning": False, "subagent_propagation": False,
+    }
+    body = {"host_id": "direct-python", "host_version": "unattested",
+            "lifecycle_capabilities": capabilities}
+    return {
+        "mode": "standard", "ingress": "codex-local-tool-v1",
+        "request_identity_scope": "tool-argument",
+        "request_utf8_bytes": len(raw),
+        "request_sha256": hashlib.sha256(raw).hexdigest(),
+        "host_id": "direct-python", "host_version": "unattested",
+        "capability_receipt_sha256": _hash(body),
+        "lifecycle_capabilities": capabilities,
+    }
+
+
+def _validate_assurance(value, request, *, allow_legacy=True):
+    fields = {
+        "mode", "ingress", "request_identity_scope", "request_utf8_bytes",
+        "request_sha256", "host_id", "host_version",
+        "capability_receipt_sha256", "lifecycle_capabilities",
+    }
+    lifecycle_fields = {
+        "session_start", "pre_tool_guard", "post_tool_freshness",
+        "compaction_resume", "automatic_learning", "subagent_propagation",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or not isinstance(value.get("lifecycle_capabilities"), dict) \
+            or set(value["lifecycle_capabilities"]) != lifecycle_fields \
+            or any(type(item) is not bool
+                   for item in value["lifecycle_capabilities"].values()):
+        raise OrchestratorError("ACTION_CORRUPT", "action assurance fields are invalid")
+    mode = value["mode"]
+    expected = {
+        "standard": ("codex-local-tool-v1", "tool-argument"),
+        "verified": ("codex-user-prompt-hook-v2", "host-prompt"),
+        "legacy-unclassified": ("legacy-v1", "legacy-unknown"),
+    }
+    if mode not in expected or (mode == "legacy-unclassified" and not allow_legacy) \
+            or (value["ingress"], value["request_identity_scope"]) != expected[mode]:
+        raise OrchestratorError("ACTION_CORRUPT", "action assurance identity is invalid")
+    raw = request.encode("utf-8")
+    if value["request_utf8_bytes"] != len(raw) \
+            or value["request_sha256"] != hashlib.sha256(raw).hexdigest() \
+            or not isinstance(value["host_id"], str) or not value["host_id"] \
+            or not isinstance(value["host_version"], str) or not value["host_version"] \
+            or not re.fullmatch(r"[0-9a-f]{64}", str(value["capability_receipt_sha256"])):
+        raise OrchestratorError("ACTION_CORRUPT", "action assurance digest is invalid")
+    return value
 
 
 def _absolute(value, label, *, must_exist=True):
@@ -582,7 +657,7 @@ def _validate_action(value, path):
         if Path(path) != expected:
             raise OrchestratorError("ACTION_PATH_MISMATCH", "legacy action path is not scoped")
         return value
-    if value.get("schema_version") == PRIOR_ACTION_SCHEMA_VERSION:
+    if value.get("schema_version") == INTERMEDIATE_ACTION_SCHEMA_VERSION:
         if set(value) != ACTION_FIELDS_V7 \
                 or value.get("action_hash") != _action_hash(value) \
                 or value.get("status") not in {
@@ -590,7 +665,7 @@ def _validate_action(value, path):
             raise OrchestratorError("ACTION_CORRUPT", "prior action fields or hash are invalid")
         value = {
             **value,
-            "schema_version": ACTION_SCHEMA_VERSION,
+            "schema_version": PRIOR_ACTION_SCHEMA_VERSION,
             "pack_seed": _legacy_pack_seed(value),
             "recovery_receipt": None,
         }
@@ -604,6 +679,17 @@ def _validate_action(value, path):
             next_action="Complete and verify the sealed frontier.",
             receipt_id="action-" + value["action_id"])
         value["action_hash"] = _action_hash(value)
+    if value.get("schema_version") == PRIOR_ACTION_SCHEMA_VERSION:
+        if set(value) != ACTION_FIELDS_V8 \
+                or value.get("action_hash") != _action_hash(value) \
+                or value.get("status") not in ACTION_STATUSES:
+            raise OrchestratorError("ACTION_CORRUPT", "prior action fields or hash are invalid")
+        value = {
+            **value,
+            "schema_version": ACTION_SCHEMA_VERSION,
+            "assurance": _legacy_assurance(value.get("request", "")),
+        }
+        value["action_hash"] = _action_hash(value)
     if value.get("schema_version") != ACTION_SCHEMA_VERSION:
         raise OrchestratorError(
             "ACTION_VERSION_UNSUPPORTED", "action schema version is not supported")
@@ -611,6 +697,7 @@ def _validate_action(value, path):
             or value.get("status") not in ACTION_STATUSES \
             or value.get("action_hash") != _action_hash(value):
         raise OrchestratorError("ACTION_CORRUPT", "action fields or hash are invalid")
+    _validate_assurance(value["assurance"], value.get("request", ""))
     try:
         if str(uuid.UUID(value["action_id"])) != value["action_id"] \
                 or str(uuid.UUID(value["invocation_id"])) != value["invocation_id"] \
@@ -2821,7 +2908,8 @@ def _controller(action, *, usage=None):
 
 
 def invoke(*, request, cwd, home, install_root, explicit_target=None,
-           timeout_seconds=900, now=None, transport_invocation_id=None):
+           timeout_seconds=900, now=None, transport_invocation_id=None,
+           assurance=None):
     if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
         raise OrchestratorError("INVALID_TIMEOUT", "timeout must be between 60 and 3600 seconds")
     if transport_invocation_id is not None:
@@ -2832,6 +2920,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             raise OrchestratorError(
                 "REQUEST_IDENTITY_INVALID",
                 "transport invocation identity is not a canonical UUID") from exc
+    assurance = _default_assurance(request) if assurance is None else assurance
+    _validate_assurance(assurance, request, allow_legacy=False)
     cwd = _absolute(cwd, "cwd")
     home = _absolute(home, "owner home", must_exist=False)
     install_root = _absolute(install_root, "installation root")
@@ -2866,12 +2956,15 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                     request=request, cwd=cwd, home=home, install_root=install_root,
                     target=target, timeout_seconds=timeout_seconds, now=instant,
                     instance_id=instance_id, memory=memory,
-                    transport_invocation_id=transport_invocation_id)
+                    transport_invocation_id=transport_invocation_id,
+                    assurance=assurance)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
     if recovery is not None and isinstance(result, dict):
         result = {**result, "prior_recovery": recovery}
+    if isinstance(result, dict) and "assurance" not in result:
+        result = {**result, "assurance": assurance}
     return result
 
 
@@ -2902,6 +2995,7 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
         "action_id": action["action_id"],
+        "assurance": action["assurance"],
         "action_path": str(_action_path(
             action["owner_home"], action["instance_id"],
             action["project_id"], action["action_id"])),
@@ -2934,7 +3028,7 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
 
 def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        timeout_seconds, now, instance_id, memory,
-                       transport_invocation_id=None):
+                       transport_invocation_id=None, assurance=None):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = transport_invocation_id or str(uuid.uuid4())
@@ -2975,6 +3069,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         "status": "initializing" if prepared.intent == "plan" else "pending",
         "instance_id": instance_id,
         "project_id": prepared.project_id, "request": request,
+        "assurance": assurance,
         "invocation_id": invocation_id, "owner_home": str(home),
         "install_root": str(install_root), "cwd": str(cwd),
         "explicit_target": str(target), "intent": prepared.intent,
@@ -3370,7 +3465,8 @@ def main(argv=None):
                 request=envelope["request"], cwd=envelope["cwd"], home=args.home,
                 install_root=args.install_root, explicit_target=args.target,
                 timeout_seconds=args.timeout_seconds,
-                transport_invocation_id=_transport_invocation_id(envelope))
+                transport_invocation_id=_transport_invocation_id(envelope),
+                assurance=envelope["assurance"])
         elif args.command == "complete":
             result = complete(
                 args.action, args.usage, result_path=args.result,

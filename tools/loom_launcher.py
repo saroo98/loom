@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import hashlib
@@ -17,10 +18,13 @@ import loom_update
 import loom_adapter_bridge
 import loom_adapter_protocol
 import loom_host_registry
+import loom_mcp_server
+import loom_codex_integration
 import loom_reliability
 
 
 LOCAL_SKILL_PATHS = loom_host_registry.project_skill_paths()
+MAX_HOOK_EVENT_BYTES = 256 * 1024
 
 
 def _reject_local_shadow(cwd):
@@ -125,6 +129,18 @@ def main(argv=None):
     probe.add_argument("--protocol-min", type=int, default=2)
     probe.add_argument("--protocol-max", type=int, default=2)
     sub.add_parser("bridge")
+    sub.add_parser("mcp")
+    sub.add_parser("hook-user-prompt")
+    sub.add_parser("hook-session-start")
+    sub.add_parser("hook-lifecycle")
+    codex_install = sub.add_parser("codex-install")
+    codex_install.add_argument("--approved", action="store_true")
+    codex_install.add_argument("--standard-only", action="store_true")
+    codex_install.add_argument("--hooks-only", action="store_true")
+    codex_install.add_argument("--codex")
+    codex_uninstall = sub.add_parser("codex-uninstall")
+    codex_uninstall.add_argument("--approved", action="store_true")
+    codex_uninstall.add_argument("--codex")
     sub.add_parser("invoke-stdio")
     complete = sub.add_parser("complete")
     complete.add_argument("--action", required=True)
@@ -135,6 +151,55 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.command == "bridge":
         return loom_adapter_bridge.serve(args.home, Path(__file__).resolve())
+    if args.command == "mcp":
+        return loom_mcp_server.serve(args.home, Path(__file__).resolve())
+    if args.command in {"hook-user-prompt", "hook-session-start", "hook-lifecycle"}:
+        raw = sys.stdin.buffer.read(MAX_HOOK_EVENT_BYTES + 1)
+        if len(raw) > MAX_HOOK_EVENT_BYTES:
+            print(json.dumps({"decision": "block", "reason": "Loom hook event is oversized"}))
+            return 0
+        _pointer, runtime = _current(args.home)
+        relative = {
+            "hook-user-prompt": "scripts/loom_codex_prompt.py",
+            "hook-session-start": "scripts/loom_bootstrap.py",
+            "hook-lifecycle": "tools/loom_codex_lifecycle.py",
+        }[args.command]
+        handler = runtime.joinpath(*relative.split("/"))
+        if not handler.is_file() or handler.is_symlink():
+            print(json.dumps({"decision": "block", "reason": "Loom hook handler is unavailable"}))
+            return 0
+        environment = {**os.environ, "PLUGIN_ROOT": str(runtime),
+                       "LOOM_HOME": str(Path(args.home).resolve())}
+        command = [sys.executable, "-B", str(handler)]
+        if args.command == "hook-lifecycle":
+            command.extend(["--home", str(Path(args.home).resolve()),
+                            "--install-root", str(runtime)])
+        completed = subprocess.run(
+            command, input=raw,
+            capture_output=True, timeout=180, check=False, env=environment)
+        sys.stdout.buffer.write(completed.stdout)
+        sys.stdout.buffer.flush()
+        return completed.returncode
+    if args.command in {"codex-install", "codex-uninstall"}:
+        user_home = Path(args.home).resolve().parent
+        try:
+            if args.command == "codex-install":
+                if args.standard_only and args.hooks_only:
+                    raise loom_codex_integration.IntegrationError(
+                        "standard-only and hooks-only are mutually exclusive")
+                result = loom_codex_integration.install(
+                    user_home, args.home, approved=args.approved,
+                    codex_executable=args.codex, verified=not args.standard_only,
+                    manage_mcp=not args.hooks_only)
+            else:
+                result = loom_codex_integration.uninstall(
+                    user_home, args.home, approved=args.approved,
+                    codex_executable=args.codex)
+        except loom_codex_integration.IntegrationError as exc:
+            print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True))
+            return 2
+        print(json.dumps(result, sort_keys=True))
+        return 0
     envelope = None
     manager = None
     lease_data = None

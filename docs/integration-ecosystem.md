@@ -16,9 +16,13 @@ read its vault, select memory, migrate state, or keep host-specific policy.
 - An unowned host-local Loom adapter blocks connection because host precedence could otherwise
   route requests around the shared runtime.
 - The bridge is a local JSON-over-stdio process. It creates no network listener.
-- Codex uses its trusted plugin `UserPromptSubmit` lifecycle hook as the host-owned stdin boundary.
-  Codex sends the prompt event to the hook over stdin; only explicit `/loom` or Loom-skill requests
-  are forwarded to the same local bridge. Ordinary prompts are ignored without starting Loom.
+- Codex Standard mode uses the plugin's local stdio MCP server. The plugin bootstrap replaces
+  itself with the receipt-owned stable launcher before accepting Loom tools. It opens no network
+  listener and needs no hook trust.
+- Codex Verified mode is a separate, explicit user-hook installation. It preserves unrelated
+  hooks, refuses unowned Loom-like entries, owns exact entry hashes, and can be removed without
+  removing the vault. `UserPromptSubmit` forwards only explicit `/loom` or Loom-skill requests;
+  ordinary prompts are ignored without starting Loom.
 - Request text remains bounded UTF-8 JSON across both subprocess boundaries. Ingress records its
   exact decoded UTF-8 byte length and SHA-256; the launcher and orchestrator reject any mismatch.
   The Windows command wrapper is not an invocation surface and refuses instead of forwarding `%*`.
@@ -33,7 +37,7 @@ result as real-host verification.
 
 | Host | Adapter location | Current evidence | Connection policy |
 | --- | --- | --- | --- |
-| Codex | plugin skill plus trusted `UserPromptSubmit` hook | source-tested; real installed-host discovery pending | plugin installation and one-time hook trust |
+| Codex | plugin skill plus local MCP; optional user hooks | source-tested; clean installed-host invocation pending | plugin installation; one-time hook trust only for Verified mode |
 | Claude Code | `~/.claude/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
 | Gemini CLI | `~/.gemini/skills/loom/SKILL.md` | stale | detected, not connected during host transition |
 | OpenCode | `~/.config/opencode/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |

@@ -1,7 +1,7 @@
 # generic-agent-skills integration
 
-Contract status: **format-only**  
-Evidence status: **unsupported**  
+Contract status: **format-only**<br>
+Evidence status: **unsupported**<br>
 Proof expiry: **7 days**
 
 ## Global routes

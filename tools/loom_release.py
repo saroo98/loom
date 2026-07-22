@@ -26,7 +26,7 @@ import loom_performance
 
 
 ROOT_FILES = {
-    ".gitignore", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "PRIVACY.md",
+    ".gitignore", ".mcp.json", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "PRIVACY.md",
     "README.md", "START-HERE.md", "TERMS.md", "VERSION",
 }
 ROOT_DIRECTORIES = {
@@ -47,7 +47,7 @@ EXTERNAL_CHECKS = (
 # The dedicated fast gate owns the 30-second regression budget.  The complete
 # correctness suite does not duplicate a wall-clock assertion inside its own
 # result; the verifier and CI job retain independent hard termination bounds.
-FULL_SUITE_MAX_SECONDS = 1500
+FULL_SUITE_MAX_SECONDS = 1800
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",

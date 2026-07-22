@@ -18,7 +18,7 @@ MAX_FRAME_BYTES = 65536
 MAX_REQUEST_CHARACTERS = 32768
 MAX_ACTION_BYTES = 384 * 1024
 MAX_CONTEXT_BYTES = 128 * 1024
-HOOK_PROTOCOL = "LOOM_CODEX_HOOK_RECEIPT_V1"
+HOOK_PROTOCOL = "LOOM_CODEX_HOOK_RECEIPT_V2"
 SKILL_PREFIX = re.compile(
     r"^\s*\[\$(?:loom(?::loom)?)\]\([^\r\n)]*SKILL\.md\)",
     re.IGNORECASE,
@@ -268,6 +268,13 @@ def _bounded_context(payload, *, request_sha256, runtime_version, loom_home):
             action_path, loom_home, action_id)
     if owner_message is not None and not isinstance(owner_message, dict):
         raise HookError("sealed Loom owner message is invalid")
+    assurance = payload.get("assurance")
+    if not isinstance(assurance, dict) \
+            or assurance.get("mode") != "verified" \
+            or assurance.get("ingress") != "codex-user-prompt-hook-v2" \
+            or assurance.get("request_identity_scope") != "host-prompt" \
+            or assurance.get("request_sha256") != request_sha256:
+        raise HookError("sealed Loom assurance does not prove this host prompt")
     context = {
         "protocol": HOOK_PROTOCOL,
         "runtime_version": runtime_version,
@@ -277,6 +284,7 @@ def _bounded_context(payload, *, request_sha256, runtime_version, loom_home):
         "action_path": action_path,
         "action_file_sha256": action_file_sha256,
         "owner_message": owner_message,
+        "assurance": assurance,
     }
     public_fields = {
         "intent": str, "tier": str, "domains": list, "expires_at": str,
@@ -322,7 +330,7 @@ def main():
             return 0
         plugin_root = Path(os.environ.get(
             "PLUGIN_ROOT", Path(__file__).resolve().parents[1])).resolve()
-        loom_home = (Path.home() / ".loom").resolve()
+        loom_home = Path(os.environ.get("LOOM_HOME", Path.home() / ".loom")).resolve()
         launcher, _bootstrap = _run_bootstrap(plugin_root, loom_home)
         frames, request_sha256 = _bridge_frames(request, event)
         initialized, payload = _run_bridge(launcher, loom_home, frames)

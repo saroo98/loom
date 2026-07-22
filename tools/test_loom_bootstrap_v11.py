@@ -127,6 +127,38 @@ class BootstrapIntegrationTests(unittest.TestCase):
                             ".loom-direct-source-receipt.json").read_text(
                                 encoding="utf-8"))["delivery_authority"])
 
+    def test_clean_host_plugin_mcp_bootstraps_and_lists_standard_tools(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            user_home = root / "clean-user"
+            user_home.mkdir()
+            frames = "".join(json.dumps(item) + "\n" for item in (
+                {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+                {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+            ))
+            environment = {
+                **os.environ,
+                "HOME": str(user_home),
+                "USERPROFILE": str(user_home),
+                "CODEX_HOME": str(user_home / ".codex"),
+            }
+            result = subprocess.run([
+                sys.executable, "-B", str(direct / "scripts" / "loom_codex_mcp.py")],
+                input=frames, capture_output=True, text=True, timeout=120,
+                check=False, env=environment)
+
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            responses = [json.loads(line) for line in result.stdout.splitlines()]
+            self.assertEqual(2, len(responses))
+            self.assertEqual("2025-06-18", responses[0]["result"]["protocolVersion"])
+            self.assertEqual(
+                ["invoke", "status", "complete", "cancel"],
+                [item["name"] for item in responses[1]["result"]["tools"]])
+            self.assertTrue((user_home / ".loom" / "runtime" / "current.json").is_file())
+            self.assertFalse((user_home / ".codex" / "hooks.json").exists())
+
     def test_changed_or_unowned_direct_install_never_creates_active_pointer(self):
         for mutation in ("changed", "missing", "unowned"):
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:

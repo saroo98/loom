@@ -21,22 +21,25 @@ CURRENT_VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 class PluginPackageTests(unittest.TestCase):
-    def test_skills_only_plugin_is_versioned_bounded_and_has_one_canonical_skill(self):
+    def test_local_mcp_plugin_is_versioned_bounded_and_has_one_canonical_skill(self):
         manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(
             encoding="utf-8"))
         self.assertEqual("loom", manifest["name"])
         self.assertEqual(CURRENT_VERSION, manifest["version"])
         self.assertEqual("./skills/", manifest["skills"])
-        self.assertNotIn("mcpServers", manifest)
+        self.assertEqual("./.mcp.json", manifest["mcpServers"])
+        mcp = json.loads((ROOT / ".mcp.json").read_text(encoding="utf-8"))
+        self.assertEqual({"loom"}, set(mcp["mcpServers"]))
+        self.assertEqual("python", mcp["mcpServers"]["loom"]["command"])
+        self.assertEqual(["-B", "./scripts/loom_codex_mcp.py"],
+                         mcp["mcpServers"]["loom"]["args"])
         self.assertNotIn("apps", manifest)
         plugin_skill = (ROOT / "skills" / "loom" / "SKILL.md").read_text(encoding="utf-8")
         canonical = (ROOT / "skill" / "loom" / "SKILL.md").read_text(encoding="utf-8")
         self.assertEqual(canonical, plugin_skill)
+        self.assertNotIn("hooks", manifest)
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-        handler = hooks["hooks"]["SessionStart"][0]["hooks"][0]
-        self.assertLessEqual(handler["timeout"], 2)
-        self.assertIn("PLUGIN_ROOT", handler["command"])
-        self.assertIn("PLUGIN_ROOT", handler["commandWindows"])
+        self.assertEqual({}, hooks["hooks"])
 
 
 class AdapterTests(unittest.TestCase):

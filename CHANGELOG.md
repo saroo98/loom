@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.8.7
+
+- Add automatic Codex Standard mode through a bounded local stdio MCP server with no network
+  listener and no lifecycle-hook trust requirement.
+- Add an explicit Verified mode whose receipt-owned user hooks provide request sealing, bounded
+  session and compaction continuity, structured-write scope checks, and lifecycle observations.
+- Bind every action and receipt to its actual assurance mode so Standard work cannot be reported
+  as Verified work, while preserving one `/loom <request>` surface and the same private vault.
+- Make Codex integration transactional and ownership-safe across install, upgrade, interruption,
+  rollback, and uninstall without overwriting unrelated user configuration.
+- Align exhaustive exact-cut and CI time budgets with the measured public-cut suite while retaining
+  fail-closed correctness, firewall, offline, and capability requirements.
+
 ## 1.8.6
 
 - Give the Codex hook a complete, bounded semantic frontier so the agent can author the required

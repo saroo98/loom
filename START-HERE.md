@@ -1,4 +1,4 @@
-# Loom 1.8.6 agent kernel
+# Loom 1.8.7 agent kernel
 
 The entire owner-facing interface is:
 
@@ -11,17 +11,20 @@ runtime below. Never read every Loom file into context.
 
 ## One-run protocol
 
-1. On Codex, an explicit `/loom` or Loom-skill prompt is transported by the trusted plugin
-   `UserPromptSubmit` hook. Codex supplies the prompt to that hook as JSON on stdin; the hook
-   bootstraps and invokes the receipt-owned bridge, then injects a bounded
-   `LOOM_CODEX_HOOK_RECEIPT_V1` developer-context record. Use that sealed action exactly once. Its
+1. On Codex, choose one mechanically labeled assurance route. **Standard mode** is always
+   available from the plugin's local stdio MCP server: it bootstraps the stable launcher and sends
+   the exact request as bounded protocol-v2 JSON, with no hook trust required. **Verified mode** is
+   an explicit opt-in user-hook layer. Its `UserPromptSubmit` hook receives the event on stdin and
+   injects a bounded `LOOM_CODEX_HOOK_RECEIPT_V2` developer-context record. Use a sealed action
+   exactly once. Its
    allowlisted public frontier contains the exact `plan_contract`, bounded owner context, required
    outcome, and action identity needed for agent work. The private `action_path` is an encrypted
    identity-and-integrity envelope, not a source the agent can read for planning semantics. Never
    call completion for a plan until the contract's required artifacts have actually been authored.
    Duplicate delivery of the same request in the same unchanged target reuses the pending action;
-   a changed target cannot replay it.
-   absence means the Codex invocation is not sealed, and prose conformance is not a substitute.
+   a changed target cannot replay it. Absence of the Verified receipt means use Standard MCP mode;
+   it is not a failure and must not be mislabeled as Verified. Absence of both routes means local
+   integration is unavailable, and prose conformance is not a substitute.
    On other supported hosts, run the installed skill's bounded bootstrap, then start only the receipt-owned Python launcher
    at `~/.loom/bin/loom.py` in bridge mode with fixed arguments. Send the initialized protocol-v2
    `invoke` frame through its stdin. Owner request text must never cross a shell, argv, environment

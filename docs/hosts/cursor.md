@@ -1,7 +1,7 @@
 # cursor integration
 
-Contract status: **experimental**  
-Evidence status: **experimental**  
+Contract status: **experimental**<br>
+Evidence status: **experimental**<br>
 Proof expiry: **7 days**
 
 ## Global routes

@@ -1,6 +1,6 @@
 {
   "name": "loom",
-  "version": "1.8.6",
+  "version": "1.8.7",
   "description": "One request becomes a scoped, evidence-backed plan that earns the right to execute.",
   "author": {
     "name": "Loom Project",
@@ -11,7 +11,7 @@
   "license": "Apache-2.0",
   "keywords": ["planning", "agents", "verification", "local-first"],
   "skills": "./skills/",
-  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "Loom",
     "shortDescription": "Planning intelligence that learns locally",

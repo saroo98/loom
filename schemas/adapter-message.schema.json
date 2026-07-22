@@ -101,9 +101,36 @@
         "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
+    "lifecycleCapabilities": {
+      "type": "object", "additionalProperties": false,
+      "required": ["session_start", "pre_tool_guard", "post_tool_freshness", "compaction_resume", "automatic_learning", "subagent_propagation"],
+      "properties": {
+        "session_start": {"type": "boolean"},
+        "pre_tool_guard": {"type": "boolean"},
+        "post_tool_freshness": {"type": "boolean"},
+        "compaction_resume": {"type": "boolean"},
+        "automatic_learning": {"type": "boolean"},
+        "subagent_propagation": {"type": "boolean"}
+      }
+    },
+    "assurance": {
+      "type": "object", "additionalProperties": false,
+      "required": ["mode", "ingress", "request_identity_scope", "request_utf8_bytes", "request_sha256", "host_id", "host_version", "capability_receipt_sha256", "lifecycle_capabilities"],
+      "properties": {
+        "mode": {"enum": ["standard", "verified"]},
+        "ingress": {"enum": ["codex-local-tool-v1", "codex-user-prompt-hook-v2"]},
+        "request_identity_scope": {"enum": ["tool-argument", "host-prompt"]},
+        "request_utf8_bytes": {"type": "integer", "minimum": 1, "maximum": 131072},
+        "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "host_id": {"$ref": "#/$defs/id"},
+        "host_version": {"$ref": "#/$defs/hostVersion"},
+        "capability_receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "lifecycle_capabilities": {"$ref": "#/$defs/lifecycleCapabilities"}
+      }
+    },
     "requestEnvelope": {
       "type": "object", "additionalProperties": false,
-      "required": ["schema_version", "message_type", "request_id", "request", "cwd", "host", "request_identity"],
+      "required": ["schema_version", "message_type", "request_id", "request", "cwd", "host", "request_identity", "assurance"],
       "properties": {
         "schema_version": {"const": 2}, "message_type": {"const": "request-envelope"},
         "request_id": {"$ref": "#/$defs/id"},
@@ -114,7 +141,8 @@
           "required": ["id", "version"],
           "properties": {"id": {"$ref": "#/$defs/id"}, "version": {"$ref": "#/$defs/hostVersion"}}
         },
-        "request_identity": {"$ref": "#/$defs/requestIdentity"}
+        "request_identity": {"$ref": "#/$defs/requestIdentity"},
+        "assurance": {"$ref": "#/$defs/assurance"}
       }
     },
     "complete": {

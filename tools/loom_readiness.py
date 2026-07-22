@@ -152,14 +152,27 @@ def render_host(host_id):
     roots = "\n".join(f"- `{item}`" for item in host["global_roots"])
     projects = "\n".join(f"- `{item}`" for item in host["project_roots"]) or "- none declared"
     sources = "\n".join(f"- {item}" for item in host["sources"])
+    assurance = ""
+    if host_id == "codex":
+        assurance = (
+            "## Assurance modes\n\n"
+            "- **Standard:** the plugin-provided local MCP server bootstraps and delegates to the "
+            "stable launcher. It needs no lifecycle-hook trust and makes no hook-enforcement "
+            "claim.\n"
+            "- **Verified:** after one explicit approval, receipt-owned user hooks add exact "
+            "prompt sealing, bounded session continuity, structured-write scope checks, freshness "
+            "observations, compaction continuity, and subagent/stop observations. Codex hook "
+            "coverage is a guardrail, not a sandbox; unsupported or unobserved tool paths remain "
+            "outside the claim.\n\n"
+        )
     return (f"# {host_id} integration\n\n"
-            f"Contract status: **{host['contract_status']}**  \n"
-            f"Evidence status: **{host['evidence_status']}**  \n"
+            f"Contract status: **{host['contract_status']}**<br>\n"
+            f"Evidence status: **{host['evidence_status']}**<br>\n"
             f"Proof expiry: **{host['proof_ttl_days']} days**\n\n"
             "## Global routes\n\n" + roots + "\n\n"
             "## Project routes that can conflict\n\n" + projects + "\n\n"
             f"Precedence policy: `{host['precedence']}`. Duplicate Loom routes block execution.\n\n"
-            "## Sources\n\n" + sources + "\n")
+            + assurance + "## Sources\n\n" + sources + "\n")
 
 
 def write_outputs(root, value):

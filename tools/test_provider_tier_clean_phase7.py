@@ -8,6 +8,7 @@ from unittest import mock
 
 import loom_provider_evidence
 import loom_clean_room
+import loom_release
 import loom_tier_s_study
 
 
@@ -65,7 +66,8 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
 
     def test_clean_room_timeout_covers_the_exact_cut_suite_budget(self):
         self.assertGreaterEqual(
-            loom_clean_room.verify.__kwdefaults__["timeout"], 1800)
+            loom_clean_room.verify.__kwdefaults__["timeout"],
+            loom_release.FULL_SUITE_MAX_SECONDS + 300)
 
     def test_clean_room_invokes_from_the_public_tools_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
