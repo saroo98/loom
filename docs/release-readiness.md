@@ -1,6 +1,6 @@
 # Loom release readiness
 
-Version: `1.8.4`
+Version: `1.8.5`
 Overall: **NOT-READY**
 
 This page is generated from versioned host contracts and exact evidence receipts. 
@@ -35,4 +35,4 @@ Missing evidence remains unverified; it is never converted into a pass.
 | `release.sbom` | unverified | none |
 | `release.threshold-authority` | unverified | none |
 
-Registry digest: `1467bf7f9927d669f8d015bc5b3154397b368d8e28bab38b6ef71d4e74528f26`
+Registry digest: `d24df21631d48a19f91be24d6bebef715211f95e5af470c75524cc7242f3e3f3`
