@@ -85,8 +85,14 @@ Loom fails closed around evidence it does not possess.
   format remain unsupported until their versioned contracts and disposable invocations pass.
 - Adapter protocol v2 and the shared-runtime topology are mechanically exercised with disposable
   simulated host profiles. This proves protocol negotiation, one-runtime routing, receipt ownership,
-  project non-mutation, and fail-closed conflicts. It does not prove that a third-party host parsed
-  the skill, invoked Loom, or returned provider usage. No MCP compatibility claim is made.
+  project non-mutation, and fail-closed conflicts. Codex's local MCP handshake and tool boundary are
+  source-tested, but a fresh installed-host `/loom` completion remains **[UNVERIFIED]**. No MCP
+  compatibility claim is made for the other named hosts, and no provider-usage claim follows from
+  local MCP conformance.
+- Codex lifecycle hooks are explicitly guardrails, not a sandbox. Structured write paths observed
+  by `PreToolUse` can be checked against declared touches; shell semantics and specialized tool
+  paths are not claimed to be completely confined. User-level `PostToolUse` execution remains a
+  host-version evidence surface and is **[UNVERIFIED]** until a clean installed-host run records it.
 - OpenAI, Anthropic, and Gemini profile arithmetic is locally tested against sanitized official-
   shape fixtures. Live provider-host runs with complete response inventories remain
   **[UNVERIFIED]** until content-bound usage receipt v3 bundles are captured from those hosts.

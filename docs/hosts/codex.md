@@ -1,7 +1,7 @@
 # codex integration
 
-Contract status: **documented**  
-Evidence status: **simulated-conformant**  
+Contract status: **implemented**
+Evidence status: **source-tested; installed-host invocation pending**
 Proof expiry: **30 days**
 
 ## Global routes
@@ -15,6 +15,15 @@ Proof expiry: **30 days**
 - `.codex/skills/loom/SKILL.md`
 
 Precedence policy: `duplicates-block`. Duplicate Loom routes block execution.
+
+## Assurance modes
+
+- **Standard:** the plugin-provided local MCP server bootstraps and delegates to the stable launcher.
+  It needs no lifecycle-hook trust and makes no hook-enforcement claim.
+- **Verified:** after one explicit approval, receipt-owned user hooks add exact prompt sealing,
+  bounded session continuity, structured-write scope checks, freshness observations, compaction
+  continuity, and subagent/stop observations. Codex hook coverage is a guardrail, not a sandbox;
+  unsupported or unobserved tool paths remain outside the claim.
 
 ## Sources
 

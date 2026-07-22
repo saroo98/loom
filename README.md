@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.5">Latest release</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.6">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -40,6 +40,21 @@ or be refused.
 Loom is not another coding agent, a project board, or a template collection. It sits between what a
 person asks for and what an agent is allowed to build.
 
+## Codex: simple by default, stronger by choice
+
+Installing the plugin gives Codex a local **Standard mode** automatically. Its MCP server uses
+bounded JSON over stdio, bootstraps the version-independent launcher, and opens no network listener.
+No lifecycle-hook trust is required.
+
+Owners who want mechanical lifecycle guardrails can opt into **Verified mode** once. Loom previews
+the exact user hooks before writing them, preserves unrelated hooks, refuses ambiguous ownership,
+and records an uninstall receipt. Verified mode adds request sealing, bounded session and compaction
+continuity, structured-write scope checks, and lifecycle observations. It is not described as a
+sandbox: Codex documents that specialized tool paths may bypass ordinary tool hooks.
+
+Both modes use the same runtime, owner vault, planning method, memory selection, and sealed action
+format. A receipt labels the mode, so Standard work can never be reported as Verified work.
+
 ## What changed in 1.8.6
 
 Loom 1.8.6 makes the native Codex path complete and repeatable without weakening its sealed
@@ -57,8 +72,8 @@ request boundary:
 - **CI spends exhaustive effort once.** Required pull-request gates protect `main`; the full
   15-cell release matrix runs on the merged candidate used by exact-cut certification.
 
-The most recent published signed artifact remains `v1.8.5` until the `v1.8.6` candidate is
-committed, attested, and published from `main`.
+The published signed `v1.8.6` artifact is bound to the default-branch release commit. The dual-mode
+Codex integration described above is current source work and is not a published release claim yet.
 
 ## What changed in 1.8.5
 
@@ -110,7 +125,16 @@ helper for the current platform.
 git clone https://github.com/saroo98/loom.git
 cd loom
 python tools/loom_install.py install . "$HOME/.codex/skills/loom"
+python "$HOME/.codex/skills/loom/scripts/loom_bootstrap.py" --ensure --plugin-root "$HOME/.codex/skills/loom" --home "$HOME/.loom"
+python "$HOME/.loom/bin/loom.py" --home "$HOME/.loom" codex-install
+python "$HOME/.loom/bin/loom.py" --home "$HOME/.loom" codex-install --approved
 ```
+
+The third command is a preview and changes nothing. Review it, then run the fourth command to add
+the exact local MCP and Verified hooks. A marketplace plugin install provides Standard MCP mode
+without these source-install integration commands. Marketplace owners can opt into only the
+Verified hook layer with `codex-install --hooks-only`, preview it, then repeat with
+`--hooks-only --approved`.
 
 Then open a project and ask for the work you want:
 
@@ -136,8 +160,8 @@ metadata is incomplete.
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
-For the verified release artifact, download `loom-plugin-v1.8.5.zip` from
-[the v1.8.5 release](https://github.com/saroo98/loom/releases/tag/v1.8.5), verify it before
+For the verified release artifact, download `loom-plugin-v1.8.6.zip` from
+[the v1.8.6 release](https://github.com/saroo98/loom/releases/tag/v1.8.6), verify it before
 installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request
