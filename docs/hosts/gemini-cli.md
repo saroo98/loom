@@ -1,7 +1,7 @@
 # gemini-cli integration
 
-Contract status: **stale**  
-Evidence status: **unsupported**  
+Contract status: **stale**<br>
+Evidence status: **unsupported**<br>
 Proof expiry: **7 days**
 
 ## Global routes

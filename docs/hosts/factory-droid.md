@@ -1,7 +1,7 @@
 # factory-droid integration
 
-Contract status: **experimental**  
-Evidence status: **unsupported**  
+Contract status: **experimental**<br>
+Evidence status: **unsupported**<br>
 Proof expiry: **7 days**
 
 ## Global routes
