@@ -19,4 +19,5 @@ Precedence policy: `duplicates-block`. Duplicate Loom routes block execution.
 ## Sources
 
 - https://learn.chatgpt.com/docs/build-skills
+- https://learn.chatgpt.com/docs/hooks
 - https://learn.chatgpt.com/docs/non-interactive-mode

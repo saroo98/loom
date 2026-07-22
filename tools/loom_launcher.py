@@ -25,9 +25,15 @@ LOCAL_SKILL_PATHS = loom_host_registry.project_skill_paths()
 
 def _reject_local_shadow(cwd):
     current = Path(cwd).resolve()
+    owner_home = Path.home().resolve()
     if not current.is_dir():
         raise RuntimeError("Loom project path is unavailable")
     while True:
+        # Host-global skills live directly under the owner home. They are the
+        # expected route, not a project-local shadow. Never scan above that
+        # boundary for projects inside the owner's profile.
+        if current == owner_home:
+            return
         for relative in LOCAL_SKILL_PATHS:
             candidate = current.joinpath(*Path(relative).parts)
             if candidate.exists():

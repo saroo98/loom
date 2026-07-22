@@ -14,11 +14,11 @@
       "version_command": ["codex", "--version"],
       "headless_command": ["codex", "exec"],
       "precedence": "duplicates-block",
-      "adapter_kind": "agent-skill",
+      "adapter_kind": "plugin-hook+agent-skill",
       "contract_status": "documented",
       "evidence_status": "simulated-conformant",
       "proof_ttl_days": 30,
-      "sources": ["https://learn.chatgpt.com/docs/build-skills", "https://learn.chatgpt.com/docs/non-interactive-mode"],
+      "sources": ["https://learn.chatgpt.com/docs/build-skills", "https://learn.chatgpt.com/docs/hooks", "https://learn.chatgpt.com/docs/non-interactive-mode"],
       "update_operation": "marketplace-or-managed-adapter",
       "uninstall_operation": "receipt-owned-files-only"
     },

@@ -13,6 +13,19 @@
           }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"$PLUGIN_ROOT/scripts/loom_codex_prompt.py\"",
+            "commandWindows": "py -3 \"%PLUGIN_ROOT%\\scripts\\loom_codex_prompt.py\"",
+            "timeout": 180,
+            "statusMessage": "Sealing Loom request"
+          }
+        ]
+      }
     ]
   }
 }
