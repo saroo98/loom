@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Loom 1.8.5 turns a plain-language request into a safe, evidence-backed execution plan.
+description: Loom 1.8.6 turns a plain-language request into a safe, evidence-backed execution plan.
 ---
 
 # Loom
@@ -18,7 +18,10 @@ invisible to the owner:
 2. On Codex, the trusted plugin `UserPromptSubmit` hook receives an explicit `/loom` or Loom-skill
    request from Codex as JSON on stdin and injects one `LOOM_CODEX_HOOK_RECEIPT_V1` developer-context
    record. Verify its request digest and the exact private `action_path` file digest; do not invoke Loom a
-   second time for that turn. If the hook blocks, its reason is terminal. If that record is absent,
+   second time for that turn. Use the allowlisted public `plan_contract`, context capsule, and
+   `required_outcome` carried in that record. The action file is encrypted identity-and-integrity
+   evidence and must not be treated as readable plan content. Never call `complete` for a plan
+   until every required plan artifact has been authored. If the hook blocks, its reason is terminal. If that record is absent,
    the Codex host did not provide the sealed Loom transport, so report the host limitation and do
    not produce a Loom-authorized plan from prose alone.
    On other supported hosts, run `python -B LOOM_ROOT/scripts/loom_bootstrap.py --ensure --plugin-root LOOM_ROOT

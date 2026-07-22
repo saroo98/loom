@@ -1,4 +1,4 @@
-# Loom 1.8.5 agent kernel
+# Loom 1.8.6 agent kernel
 
 The entire owner-facing interface is:
 
@@ -15,6 +15,12 @@ runtime below. Never read every Loom file into context.
    `UserPromptSubmit` hook. Codex supplies the prompt to that hook as JSON on stdin; the hook
    bootstraps and invokes the receipt-owned bridge, then injects a bounded
    `LOOM_CODEX_HOOK_RECEIPT_V1` developer-context record. Use that sealed action exactly once. Its
+   allowlisted public frontier contains the exact `plan_contract`, bounded owner context, required
+   outcome, and action identity needed for agent work. The private `action_path` is an encrypted
+   identity-and-integrity envelope, not a source the agent can read for planning semantics. Never
+   call completion for a plan until the contract's required artifacts have actually been authored.
+   Duplicate delivery of the same request in the same unchanged target reuses the pending action;
+   a changed target cannot replay it.
    absence means the Codex invocation is not sealed, and prose conformance is not a substitute.
    On other supported hosts, run the installed skill's bounded bootstrap, then start only the receipt-owned Python launcher
    at `~/.loom/bin/loom.py` in bridge mode with fixed arguments. Send the initialized protocol-v2
