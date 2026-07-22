@@ -122,6 +122,14 @@ class WorkflowPolicyTests(unittest.TestCase):
         )
         self.assertEqual(2, quality.count("if-no-files-found: ignore"))
 
+    def test_quality_avoids_duplicate_feature_pushes_without_weakening_main(self):
+        quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
+        trigger = "on:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n"
+        self.assertIn(trigger, quality)
+        self.assertIn("if: github.event_name == 'push'", quality)
+        self.assertIn('os: [ubuntu-latest, macos-latest, windows-latest]', quality)
+        self.assertIn('python: ["3.10", "3.11", "3.12", "3.13", "3.14"]', quality)
+
     def test_release_suite_imports_exact_main_capability_evidence(self):
         release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
         self.assertIn("actions: read", release)
