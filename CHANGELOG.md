@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.8.8
+
+- Install the stable launcher from the newly verified runtime in a clean process after activation,
+  so newly introduced launcher dependencies cannot be omitted by a previous runtime's stale
+  adapter module.
+- Add a regression that poisons the pre-update adapter import and proves the candidate runtime
+  still installs every receipt-bound launcher dependency and produces an importable launcher.
+
 ## 1.8.7
 
 - Add automatic Codex Standard mode through a bounded local stdio MCP server with no network

@@ -347,6 +347,32 @@ class BootstrapIntegrationTests(unittest.TestCase):
             self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
             self.assertEqual("1.1.0", json.loads(probe.stdout)["version"])
 
+    def test_post_activation_launcher_uses_candidate_runtime_not_stale_import(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            home = root / "home" / ".loom"
+            home.mkdir(parents=True)
+            stale = mock.Mock()
+            stale.install_launcher.side_effect = AssertionError(
+                "the pre-update adapter module must not install the candidate launcher")
+            with mock.patch.dict(sys.modules, {"loom_adapters": stale}):
+                result = loom_bootstrap._install_active_launcher(home, ROOT)
+            self.assertEqual("installed", result["status"])
+            receipt = json.loads(
+                (home / "bin" / ".loom-launcher-receipt.json").read_text(encoding="utf-8"))
+            for dependency in (
+                    "loom_mcp_server.py", "loom_codex_integration.py", "loom_adapters.py"):
+                self.assertTrue((home / "bin" / dependency).is_file())
+                self.assertIn(dependency, receipt["files"])
+            probe = subprocess.run([
+                sys.executable, "-B", "-c",
+                "import importlib.util,sys;sys.path.insert(0,sys.argv[1]);"
+                "s=importlib.util.spec_from_file_location('installed_loom',sys.argv[2]);"
+                "m=importlib.util.module_from_spec(s);s.loader.exec_module(m)",
+                str(home / "bin"), str(home / "bin" / "loom.py")],
+                capture_output=True, text=True, timeout=30, check=False)
+            self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
+
     def test_prebootstrap_runtime_scan_rejects_redirected_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             runtime = Path(temporary) / "runtime"

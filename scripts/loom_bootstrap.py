@@ -63,6 +63,35 @@ def _source_root(path):
     return root
 
 
+def _install_active_launcher(home, active_runtime):
+    """Install the stable launcher using only the newly verified runtime."""
+    active_runtime = Path(active_runtime).resolve()
+    tools = active_runtime / "tools"
+    launcher = tools / "loom_launcher.py"
+    if not tools.is_dir() or not launcher.is_file() or launcher.is_symlink():
+        raise BootstrapError("verified runtime launcher is unavailable")
+    script = (
+        "import json,sys;"
+        "sys.path.insert(0,sys.argv[1]);"
+        "import loom_adapters;"
+        "print(json.dumps(loom_adapters.install_launcher(sys.argv[2],sys.argv[3]),"
+        "sort_keys=True,separators=(',',':')))"
+    )
+    installed = subprocess.run(
+        [sys.executable, "-B", "-c", script, str(tools), str(Path(home).resolve()),
+         str(launcher)],
+        capture_output=True, text=True, timeout=30, check=False)
+    try:
+        result = json.loads(installed.stdout)
+    except json.JSONDecodeError as exc:
+        raise BootstrapError("verified runtime launcher returned invalid output") from exc
+    required = {"status", "python_launcher", "posix_launcher", "windows_launcher"}
+    if installed.returncode != 0 or set(result) != required \
+            or result.get("status") != "installed":
+        raise BootstrapError("verified runtime launcher installation failed")
+    return result
+
+
 def _runtime_files(root):
     pending = [Path(root)]
     count = 0
@@ -538,8 +567,7 @@ def reconcile(plugin_root, home):
     manager = loom_update.SharedRuntime(home, plugin_roots=[plugin_root])
     if manager.current_path.is_file() and manager.current().get("version") == version:
         manager.reconcile_current_metadata()
-        launcher = loom_adapters.install_launcher(
-            home, current_runtime / "tools" / "loom_launcher.py")
+        launcher = _install_active_launcher(home, current_runtime)
         authority = ("direct-source-install-unattested"
                      if (current_runtime / ".loom-direct-source-receipt.json").is_file()
                      else "signed-release")
@@ -665,8 +693,7 @@ def reconcile(plugin_root, home):
         }
         manager.activate_direct_baseline(pointer)
         active_runtime = _verified_current_runtime(home)
-        launcher = loom_adapters.install_launcher(
-            home, active_runtime / "tools" / "loom_launcher.py")
+        launcher = _install_active_launcher(home, active_runtime)
         return {
             "status": "activated", "version": version,
             "delivery_authority": "direct-source-install-unattested",
@@ -683,8 +710,7 @@ def reconcile(plugin_root, home):
         loom_reliability.atomic_write_json(trust_path, supplied_root)
     activated = manager.current()
     active_runtime = manager.versions / activated["path"]
-    launcher = loom_adapters.install_launcher(
-        home, active_runtime / "tools" / "loom_launcher.py")
+    launcher = _install_active_launcher(home, active_runtime)
     return {**result, "delivery_authority": "signed-release", "launcher": launcher}
 
 
