@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-<strong>Loom 1.8.8 · Planning intelligence for AI coding agents.</strong><br>
+<strong>Loom 1.8.9 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.8">Latest release</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.9">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -55,21 +55,24 @@ sandbox: Codex documents that specialized tool paths may bypass ordinary tool ho
 Both modes use the same runtime, owner vault, planning method, memory selection, and sealed action
 format. A receipt labels the mode, so Standard work can never be reported as Verified work.
 
-## What changed in 1.8.8
+## What changed in 1.8.9
 
-Loom 1.8.8 gives Codex two honest assurance levels behind the same `/loom <request>` surface:
+Loom 1.8.9 completes the Codex integration path that turns a selected Loom skill into a usable
+sealed planning action:
 
-- **Standard mode works immediately.** The plugin exposes a bounded local MCP server over stdio,
-  opens no network listener, and requires no lifecycle-hook trust.
-- **Verified mode is explicit.** One reviewed approval installs receipt-owned user hooks for exact
-  request sealing, session and compaction continuity, structured-write scope checks, and lifecycle
-  observations. Loom preserves unrelated hooks and refuses ambiguous ownership.
-- **Assurance cannot be overstated.** Actions and receipts record the actual mode, so Standard work
-  cannot be presented as Verified work.
-- **Integration is reversible.** Install, upgrade, interruption recovery, rollback, and uninstall
-  are transactional and preserve the owner vault.
+- **Codex startup is portable.** If Codex's bundled Python omits platform probe values, Loom derives
+  the supported platform from independent runtime facts. Explicit unsupported values still block.
+- **Verified requests stay compact.** The hook injects only request-bound action identity. The
+  read-only `loom.resolve` tool rechecks the action, installation, request, expiry, active pointer,
+  and current project world before returning the public planning frontier.
+- **Requests execute once.** Verified mode resolves the action already created by the hook instead
+  of invoking Loom again. Standard mode continues to use `loom.invoke`.
+- **The installed kernel is found deterministically.** Both skill layouts resolve the plugin root
+  before loading `START-HERE.md`, eliminating the missing sibling-file lookup.
+- **Timeouts are truly bounded.** Bootstrap and bridge work share one total deadline rather than
+  stacking independent timeout budgets.
 
-This candidate becomes the published signed `v1.8.8` artifact only after it is verified and
+This candidate becomes the published signed `v1.8.9` artifact only after it is verified and
 published from `main`.
 
 ## What changed in 1.8.6
@@ -77,9 +80,10 @@ published from `main`.
 Loom 1.8.6 makes the native Codex path complete and repeatable without weakening its sealed
 request boundary:
 
-- **The agent receives the whole public planning frontier.** Bounded hook context now carries the
-  request, current-world evidence, plan contract, and required outcome needed to author real plan
-  artifacts. Private encrypted action state remains private.
+- **The agent receives the whole public planning frontier without overloading hook context.** The
+  hook carries only compact action identity and assurance. The local `loom.resolve` tool verifies
+  that identity against the unchanged request and world, then returns the plan contract and
+  required outcome. Private encrypted action state remains private.
 - **Retries follow operations, not merely words.** A duplicate delivery in an unchanged world is
   idempotent. The same natural-language request after repository or lifecycle advancement creates
   the next operation or fails closed instead of replaying stale authorization.
@@ -176,8 +180,8 @@ metadata is incomplete.
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
-For the verified release artifact, download `loom-plugin-v1.8.8.zip` from
-[the v1.8.8 release](https://github.com/saroo98/loom/releases/tag/v1.8.8), verify it before
+For the verified release artifact, download `loom-plugin-v1.8.9.zip` from
+[the v1.8.9 release](https://github.com/saroo98/loom/releases/tag/v1.8.9), verify it before
 installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request

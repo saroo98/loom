@@ -745,7 +745,7 @@ h2 span {
 }
 
 .release-note::after {
-  content: "1.8.8";
+  content: "1.8.9";
   position: absolute;
   right: -0.06em;
   bottom: -0.22em;
