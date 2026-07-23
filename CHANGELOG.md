@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+## 1.8.9
+
+- Make Codex MCP startup robust when its bundled Python runtime omits platform probe values, while
+  retaining fail-closed behavior for explicit unsupported operating systems and architectures.
+- Replace oversized Verified hook payloads with a compact request-bound action receipt and a
+  read-only `loom.resolve` MCP operation that rechecks action integrity, request identity,
+  installation authority, expiry, active state, and current project world before returning the
+  public planning frontier.
+- Resolve the plugin root deterministically from the installed skill path and enforce one shared
+  hook deadline, preventing missing-kernel lookups, duplicate invocation, and compounded timeout
+  budgets.
+- Add clean-host, transport, tampering, drift, platform-fallback, request-identity, and compact-hook
+  regressions for the complete Codex integration path.
+
 ## 1.8.8
 
 - Install the stable launcher from the newly verified runtime in a clean process after activation,

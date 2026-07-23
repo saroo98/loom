@@ -86,7 +86,7 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(loom_mcp_server.MCP_PROTOCOL,
                          responses[0]["result"]["protocolVersion"])
         self.assertEqual(
-            ["invoke", "status", "complete", "cancel"],
+            ["invoke", "resolve", "status", "complete", "cancel"],
             [tool["name"] for tool in responses[1]["result"]["tools"]])
 
     def test_invoke_remains_structured_at_the_mcp_boundary(self):
@@ -112,6 +112,36 @@ class McpServerTests(unittest.TestCase):
             loom_mcp_server.serve(Path("C:/home"), Path("C:/loom.py"),
                                   input_stream=source, output_stream=target)
         self.assertEqual([("invoke", {"request": request, "cwd": "C:/project"})], calls)
+
+    def test_resolve_preserves_verified_identity_at_the_mcp_boundary(self):
+        request = "line one\nline two % ! & | < > ^ café"
+        arguments = {
+            "request": request, "cwd": "C:/project",
+            "action": "C:/owner/.loom/orchestration/action.json",
+            "action_sha256": "a" * 64,
+        }
+        calls = []
+
+        def call(name, value, **_kwargs):
+            calls.append((name, value))
+            return {"content": [{"type": "text", "text": "{}"}],
+                    "structuredContent": {}, "isError": False}
+
+        frames = [
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "resolve", "arguments": arguments}},
+        ]
+        source = io.BytesIO(b"".join(
+            (json.dumps(item, ensure_ascii=False) + "\n").encode("utf-8")
+            for item in frames))
+        target = io.BytesIO()
+        with mock.patch.object(loom_mcp_server, "_call_tool", side_effect=call):
+            loom_mcp_server.serve(
+                Path("C:/home"), Path("C:/loom.py"),
+                input_stream=source, output_stream=target)
+        self.assertEqual([("resolve", arguments)], calls)
 
     def test_tool_call_before_initialize_fails_closed(self):
         source = io.BytesIO((json.dumps({

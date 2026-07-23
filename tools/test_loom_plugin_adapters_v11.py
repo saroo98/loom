@@ -37,6 +37,11 @@ class PluginPackageTests(unittest.TestCase):
         plugin_skill = (ROOT / "skills" / "loom" / "SKILL.md").read_text(encoding="utf-8")
         canonical = (ROOT / "skill" / "loom" / "SKILL.md").read_text(encoding="utf-8")
         self.assertEqual(canonical, plugin_skill)
+        self.assertTrue((ROOT / "skills" / "loom" / ".." / ".." /
+                         "START-HERE.md").resolve().is_file())
+        self.assertIn("`LOOM_ROOT/START-HERE.md`", plugin_skill)
+        self.assertNotIn(
+            "`LOOM_ROOT` is the installed directory containing this file", plugin_skill)
         self.assertNotIn("hooks", manifest)
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
         self.assertEqual({}, hooks["hooks"])

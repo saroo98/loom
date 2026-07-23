@@ -92,6 +92,7 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertEqual("bounded-utf8-json-stdio-end-to-end",
                          contract["request_transport"])
         self.assertIn("requestEnvelope", message["$defs"])
+        self.assertIn("resolve", message["$defs"])
         self.assertFalse(ownership["additionalProperties"])
         for definition in message["$defs"].values():
             if isinstance(definition, dict) and definition.get("type") == "object":
@@ -202,6 +203,31 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertEqual(
             loom_adapter_protocol.request_identity(request),
             envelope["request_identity"])
+
+    def test_bridge_resolves_verified_action_through_bounded_stdin(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {"id": "codex", "version": "2.1.0"},
+            "capabilities": capabilities(), "protocol_version": 2,
+        }
+        message = {
+            "schema_version": 2, "message_type": "resolve",
+            "request_id": "req-resolve",
+            "request": "Plan exactly\nwithout another action",
+            "cwd": "C:/disposable/project",
+            "action": "C:/disposable/home/.loom/orchestration/action.json",
+            "action_sha256": "a" * 64,
+        }
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(0, {"status": "action-required"})) as run_request:
+            result = loom_adapter_bridge.dispatch(
+                message, home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+        self.assertEqual(0, result["returncode"])
+        self.assertEqual(message, run_request.call_args.args[2])
+        self.assertEqual("resolve-stdio", run_request.call_args.kwargs["command"])
 
     def test_adapter_template_is_stateless_and_names_protocol_v2(self):
         import loom_adapters

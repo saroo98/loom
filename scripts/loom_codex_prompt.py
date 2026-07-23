@@ -8,6 +8,7 @@ import re
 import stat
 import subprocess
 import sys
+import time
 import uuid
 from pathlib import Path
 
@@ -17,7 +18,10 @@ MAX_BRIDGE_BYTES = 2 * 1024 * 1024
 MAX_FRAME_BYTES = 65536
 MAX_REQUEST_CHARACTERS = 32768
 MAX_ACTION_BYTES = 384 * 1024
-MAX_CONTEXT_BYTES = 128 * 1024
+MAX_CONTEXT_BYTES = 8 * 1024
+HOOK_TOTAL_TIMEOUT_SECONDS = 170
+BOOTSTRAP_TIMEOUT_SECONDS = 90
+BRIDGE_TIMEOUT_SECONDS = 150
 HOOK_PROTOCOL = "LOOM_CODEX_HOOK_RECEIPT_V2"
 SKILL_PREFIX = re.compile(
     r"^\s*\[\$(?:loom(?::loom)?)\]\([^\r\n)]*SKILL\.md\)",
@@ -159,7 +163,7 @@ def _load_object(raw, label):
     return value
 
 
-def _run_bootstrap(plugin_root, loom_home):
+def _run_bootstrap(plugin_root, loom_home, *, timeout=BOOTSTRAP_TIMEOUT_SECONDS):
     bootstrap = plugin_root / "scripts" / "loom_bootstrap.py"
     if not bootstrap.is_file() or bootstrap.is_symlink():
         raise HookError("Loom bootstrap is missing or redirected")
@@ -167,7 +171,7 @@ def _run_bootstrap(plugin_root, loom_home):
         completed = subprocess.run([
             sys.executable, "-B", str(bootstrap), "--ensure",
             "--plugin-root", str(plugin_root), "--home", str(loom_home),
-        ], capture_output=True, timeout=90, check=False)
+        ], capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise HookError("Loom bootstrap exceeded its bounded timeout") from exc
     payload = _load_object(completed.stdout, "Loom bootstrap")
@@ -217,11 +221,11 @@ def _bridge_frames(request, event):
     return initialize_frame + b"\n" + invoke_frame + b"\n", identity
 
 
-def _run_bridge(launcher, loom_home, frames):
+def _run_bridge(launcher, loom_home, frames, *, timeout=BRIDGE_TIMEOUT_SECONDS):
     try:
         completed = subprocess.run([
             sys.executable, "-B", str(launcher), "--home", str(loom_home), "bridge",
-        ], input=frames, capture_output=True, timeout=150, check=False)
+        ], input=frames, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise HookError("Loom sealed invocation exceeded its bounded timeout") from exc
     if len(completed.stdout) > MAX_BRIDGE_BYTES:
@@ -254,7 +258,8 @@ def _run_bridge(launcher, loom_home, frames):
     return initialized, payload
 
 
-def _bounded_context(payload, *, request_sha256, runtime_version, loom_home):
+def _bounded_context(
+        payload, *, request_sha256, runtime_version, loom_home, working_directory):
     action_path = payload.get("action_path")
     action_id = payload.get("action_id")
     action_file_sha256 = None
@@ -285,33 +290,20 @@ def _bounded_context(payload, *, request_sha256, runtime_version, loom_home):
         "action_file_sha256": action_file_sha256,
         "owner_message": owner_message,
         "assurance": assurance,
+        "working_directory": working_directory,
     }
-    public_fields = {
-        "intent": str, "tier": str, "domains": list, "expires_at": str,
-        "work_order": (str, type(None)), "repair_plan": (dict, type(None)),
-        "plan_contract": (dict, type(None)), "context_manifest": dict,
-        "continuation_authority": dict,
-        "resolved_terminal_block": (dict, type(None)), "context": dict,
-        "attempts_remaining": int, "session_environment": dict,
-        "required_outcome": str, "prior_recovery": dict,
-    }
-    for field, expected_type in public_fields.items():
-        if field not in payload:
-            continue
-        value = payload[field]
-        if (expected_type is int and type(value) is not int) \
-                or (expected_type is not int and not isinstance(value, expected_type)):
-            raise HookError(f"sealed Loom public frontier field is invalid: {field}")
-        context[field] = value
-    context["instruction"] = (
-        "Loom executed this request before agent work. The allowlisted public fields in this "
-        "context are the complete semantic frontier; the encrypted action file is identity and "
-        "digest evidence, not readable planning input. Never invoke Loom again for this turn or "
-        "invent a fallback. For a plan action, author the exact plan_contract under its declared "
-        "paths before calling complete. Do not call complete until the required artifacts exist. "
-        "For every other intent, perform only required_outcome, then complete through the "
-        "installed Loom skill."
-    )
+    if action_path is None:
+        context["instruction"] = (
+            "This is a terminal verified Loom receipt. Return owner_message.human exactly. "
+            "Do not call Loom again for this turn.")
+    else:
+        context["instruction"] = (
+            "This hook already created the verified Loom action. Call the local loom.resolve "
+            "tool exactly once with the exact owner request from this turn, working_directory "
+            "as cwd, action_path as action, and action_file_sha256 as action_sha256. Do not call "
+            "loom.invoke, do not read the encrypted action file, and do not invent a fallback. "
+            "Use only the resolved public frontier. Complete only after its required artifacts "
+            "and outcome exist.")
     try:
         encoded = json.dumps(context, sort_keys=True, separators=(",", ":"),
                              ensure_ascii=False, allow_nan=False)
@@ -331,12 +323,21 @@ def main():
         plugin_root = Path(os.environ.get(
             "PLUGIN_ROOT", Path(__file__).resolve().parents[1])).resolve()
         loom_home = Path(os.environ.get("LOOM_HOME", Path.home() / ".loom")).resolve()
-        launcher, _bootstrap = _run_bootstrap(plugin_root, loom_home)
+        deadline = time.monotonic() + HOOK_TOTAL_TIMEOUT_SECONDS
+        launcher, _bootstrap = _run_bootstrap(
+            plugin_root, loom_home,
+            timeout=min(BOOTSTRAP_TIMEOUT_SECONDS, max(0.001, deadline - time.monotonic())))
         frames, request_sha256 = _bridge_frames(request, event)
-        initialized, payload = _run_bridge(launcher, loom_home, frames)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise HookError("Loom hook exhausted its total timeout before invocation")
+        initialized, payload = _run_bridge(
+            launcher, loom_home, frames,
+            timeout=min(BRIDGE_TIMEOUT_SECONDS, remaining))
         context = _bounded_context(
             payload, request_sha256=request_sha256,
-            runtime_version=initialized["runtime_version"], loom_home=loom_home)
+            runtime_version=initialized["runtime_version"], loom_home=loom_home,
+            working_directory=event["cwd"])
         print(_json_output(context))
         return 0
     except HookError as exc:

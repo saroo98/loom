@@ -11,6 +11,8 @@ import re
 import shutil
 import sqlite3
 import stat
+import sys
+import sysconfig
 import uuid
 import zipfile
 from pathlib import Path, PurePosixPath
@@ -52,8 +54,25 @@ def platform_id():
         "x86_64": "x64", "AMD64": "x64", "aarch64": "arm64",
         "arm64": "arm64", "ARM64": "arm64",
     }
+    system = platform.system()
+    machine = platform.machine()
+    if not system:
+        if sys.platform.startswith("win"):
+            system = "Windows"
+        elif sys.platform == "darwin":
+            system = "Darwin"
+        elif sys.platform.startswith("linux"):
+            system = "Linux"
+    if not machine:
+        configured = sysconfig.get_platform()
+        if isinstance(configured, str):
+            normalized = configured.casefold()
+            if re.search(r"(?:^|[-_.])(amd64|x86_64|x86-64)$", normalized):
+                machine = "x86_64"
+            elif re.search(r"(?:^|[-_.])(arm64|aarch64)$", normalized):
+                machine = "arm64"
     try:
-        return f"{systems[platform.system()]}-{machines[platform.machine()]}"
+        return f"{systems[system]}-{machines[machine]}"
     except KeyError as exc:
         raise UpdateError("this operating system or architecture is unsupported") from exc
 

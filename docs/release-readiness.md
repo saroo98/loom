@@ -1,6 +1,6 @@
 # Loom release readiness
 
-Version: `1.8.8`
+Version: `1.8.9`
 Overall: **NOT-READY**
 
 This page is generated from versioned host contracts and exact evidence receipts. 

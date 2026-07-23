@@ -142,6 +142,7 @@ def main(argv=None):
     codex_uninstall.add_argument("--approved", action="store_true")
     codex_uninstall.add_argument("--codex")
     sub.add_parser("invoke-stdio")
+    sub.add_parser("resolve-stdio")
     complete = sub.add_parser("complete")
     complete.add_argument("--action", required=True)
     complete.add_argument("--usage")
@@ -206,11 +207,12 @@ def main(argv=None):
     runtime_healthy = False
     trust_failure = None
     try:
-        if args.command == "invoke-stdio":
+        if args.command in {"invoke-stdio", "resolve-stdio"}:
             envelope = loom_adapter_protocol.read_single_frame(
-                sys.stdin.buffer, message_type="request-envelope")
+                sys.stdin.buffer, message_type=(
+                    "request-envelope" if args.command == "invoke-stdio" else "resolve"))
         manager = loom_update.SharedRuntime(args.home)
-        if args.command in {"invoke-stdio", "complete", "cancel"}:
+        if args.command in {"invoke-stdio", "resolve-stdio", "complete", "cancel"}:
             if args.command == "invoke-stdio":
                 _reject_local_shadow(envelope["cwd"])
             lease_data = manager.begin_session()
@@ -233,6 +235,10 @@ def main(argv=None):
         if args.command == "invoke-stdio":
             command = [
                 sys.executable, "-B", str(orchestrator), "invoke-stdio",
+                "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
+        elif args.command == "resolve-stdio":
+            command = [
+                sys.executable, "-B", str(orchestrator), "resolve-stdio",
                 "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
         elif args.command == "complete":
             command = [sys.executable, "-B", str(orchestrator), "complete",

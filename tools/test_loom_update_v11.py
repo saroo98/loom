@@ -92,6 +92,37 @@ class UpdateTests(unittest.TestCase):
                 mock.patch.object(loom_update.platform, "machine", return_value="arm64"):
             self.assertEqual("macos-arm64", loom_update.platform_id())
 
+    def test_platform_id_recovers_when_sandbox_hides_platform_calls(self):
+        cases = (
+            ("win32", "win-amd64", "windows-x64"),
+            ("win32", "win-arm64", "windows-arm64"),
+            ("linux", "linux-x86_64", "linux-x64"),
+            ("darwin", "macosx-15.0-arm64", "macos-arm64"),
+        )
+        for sys_platform, configured, expected in cases:
+            with self.subTest(configured=configured), \
+                    mock.patch.object(loom_update.platform, "system", return_value=""), \
+                    mock.patch.object(loom_update.platform, "machine", return_value=""), \
+                    mock.patch.object(loom_update.sys, "platform", sys_platform), \
+                    mock.patch.object(
+                        loom_update.sysconfig, "get_platform", return_value=configured):
+                self.assertEqual(expected, loom_update.platform_id())
+
+    def test_platform_id_does_not_override_nonempty_unsupported_values(self):
+        with mock.patch.object(
+                loom_update.platform, "system", return_value="UnknownOS"), \
+                mock.patch.object(loom_update.platform, "machine", return_value="AMD64"), \
+                mock.patch.object(loom_update.sys, "platform", "win32"), \
+                self.assertRaisesRegex(loom_update.UpdateError, "unsupported"):
+            loom_update.platform_id()
+        with mock.patch.object(
+                loom_update.platform, "system", return_value="Windows"), \
+                mock.patch.object(loom_update.platform, "machine", return_value="mips64"), \
+                mock.patch.object(
+                    loom_update.sysconfig, "get_platform", return_value="win-amd64"), \
+                self.assertRaisesRegex(loom_update.UpdateError, "unsupported"):
+            loom_update.platform_id()
+
     def test_plugin_payload_accepts_only_a_verified_operating_system_alias(self):
         alias = self.root.parents[-1]
         with mock.patch.object(

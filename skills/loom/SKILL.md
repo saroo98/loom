@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Loom 1.8.8 turns a plain-language request into a safe, evidence-backed execution plan.
+description: Loom 1.8.9 turns a plain-language request into a safe, evidence-backed execution plan.
 ---
 
 # Loom
@@ -11,21 +11,26 @@ Use one surface only:
 /loom <request>
 ```
 
-`LOOM_ROOT` is the installed directory containing this file. Keep the following internal protocol
-invisible to the owner:
+Resolve `LOOM_ROOT` as the plugin root two directories above this skill directory:
+`skills/loom/SKILL.md` -> `../../`. The kernel is exactly
+`LOOM_ROOT/START-HERE.md`; never look for `START-HERE.md` beside this skill. Keep the following
+internal protocol invisible to the owner:
 
-1. Read `START-HERE.md`, not the entire installation.
+1. Read `LOOM_ROOT/START-HERE.md`, not the entire installation.
 2. On Codex, select exactly one of Loom's two assurance modes. If the trusted `UserPromptSubmit`
    hook injected a `LOOM_CODEX_HOOK_RECEIPT_V2` developer-context record, use **Verified mode**:
-   verify its exact request digest, assurance object, and private `action_path` digest; do not invoke
-   Loom a second time for that turn. If no verified hook receipt exists, call the local `loom.invoke`
+   verify its exact request digest, assurance object, and private `action_path` digest, then call
+   the local `loom.resolve` MCP tool exactly once with the exact request, working directory, action
+   path, and action digest from that record. Do not call `loom.invoke` for that turn. If no verified
+   hook receipt exists, call the local `loom.invoke`
    MCP tool once with the exact request and absolute working directory. That is **Standard mode**:
    it uses the same runtime, vault, planning method, and sealed actions, but makes no hook-enforcement
    claim. Absence of a hook receipt is not a planning failure when the Loom MCP tool is available.
    If neither route exists, report that Codex integration requires one explicit local setup approval;
    never create a Loom-authorized plan from prose alone.
    In either mode, use the allowlisted public `plan_contract`, context capsule, and
-   `required_outcome` returned by Loom. The action file is encrypted identity-and-integrity evidence
+   `required_outcome` returned by `loom.resolve` or `loom.invoke`. The action file is
+   encrypted identity-and-integrity evidence
    and must not be treated as readable plan content. Never call `complete` for a plan until every
    required plan artifact has been authored. A blocked result is terminal for that invocation.
    On other supported hosts, run `python -B LOOM_ROOT/scripts/loom_bootstrap.py --ensure --plugin-root LOOM_ROOT
