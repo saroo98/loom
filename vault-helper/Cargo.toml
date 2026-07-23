@@ -13,7 +13,7 @@ chacha20poly1305 = "0.10.1"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "zeroize"] }
 hex = "0.4.3"
 hkdf = "0.12.4"
-hmac = "0.12.1"
+hmac = "0.13.0"
 keyring = "4.1.5"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 serde = { version = "1.0.219", features = ["derive"] }
