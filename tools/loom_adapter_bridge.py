@@ -42,13 +42,13 @@ def _run(launcher, arguments, *, timeout=120):
     return result.returncode, _payload(result.stdout)
 
 
-def _run_request(launcher, home, envelope, *, timeout=120):
+def _run_request(launcher, home, message, *, command="invoke-stdio", timeout=120):
     """Forward owner text only as one bounded protocol-v2 stdin frame."""
-    frame = loom_adapter_protocol.canonical_bytes(envelope) + b"\n"
+    frame = loom_adapter_protocol.canonical_bytes(message) + b"\n"
     try:
         result = subprocess.run(
             [sys.executable, "-B", str(launcher), "--home", str(home),
-             "invoke-stdio"],
+             command],
             input=frame, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise loom_adapter_protocol.ProtocolError(
@@ -88,18 +88,23 @@ def dispatch(message, *, home, launcher, session):
     if not session:
         raise loom_adapter_protocol.ProtocolError(
             "PROTOCOL_INCOMPATIBLE", "adapter must initialize before another operation")
-    if kind not in {"invoke", "complete", "cancel", "status"}:
+    if kind not in {"invoke", "resolve", "complete", "cancel", "status"}:
         raise loom_adapter_protocol.ProtocolError(
             "MESSAGE_INVALID", "adapter request is not a bridge operation")
-    if not session["capabilities"].get(kind, False):
+    required_capability = "invoke" if kind == "resolve" else kind
+    if not session["capabilities"].get(required_capability, False):
         raise loom_adapter_protocol.ProtocolError(
-            "CAPABILITY_MISSING", f"host did not declare the {kind} capability")
+            "CAPABILITY_MISSING",
+            f"host did not declare the {required_capability} capability")
     host = session["host"]
     if kind == "invoke":
         envelope = loom_adapter_protocol.request_envelope(
             message, host, adapter=session["adapter"],
             capabilities=session["capabilities"])
         code, payload = _run_request(launcher, home, envelope)
+    elif kind == "resolve":
+        code, payload = _run_request(
+            launcher, home, message, command="resolve-stdio")
     elif kind == "complete":
         arguments = ["--home", str(home), "complete", "--action", message["action"]]
         if message["usage"] is not None:
@@ -112,7 +117,7 @@ def dispatch(message, *, home, launcher, session):
         arguments = [
             "--home", str(home), "adapter-probe", "--protocol-min", "2",
             "--protocol-max", "2"]
-    if kind != "invoke":
+    if kind not in {"invoke", "resolve"}:
         code, payload = _run(launcher, arguments)
     result = {"schema_version": 2, "message_type": "result",
               "request_id": request_id, "returncode": code, "payload": payload}

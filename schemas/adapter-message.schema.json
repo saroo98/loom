@@ -6,6 +6,7 @@
     {"$ref": "#/$defs/initialize"},
     {"$ref": "#/$defs/initializeResult"},
     {"$ref": "#/$defs/invoke"},
+    {"$ref": "#/$defs/resolve"},
     {"$ref": "#/$defs/requestEnvelope"},
     {"$ref": "#/$defs/complete"},
     {"$ref": "#/$defs/cancel"},
@@ -91,6 +92,18 @@
         "request_id": {"$ref": "#/$defs/id"},
         "request": {"type": "string", "minLength": 1, "maxLength": 32768},
         "cwd": {"type": "string", "minLength": 1, "maxLength": 4096}
+      }
+    },
+    "resolve": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "message_type", "request_id", "request", "cwd", "action", "action_sha256"],
+      "properties": {
+        "schema_version": {"const": 2}, "message_type": {"const": "resolve"},
+        "request_id": {"$ref": "#/$defs/id"},
+        "request": {"type": "string", "minLength": 1, "maxLength": 32768},
+        "cwd": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "action": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "action_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "requestIdentity": {

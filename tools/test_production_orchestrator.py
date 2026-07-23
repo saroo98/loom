@@ -565,6 +565,79 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(first["plan_contract"], second["plan_contract"])
         self.assertNotIn("prior_recovery", second)
 
+    def test_verified_hook_action_resolves_once_without_creating_another_action(self):
+        target = self.root / "verified-resolve-target"
+        target.mkdir()
+        request = "Plan a very simple test project."
+        capabilities = {
+            key: key in {"invoke", "complete", "cancel", "status", "markdown"}
+            for key in loom_adapter_protocol.CAPABILITY_KEYS
+        }
+        source = {
+            "schema_version": 2, "message_type": "invoke",
+            "request_id": "verified-resolve-source",
+            "request": request, "cwd": str(target),
+        }
+        envelope = loom_adapter_protocol.request_envelope(
+            source, {"id": "codex", "version": "test"},
+            adapter={"id": "codex-prompt-hook", "version": "1.0.0"},
+            capabilities=capabilities)
+        opened = loom_orchestrator.invoke(
+            request=request, cwd=target, home=self.home,
+            install_root=self.installed,
+            transport_invocation_id=loom_orchestrator._transport_invocation_id(envelope),
+            assurance=envelope["assurance"])
+        action_path = Path(opened["action_path"])
+        action_sha256 = hashlib.sha256(action_path.read_bytes()).hexdigest()
+
+        resolved = loom_orchestrator.resolve(
+            request=request, cwd=target, action_path=action_path,
+            action_sha256=action_sha256, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(opened["action_id"], resolved["action_id"])
+        self.assertEqual(opened["plan_contract"], resolved["plan_contract"])
+        self.assertEqual("verified", resolved["assurance"]["mode"])
+        self.assertEqual(
+            1, len(list(action_path.parent.glob("????????-????-????-????-????????????.json"))))
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.resolve(
+                request=request, cwd=target, action_path=action_path,
+                action_sha256="0" * 64, home=self.home,
+                install_root=self.installed)
+        self.assertEqual("ACTION_CORRUPT", caught.exception.code)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.resolve(
+                request=request + " changed", cwd=target, action_path=action_path,
+                action_sha256=action_sha256, home=self.home,
+                install_root=self.installed)
+        self.assertEqual("REQUEST_IDENTITY_INVALID", caught.exception.code)
+
+        (target / "world-drift.txt").write_text("changed\n", encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.resolve(
+                request=request, cwd=target, action_path=action_path,
+                action_sha256=action_sha256, home=self.home,
+                install_root=self.installed)
+        self.assertEqual("TARGET_DRIFT", caught.exception.code)
+
+    def test_standard_action_cannot_be_relabelled_as_verified_by_resolve(self):
+        target = self.root / "standard-resolve-target"
+        target.mkdir()
+        request = "Plan a very simple test project."
+        opened = loom_orchestrator.invoke(
+            request=request, cwd=target, home=self.home,
+            install_root=self.installed)
+        action_path = Path(opened["action_path"])
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.resolve(
+                request=request, cwd=target, action_path=action_path,
+                action_sha256=hashlib.sha256(action_path.read_bytes()).hexdigest(),
+                home=self.home, install_root=self.installed)
+        self.assertEqual("HOST_UNVERIFIED", caught.exception.code)
+
     def test_same_plan_request_after_world_change_creates_new_frontier(self):
         non_git = self.root / "changed-world-target"
         non_git.mkdir()

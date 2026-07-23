@@ -215,6 +215,18 @@ def validate_message(value):
         _exact(value, common | {"request", "cwd"}, "invoke")
         _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
         _text(value["cwd"], "project path", 1, 4096)
+    elif message_type == "resolve":
+        _exact(
+            value,
+            common | {"request", "cwd", "action", "action_sha256"},
+            "resolve",
+        )
+        _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
+        _text(value["cwd"], "project path", 1, 4096)
+        _text(value["action"], "action path", 1, 4096)
+        if not isinstance(value["action_sha256"], str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", value["action_sha256"]):
+            raise ProtocolError("MESSAGE_INVALID", "action digest is invalid")
     elif message_type == "request-envelope":
         _exact(value, common | {"request", "cwd", "host", "request_identity", "assurance"},
                "request envelope")

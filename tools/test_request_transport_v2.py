@@ -40,6 +40,18 @@ def envelope(request, cwd, request_id="req-transport"):
         {"id": "codex", "version": "windows-test"})
 
 
+def resolve_message(request, cwd, action, request_id="req-resolve"):
+    return {
+        "schema_version": 2,
+        "message_type": "resolve",
+        "request_id": request_id,
+        "request": request,
+        "cwd": str(cwd),
+        "action": str(action),
+        "action_sha256": "a" * 64,
+    }
+
+
 class FakeManager:
     def begin_session(self):
         return {"session_id": "session-transport", "version": "test-runtime"}
@@ -117,6 +129,54 @@ class RequestTransportV2Tests(unittest.TestCase):
         self.assertEqual(0, code, output.getvalue())
         self.assertEqual(request, invoke.call_args.kwargs["request"])
         self.assertEqual(item["cwd"], invoke.call_args.kwargs["cwd"])
+
+    def test_verified_resolution_keeps_request_in_bounded_stdin_across_both_processes(self):
+        request = "  verified\r\nrequest % ! & | < > ^ کوردی  "
+        item = resolve_message(
+            request, "C:/disposable/project",
+            "C:/disposable/home/.loom/orchestration/action.json")
+        frame = loom_adapter_protocol.canonical_bytes(item) + b"\n"
+        manager = FakeManager()
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            runtime = root / "runtime"
+            orchestrator = runtime / "tools" / "loom_orchestrator.py"
+            orchestrator.parent.mkdir(parents=True)
+            orchestrator.write_text("# fixture\n", encoding="utf-8")
+            stdin = SimpleNamespace(buffer=io.BytesIO(frame))
+            completed = SimpleNamespace(returncode=0)
+            with mock.patch.object(loom_launcher.sys, "stdin", stdin), \
+                    mock.patch.object(
+                        loom_launcher.loom_update, "SharedRuntime", return_value=manager), \
+                    mock.patch.object(
+                        loom_launcher, "_current",
+                        return_value=({"version": "test-runtime", "release_sequence": 1},
+                                      runtime)), \
+                    mock.patch.object(
+                        loom_launcher.subprocess, "run", return_value=completed) as run:
+                code = loom_launcher.main([
+                    "--home", str(root / ".loom"), "resolve-stdio"])
+        self.assertEqual(0, code)
+        command = run.call_args.args[0]
+        self.assertEqual("resolve-stdio", command[3])
+        self.assertNotIn(request, command)
+        self.assertEqual(frame, run.call_args.kwargs["input"])
+
+        stdin = SimpleNamespace(buffer=io.BytesIO(frame))
+        output = io.StringIO()
+        with mock.patch.object(loom_orchestrator.sys, "stdin", stdin), \
+                mock.patch.object(
+                    loom_orchestrator, "resolve",
+                    return_value={"status": "transport-ok"}) as resolve, \
+                contextlib.redirect_stdout(output):
+            code = loom_orchestrator.main([
+                "resolve-stdio", "--home", "C:/disposable/home/.loom",
+                "--install-root", "C:/disposable/runtime"])
+        self.assertEqual(0, code, output.getvalue())
+        self.assertEqual(request, resolve.call_args.kwargs["request"])
+        self.assertEqual(item["action"], resolve.call_args.kwargs["action_path"])
+        self.assertEqual(item["action_sha256"],
+                         resolve.call_args.kwargs["action_sha256"])
 
     def test_legacy_request_argv_surface_is_refused_before_runtime_access(self):
         stderr = io.StringIO()

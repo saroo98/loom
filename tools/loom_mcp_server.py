@@ -74,6 +74,25 @@ def _tools():
                             "idempotentHint": True, "openWorldHint": False},
         },
         {
+            "name": "resolve",
+            "description": (
+                "Resolve one Verified-assurance hook action without starting another action."),
+            "inputSchema": {
+                "type": "object", "additionalProperties": False,
+                "required": ["request", "cwd", "action", "action_sha256"],
+                "properties": {
+                    "request": {"type": "string", "minLength": 1,
+                                "maxLength": loom_adapter_protocol.MAX_REQUEST_CHARACTERS},
+                    "cwd": path,
+                    "action": path,
+                    "action_sha256": {
+                        "type": "string", "pattern": "^[0-9a-f]{64}$"},
+                },
+            },
+            "annotations": {"readOnlyHint": True, "destructiveHint": False,
+                            "idempotentHint": True, "openWorldHint": False},
+        },
+        {
             "name": "status", "description": "Read the verified local Loom runtime status.",
             "inputSchema": {"type": "object", "additionalProperties": False,
                             "properties": {}},
@@ -109,6 +128,9 @@ def _adapter_message(name, arguments):
     if name == "invoke":
         expected = {"request", "cwd"}
         message = {**common, "message_type": "invoke", **arguments}
+    elif name == "resolve":
+        expected = {"request", "cwd", "action", "action_sha256"}
+        message = {**common, "message_type": "resolve", **arguments}
     elif name == "status":
         expected = set()
         message = {**common, "message_type": "status"}
@@ -189,7 +211,8 @@ def serve(home, launcher, *, input_stream=None, output_stream=None):
                 result = {"protocolVersion": MCP_PROTOCOL,
                           "capabilities": {"tools": {"listChanged": False}},
                           "serverInfo": SERVER_INFO,
-                          "instructions": "Use invoke for /loom when no verified hook receipt exists."}
+                          "instructions": (
+                              "Use resolve for a verified hook receipt; otherwise use invoke.")}
             elif method == "ping":
                 result = {}
             elif method == "tools/list":

@@ -114,8 +114,9 @@ class HookContractTests(unittest.TestCase):
                 "status": "action-required", "action_path": str(outside),
                 "action_id": self.action_id,
                 "owner_message": {},
+                "assurance": verified_assurance("a" * 64),
             }, request_sha256="a" * 64, runtime_version="1.8.5",
-                loom_home=self.home)
+                loom_home=self.home, working_directory=str(self.root))
 
     def test_bounded_context_rejects_malformed_action_before_injection(self):
         self.action.write_text('{"schema_version":1,"status":"completed"}\n',
@@ -124,16 +125,18 @@ class HookContractTests(unittest.TestCase):
             loom_codex_prompt._bounded_context({
                 "status": "action-required", "action_path": str(self.action),
                 "action_id": self.action_id, "owner_message": {},
+                "assurance": verified_assurance("a" * 64),
             }, request_sha256="a" * 64, runtime_version="1.8.5",
-                loom_home=self.home)
+                loom_home=self.home, working_directory=str(self.root))
 
     def test_bounded_context_rejects_action_id_unlinked_from_file(self):
         with self.assertRaisesRegex(loom_codex_prompt.HookError, "envelope linkage"):
             loom_codex_prompt._bounded_context({
                 "status": "action-required", "action_path": str(self.action),
                 "action_id": str(uuid.uuid4()), "owner_message": {},
+                "assurance": verified_assurance("a" * 64),
             }, request_sha256="a" * 64, runtime_version="1.8.5",
-                loom_home=self.home)
+                loom_home=self.home, working_directory=str(self.root))
 
     def test_success_injects_sealed_context_and_never_reinvokes(self):
         request = "Plan exactly\n  preserve this"
@@ -148,9 +151,10 @@ class HookContractTests(unittest.TestCase):
             }],
         }
 
-        def bridge(_launcher, _home, frames):
+        def bridge(_launcher, _home, frames, *, timeout):
             messages = [json.loads(line) for line in frames.splitlines()]
             captured["request"] = messages[1]["request"]
+            captured["timeout"] = timeout
             return ({"runtime_version": "1.8.5"}, {
                 "status": "action-required", "action_id": self.action_id,
                 "action_path": str(self.action),
@@ -178,13 +182,18 @@ class HookContractTests(unittest.TestCase):
         self.assertEqual(request, captured["request"])
         self.assertEqual(loom_codex_prompt.HOOK_PROTOCOL, context["protocol"])
         self.assertEqual(self.action_file_sha256, context["action_file_sha256"])
-        self.assertEqual("plan", context["intent"])
-        self.assertEqual(plan_contract, context["plan_contract"])
-        self.assertIn("author", context["instruction"].lower())
-        self.assertIn("before calling complete", context["instruction"].lower())
+        self.assertNotIn("intent", context)
+        self.assertNotIn("plan_contract", context)
+        self.assertEqual(str(self.root), context["working_directory"])
+        self.assertIn("loom.resolve", context["instruction"])
+        self.assertIn("do not call loom.invoke", context["instruction"].lower())
         self.assertNotIn(request, output["hookSpecificOutput"]["additionalContext"])
+        self.assertLessEqual(
+            len(output["hookSpecificOutput"]["additionalContext"].encode("utf-8")),
+            loom_codex_prompt.MAX_CONTEXT_BYTES)
+        self.assertGreater(captured["timeout"], 0)
 
-    def test_context_allowlists_public_frontier_and_rejects_oversize(self):
+    def test_context_injects_only_compact_resolution_identity(self):
         payload = {
             "status": "action-required", "action_id": self.action_id,
             "action_path": str(self.action), "intent": "plan", "tier": "M",
@@ -197,21 +206,55 @@ class HookContractTests(unittest.TestCase):
         }
         context = json.loads(loom_codex_prompt._bounded_context(
             payload, request_sha256="a" * 64, runtime_version="1.8.5",
-            loom_home=self.home))
-        self.assertEqual("plan", context["intent"])
-        self.assertEqual(payload["plan_contract"], context["plan_contract"])
+            loom_home=self.home, working_directory=str(self.root)))
+        self.assertNotIn("intent", context)
+        self.assertNotIn("plan_contract", context)
         self.assertNotIn("request", context)
         self.assertNotIn("unknown_private_field", context)
+        self.assertEqual(self.action_file_sha256, context["action_file_sha256"])
 
         oversized = dict(payload)
-        oversized["plan_contract"] = {
-            "schema_version": 4, "contract_hash": "b" * 64,
-            "planning_intelligence": {"payload": "x" * (256 * 1024)},
-        }
+        oversized["owner_message"] = {"human": "x" * (16 * 1024)}
         with self.assertRaisesRegex(loom_codex_prompt.HookError, "exceeds"):
             loom_codex_prompt._bounded_context(
                 oversized, request_sha256="a" * 64,
-                runtime_version="1.8.5", loom_home=self.home)
+                runtime_version="1.8.5", loom_home=self.home,
+                working_directory=str(self.root))
+
+    def test_total_timeout_budget_is_shared_by_bootstrap_and_bridge(self):
+        request = "Plan exactly"
+        assurance = verified_assurance(
+            hashlib.sha256(request.encode("utf-8")).hexdigest())
+        stdin = io.BytesIO(json.dumps(event("/loom " + request, self.root)).encode())
+        stdout = io.StringIO()
+        ticks = iter((100.0, 100.0, 140.0, 140.0))
+        captured = {}
+
+        def bootstrap(_root, _home, *, timeout):
+            captured["bootstrap"] = timeout
+            return self.root / "loom.py", {}
+
+        def bridge(_launcher, _home, _frames, *, timeout):
+            captured["bridge"] = timeout
+            return ({"runtime_version": "1.8.5"}, {
+                "status": "action-required", "action_id": self.action_id,
+                "action_path": str(self.action),
+                "owner_message": {"human": "ready"}, "assurance": assurance,
+            })
+
+        with mock.patch.object(
+                loom_codex_prompt.sys, "stdin", mock.Mock(buffer=stdin)), \
+                mock.patch.object(
+                    loom_codex_prompt, "_run_bootstrap", side_effect=bootstrap), \
+                mock.patch.object(loom_codex_prompt, "_run_bridge", side_effect=bridge), \
+                mock.patch.object(loom_codex_prompt.time, "monotonic",
+                                  side_effect=lambda: next(ticks)), \
+                mock.patch.object(loom_codex_prompt.Path, "home",
+                                  return_value=self.root / "owner"), \
+                mock.patch("sys.stdout", stdout):
+            self.assertEqual(0, loom_codex_prompt.main())
+        self.assertEqual(90, captured["bootstrap"])
+        self.assertEqual(130, captured["bridge"])
 
     def test_explicit_loom_bootstrap_failure_blocks_without_fallback(self):
         stdin = io.BytesIO(json.dumps(event("/loom plan safely", self.root)).encode())

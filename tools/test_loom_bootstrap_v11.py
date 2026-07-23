@@ -154,7 +154,7 @@ class BootstrapIntegrationTests(unittest.TestCase):
             self.assertEqual(2, len(responses))
             self.assertEqual("2025-06-18", responses[0]["result"]["protocolVersion"])
             self.assertEqual(
-                ["invoke", "status", "complete", "cancel"],
+                ["invoke", "resolve", "status", "complete", "cancel"],
                 [item["name"] for item in responses[1]["result"]["tools"]])
             self.assertTrue((user_home / ".loom" / "runtime" / "current.json").is_file())
             self.assertFalse((user_home / ".codex" / "hooks.json").exists())

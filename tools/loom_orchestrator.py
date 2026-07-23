@@ -1512,6 +1512,37 @@ def _legacy_active_actions(directory, *, owner_home, install_root):
     return candidates
 
 
+def _action_matches_current_frontier(action, prepared, target, *, request, cwd):
+    """Prove that one pending action still names the current target frontier."""
+    sealed = action["prepared"]
+    same_frontier = action["request"] == request \
+            and action["cwd"] == str(cwd) \
+            and action["explicit_target"] == str(target) \
+            and action["project_id"] == prepared.project_id \
+            and action["survey_hash"] == prepared.survey_hash \
+            and sealed["request_hash"] == prepared.request_hash \
+            and sealed["intent"] == prepared.intent \
+            and sealed["domains"] == list(prepared.domains)
+    unchanged_world = sealed["world_fingerprint"] == prepared.world_fingerprint
+    current_pack_matches = action["initial_pack_hash"] is not None \
+        and _pack_hash(Path(target) / "plans") == action["initial_pack_hash"]
+    repair_record = Path(target) / "plans" / ".loom-small-lifecycle.json"
+    tier_s_repair_current = False
+    if action["intent"] == "repair" and action["tier"] == "S" \
+            and isinstance(action["repair_plan"], dict) \
+            and _path_present(repair_record):
+        try:
+            tier_s_repair_current = hashlib.sha256(
+                repair_record.read_bytes()).hexdigest() == \
+                action["repair_plan"].get("lifecycle_sha256")
+        except OSError as exc:
+            raise OrchestratorError(
+                "TARGET_INDETERMINATE",
+                "the repeated transport operation's Tier-S lifecycle is unreadable") from exc
+    return action["intent"] == prepared.intent and same_frontier and (
+        unchanged_world or current_pack_matches or tier_s_repair_current)
+
+
 def _reconcile_active_action(*, owner_home, install_root, instance_id,
                              project_id, now, incoming_intent, request, cwd, target,
                              transport_invocation_id=None):
@@ -1557,34 +1588,8 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                 cwd=cwd, explicit_target=target, owner_home=owner_home, now=now)
         except loom_runtime.RuntimeBlocked as exc:
             raise OrchestratorError(exc.code, exc.message) from exc
-        sealed = action["prepared"]
-        same_frontier = action["request"] == request \
-                and action["cwd"] == str(cwd) \
-                and action["explicit_target"] == str(target) \
-                and action["project_id"] == prepared.project_id \
-                and action["survey_hash"] == prepared.survey_hash \
-                and sealed["request_hash"] == prepared.request_hash \
-                and sealed["intent"] == prepared.intent \
-                and sealed["domains"] == list(prepared.domains)
-        unchanged_world = sealed["world_fingerprint"] == prepared.world_fingerprint
-        current_pack_matches = action["initial_pack_hash"] is not None \
-            and _pack_hash(Path(target) / "plans") == action["initial_pack_hash"]
-        repair_record = Path(target) / "plans" / ".loom-small-lifecycle.json"
-        tier_s_repair_current = False
-        if action["intent"] == "repair" and action["tier"] == "S" \
-                and isinstance(action["repair_plan"], dict) \
-                and _path_present(repair_record):
-            try:
-                tier_s_repair_current = hashlib.sha256(
-                    repair_record.read_bytes()).hexdigest() == \
-                    action["repair_plan"].get("lifecycle_sha256")
-            except OSError as exc:
-                raise OrchestratorError(
-                    "TARGET_INDETERMINATE",
-                    "the repeated transport operation's Tier-S lifecycle is unreadable") \
-                    from exc
-        if action["intent"] == prepared.intent and same_frontier and (
-                unchanged_world or current_pack_matches or tier_s_repair_current):
+        if _action_matches_current_frontier(
+                action, prepared, target, request=request, cwd=cwd):
             return None, action
         raise OrchestratorError(
             "TARGET_DRIFT",
@@ -2968,6 +2973,124 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     return result
 
 
+def resolve(*, request, cwd, action_path, action_sha256, home, install_root, now=None):
+    """Resolve one hook-created verified action without creating a second action."""
+    try:
+        loom_adapter_protocol.request_identity(request)
+    except loom_adapter_protocol.ProtocolError as exc:
+        raise OrchestratorError(exc.code, str(exc)) from exc
+    if not isinstance(action_sha256, str) \
+            or not re.fullmatch(r"[0-9a-f]{64}", action_sha256):
+        raise OrchestratorError(
+            "REQUEST_IDENTITY_INVALID", "verified action digest is invalid")
+    cwd = _absolute(cwd, "cwd")
+    home = _absolute(home, "owner home", must_exist=False)
+    install_root = _absolute(install_root, "installation root")
+    path = _absolute(action_path, "action")
+    try:
+        relative = path.relative_to(home)
+    except ValueError as exc:
+        raise OrchestratorError(
+            "ACTION_PATH_MISMATCH", "verified action escapes the owner home") from exc
+    parts = relative.parts
+    if len(parts) != 7 or parts[0] != "instances" or parts[2] != "runtime" \
+            or parts[3] != "projects" or parts[5] != "orchestrations" \
+            or not loom_runtime.PROJECT_RE.fullmatch(parts[4]) \
+            or not re.fullmatch(r"[0-9a-f-]{36}\.json", parts[6]):
+        raise OrchestratorError(
+            "ACTION_PATH_MISMATCH", "verified action path is not owner-project scoped")
+    try:
+        if str(uuid.UUID(parts[1])) != parts[1] \
+                or str(uuid.UUID(parts[6][:-5])) != parts[6][:-5]:
+            raise ValueError
+        loom_memory._reject_link_ancestors(path, "verified action")
+    except (ValueError, loom_memory.MemoryError) as exc:
+        raise OrchestratorError(
+            "ACTION_UNSAFE", "verified action path is redirected or malformed") from exc
+    try:
+        loom_install.check(install_root)
+    except loom_install.InstallError as exc:
+        raise OrchestratorError(
+            "INSTALL_UNVERIFIED", f"installation receipt check failed: {exc}") from exc
+    instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
+    try:
+        with loom_reliability.exclusive_file_lock(_orchestration_lock(path.parent)):
+            try:
+                before = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise OrchestratorError(
+                    "ACTION_UNSAFE", "verified action cannot be read") from exc
+            if before != action_sha256:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT", "verified action digest does not match the hook receipt")
+            _path, action, _security = _read_action(
+                path, owner_home=home, install_root=install_root)
+            try:
+                after = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise OrchestratorError(
+                    "ACTION_UNSAFE", "verified action cannot be reread") from exc
+            if after != before:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT", "verified action changed while it was being resolved")
+            if Path(action["owner_home"]) != home \
+                    or Path(action["install_root"]) != install_root:
+                raise OrchestratorError(
+                    "ACTION_RUNTIME_MISMATCH",
+                    "verified action belongs to another owner home or runtime")
+            if action["status"] != "pending":
+                raise OrchestratorError(
+                    "ACTION_TERMINAL",
+                    f"verified action is {action['status']}",
+                    status=action["status"])
+            if instant > loom_runtime._parse_time(action["expires_at"]):
+                raise OrchestratorError(
+                    "ACTION_EXPIRED", "verified action expired before it was resolved")
+            if action["request"] != request or action["cwd"] != str(cwd):
+                raise OrchestratorError(
+                    "REQUEST_IDENTITY_INVALID",
+                    "verified action does not match this request and working directory")
+            assurance = action["assurance"]
+            _validate_assurance(assurance, request, allow_legacy=False)
+            if assurance["mode"] != "verified" \
+                    or assurance["ingress"] != "codex-user-prompt-hook-v2":
+                raise OrchestratorError(
+                    "HOST_UNVERIFIED", "action was not created by the verified Codex hook")
+            pointer = _read_active_pointer(path.parent)
+            if pointer is None \
+                    or pointer["action_id"] != action["action_id"] \
+                    or pointer["project_id"] != action["project_id"]:
+                raise OrchestratorError(
+                    "ACTION_POINTER_CONFLICT",
+                    "verified action is not the active action for this project")
+            target = _absolute(
+                action["explicit_target"] or action["cwd"], "target")
+            try:
+                prepared = loom_runtime.prepare_invocation(
+                    request, instance_id=action["instance_id"],
+                    invocation_id=str(uuid.uuid4()), cwd=cwd,
+                    explicit_target=target, owner_home=home, now=instant)
+            except loom_runtime.RuntimeBlocked as exc:
+                raise OrchestratorError(exc.code, exc.message) from exc
+            if not _action_matches_current_frontier(
+                    action, prepared, target, request=request, cwd=cwd):
+                raise OrchestratorError(
+                    "TARGET_DRIFT",
+                    "verified action no longer matches the current target state")
+            try:
+                final_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError as exc:
+                raise OrchestratorError(
+                    "ACTION_UNSAFE", "verified action cannot be read after resolution") from exc
+            if final_digest != action_sha256:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT", "verified action changed before resolution completed")
+            return _pending_action_result(action)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
+
+
 def _pending_action_result(action, *, resolved_terminal_block=None,
                            session_environment=None, work_order=None):
     """Return the bounded public frontier for a new or idempotently reused action."""
@@ -3446,6 +3569,9 @@ def main(argv=None):
     invoke_parser.add_argument("--install-root", required=True)
     invoke_parser.add_argument("--target")
     invoke_parser.add_argument("--timeout-seconds", type=int, default=900)
+    resolve_parser = commands.add_parser("resolve-stdio")
+    resolve_parser.add_argument("--home", required=True)
+    resolve_parser.add_argument("--install-root", required=True)
     complete_parser = commands.add_parser("complete")
     complete_parser.add_argument("--action", required=True)
     complete_parser.add_argument("--usage")
@@ -3467,6 +3593,14 @@ def main(argv=None):
                 timeout_seconds=args.timeout_seconds,
                 transport_invocation_id=_transport_invocation_id(envelope),
                 assurance=envelope["assurance"])
+        elif args.command == "resolve-stdio":
+            message = loom_adapter_protocol.read_single_frame(
+                sys.stdin.buffer, message_type="resolve")
+            result = resolve(
+                request=message["request"], cwd=message["cwd"],
+                action_path=message["action"],
+                action_sha256=message["action_sha256"],
+                home=args.home, install_root=args.install_root)
         elif args.command == "complete":
             result = complete(
                 args.action, args.usage, result_path=args.result,
