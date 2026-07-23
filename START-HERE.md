@@ -1,4 +1,4 @@
-# Loom 1.8.8 agent kernel
+# Loom 1.8.9 agent kernel
 
 The entire owner-facing interface is:
 
@@ -15,10 +15,11 @@ runtime below. Never read every Loom file into context.
    available from the plugin's local stdio MCP server: it bootstraps the stable launcher and sends
    the exact request as bounded protocol-v2 JSON, with no hook trust required. **Verified mode** is
    an explicit opt-in user-hook layer. Its `UserPromptSubmit` hook receives the event on stdin and
-   injects a bounded `LOOM_CODEX_HOOK_RECEIPT_V2` developer-context record. Use a sealed action
-   exactly once. Its
-   allowlisted public frontier contains the exact `plan_contract`, bounded owner context, required
-   outcome, and action identity needed for agent work. The private `action_path` is an encrypted
+   injects a compact `LOOM_CODEX_HOOK_RECEIPT_V2` developer-context record. Resolve that exact
+   action once through the local `loom.resolve` MCP tool; never call `loom.invoke` for the same
+   verified turn. The resolver returns the allowlisted public frontier containing the exact
+   `plan_contract`, bounded owner context, required outcome, and action identity needed for agent
+   work. The private `action_path` is an encrypted
    identity-and-integrity envelope, not a source the agent can read for planning semantics. Never
    call completion for a plan until the contract's required artifacts have actually been authored.
    Duplicate delivery of the same request in the same unchanged target reuses the pending action;
