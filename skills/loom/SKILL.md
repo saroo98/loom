@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Loom 1.8.7 turns a plain-language request into a safe, evidence-backed execution plan.
+description: Loom 1.8.8 turns a plain-language request into a safe, evidence-backed execution plan.
 ---
 
 # Loom

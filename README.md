@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-<strong>Loom 1.8.7 · Planning intelligence for AI coding agents.</strong><br>
+<strong>Loom 1.8.8 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.7">Latest release</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.8">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -55,9 +55,9 @@ sandbox: Codex documents that specialized tool paths may bypass ordinary tool ho
 Both modes use the same runtime, owner vault, planning method, memory selection, and sealed action
 format. A receipt labels the mode, so Standard work can never be reported as Verified work.
 
-## What changed in 1.8.7
+## What changed in 1.8.8
 
-Loom 1.8.7 gives Codex two honest assurance levels behind the same `/loom <request>` surface:
+Loom 1.8.8 gives Codex two honest assurance levels behind the same `/loom <request>` surface:
 
 - **Standard mode works immediately.** The plugin exposes a bounded local MCP server over stdio,
   opens no network listener, and requires no lifecycle-hook trust.
@@ -69,7 +69,7 @@ Loom 1.8.7 gives Codex two honest assurance levels behind the same `/loom <reque
 - **Integration is reversible.** Install, upgrade, interruption recovery, rollback, and uninstall
   are transactional and preserve the owner vault.
 
-This candidate becomes the published signed `v1.8.7` artifact only after it is verified and
+This candidate becomes the published signed `v1.8.8` artifact only after it is verified and
 published from `main`.
 
 ## What changed in 1.8.6
@@ -176,8 +176,8 @@ metadata is incomplete.
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
-For the verified release artifact, download `loom-plugin-v1.8.7.zip` from
-[the v1.8.7 release](https://github.com/saroo98/loom/releases/tag/v1.8.7), verify it before
+For the verified release artifact, download `loom-plugin-v1.8.8.zip` from
+[the v1.8.8 release](https://github.com/saroo98/loom/releases/tag/v1.8.8), verify it before
 installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request
