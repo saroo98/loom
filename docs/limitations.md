@@ -1,4 +1,4 @@
-# Loom 1.8.9 Limitations
+# Loom 1.8.10 Limitations
 
 Loom fails closed around evidence it does not possess.
 
@@ -39,6 +39,11 @@ Loom fails closed around evidence it does not possess.
   observations and 8 controlled memory-enabled versus memory-disabled production replay pairs.
 - Domain guidance is not current legal, tax, medical, safety, or regulatory advice. Loom must verify
   present rules and target-environment facts before those claims become load-bearing.
+- Semantic unknown-domain authoring can mechanically trust repository bytes that Loom reads itself
+  and exact owner text already present in the sealed request. External official sources, executed
+  observations, and qualified-reviewer claims require separate sealed provenance that the semantic
+  authoring call cannot fabricate. Without that provenance, Loom may use material only as inert
+  secondary discovery and must not seal gate-ready coverage.
 - The 240-case unknown-domain corpus is deterministic, templated regression evidence. Its observed
   zero unsafe authorizations and perfect routing metrics do not establish a population error rate,
   professional correctness, or universal domain coverage. Independent, naturally sampled holdout

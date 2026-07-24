@@ -36,7 +36,10 @@
       "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}},
     "reversible_action_ids": {"type": "array", "maxItems": 64,
       "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}},
-    "archived_count": {"type": "integer", "minimum": 0},
+    "archived_count": {
+      "type": "integer", "minimum": 0,
+      "description": "Count of inactive owner-context records archived during this session. This is not a count of archived project plan packs."
+    },
     "uncertainty_codes": {"type": "array", "maxItems": 16,
       "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"}},
     "owner_input_required": {"type": "boolean"},

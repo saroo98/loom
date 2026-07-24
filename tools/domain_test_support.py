@@ -21,11 +21,16 @@ SCOPE = {
 
 
 def source(source_class, title, content, authority_claims=None):
+    trust_state = (
+        "trusted-local"
+        if source_class in {"repository", "executed-observation", "owner-attestation"}
+        else "untrusted-data" if source_class == "secondary-discovery"
+        else "trusted-authority")
     return loom_domain_evidence.seal_source(
         title=title, locator=f"https://example.invalid/{title}",
         locator_visibility="public", publisher="Fixture authority",
         source_class=source_class, authority_claims=list(authority_claims or []),
-        trust_state="trusted-authority", document_id=title, version="1",
+        trust_state=trust_state, document_id=title, version="1",
         published_at=STAMP, effective_at=STAMP, superseded_at=None,
         accessed_at=STAMP, revalidate_by=FUTURE, content=content.encode("utf-8"),
         retrieval_method="host-provided fixture",

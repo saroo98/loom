@@ -88,10 +88,11 @@ def dispatch(message, *, home, launcher, session):
     if not session:
         raise loom_adapter_protocol.ProtocolError(
             "PROTOCOL_INCOMPATIBLE", "adapter must initialize before another operation")
-    if kind not in {"invoke", "resolve", "complete", "cancel", "status"}:
+    if kind not in {"invoke", "resolve", "author", "complete", "cancel", "status"}:
         raise loom_adapter_protocol.ProtocolError(
             "MESSAGE_INVALID", "adapter request is not a bridge operation")
-    required_capability = "invoke" if kind == "resolve" else kind
+    required_capability = (
+        "invoke" if kind == "resolve" else "complete" if kind == "author" else kind)
     if not session["capabilities"].get(required_capability, False):
         raise loom_adapter_protocol.ProtocolError(
             "CAPABILITY_MISSING",
@@ -105,6 +106,9 @@ def dispatch(message, *, home, launcher, session):
     elif kind == "resolve":
         code, payload = _run_request(
             launcher, home, message, command="resolve-stdio")
+    elif kind == "author":
+        code, payload = _run_request(
+            launcher, home, message, command="author-stdio")
     elif kind == "complete":
         arguments = ["--home", str(home), "complete", "--action", message["action"]]
         if message["usage"] is not None:
@@ -117,7 +121,7 @@ def dispatch(message, *, home, launcher, session):
         arguments = [
             "--home", str(home), "adapter-probe", "--protocol-min", "2",
             "--protocol-max", "2"]
-    if kind not in {"invoke", "resolve"}:
+    if kind not in {"invoke", "resolve", "author"}:
         code, payload = _run(launcher, arguments)
     result = {"schema_version": 2, "message_type": "result",
               "request_id": request_id, "returncode": code, "payload": payload}

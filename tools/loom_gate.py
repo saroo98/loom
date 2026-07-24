@@ -640,7 +640,9 @@ def _load(pack):
         raise ValueError(f"cannot read {LIFECYCLE_FILE}: {exc}") from exc
 
 
-def _verify(pack, repo=None, require_authorized=False, *, pending_completion=None):
+def _verify(
+        pack, repo=None, require_authorized=False, *, pending_completion=None,
+        include_pack_contracts=True):
     pack = Path(pack).resolve()
     findings = []
     if pending_completion is not None \
@@ -748,25 +750,26 @@ def _verify(pack, repo=None, require_authorized=False, *, pending_completion=Non
             != _mapping_hash(baseline_files):
         findings.append("planning event does not bind the baseline file snapshot")
     work_orders, frontier, contract_findings = _pack_work_order_contracts(pack)
-    findings.extend(contract_findings)
-    for wid, work_order in work_orders.items():
-        row = frontier.get(wid)
-        if row is None:
-            findings.append(f"MANIFEST frontier is missing work order {wid}")
-            continue
-        transition = (
-            pending_completion == work_order["relative"]
-            and work_order["status"] == "done"
-            and row["status"] in {"ready", "in-progress"}
-        )
-        if row["status"] != work_order["status"] and not transition:
-            findings.append(
-                f"MANIFEST frontier status for {wid} is {row['status']!r}, "
-                f"work-order status is {work_order['status']!r}")
-        if row["routing"] != work_order["routing"]:
-            findings.append(f"MANIFEST frontier routing for {wid} differs")
-    for wid in sorted(set(frontier) - set(work_orders)):
-        findings.append(f"MANIFEST frontier references missing work order {wid}")
+    if include_pack_contracts:
+        findings.extend(contract_findings)
+        for wid, work_order in work_orders.items():
+            row = frontier.get(wid)
+            if row is None:
+                findings.append(f"MANIFEST frontier is missing work order {wid}")
+                continue
+            transition = (
+                pending_completion == work_order["relative"]
+                and work_order["status"] == "done"
+                and row["status"] in {"ready", "in-progress"}
+            )
+            if row["status"] != work_order["status"] and not transition:
+                findings.append(
+                    f"MANIFEST frontier status for {wid} is {row['status']!r}, "
+                    f"work-order status is {work_order['status']!r}")
+            if row["routing"] != work_order["routing"]:
+                findings.append(f"MANIFEST frontier routing for {wid} differs")
+        for wid in sorted(set(frontier) - set(work_orders)):
+            findings.append(f"MANIFEST frontier references missing work order {wid}")
     completions = data.get("work_order_completions")
     if not isinstance(completions, list):
         findings.append("work_order_completions must be a list")
@@ -916,11 +919,15 @@ def _verify(pack, repo=None, require_authorized=False, *, pending_completion=Non
     return findings
 
 
-def verify(pack, repo=None, require_authorized=False):
+def verify(
+        pack, repo=None, require_authorized=False, *,
+        include_pack_contracts=True, include_pack_lint=True):
     """Verify only stable lifecycle states; transitional exceptions are never public."""
-    findings = _verify(pack, repo, require_authorized)
+    findings = _verify(
+        pack, repo, require_authorized,
+        include_pack_contracts=include_pack_contracts)
     pack_path = Path(pack).resolve()
-    if not pack_path.is_dir():
+    if not pack_path.is_dir() or not include_pack_lint:
         return findings
     try:
         import loom_lint
@@ -991,14 +998,25 @@ def seal_g1(pack, repo, review):
         return 1
     import loom_lint
     review_fm, _ = loom_lint.parse_frontmatter(review.read_text(encoding="utf-8"))
+    manifest_fm, _ = loom_lint.parse_frontmatter(
+        (pack / "MANIFEST.md").read_text(encoding="utf-8"))
+    mechanical = (
+        review_fm
+        and review_fm.get("reviewer_independence") == "mechanical-independent"
+        and review_fm.get("reviewer") == "loom-deterministic-plan-validator-v1"
+        and manifest_fm
+        and manifest_fm.get("tier") == "M"
+    )
     if not review_fm or review_fm.get("gate") != "G1" \
             or review_fm.get("verdict") not in {"pass", "pass-with-fixes"} \
-            or review_fm.get("reviewer_independence") != "independent" \
+            or (review_fm.get("reviewer_independence") != "independent"
+                and not mechanical) \
             or not isinstance(review_fm.get("reviewer"), str) \
             or not review_fm["reviewer"].strip() \
             or review_fm.get("open_high_findings") != 0:
-        print("loom_gate: REFUSED — G1 must be passing, independently reviewed, "
-              "and have zero open High findings", file=sys.stderr)
+        print("loom_gate: REFUSED — G1 must be passing, independently reviewed "
+              "(human/model or bounded Tier-M mechanical validator), and have zero "
+              "open High findings", file=sys.stderr)
         return 1
     lint = loom_lint.lint(
         pack, repo_path=repo, enforce_lifecycle=False, check_repo_state=False)

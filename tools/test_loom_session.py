@@ -13,6 +13,7 @@ from pathlib import Path
 
 import loom_memory
 import loom_improvement
+import loom_message
 import loom_session
 
 
@@ -63,6 +64,38 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertEqual(len(observed), 1)
         self.assertEqual(observed[0], (
             "plan", receipt.project_id, receipt.session_id))
+        self.assertEqual(4, receipt.owner_message["schema_version"])
+
+    def test_current_v3_receipt_remains_readable_after_owner_message_v4(self):
+        controller = loom_session.SessionController(
+            owner_home=self.owner_home,
+            instance_id=self.instance_id,
+            handlers={"plan": lambda _context: {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "user_message": "Release-ready plan validated.",
+            }},
+            memory=loom_session.NoopMemoryAdapter(),
+        )
+        current = controller.run(
+            "Build a command-line tool",
+            invocation_id="00000000-0000-4000-8000-000000000302",
+            cwd=self.project,
+            now="2026-07-14T12:00:00Z",
+        ).to_dict()
+        current["owner_message"] = loom_message.v3_from_session(
+            status=current["status"], code=current["code"], intent=current["intent"],
+            tier=current["tier"], owner_input_required=current["owner_input_required"],
+            reversible_action_ids=current["reversible_action_ids"],
+            detail=current["user_message"],
+            receipt_id="session-" + current["operation_id"][:16],
+            block_reason=current["block_reason"])
+        current["receipt_hash"] = loom_session._receipt_hash(current)
+
+        restored = loom_session._receipt_from_data(current, repeated=False)
+
+        self.assertEqual(3, restored.owner_message["schema_version"])
+        self.assertEqual(current["receipt_hash"], restored.receipt_hash)
 
     def test_repeated_request_returns_existing_receipt_without_duplicate_execution(self):
         calls = []

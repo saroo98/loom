@@ -8,6 +8,7 @@
     {"$ref": "#/$defs/invoke"},
     {"$ref": "#/$defs/resolve"},
     {"$ref": "#/$defs/requestEnvelope"},
+    {"$ref": "#/$defs/author"},
     {"$ref": "#/$defs/complete"},
     {"$ref": "#/$defs/cancel"},
     {"$ref": "#/$defs/status"},
@@ -164,9 +165,28 @@
       "properties": {
         "schema_version": {"const": 2}, "message_type": {"const": "complete"},
         "request_id": {"$ref": "#/$defs/id"},
+        "action": {
+          "type": "string", "minLength": 1, "maxLength": 4096,
+          "description": "Existing absolute action_path returned by Loom."
+        },
+        "usage": {
+          "type": ["string", "null"], "maxLength": 4096,
+          "description": "Optional existing absolute path to private usage-receipt-v3 JSON."
+        },
+        "result": {
+          "type": ["string", "null"], "maxLength": 4096,
+          "description": "Optional existing absolute path to structured repair-result or host-outcome JSON. Null for ordinary planning; never prose or inline JSON."
+        }
+      }
+    },
+    "author": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "message_type", "request_id", "action", "draft"],
+      "properties": {
+        "schema_version": {"const": 2}, "message_type": {"const": "author"},
+        "request_id": {"$ref": "#/$defs/id"},
         "action": {"type": "string", "minLength": 1, "maxLength": 4096},
-        "usage": {"type": ["string", "null"], "maxLength": 4096},
-        "result": {"type": ["string", "null"], "maxLength": 4096}
+        "draft": {"$ref": "plan-draft.schema.json"}
       }
     },
     "cancel": {

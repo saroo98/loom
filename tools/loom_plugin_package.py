@@ -2,6 +2,7 @@
 """Build deterministic, platform-specific Loom runtime archives for marketplace signing."""
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import os
@@ -82,6 +83,15 @@ def _copy_helper_executable(source, destination):
         os.chmod(destination, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
 
+def _link_or_copy(source, destination):
+    """Reuse immutable build inputs when the temporary filesystem supports it."""
+    try:
+        os.link(source, destination)
+    except OSError:
+        shutil.copy2(source, destination)
+    return destination
+
+
 def _archive_name(relative, seen):
     if not relative or relative.startswith("/") or "\\" in relative:
         raise PackageError("archive path is absolute or ambiguous")
@@ -153,7 +163,9 @@ def _verified_artifact(path, label):
     return loom_reliability.file_sha256(value)
 
 
-def _verify_helper_receipt(platform_id, helper, receipt, evidence, source, source_commit):
+def _verify_helper_receipt(
+        platform_id, helper, receipt, evidence, source, source_commit,
+        source_digest):
     required = {"platform", "binary_sha256", "rebuild_sha256", "source_sha256",
                 "cargo_lock_sha256", "sbom_sha256", "provenance_sha256"}
     if not isinstance(receipt, dict) or set(receipt) != required \
@@ -176,7 +188,7 @@ def _verify_helper_receipt(platform_id, helper, receipt, evidence, source, sourc
         raise PackageError(f"{platform_id} helper is not a matching reproducible build")
     if receipt["sbom_sha256"] != sbom or receipt["provenance_sha256"] != provenance \
             or receipt["cargo_lock_sha256"] != lock \
-            or receipt["source_sha256"] != _source_digest(source):
+            or receipt["source_sha256"] != source_digest:
         raise PackageError(f"{platform_id} helper evidence does not match its receipt")
     try:
         loom_sbom.validate(evidence["sbom"], source, helper, platform_id)
@@ -215,25 +227,36 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             or set(helper_evidence) != set(PLATFORMS):
         raise PackageError(
             "output, six platform helpers, receipts, and evidence sets are required")
+    source_digest = _source_digest(source)
+    def verify_platform(platform_id):
+        helper = loom_reliability._absolute(
+            helpers[platform_id], f"{platform_id} crypto helper", must_exist=True)
+        if not helper.is_file() or helper.is_symlink() or helper.stat().st_size <= 0:
+            raise PackageError(f"{platform_id} crypto helper is unsafe")
+        _verify_helper_platform(platform_id, helper)
+        observed = _verify_helper_receipt(
+            platform_id, helper, helper_receipts[platform_id],
+            helper_evidence[platform_id], source, source_commit, source_digest)
+        return platform_id, helper, observed
+
+    with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(PLATFORMS)) as executor:
+        verified_helpers = list(executor.map(verify_platform, PLATFORMS))
+    helper_paths = {
+        platform_id: helper for platform_id, helper, _observed in verified_helpers}
+    verified_opaque = {
+        observed for _platform_id, _helper, observed in verified_helpers}
     with tempfile.TemporaryDirectory(prefix="loom-plugin-build-") as temporary:
         public = Path(temporary) / "public"
         loom_release.build_public(
             source, public, forbidden_tokens=tuple(owner_tokens),
             source_classification="public-release")
         shutil.copytree(public, output)
-        targets = []
-        verified_opaque = set()
-        for platform_id, binary_name in PLATFORMS.items():
-            helper = loom_reliability._absolute(
-                helpers[platform_id], f"{platform_id} crypto helper", must_exist=True)
-            if not helper.is_file() or helper.is_symlink() or helper.stat().st_size <= 0:
-                raise PackageError(f"{platform_id} crypto helper is unsafe")
-            _verify_helper_platform(platform_id, helper)
-            verified_opaque.add(_verify_helper_receipt(
-                platform_id, helper, helper_receipts[platform_id],
-                helper_evidence[platform_id], source, source_commit))
+        def build_runtime(item):
+            platform_id, binary_name = item
+            helper = helper_paths[platform_id]
             runtime = Path(temporary) / platform_id
-            shutil.copytree(public, runtime)
+            shutil.copytree(public, runtime, copy_function=_link_or_copy)
             binary = runtime / "bin" / binary_name
             binary.parent.mkdir(parents=True)
             _copy_helper_executable(helper, binary)
@@ -250,8 +273,22 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             verifier = output / "crypto" / platform_id / binary_name
             verifier.parent.mkdir(parents=True)
             _copy_helper_executable(helper, verifier)
-            targets.append({"platform": platform_id, "path": "loom-runtime.zip",
-                            "sha256": archive_info["sha256"], "bytes": archive_info["bytes"]})
+            return {
+                "target": {
+                    "platform": platform_id, "path": "loom-runtime.zip",
+                    "sha256": archive_info["sha256"], "bytes": archive_info["bytes"],
+                },
+                "archive_sha256": archive_info["sha256"],
+            }
+
+        # Runtime payloads are independent immutable trees. Building them concurrently
+        # preserves deterministic bytes while avoiding six serial copies and ZIP passes.
+        with concurrent.futures.ThreadPoolExecutor(
+                max_workers=len(PLATFORMS)) as executor:
+            runtime_results = list(executor.map(build_runtime, PLATFORMS.items()))
+        targets = [item["target"] for item in runtime_results]
+        verified_opaque.update(
+            item["archive_sha256"] for item in runtime_results)
         manifest = {
             "package": "loom", "release_sequence": release_sequence, "version": version,
             "targets": targets, "schema_range": {"minimum": 1, "maximum": 2},

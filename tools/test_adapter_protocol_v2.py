@@ -93,6 +93,7 @@ class AdapterProtocolV2Tests(unittest.TestCase):
                          contract["request_transport"])
         self.assertIn("requestEnvelope", message["$defs"])
         self.assertIn("resolve", message["$defs"])
+        self.assertIn("author", message["$defs"])
         self.assertFalse(ownership["additionalProperties"])
         for definition in message["$defs"].values():
             if isinstance(definition, dict) and definition.get("type") == "object":
@@ -204,6 +205,55 @@ class AdapterProtocolV2Tests(unittest.TestCase):
             loom_adapter_protocol.request_identity(request),
             envelope["request_identity"])
 
+    def test_result_payload_accepts_finite_confidence_and_rejects_nonfinite_numbers(self):
+        result = {
+            "schema_version": 2,
+            "message_type": "result",
+            "request_id": "req-finite-confidence",
+            "returncode": 0,
+            "payload": {
+                "status": "action-required",
+                "context": {
+                    "memory": [{"id": "memory-1", "confidence": 0.8}],
+                },
+            },
+        }
+        self.assertEqual(result, loom_adapter_protocol.round_trip(result))
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                changed = json.loads(json.dumps(result))
+                changed["payload"]["context"]["memory"][0]["confidence"] = value
+                with self.assertRaisesRegex(
+                        loom_adapter_protocol.ProtocolError, "non-finite"):
+                    loom_adapter_protocol.validate_message(changed)
+
+    def test_bridge_returns_selected_memory_with_fractional_confidence(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {"id": "codex", "version": "2.1.0"},
+            "capabilities": capabilities(), "protocol_version": 2,
+        }
+        message = {
+            "schema_version": 2, "message_type": "invoke",
+            "request_id": "req-memory-confidence",
+            "request": "Plan the exact unknown-domain target.",
+            "cwd": "C:/disposable/project",
+        }
+        payload = {
+            "status": "action-required",
+            "context": {
+                "memory": [{"id": "memory-1", "confidence": 0.8}],
+            },
+        }
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(0, payload)):
+            result = loom_adapter_bridge.dispatch(
+                message, home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+        self.assertEqual(0.8, result["payload"]["context"]["memory"][0]["confidence"])
+
     def test_bridge_resolves_verified_action_through_bounded_stdin(self):
         session = {
             "host": {"id": "codex", "version": "test"},
@@ -228,6 +278,38 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertEqual(0, result["returncode"])
         self.assertEqual(message, run_request.call_args.args[2])
         self.assertEqual("resolve-stdio", run_request.call_args.kwargs["command"])
+
+    def test_bridge_forwards_semantic_plan_only_through_bounded_stdin(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {"id": "codex", "version": "2.1.0"},
+            "capabilities": capabilities(), "protocol_version": 2,
+        }
+        draft = {
+            "schema_version": 1, "title": "Tiny CLI", "summary": "One outcome.",
+            "assumptions": [], "decisions": [], "current_facts": [],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [], "domain_evidence": None,
+        }
+        message = {
+            "schema_version": 2, "message_type": "author",
+            "request_id": "req-author",
+            "action": "C:/disposable/home/.loom/orchestration/action.json",
+            "draft": draft,
+        }
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(0, {"status": "authored"})) as run_request:
+            result = loom_adapter_bridge.dispatch(
+                message, home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+        self.assertEqual(0, result["returncode"])
+        self.assertEqual(message, run_request.call_args.args[2])
+        self.assertEqual("author-stdio", run_request.call_args.kwargs["command"])
 
     def test_adapter_template_is_stateless_and_names_protocol_v2(self):
         import loom_adapters

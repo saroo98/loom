@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/plan-draft.schema.json",
+  "title": "Bounded semantic input for machine-owned Loom plan authoring",
+  "description": "Submit decisions and evidence only. Loom owns files, structure, hashes, lifecycle records, and gate records. The sealed plan_contract may impose narrower tier-specific limits than this transport schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "title",
+    "summary",
+    "assumptions",
+    "decisions",
+    "current_facts",
+    "release_exposure",
+    "work_orders",
+    "domain_evidence"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "title": {
+      "type": "string", "minLength": 1, "maxLength": 100,
+      "description": "One outcome-oriented plan title."
+    },
+    "summary": {
+      "type": "string", "minLength": 1, "maxLength": 1000,
+      "description": "A bounded summary of the requested outcome, not Loom process narration."
+    },
+    "assumptions": {
+      "type": "array", "maxItems": 16,
+      "description": "Only assumptions that affect a decision or verification route.",
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "decisions": {
+      "type": "array", "maxItems": 16,
+      "description": "Only decisions needed to execute or verify the planned outcome.",
+      "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "current_facts": {
+      "type": "array", "maxItems": 48,
+      "description": "Copy every domain and fact string exactly from plan_contract.current_facts. Add only the evidence source. Do not paraphrase, omit, or invent a fact.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["domain", "fact", "source"],
+        "properties": {
+          "domain": {"type": "string", "minLength": 1, "maxLength": 64},
+          "fact": {"type": "string", "minLength": 1, "maxLength": 300},
+          "source": {
+            "type": "string", "minLength": 1, "maxLength": 500,
+            "description": "The concrete source or observation that will verify this exact sealed fact."
+          }
+        }
+      }
+    },
+    "release_exposure": {
+      "type": "object", "additionalProperties": false,
+      "required": ["external_users", "irreversible", "data_migration", "regulated"],
+      "properties": {
+        "external_users": {"type": "integer", "minimum": 0, "maximum": 1000000000},
+        "irreversible": {"type": "boolean"},
+        "data_migration": {"type": "boolean"},
+        "regulated": {"type": "boolean"}
+      }
+    },
+    "work_orders": {
+      "type": "array", "minItems": 1, "maxItems": 64,
+      "description": "Respect plan_contract.semantic_draft_limits and work_order_topology. Tier S always uses exactly one compact work order.",
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": [
+          "title", "outcome", "tasks", "acceptance", "negative_acceptance",
+          "out_of_scope", "escalation", "touches", "depends_on", "routing", "size"
+        ],
+        "properties": {
+          "title": {"type": "string", "minLength": 1, "maxLength": 100},
+          "outcome": {"type": "string", "minLength": 1, "maxLength": 500},
+          "tasks": {
+            "type": "array", "minItems": 1, "maxItems": 16,
+            "description": "Atomic implementation or planning tasks, within the tier-specific item count.",
+            "items": {"type": "string", "minLength": 1, "maxLength": 500}
+          },
+          "acceptance": {
+            "type": "array", "minItems": 1, "maxItems": 16,
+            "description": "Observable positive acceptance evidence in the contract's real medium.",
+            "items": {"type": "string", "minLength": 1, "maxLength": 500}
+          },
+          "negative_acceptance": {
+            "type": "array", "minItems": 1, "maxItems": 8,
+            "description": "At least one observable failure or rejection case.",
+            "items": {"type": "string", "minLength": 1, "maxLength": 500}
+          },
+          "out_of_scope": {
+            "type": "array", "minItems": 1, "maxItems": 16,
+            "items": {"type": "string", "minLength": 1, "maxLength": 500}
+          },
+          "escalation": {
+            "type": "array", "minItems": 1, "maxItems": 16,
+            "items": {"type": "string", "minLength": 1, "maxLength": 500}
+          },
+          "touches": {
+            "type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true,
+            "description": "At least one repository-relative future implementation target or glob is required for every work order, including planning-only turns. Never include plans/.",
+            "items": {"type": "string", "minLength": 1, "maxLength": 300}
+          },
+          "depends_on": {
+            "type": "array", "maxItems": 16, "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^WO-[0-9]{3,}$"}
+          },
+          "routing": {
+            "enum": ["frontier-reasoning", "strong-coding", "fast-cheap", "specialist", "human"]
+          },
+          "size": {"enum": ["S", "M"]}
+        }
+      }
+    },
+    "domain_evidence": {
+      "description": "Null for shipped known-domain routes. For discovery routes, provide bounded semantic evidence only. Loom derives every source ID, applicability receipt, invariant ID, digest, discovery receipt, and sealed bundle.",
+      "oneOf": [
+        {"type": "null"},
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["retrieval_rounds", "answers", "sources", "invariants"],
+          "properties": {
+            "retrieval_rounds": {"type": "integer", "minimum": 0, "maximum": 2},
+            "answers": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "target", "harm", "applicability", "authority",
+                "invariants", "failure", "medium", "escalation"
+              ],
+              "properties": {
+                "target": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "harm": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "applicability": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "authority": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "invariants": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "failure": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "medium": {"type": "string", "minLength": 1, "maxLength": 1024},
+                "escalation": {"type": "string", "minLength": 1, "maxLength": 1024}
+              }
+            },
+            "sources": {
+              "type": "array", "minItems": 1, "maxItems": 20,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": [
+                  "key", "title", "locator", "locator_visibility", "publisher",
+                  "source_class", "content", "retrieval_method", "document_id",
+                  "version", "published_at", "effective_at", "revalidate_by",
+                  "jurisdiction", "product_class", "environment", "currentness",
+                  "ambiguity"
+                ],
+                "properties": {
+                  "key": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"},
+                  "title": {"type": "string", "minLength": 1, "maxLength": 256},
+                  "locator": {"type": "string", "minLength": 1, "maxLength": 512},
+                  "locator_visibility": {"enum": ["public", "encrypted-private"]},
+                  "publisher": {"type": "string", "minLength": 1, "maxLength": 256},
+                  "source_class": {
+                    "enum": [
+                      "repository", "owner-attestation", "secondary-discovery"
+                    ]
+                  },
+                  "content": {
+                    "type": ["string", "null"], "minLength": 1, "maxLength": 8192,
+                    "description": "Use null for repository sources because Loom reads the file itself. Owner attestations must copy exact sealed-request text. Secondary discovery remains inert and cannot mint authority."
+                  },
+                  "retrieval_method": {"type": "string", "minLength": 1, "maxLength": 256},
+                  "document_id": {"type": "string", "minLength": 1, "maxLength": 256},
+                  "version": {"type": ["string", "null"], "maxLength": 256},
+                  "published_at": {"type": ["string", "null"], "format": "date-time"},
+                  "effective_at": {"type": ["string", "null"], "format": "date-time"},
+                  "revalidate_by": {"type": ["string", "null"], "format": "date-time"},
+                  "jurisdiction": {"type": ["string", "null"], "maxLength": 256},
+                  "product_class": {"type": ["string", "null"], "maxLength": 256},
+                  "environment": {"type": ["string", "null"], "maxLength": 256},
+                  "currentness": {"enum": ["current", "stale", "superseded", "unknown"]},
+                  "ambiguity": {"type": ["string", "null"], "maxLength": 256}
+                },
+                "allOf": [
+                  {
+                    "if": {
+                      "properties": {"source_class": {"const": "repository"}},
+                      "required": ["source_class"]
+                    },
+                    "then": {"properties": {"content": {"type": "null"}}},
+                    "else": {"properties": {"content": {"type": "string"}}}
+                  }
+                ]
+              }
+            },
+            "invariants": {
+              "type": "array", "minItems": 1, "maxItems": 32,
+              "items": {
+                "type": "object", "additionalProperties": false,
+                "required": [
+                  "statement", "invariant_type", "domain_ids", "subsystem_ids",
+                  "scope", "consequence_class", "failure",
+                  "authority_requirements", "supporting_source_keys",
+                  "contradicting_source_keys", "applicability_evidence",
+                  "required_real_medium", "acceptance_target",
+                  "as_of", "revalidate_by",
+                  "revision_identity"
+                ],
+                "properties": {
+                  "statement": {"type": "string", "minLength": 1, "maxLength": 512},
+                  "invariant_type": {
+                    "enum": [
+                      "correctness", "safety", "regulatory",
+                      "interface", "release", "verification"
+                    ]
+                  },
+                  "domain_ids": {
+                    "type": "array", "minItems": 1, "maxItems": 16,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "string",
+                      "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"
+                    }
+                  },
+                  "subsystem_ids": {
+                    "type": "array", "maxItems": 32, "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 64}
+                  },
+                  "scope": {
+                    "type": "object", "additionalProperties": false,
+                    "required": [
+                      "component", "jurisdiction", "product_class",
+                      "environment", "version_range", "effective_period"
+                    ],
+                    "properties": {
+                      "component": {"type": ["string", "null"], "maxLength": 128},
+                      "jurisdiction": {"type": ["string", "null"], "maxLength": 128},
+                      "product_class": {"type": ["string", "null"], "maxLength": 128},
+                      "environment": {"type": ["string", "null"], "maxLength": 128},
+                      "version_range": {"type": ["string", "null"], "maxLength": 128},
+                      "effective_period": {"type": ["string", "null"], "maxLength": 128}
+                    }
+                  },
+                  "consequence_class": {
+                    "enum": ["ordinary", "material", "high", "critical"]
+                  },
+                  "failure": {"type": "string", "minLength": 1, "maxLength": 512},
+                  "authority_requirements": {
+                    "type": "array", "minItems": 1, "maxItems": 8,
+                    "uniqueItems": true,
+                    "items": {
+                      "enum": [
+                        "repository-evidence", "executed-evidence",
+                        "official-law", "regulator", "official-vendor",
+                        "governing-standard", "primary-research",
+                        "qualified-reviewer", "owner-authority",
+                        "real-medium-evidence"
+                      ]
+                    }
+                  },
+                  "supporting_source_keys": {
+                    "type": "array", "minItems": 1, "maxItems": 20,
+                    "uniqueItems": true,
+                    "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}
+                  },
+                  "contradicting_source_keys": {
+                    "type": "array", "maxItems": 20, "uniqueItems": true,
+                    "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,31}$"}
+                  },
+                  "applicability_evidence": {
+                    "type": "array", "minItems": 1, "maxItems": 16,
+                    "uniqueItems": true,
+                    "items": {"type": "string", "minLength": 1, "maxLength": 256}
+                  },
+                  "required_real_medium": {
+                    "type": "string", "minLength": 1, "maxLength": 256
+                  },
+                  "acceptance_target": {
+                    "type": "string", "minLength": 1, "maxLength": 256
+                  },
+                  "as_of": {"type": ["string", "null"], "format": "date-time"},
+                  "revalidate_by": {"type": ["string", "null"], "format": "date-time"},
+                  "revision_identity": {"type": ["string", "null"], "maxLength": 128}
+                }
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

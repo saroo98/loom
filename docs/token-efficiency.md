@@ -17,6 +17,11 @@ five declared touches, one atomic outcome, 3,000 characters, 40 lines, 900 lexic
 consequential changes, new boundaries, irreversible work, multiple outcomes, or insufficient
 verification promote the task before authorization.
 
+On Codex, the skill contains the complete bounded invocation contract and does not reread
+`START-HERE.md` during a normal turn. Ordinary planning combines machine authoring and completion
+behind one `loom.author` host call. This removes a repeated model/tool round trip without combining
+the underlying validation boundaries: completion still runs only after authoring succeeds.
+
 Local spans use monotonic durations and bounded numeric counters. They never contain prompts,
 repository bodies, memory statements, secrets, or telemetry. Provider prompt caching is optional
 host behavior, never a correctness dependency or freshness authority.

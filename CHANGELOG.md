@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+## 1.8.10
+
+- Refuse to invent a project type for an underspecified small planning request.
+  Loom now returns one bounded scope question without creating a plan pack or escalating a
+  placeholder request into unknown-domain planning.
+- Add a closed plan-draft schema and machine-owned `loom.author` operation that renders, validates,
+  lints, and atomically activates a complete planning pack. Invalid candidates never replace a
+  previously valid pack, including across interrupted activation and recovery.
+- Accept Codex's valid MCP metadata and omitted zero-argument payloads while preserving closed
+  per-tool argument validation, eliminating false `-32602` failures for compatible clients.
+- Convert bootstrap failures into bounded MCP errors instead of closing the transport, and preserve
+  skill-link plus `/loom` invocation wrappers only in the sealed request while excluding them from
+  intent, domain, and placeholder classification.
+- Make the enabled plugin the one canonical Codex skill and MCP route. Approved migration retires
+  only exact receipt-owned legacy routes, is resumable after interruption, and blocks changed,
+  unowned, incomplete, or ambiguous duplicates.
+- Consolidate repeated lint and gate diagnostics so a failed pack reports each actionable defect
+  once, while retaining the original fail-closed enforcement.
+- Make the canonical Codex skill a bounded, self-contained dispatcher that does not reread the
+  non-Codex kernel during each invocation. Ordinary planning now uses one invoke call and one
+  combined author-and-finalize call while preserving the backward-compatible separate completion
+  path.
+- Publish explicit invariant-type guidance for unknown-domain authoring. Repository-defined
+  side-effect constraints remain correctness rules; safety and regulatory classifications still
+  require their pre-existing governing authority and fail with field-specific diagnostics.
+
 ## 1.8.9
 
 - Make Codex MCP startup robust when its bundled Python runtime omits platform probe values, while

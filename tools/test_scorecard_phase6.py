@@ -252,6 +252,8 @@ class ScorecardPhase6Tests(unittest.TestCase):
                 result = loom_scorecard.collect_release(root)
             self.assertEqual({"schema_version": 1}, result)
             self.assertEqual("full", captured["suite_report"]["mode"])
+            self.assertIsNone(captured["suite_report"]["max_seconds"])
+            self.assertTrue(captured["suite_report"]["within_budget"])
             self.assertFalse(captured["suite_report"]["successful"])
             self.assertTrue(captured["publication_report"]["exact_cut_suite_passed"])
 

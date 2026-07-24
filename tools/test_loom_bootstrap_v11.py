@@ -1,8 +1,10 @@
 """Exact signed-package to stable-launcher bootstrap integration test."""
 
 import datetime as dt
+import contextlib
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import shutil
@@ -85,6 +87,78 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertNotEqual(baseline, home_changed)
         self.assertNotEqual(baseline, profile_changed)
 
+    def test_plugin_session_start_canonicalizes_without_prompt_transport(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            user = Path(temporary) / "owner"
+            user.mkdir()
+            launcher = user / ".loom" / "bin" / "loom.py"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("# launcher\n", encoding="utf-8")
+            event = io.TextIOWrapper(
+                io.BytesIO(json.dumps({
+                    "hook_event_name": "SessionStart"}).encode("utf-8")))
+            completed = subprocess.CompletedProcess(
+                args=[], returncode=0,
+                stdout=json.dumps({"status": "installed"}), stderr="")
+            output = io.StringIO()
+            with mock.patch.object(loom_bootstrap.sys, "stdin", event), \
+                    mock.patch.dict(os.environ, {
+                        "PLUGIN_ROOT": str(ROOT),
+                        "USERPROFILE": str(user),
+                    }, clear=False), \
+                    mock.patch.object(
+                        loom_bootstrap, "reconcile",
+                        return_value={
+                            "status": "current",
+                            "launcher": {"python_launcher": str(launcher)}}), \
+                    mock.patch.object(
+                        loom_bootstrap.subprocess, "run",
+                        return_value=completed) as run, \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(0, loom_bootstrap._hook_event())
+            command = run.call_args.args[0]
+            self.assertIn("codex-plugin-canonicalize", command)
+            self.assertIn("--approved", command)
+            self.assertNotIn("UserPromptSubmit", " ".join(command))
+            result = json.loads(output.getvalue())
+            self.assertTrue(result["continue"])
+            self.assertIn("canonical Loom route", result["systemMessage"])
+
+    def test_plugin_session_start_reports_safe_canonicalization_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            user = Path(temporary) / "owner"
+            user.mkdir()
+            launcher = user / ".loom" / "bin" / "loom.py"
+            launcher.parent.mkdir(parents=True)
+            launcher.write_text("# launcher\n", encoding="utf-8")
+            event = io.TextIOWrapper(
+                io.BytesIO(json.dumps({
+                    "hook_event_name": "SessionStart"}).encode("utf-8")))
+            completed = subprocess.CompletedProcess(
+                args=[], returncode=2, stdout=json.dumps({
+                    "status": "blocked",
+                    "error": "unowned Loom route"}), stderr="")
+            output = io.StringIO()
+            with mock.patch.object(loom_bootstrap.sys, "stdin", event), \
+                    mock.patch.dict(os.environ, {
+                        "PLUGIN_ROOT": str(ROOT),
+                        "USERPROFILE": str(user),
+                    }, clear=False), \
+                    mock.patch.object(
+                        loom_bootstrap, "reconcile",
+                        return_value={
+                            "status": "current",
+                            "launcher": {"python_launcher": str(launcher)}}), \
+                    mock.patch.object(
+                        loom_bootstrap.subprocess, "run",
+                        return_value=completed), \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(0, loom_bootstrap._hook_event())
+            result = json.loads(output.getvalue())
+            self.assertTrue(result["continue"])
+            self.assertIn("blocked safely", result["systemMessage"])
+            self.assertIn("No unowned route was changed", result["systemMessage"])
+
     def test_rustc_identity_probe_is_bounded_and_cached_per_process(self):
         _rustc_identity.cache_clear()
         try:
@@ -127,16 +201,18 @@ class BootstrapIntegrationTests(unittest.TestCase):
                             ".loom-direct-source-receipt.json").read_text(
                                 encoding="utf-8"))["delivery_authority"])
 
-    def test_clean_host_plugin_mcp_bootstraps_and_lists_standard_tools(self):
+    def test_clean_host_plugin_mcp_bootstraps_lists_and_calls_status(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             direct = self._install_direct_fixture(root)
-            user_home = root / "clean-user"
+            user_home = root / "clean user with spaces"
             user_home.mkdir()
             frames = "".join(json.dumps(item) + "\n" for item in (
                 {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
                 {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
                 {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
+                {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                    "name": "status", "_meta": {"progressToken": "codex-status"}}},
             ))
             environment = {
                 **os.environ,
@@ -151,11 +227,20 @@ class BootstrapIntegrationTests(unittest.TestCase):
 
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             responses = [json.loads(line) for line in result.stdout.splitlines()]
-            self.assertEqual(2, len(responses))
+            self.assertEqual(3, len(responses))
             self.assertEqual("2025-06-18", responses[0]["result"]["protocolVersion"])
             self.assertEqual(
-                ["invoke", "resolve", "status", "complete", "cancel"],
+                json.loads((direct / ".codex-plugin" / "plugin.json").read_text(
+                    encoding="utf-8"))["version"],
+                responses[0]["result"]["serverInfo"]["version"])
+            self.assertEqual(
+                ["invoke", "resolve", "status", "complete", "author", "cancel"],
                 [item["name"] for item in responses[1]["result"]["tools"]])
+            self.assertNotIn("error", responses[2])
+            self.assertFalse(responses[2]["result"]["isError"])
+            self.assertNotIn("structuredContent", responses[2]["result"])
+            status = json.loads(responses[2]["result"]["content"][0]["text"])
+            self.assertIsInstance(status.get("status"), str)
             self.assertTrue((user_home / ".loom" / "runtime" / "current.json").is_file())
             self.assertFalse((user_home / ".codex" / "hooks.json").exists())
 
@@ -361,7 +446,8 @@ class BootstrapIntegrationTests(unittest.TestCase):
             receipt = json.loads(
                 (home / "bin" / ".loom-launcher-receipt.json").read_text(encoding="utf-8"))
             for dependency in (
-                    "loom_mcp_server.py", "loom_codex_integration.py", "loom_adapters.py"):
+                    "loom_mcp_server.py", "loom_codex_integration.py",
+                    "loom_adapters.py", "loom_install.py"):
                 self.assertTrue((home / "bin" / dependency).is_file())
                 self.assertIn(dependency, receipt["files"])
             probe = subprocess.run([

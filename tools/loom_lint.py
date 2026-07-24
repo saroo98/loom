@@ -56,6 +56,7 @@ import datetime as dt
 import hashlib
 import json
 import re
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -108,8 +109,11 @@ A_REF_RE = re.compile(r"\bA-\d{3,}\b")
 D_REF_RE = re.compile(r"\bD-\d{3,}\b")
 WO_ID_RE = re.compile(r"^WO-\d{3,}$")
 LABEL_RE = re.compile(r"\[(FACT|ASSUMPTION|SPECULATION|UNKNOWN|HUMAN-DECISION)\b")
-CRITERION_OK_RE = re.compile(r"`|→|->|\d|(?i:\b(exit|green|pass|passes|output|diff|curl|http"
-                             r"|screenshot|transcript|observ|returns|renders|matches)\b)")
+CRITERION_OK_RE = re.compile(
+    r"`|→|->|\d|(?i:\b(exits?|green|pass|passes|output|diff|curl|http|screenshot|transcript"
+    r"|observ\w*|returns?|renders?|match(?:es)?|records?|identif(?:y|ies)|names?|specif(?:y|ies)"
+    r"|rejects?|finds?|blocks?|blocked|accepts?|fails?|sort(?:s|ed)?|contains?|occurs?"
+    r"|detect(?:s|ed)?)\b)")
 FALLBACK_VERSION = "0.4.0"
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
 
@@ -442,9 +446,12 @@ def parse_markdown_table(text, heading):
 
 
 def check_required(rep, path, fm, kind):
+    missing = []
     for key in REQUIRED_KEYS[kind]:
         if key not in fm or fm[key] in ("", None):
+            missing.append(key)
             rep.add("ERROR", "E03", path, 1, f"missing required frontmatter key '{key}'")
+    return missing
 
 
 def check_enum(rep, path, fm, key, enum_name):
@@ -594,17 +601,50 @@ MULTI_PROFILE_KEYS = {"hard_stop"}
 
 def lint_home(home_path):
     """User-home checks (loom/core/user-memory.md): shape, provenance, secrets,
-    outbox anonymization sniff. Warnings guide; only secrets are errors."""
+    outbox anonymization sniff, and transactional owner-vault integrity."""
     rep = Report()
     home = Path(home_path)
     if not home.is_dir():
         rep.add("WARN", "W20", home, 1,
                 "user home does not exist yet — created on first retro or /loom profile set")
         return rep
+    vault_database = home / "vault" / "owner.sqlite3"
+    vault_present = vault_database.exists()
+    if vault_present:
+        if not vault_database.is_file() or vault_database.is_symlink():
+            rep.add("ERROR", "E21", vault_database, 1,
+                    "owner vault is redirected or not a regular file")
+        else:
+            try:
+                connection = sqlite3.connect(
+                    vault_database.as_uri() + "?mode=ro", uri=True, timeout=2)
+                try:
+                    integrity = connection.execute("PRAGMA quick_check").fetchone()
+                    metadata = dict(connection.execute(
+                        "SELECT key,value FROM metadata "
+                        "WHERE key IN ('schema_version','generation')"))
+                    connection.execute("SELECT COUNT(*) FROM events").fetchone()
+                    connection.execute("SELECT COUNT(*) FROM quarantine").fetchone()
+                finally:
+                    connection.close()
+                if integrity != ("ok",) \
+                        or not str(metadata.get("schema_version", "")).isdigit() \
+                        or not str(metadata.get("generation", "")).isdigit():
+                    rep.add("ERROR", "E21", vault_database, 1,
+                            "owner vault integrity or generation metadata is invalid")
+            except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+                rep.add("ERROR", "E21", vault_database, 1,
+                        f"owner vault cannot be verified: {exc}")
     instances = home / "instances"
     quarantine_digests = {}
     if instances.is_dir():
         for directory in sorted(path for path in instances.iterdir() if path.is_dir()):
+            if vault_present and not (directory / "instance.json").exists():
+                runtime = directory / "runtime"
+                if not runtime.is_dir() or runtime.is_symlink():
+                    rep.add("ERROR", "E21", directory, 1,
+                            "owner-vault instance partition is not a regular runtime directory")
+                continue
             try:
                 findings = loom_memory.validate_instance(home, directory.name)
             except loom_memory.MemoryError as exc:
@@ -612,10 +652,11 @@ def lint_home(home_path):
                 continue
             for message in findings:
                 rep.add("ERROR", "E21", directory, 1, message)
-        try:
-            quarantine_digests = loom_memory.legacy_quarantine_digests(home)
-        except loom_memory.MemoryError as exc:
-            rep.add("ERROR", "E21", instances, 1, str(exc))
+        if not vault_present:
+            try:
+                quarantine_digests = loom_memory.legacy_quarantine_digests(home)
+            except loom_memory.MemoryError as exc:
+                rep.add("ERROR", "E21", instances, 1, str(exc))
     for name in HOME_FILES:
         f = home / name
         if not f.is_file():
@@ -684,6 +725,86 @@ def lint_home(home_path):
     return rep
 
 
+def _lint_small_pack(pack, repo_path=None, strict_staleness=False,
+                     check_repo_state=True):
+    """Validate the complete compact Tier-S representation."""
+    rep = Report()
+    record = pack / ".loom-small-lifecycle.json"
+    try:
+        data = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        rep.add("ERROR", "E19", record, 1,
+                f"compact lifecycle is unreadable: {exc}")
+        return rep
+    for finding in loom_gate.verify_small(record):
+        rep.add("ERROR", "E19", record, 1, finding)
+    events = data.get("events") if isinstance(data, dict) else None
+    names = [
+        event.get("event") if isinstance(event, dict) else None
+        for event in (events if isinstance(events, list) else [])]
+    required_status = (
+        "done" if names == [
+            "small-planning-started", "small-authorized", "small-completed"]
+        else "ready")
+    wo = pack / "WO-001.md"
+    try:
+        _fm, text, findings = loom_gate._standalone_wo_contract(
+            wo, required_status)
+    except (OSError, UnicodeError, ValueError) as exc:
+        text, findings = "", [f"compact work order is unreadable: {exc}"]
+    for finding in findings:
+        rep.add("ERROR", "E19", wo, 1, finding)
+    if text:
+        scan_text(rep, wo, text)
+    allowed_roots = {
+        ".loom-small-lifecycle.json", "WO-001.md",
+        ".loom-small-history", "evidence",
+    }
+    try:
+        for path in pack.iterdir():
+            if path.name not in allowed_roots:
+                rep.add(
+                    "ERROR", "E19", path, 1,
+                    "unexpected file in compact Tier-S pack")
+            elif path.name in {".loom-small-history", "evidence"} \
+                    and (path.is_symlink() or not path.is_dir()):
+                rep.add(
+                    "ERROR", "E19", path, 1,
+                    "compact evidence/history root is redirected or irregular")
+    except OSError as exc:
+        rep.add("ERROR", "E19", pack, 1,
+                f"compact pack cannot be enumerated: {exc}")
+    route = data.get("route_contract", {}) if isinstance(data, dict) else {}
+    try:
+        verified = dt.date.fromisoformat(str(route.get("last_verified", "")))
+    except ValueError:
+        verified = None
+    window = route.get("freshness_window_days")
+    if verified is not None and type(window) is int \
+            and (dt.date.today() - verified).days > window:
+        severity = "ERROR" if strict_staleness else "WARN"
+        code = "E16" if strict_staleness else "W03"
+        rep.add(
+            severity, code, record, 1,
+            f"compact plan last_verified {verified} exceeds freshness window "
+            f"({window}d)")
+    if repo_path is not None and check_repo_state and names:
+        try:
+            state = loom_gate._stable_state(Path(repo_path), pack)
+        except (OSError, ValueError, loom_survey.SurveyError) as exc:
+            rep.add("ERROR", "E16", record, 1,
+                    f"compact repository state is indeterminate: {exc}")
+        else:
+            expected = events[-1].get("repo_state_hash")
+            if state.state_hash != expected:
+                severity = "ERROR" if strict_staleness else "WARN"
+                code = "E16" if strict_staleness else "W04"
+                rep.add(
+                    severity, code, record, 1,
+                    "compact repository state differs from the last sealed event")
+    return rep
+
+
 def lint(pack_path, repo_path=None, strict_staleness=False,
          enforce_lifecycle=True, check_repo_state=True,
          check_gate_requirements=True):
@@ -692,6 +813,11 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
     if not pack.is_dir():
         print(f"loom_lint: pack path not found: {pack}", file=sys.stderr)
         sys.exit(2)
+    if (pack / ".loom-small-lifecycle.json").is_file() \
+            and not (pack / "MANIFEST.md").exists():
+        return _lint_small_pack(
+            pack, repo_path=repo_path, strict_staleness=strict_staleness,
+            check_repo_state=check_repo_state)
 
     manifest = pack / "MANIFEST.md"
     window = 14
@@ -791,7 +917,9 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
     if mfm and execution_mode == "planned" and enforce_lifecycle:
         lifecycle_findings = loom_gate.verify(
             pack, repo_path,
-            require_authorized=mfm.get("status") in {"active", "maintenance"})
+            require_authorized=mfm.get("status") in {"active", "maintenance"},
+            include_pack_contracts=False,
+            include_pack_lint=False)
         for finding in lifecycle_findings:
             rep.add("ERROR", "E17", pack / loom_gate.LIFECYCLE_FILE, 1, finding)
         lifecycle_path = pack / loom_gate.LIFECYCLE_FILE
@@ -1139,8 +1267,9 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
             if fm is None:
                 rep.add("ERROR", "E02", f, 1, "frontmatter missing or unterminated")
                 continue
-            check_required(rep, f, fm, "wo")
-            validate_schema(rep, f, fm, "work-order.schema.json")
+            missing_frontmatter = check_required(rep, f, fm, "wo")
+            if not missing_frontmatter:
+                validate_schema(rep, f, fm, "work-order.schema.json")
             check_enum(rep, f, fm, "status", "wo.status")
             check_enum(rep, f, fm, "routing", "wo.routing")
             check_enum(rep, f, fm, "size", "wo.size")
@@ -1231,9 +1360,6 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                 body_lines = len(text.splitlines())
                 if body_lines > HEFT_MAX_BODY_LINES:
                     heft.append(f"{body_lines} body lines (>{HEFT_MAX_BODY_LINES})")
-                if re.search(r"\s+and\s+", str(fm.get("title", "")), re.I):
-                    heft.append("title joins outcomes with 'and'? (atomicity rule 4 — "
-                                "lexical check, ignore if the 'and' is inside one outcome)")
                 if heft:
                     rep.add("WARN", "W13", f, 1,
                             f"{wid} heft vs declared size '{fm.get('size', '?')}': "
@@ -1505,9 +1631,16 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                 if key not in rfm or rfm[key] in ("", None):
                     rep.add("ERROR", "E15", review, 1,
                             f"G1 review missing required frontmatter key '{key}'")
-            if rfm.get("reviewer_independence") != "independent":
+            independence = rfm.get("reviewer_independence")
+            mechanical = (
+                independence == "mechanical-independent"
+                and mfm.get("tier") == "M"
+                and rfm.get("reviewer") == "loom-deterministic-plan-validator-v1"
+            )
+            if independence != "independent" and not mechanical:
                 rep.add("ERROR", "E15", review, 1,
-                        "passing G1 reviewer_independence must be independent")
+                        "passing G1 review must be independently reviewed, or use the "
+                        "bounded Tier-M deterministic validator")
             if str(rfm.get("open_high_findings", "")) != "0":
                 rep.add("ERROR", "E15", review, 1,
                         "passing G1 review must declare open_high_findings: 0")

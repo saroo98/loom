@@ -11,6 +11,16 @@ class TierSFastPathTests(unittest.TestCase):
                         "Change one UI label", "Rename one configuration key"):
             self.assertEqual("S", loom_tier.classify(request)["tier"], request)
 
+    def test_tiny_planning_only_cli_is_not_promoted_by_negated_implementation(self):
+        request = (
+            "Plan a tiny Python CLI greeter that accepts a name and prints "
+            "Hello, <name>!, with one standard-library unittest. Planning only; "
+            "excluded."
+        )
+        result = loom_tier.classify(request, domains=["cli"])
+        self.assertEqual("S", result["tier"])
+        self.assertFalse(result["plan_and_implement"])
+
     def test_deceptive_small_consequences_promote(self):
         fixtures = (
             "Make a one-line authentication bypass change",

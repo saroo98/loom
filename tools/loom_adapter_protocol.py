@@ -4,6 +4,7 @@
 import hashlib
 import io
 import json
+import math
 import re
 
 
@@ -51,14 +52,25 @@ def _depth(value, level=0):
     elif isinstance(value, list):
         for item in value:
             _depth(item, level + 1)
+    elif isinstance(value, float):
+        if not math.isfinite(value):
+            raise ProtocolError(
+                "MESSAGE_INVALID",
+                "adapter message contains a non-finite number",
+            )
     elif value is not None and not isinstance(value, (str, int, bool)):
         raise ProtocolError("MESSAGE_INVALID", "adapter message contains an unsupported value")
 
 
 def canonical_bytes(value):
     validate_message(value)
-    return json.dumps(value, sort_keys=True, separators=(",", ":"),
-                      ensure_ascii=False).encode("utf-8")
+    return json.dumps(
+        value,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
 
 
 def digest(value):
@@ -251,6 +263,11 @@ def validate_message(value):
         for field in ("usage", "result"):
             if value[field] is not None:
                 _text(value[field], f"{field} path", 1, 4096)
+    elif message_type == "author":
+        _exact(value, common | {"action", "draft"}, "author")
+        _text(value["action"], "action path", 1, 4096)
+        if not isinstance(value["draft"], dict):
+            raise ProtocolError("MESSAGE_INVALID", "semantic plan draft is not an object")
     elif message_type == "cancel":
         _exact(value, common | {"action"}, "cancel")
         _text(value["action"], "action path", 1, 4096)
@@ -269,8 +286,13 @@ def validate_message(value):
     else:
         raise ProtocolError("MESSAGE_INVALID", "adapter message type is unsupported")
     try:
-        raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
-                         ensure_ascii=False).encode("utf-8")
+        raw = json.dumps(
+            value,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
     except UnicodeEncodeError as exc:
         raise ProtocolError(
             "MESSAGE_INVALID", "adapter message is not valid Unicode scalar text") from exc

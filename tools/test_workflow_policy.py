@@ -72,6 +72,7 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn(
             "LOOM_RELEASE_SIGNING_PUBLIC_KEY: "
             "${{ vars.LOOM_RELEASE_SIGNING_PUBLIC_KEY }}", release)
+        self.assertIn("loom-release@users.noreply.github.com", release)
         self.assertIn("git config gpg.format ssh", release)
         self.assertIn("git config gpg.ssh.allowedSignersFile", release)
         self.assertIn("git verify-tag", release)

@@ -37,8 +37,31 @@ class OwnerMessageTests(unittest.TestCase):
             status="completed", code="plan-complete", intent="plan", tier="L",
             owner_input_required=False, reversible_action_ids=[],
             detail="internal detail", receipt_id="session-123")
+        self.assertEqual(4, value["schema_version"])
         self.assertEqual("high", value["consequence"])
         self.assertIsNone(re.search(r"\b(?:tier|gate|schema)\b", value["human"], re.I))
+
+    def test_current_completed_message_explains_the_actual_operation(self):
+        value = loom_message.from_session(
+            status="completed", code="undo-complete", intent="undo", tier="S",
+            owner_input_required=False, reversible_action_ids=[],
+            detail="The unchanged Loom plan was archived and removed from the active project.",
+            receipt_id="session-undo")
+        self.assertEqual(
+            "The unchanged Loom plan was archived and removed from the active project.",
+            value["summary"])
+        self.assertIn("new request", value["next_action"])
+        self.assertNotIn("safe verified frontier", value["human"])
+
+    def test_v3_completed_message_remains_exactly_reconstructable(self):
+        value = loom_message.v3_from_session(
+            status="completed", code="undo-complete", intent="undo", tier="S",
+            owner_input_required=False, reversible_action_ids=[],
+            detail="The unchanged Loom plan was archived.",
+            receipt_id="session-v3")
+        self.assertEqual(3, value["schema_version"])
+        self.assertEqual("Loom completed the safe verified frontier.", value["summary"])
+        loom_message.validate(value)
 
     def test_relevant_preference_conflict_asks_one_choice_without_guessing(self):
         value = loom_message.from_session(

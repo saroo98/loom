@@ -51,6 +51,16 @@ class DomainUniversalityTests(unittest.TestCase):
         self.assertNotIn("website", result["memory_domains"])
         self.assertNotIn("web-app", result["memory_domains"])
 
+    def test_standard_library_test_does_not_activate_public_library_domain(self):
+        for request in (
+                "Plan a tiny Python CLI with one standard-library unittest.",
+                "/loom Plan a tiny Python CLI with one standard-library unittest."):
+            with self.subTest(request=request):
+                result = loom_domain.select_domains(request)
+                self.assertEqual(["cli"], result["memory_domains"])
+                self.assertNotIn("library-sdk", result["memory_domains"])
+                self.assertNotIn("llm-agent", result["memory_domains"])
+
     def test_evidence_path_and_nested_docs_site_do_not_override_agent_runtime_domain(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

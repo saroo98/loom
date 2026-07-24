@@ -83,6 +83,99 @@ class StableSurveyCountTests(RuntimeFixture):
         self.assertEqual(2, len(calls))
 
 
+class PlanScopeDecisionTests(RuntimeFixture):
+    def test_placeholder_plan_requires_one_bounded_scope_decision(self):
+        prefixes = (
+            "",
+            "/loom ",
+            "[$loom:loom](C:\\Users\\owner\\.codex\\skills\\loom\\SKILL.md) ",
+            "[@loom](plugin://loom@personal) ",
+        )
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix):
+                prepared = self.prepare(
+                    prefix + "Plan a very simple test project.",
+                    invocation_id=str(uuid.uuid4()))
+
+                route = prepared.route_contract
+                self.assertTrue(route["blocked"])
+                self.assertTrue(route["needs_owner"])
+                self.assertEqual("PLAN_SCOPE_DECISION_REQUIRED", route["code"])
+                self.assertEqual("S", route["tier"])
+                self.assertFalse(route["requires_domain_discovery"])
+                self.assertIn("kind of project", route["recommendation"])
+
+    def test_specific_known_domain_does_not_trigger_placeholder_guard(self):
+        prepared = self.prepare("Plan a tiny Python command-line greeting tool.")
+
+        self.assertFalse(prepared.route_contract["blocked"])
+        self.assertEqual(["cli"], list(prepared.domains))
+
+    def test_planning_only_tiny_cli_stays_tier_s_and_single_domain(self):
+        for prefix in ("", "/loom "):
+            with self.subTest(prefix=prefix):
+                prepared = self.prepare(
+                    prefix +
+                    "Plan a tiny Python CLI greeter that accepts a name and prints "
+                    "Hello, <name>!, with one standard-library unittest. "
+                    "Planning only; do not implement.",
+                    invocation_id=str(uuid.uuid4()))
+                self.assertFalse(prepared.route_contract["blocked"])
+                self.assertEqual("S", prepared.route_contract["tier"])
+                self.assertEqual(["cli"], list(prepared.domains))
+
+    def test_specific_unknown_domain_still_uses_domain_discovery(self):
+        prepared = self.prepare(
+            "Plan a quantum optics calibration controller for a laboratory rig.")
+
+        self.assertFalse(prepared.route_contract["blocked"])
+        self.assertTrue(prepared.route_contract["requires_domain_discovery"])
+        self.assertIn("quantum-optics", prepared.domains)
+
+    def test_known_implementation_shape_cannot_erase_named_opaque_domain(self):
+        requests = (
+            "Plan a release-ready Python CLI for the fictional QuantaLex calibration "
+            "engine. Planning only; do not implement.",
+            "Plan a release-ready Python CLI for QuantaLex. Follow the committed "
+            "AUTHORITY.md exactly. Planning only; do not implement.",
+        )
+        for request in requests:
+            with self.subTest(request=request):
+                prepared = self.prepare(
+                    request, invocation_id=str(uuid.uuid4()))
+
+                self.assertFalse(prepared.route_contract["blocked"])
+                self.assertEqual("M", prepared.route_contract["tier"])
+                self.assertEqual(["cli", "unclassified"], list(prepared.domains))
+                self.assertTrue(prepared.route_contract["requires_domain_discovery"])
+
+    def test_unknown_domain_with_explicitly_unavailable_authority_blocks_early(self):
+        requests = (
+            "Plan a release-ready calibration procedure for an Arcturus-Z9 "
+            "cryogenic flux sensor. The sensor is fictional and no manufacturer "
+            "specifications are available.",
+            "Plan a high-pressure actuator controller without vendor safety limits.",
+            "Plan the device release; governing standards do not exist.",
+        )
+        for request in requests:
+            with self.subTest(request=request):
+                prepared = self.prepare(
+                    request, invocation_id=str(uuid.uuid4()))
+                route = prepared.route_contract
+                self.assertTrue(route["blocked"])
+                self.assertTrue(route["needs_owner"])
+                self.assertEqual("DOMAIN_AUTHORITY_REQUIRED", route["code"])
+                self.assertTrue(route["requires_domain_discovery"])
+                self.assertIn("governing specification", route["recommendation"])
+
+    def test_unknown_domain_with_named_authority_can_enter_discovery(self):
+        prepared = self.prepare(
+            "Plan a quantum optics calibration procedure governed by QO-17 "
+            "revision 4, with a real interferometer acceptance run.")
+        self.assertFalse(prepared.route_contract["blocked"])
+        self.assertTrue(prepared.route_contract["requires_domain_discovery"])
+
+
 class ProjectResolutionTests(RuntimeFixture):
     def test_explicit_target_wins_without_scanning_siblings(self):
         other = self.root / "other"
@@ -794,6 +887,22 @@ class InvalidWorldStateTests(RuntimeFixture):
         rejected = self.prepare("Continue")
         self.assertEqual(rejected.intent, "repair")
         self.assertEqual(rejected.route_contract["code"], "AUTO_REGATE_REQUIRED")
+
+    def test_explicit_owner_control_intents_survive_stale_lifecycle(self):
+        self.authorize_fixture_pack()
+        (self.repo / "owner-change.txt").write_text("changed\n", encoding="utf-8")
+
+        for request, expected in (
+                ("Undo the last Loom plan", "undo"),
+                ("Show me the status", "status"),
+                ("Why did Loom choose this?", "why"),
+                ("Forget this preference", "forget"),
+                ("Remember that I prefer careful review", "remember")):
+            with self.subTest(request=request):
+                prepared = self.prepare(request)
+                self.assertEqual(expected, prepared.intent)
+                self.assertNotEqual(
+                    "AUTO_REGATE_REQUIRED", prepared.route_contract["code"])
 
     def test_missing_lifecycle_and_ceremonial_status_text_cannot_close(self):
         for name, content in (

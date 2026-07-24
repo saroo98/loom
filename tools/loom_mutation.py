@@ -2,6 +2,7 @@
 """Run bounded, deterministic trust-critical mutation tests in disposable copies."""
 
 import argparse
+import concurrent.futures
 import json
 import os
 import shutil
@@ -143,34 +144,42 @@ def _ignore(_directory, names):
     return [name for name in names if name in blocked or name.endswith((".pyc", ".pyo"))]
 
 
+def _run_mutation(root, mutation, timeout):
+    mutation_id, relative, original, replacement, test_name = mutation
+    with tempfile.TemporaryDirectory(prefix="loom-mutation-") as temporary:
+        sandbox = Path(temporary) / "loom"
+        shutil.copytree(root, sandbox, ignore=_ignore)
+        target = sandbox / relative
+        text = target.read_text(encoding="utf-8")
+        if text.count(original) != 1:
+            raise MutationError(f"{mutation_id} source anchor is not unique")
+        target.write_text(text.replace(original, replacement), encoding="utf-8")
+        environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
+                           HOME=str(sandbox / ".test-home"),
+                           USERPROFILE=str(sandbox / ".test-home"),
+                           PYTHONPATH=str(sandbox / "tools"))
+        try:
+            result = subprocess.run(
+                [sys.executable, "-B", "-m", "unittest", test_name],
+                cwd=sandbox / "tools", env=environment,
+                capture_output=True, text=True, timeout=timeout, check=False)
+        except subprocess.TimeoutExpired as exc:
+            raise MutationError(f"{mutation_id} exceeded its timeout") from exc
+        return {"id": mutation_id, "test": test_name,
+                "killed": result.returncode != 0,
+                "returncode": result.returncode}
+
+
 def run(root, *, minimum_score=100, timeout=120):
     root = Path(root).resolve()
     if not (root / "tools").is_dir() or not 1 <= minimum_score <= 100:
         raise MutationError("mutation root or score is invalid")
-    receipts = []
-    for mutation_id, relative, original, replacement, test_name in MUTATIONS:
-        with tempfile.TemporaryDirectory(prefix="loom-mutation-") as temporary:
-            sandbox = Path(temporary) / "loom"
-            shutil.copytree(root, sandbox, ignore=_ignore)
-            target = sandbox / relative
-            text = target.read_text(encoding="utf-8")
-            if text.count(original) != 1:
-                raise MutationError(f"{mutation_id} source anchor is not unique")
-            target.write_text(text.replace(original, replacement), encoding="utf-8")
-            environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
-                               HOME=str(sandbox / ".test-home"),
-                               USERPROFILE=str(sandbox / ".test-home"),
-                               PYTHONPATH=str(sandbox / "tools"))
-            try:
-                result = subprocess.run(
-                    [sys.executable, "-B", "-m", "unittest", test_name],
-                    cwd=sandbox / "tools", env=environment,
-                    capture_output=True, text=True, timeout=timeout, check=False)
-            except subprocess.TimeoutExpired as exc:
-                raise MutationError(f"{mutation_id} exceeded its timeout") from exc
-            receipts.append({"id": mutation_id, "test": test_name,
-                             "killed": result.returncode != 0,
-                             "returncode": result.returncode})
+    # Every mutant owns a complete disposable tree and process, so bounded parallel
+    # execution changes no test semantics while avoiding serial copy/startup tax.
+    workers = min(4, len(MUTATIONS))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        receipts = list(executor.map(
+            lambda mutation: _run_mutation(root, mutation, timeout), MUTATIONS))
     killed = sum(item["killed"] for item in receipts)
     score = round(killed * 100 / len(receipts), 2)
     return {"schema_version": 1,

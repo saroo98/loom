@@ -23,6 +23,7 @@ import loom_crypto
 import loom_domain
 import loom_domain_bundle
 import loom_domain_contract
+import loom_domain_discovery
 import loom_domain_invariants
 import loom_planning_intelligence
 import loom_program
@@ -35,16 +36,19 @@ import loom_adapter_protocol
 import loom_memory
 import loom_message
 import loom_owner
+import loom_plan_author
 
 
 TEST_LEGACY_BACKEND_MARKER = ".loom-test-legacy-backend-v1"
 TEST_LEGACY_BACKEND_MARKER_BYTES = b"loom-disposable-test-backend-v1\n"
 import loom_performance
+import loom_preferences
 import loom_project_inspection
 import loom_reliability
 import loom_runtime
 import loom_session
 import loom_survey
+import loom_transparency
 import loom_vault_adapter
 
 
@@ -81,7 +85,18 @@ MAX_RECOVERY_FILE_BYTES = 256 * 1024
 MAX_RECOVERY_TOTAL_BYTES = MAX_RECOVERY_FILES * MAX_RECOVERY_FILE_BYTES
 MAX_ACTION_BYTES = 256 * 1024
 MAX_ENCRYPTED_ACTION_BYTES = 384 * 1024
-PLAN_CONTRACT_SCHEMA_VERSION = 4
+LEGACY_PLAN_CONTRACT_SCHEMA_VERSION = 4
+PLAN_CONTRACT_SCHEMA_VERSION = 5
+LEGACY_PLAN_CONTRACT_FIELDS_V4 = {
+    "schema_version", "request_hash", "survey_hash", "tier", "domains",
+    "domain_route", "route_digest", "composition_graph_digest",
+    "target_fingerprint", "project_inspection", "inspection_obligations",
+    "pack_baseline_hash", "pack_root", "allowed_host_write_paths",
+    "artifact_matrix", "required_domain_invariants", "domain_invariants",
+    "domain_discovery", "planning_intelligence", "current_facts_to_verify",
+    "verification_media", "budget", "work_order_topology",
+    "completion_gates", "contract_hash",
+}
 ARTIFACT_ORDER = (
     "intake.md", "survey.md", "product.md", "architecture.md", "uiux.md",
     "contracts.md", "testing.md", "release-rollback.md", "security.md",
@@ -217,6 +232,60 @@ def _absolute(value, label, *, must_exist=True):
 def _action_path(owner_home, instance_id, project_id, action_id):
     return (Path(owner_home) / "instances" / instance_id / "runtime" /
             "projects" / project_id / "orchestrations" / f"{action_id}.json")
+
+
+def _plan_author_transaction_path(action):
+    root = Path(action["explicit_target"] or action["cwd"]).resolve()
+    return root / f".loom-plan-transaction-{action['action_id']}.json"
+
+
+def _reconcile_plan_authoring(action):
+    if action["intent"] != "plan" or not action["pack_seed"]["created_pack"]:
+        return {"status": "clean"}
+    root = Path(action["explicit_target"] or action["cwd"]).resolve()
+    try:
+        return loom_plan_author.reconcile(
+            root / "plans", _plan_author_transaction_path(action))
+    except loom_plan_author.PlanAuthorError as exc:
+        raise OrchestratorError(
+            exc.code, exc.message, status="action-required") from exc
+
+
+def _validate_plan_author_record(value, *, action):
+    if value is None:
+        return None
+    fields = {
+        "schema_version", "action_id", "state", "manifest",
+        "archive_path", "completed_at", "undone_at",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("action_id") != action.get("action_id") \
+            or value.get("state") not in {"active", "undone"}:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "plan-author reversibility record is invalid")
+    try:
+        loom_reliability.validate_exact_tree_manifest(value["manifest"])
+        loom_runtime._parse_time(value["completed_at"])
+    except (loom_reliability.ReliabilityError, loom_runtime.RuntimeError,
+            TypeError, ValueError) as exc:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "plan-author reversibility evidence is invalid") from exc
+    expected_archive = f".loom-history/undone-plan-{action['action_id']}"
+    if value["state"] == "active":
+        if value["archive_path"] is not None or value["undone_at"] is not None:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "active plan-author record carries undo state")
+    else:
+        try:
+            loom_runtime._parse_time(value["undone_at"])
+        except (loom_runtime.RuntimeError, TypeError, ValueError) as exc:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "plan-author undo time is invalid") from exc
+        if value["archive_path"] != expected_archive:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "plan-author archive path is not action-bound")
+    return value
 
 
 def _validate_seed_manifest(value):
@@ -628,6 +697,48 @@ def _legacy_pack_seed(value):
     }
 
 
+def _validate_legacy_plan_contract_v4(contract, *, action, prepared):
+    """Validate a terminal v4 plan contract without executing it under v5 rules."""
+    if not isinstance(contract, dict) or set(contract) != LEGACY_PLAN_CONTRACT_FIELDS_V4:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "legacy plan contract fields are invalid")
+    body = {key: value for key, value in contract.items() if key != "contract_hash"}
+    if contract.get("schema_version") != LEGACY_PLAN_CONTRACT_SCHEMA_VERSION \
+            or not re.fullmatch(r"[0-9a-f]{64}", str(contract.get("contract_hash", ""))) \
+            or contract["contract_hash"] != _hash(body):
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "legacy plan contract digest is invalid")
+    project_inspection = loom_runtime._thaw(prepared.project_inspection)
+    inspection_obligations = [
+        {"path": item["path"], "reason": item["reason"],
+         "potential_authorities": list(item["potential_authorities"])}
+        for item in project_inspection["unresolved_roots"]]
+    if contract["request_hash"] != prepared.request_hash \
+            or contract["survey_hash"] != action["survey_hash"] \
+            or contract["tier"] != action["tier"] \
+            or contract["domains"] != action["domains"] \
+            or contract["domain_route"] != action["domain_contract"] \
+            or contract["route_digest"] != action["domain_contract"]["route_digest"] \
+            or contract["composition_graph_digest"] \
+            != action["domain_contract"]["graph_digest"] \
+            or contract["target_fingerprint"] != action["survey_hash"] \
+            or contract["project_inspection"] \
+            != loom_project_inspection.capsule(project_inspection) \
+            or contract["inspection_obligations"] != inspection_obligations \
+            or contract["pack_baseline_hash"] != action["initial_pack_hash"] \
+            or contract["pack_root"] != "plans" \
+            or contract["allowed_host_write_paths"] != ["plans/**"]:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "legacy plan contract does not match its sealed action")
+    if action["status"] not in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "ACTION_REPREPARE_REQUIRED",
+            "an open plan-contract-v4 action cannot resume under plan-contract-v5; "
+            "invoke /loom again against the current project state",
+            status="action-required")
+    return contract
+
+
 def _validate_action(value, path):
     if not isinstance(value, dict):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
@@ -759,9 +870,11 @@ def _validate_action(value, path):
     except loom_message.MessageError as exc:
         raise OrchestratorError(
             "ACTION_CORRUPT", f"sealed owner message is invalid: {exc}") from exc
-    message_builder = (loom_message.v2_build
-                       if value["owner_message"].get("schema_version") == 2
-                       else loom_message.build)
+    message_version = value["owner_message"].get("schema_version")
+    message_builder = (
+        loom_message.v2_build if message_version == 2 else
+        loom_message.v3_build if message_version == 3 else
+        loom_message.build)
     expected_owner_message = message_builder(
         state="progress",
         consequence={"S": "ordinary", "M": "material", "L": "high",
@@ -817,13 +930,25 @@ def _validate_action(value, path):
         and not prepared.route_contract["blocked"] \
         and value["initial_pack_hash"] is not None
     if contract_expected:
-        schema_report = loom_lint.Report()
-        loom_lint.validate_schema(
-            schema_report, path, value["plan_contract"], "plan-contract.schema.json")
-        if schema_report.errors \
-                or value["plan_contract"] != _make_plan_contract(value, prepared):
+        contract_version = (
+            value["plan_contract"].get("schema_version")
+            if isinstance(value["plan_contract"], dict) else None)
+        if contract_version == LEGACY_PLAN_CONTRACT_SCHEMA_VERSION:
+            _validate_legacy_plan_contract_v4(
+                value["plan_contract"], action=value, prepared=prepared)
+        elif contract_version == PLAN_CONTRACT_SCHEMA_VERSION:
+            schema_report = loom_lint.Report()
+            loom_lint.validate_schema(
+                schema_report, path, value["plan_contract"], "plan-contract.schema.json")
+            if schema_report.errors \
+                    or value["plan_contract"] != _make_plan_contract(value, prepared):
+                raise OrchestratorError(
+                    "ACTION_CORRUPT",
+                    "sealed plan contract is invalid or does not match action")
+        else:
             raise OrchestratorError(
-                "ACTION_CORRUPT", "sealed plan contract is invalid or does not match action")
+                "ACTION_VERSION_UNSUPPORTED",
+                "sealed plan contract schema version is not supported")
     elif value["plan_contract"] is not None:
         raise OrchestratorError(
             "ACTION_CORRUPT", "non-planning action carries a plan contract")
@@ -859,6 +984,12 @@ def _validate_action(value, path):
         raise OrchestratorError("ACTION_CORRUPT", "non-repair action carries repair scope")
     if value["host_result"] is not None and not isinstance(value["host_result"], dict):
         raise OrchestratorError("ACTION_CORRUPT", "host result is invalid")
+    if isinstance(value["host_result"], dict) and "plan_author" in value["host_result"]:
+        if value["intent"] != "plan":
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "non-planning action carries plan-author state")
+        _validate_plan_author_record(
+            value["host_result"]["plan_author"], action=value)
     if created >= expires \
             or any(not isinstance(value[field], str) or not Path(value[field]).is_absolute()
                    for field in ("owner_home", "install_root", "cwd", "journal_path")) \
@@ -1574,6 +1705,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             raise OrchestratorError(
                 "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
     path, action, security = candidates[0]
+    _reconcile_plan_authoring(action)
     if incoming_intent is None \
             or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
         return None, None
@@ -1627,7 +1759,7 @@ tier: {prepared.route_contract['tier']}
 status: draft
 last_verified: {dt.date.today().isoformat()}
 loom_version: {json.dumps(version)}
-plan_contract_version: 4
+plan_contract_version: {PLAN_CONTRACT_SCHEMA_VERSION}
 execution_mode: planned
 domain_id: {prepared.domains[0]}
 domain_ids: [{', '.join(prepared.domains)}]
@@ -1657,7 +1789,8 @@ Original request (verbatim, do not paraphrase):
 def _artifact_contract(tier, domains, request, requires_discovery):
     domains = set(domains)
     whole = bool(re.search(
-        r"(?i)\b(?:build|create|develop|design|implement|produce|write)\b", request))
+        r"(?i)\b(?:build|create|develop|design|implement|produce|write)\b",
+        loom_domain.task_language(request)))
     ui_domains = {
         "android", "desktop", "ios-macos", "mobile", "realtime-3d",
         "web-app", "website",
@@ -1746,6 +1879,55 @@ def _artifact_contract(tier, domains, request, requires_discovery):
     return rows
 
 
+def _semantic_draft_limits(tier):
+    """Return the one machine-enforced semantic budget for this tier."""
+    by_tier = {
+        "S": {
+            "assumptions": (2, 180), "decisions": (2, 180),
+            "tasks": (3, 180), "acceptance": (3, 220),
+            "negative_acceptance": (2, 180), "out_of_scope": (2, 180),
+            "escalation": (2, 180), "touches": (5, 300),
+        },
+        "M": {
+            "assumptions": (4, 300), "decisions": (4, 300),
+            "tasks": (5, 300), "acceptance": (5, 360),
+            "negative_acceptance": (3, 300), "out_of_scope": (3, 300),
+            "escalation": (3, 300), "touches": (8, 300),
+        },
+        "L": {
+            "assumptions": (8, 400), "decisions": (8, 400),
+            "tasks": (8, 400), "acceptance": (8, 450),
+            "negative_acceptance": (5, 400), "out_of_scope": (5, 400),
+            "escalation": (5, 400), "touches": (16, 300),
+        },
+        "XL": {
+            "assumptions": (12, 500), "decisions": (12, 500),
+            "tasks": (12, 500), "acceptance": (12, 500),
+            "negative_acceptance": (8, 500), "out_of_scope": (8, 500),
+            "escalation": (8, 500), "touches": (24, 300),
+        },
+    }
+    body = {
+        "schema": "schemas/plan-draft.schema.json",
+        "copy_current_facts_exactly": True,
+    }
+    minimum_items = {
+        "tasks": 1,
+        "acceptance": 1,
+        "negative_acceptance": 1,
+        "out_of_scope": 1,
+        "escalation": 1,
+        "touches": 1,
+    }
+    for field, (items, characters) in by_tier[tier].items():
+        body[field] = {
+            "minimum_items": minimum_items.get(field, 0),
+            "maximum_items": items,
+            "maximum_item_characters": characters,
+        }
+    return body
+
+
 def _make_plan_contract(action, prepared):
     tier = action["tier"]
     domains = list(action["domains"])
@@ -1824,6 +2006,7 @@ def _make_plan_contract(action, prepared):
         "inspection_obligations": inspection_obligations,
         "pack_baseline_hash": action["initial_pack_hash"],
         "pack_root": "plans",
+        "project_id": action["project_id"],
         "allowed_host_write_paths": ["plans/**"],
         "artifact_matrix": _artifact_contract(
             tier, domains, action["request"],
@@ -1850,6 +2033,7 @@ def _make_plan_contract(action, prepared):
             "dag_required": True, "atomic_outcomes_required": True,
             "acceptance_evidence_required": True,
         },
+        "semantic_draft_limits": _semantic_draft_limits(tier),
         "completion_gates": completion_gates,
     }
     return {**body, "contract_hash": _hash(body)}
@@ -1872,6 +2056,7 @@ def _tier_s_host_capsule(contract):
                        "required_sections": ["Intent", "Context", "Preconditions", "Task",
                            "Acceptance criteria", "Out of scope", "Escalation triggers",
                            "Epistemic notes", "Close-out"]},
+        "semantic_draft_limits": contract["semantic_draft_limits"],
         "invariants": [{"id": item["invariant_id"], "statement": item["statement"],
                         "verification_medium": item["verification"]["required_real_medium"]}
                        for item in contract["domain_invariants"]],
@@ -1991,10 +2176,12 @@ def _validate_planning_assignments(pack, contract, work_orders):
                 f"{identity} frontmatter diverges from sealed planning assignments")
 
 
-def _validate_authored_plan(action):
+def _validate_authored_plan(action, *, pack_override=None):
     contract = action["plan_contract"]
     root = Path(action["explicit_target"] or action["cwd"])
-    pack = root / contract["pack_root"]
+    pack = (
+        Path(pack_override).resolve()
+        if pack_override is not None else root / contract["pack_root"])
     if not pack.is_dir() or pack.is_symlink():
         raise OrchestratorError("PLAN_CONTRACT_MISMATCH", "planning pack is missing or unsafe")
     if action["tier"] != "S":
@@ -2587,7 +2774,8 @@ def _active_work_order(pack, tier):
 
 
 def _handler_result(context, root, owner_home, usage, work_order=None,
-                    repair_plan=None, host_result=None, memory_adapter=None):
+                    repair_plan=None, host_result=None, memory_adapter=None,
+                    seal_plan_author=None):
     pack = root / "plans"
     tier = context.prepared.route_contract["tier"]
     intent = context.intent
@@ -2639,12 +2827,16 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
                 "user_message": "Plan validation blocked: " + "; ".join(findings[:8]),
             }
         evidence = "pack-" + _pack_hash(pack)[:24]
+        reversible_action_ids = []
+        if seal_plan_author is not None:
+            reversible_action_ids = [seal_plan_author()]
         return {
             "status": "completed", "code": "plan-complete", "success": True,
             "metrics": {}, "evidence_ids": [evidence],
-            "reversible_action_ids": [], "usage": usage,
+            "reversible_action_ids": reversible_action_ids, "usage": usage,
             "user_message": (
-                "Release-ready plan validated and implementation authorized. "
+                "Release-ready plan validated. Only the declared work-order frontier "
+                "is authorized. "
                 f"Lifecycle evidence: {evidence}."),
         }
 
@@ -2832,7 +3024,8 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
 
 
 def default_handlers(*, root, owner_home, usage=None, work_order=None,
-                     repair_plan=None, host_result=None, memory_adapter=None):
+                     repair_plan=None, host_result=None, memory_adapter=None,
+                     seal_plan_author=None):
     """Return the complete audited production handler registry."""
     root, owner_home = Path(root), Path(owner_home)
     normalized = loom_performance.normalize_usage(usage)
@@ -2840,7 +3033,8 @@ def default_handlers(*, root, owner_home, usage=None, work_order=None,
     return {
         intent: (lambda context, _intent=intent: _merge_host_outcome(
             _handler_result(context, root, owner_home, usage_payload, work_order,
-                            repair_plan, host_result, memory_adapter), host_result))
+                            repair_plan, host_result, memory_adapter,
+                            seal_plan_author), host_result))
         for intent in {
             "plan", "resume", "execute", "review", "repair", "close", "remember"
         }
@@ -2895,7 +3089,7 @@ def _memory_backend(home, install_root, project_root=None):
     return adapter.instance_id, adapter
 
 
-def _controller(action, *, usage=None):
+def _controller(action, *, usage=None, seal_plan_author=None):
     home = Path(action["owner_home"])
     root = Path(action["explicit_target"] or action["cwd"])
     instance_id, memory = _memory_backend(home, action["install_root"], root)
@@ -2906,10 +3100,172 @@ def _controller(action, *, usage=None):
         root=root, owner_home=home, usage=usage,
         work_order=action.get("work_order"),
         repair_plan=action.get("repair_plan"), host_result=action.get("host_result"),
-        memory_adapter=memory)
+        memory_adapter=memory, seal_plan_author=seal_plan_author)
     return loom_session.SessionController(
         owner_home=home, instance_id=instance_id,
         handlers=handlers, memory=memory)
+
+
+def _plan_undo_handler(action, memory, *, now):
+    """Undo the latest exact, unchanged plan pack before falling back to memory undo."""
+    directory = _orchestration_directory(
+        action["owner_home"], action["instance_id"], action["project_id"])
+    candidates = []
+    try:
+        entries = list(directory.iterdir())
+    except OSError as exc:
+        raise OrchestratorError(
+            "PLAN_UNDO_INDETERMINATE",
+            f"plan history cannot be inspected safely: {exc}") from exc
+    action_paths = [
+        path for path in entries
+        if re.fullmatch(r"[0-9a-f-]{36}\.json", path.name)
+    ]
+    if len(action_paths) > MAX_ORCHESTRATION_ACTIONS:
+        raise OrchestratorError(
+            "PLAN_UNDO_INDETERMINATE", "plan history exceeds its bounded action inventory")
+    for candidate_path in action_paths:
+        _candidate_path, candidate, security = _read_action(
+            candidate_path, owner_home=action["owner_home"],
+            install_root=action["install_root"])
+        record = (
+            (candidate.get("host_result") or {}).get("plan_author")
+            if candidate.get("intent") == "plan"
+            and candidate.get("status") == "completed" else None)
+        if record is not None and record["state"] == "active" \
+                and candidate["project_id"] == action["project_id"] \
+                and candidate["explicit_target"] == action["explicit_target"]:
+            candidates.append((candidate["created_at"], candidate_path,
+                               candidate, security, record))
+    if not candidates:
+        undo = getattr(memory, "undo_latest", None)
+        if undo is None:
+            return {
+                "status": "blocked", "code": "nothing-to-undo", "success": False,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "user_message": "No reversible Loom change is available.",
+            }
+        try:
+            result = undo()
+        except (loom_vault_adapter.VaultAdapterError,
+                loom_transparency.TransparencyError,
+                loom_preferences.PreferenceError) as exc:
+            return {
+                "status": "blocked", "code": "nothing-to-undo", "success": False,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "user_message": str(exc),
+            }
+        return {
+            "status": "completed", "code": "undo-complete", "success": True,
+            "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+            "user_message": result["message"],
+        }
+    _created_at, prior_path, prior, prior_security, record = max(
+        candidates, key=lambda item: item[0])
+    root = Path(prior["explicit_target"] or prior["cwd"]).resolve()
+    pack = root / "plans"
+    history = root / ".loom-history"
+    archive = history / f"undone-plan-{prior['action_id']}"
+    expected_relative = archive.relative_to(root).as_posix()
+    if history.exists() and (history.is_symlink() or not history.is_dir()):
+        raise OrchestratorError(
+            "PLAN_UNDO_UNSAFE", "project-local Loom history is not a regular directory")
+    pack_present = _path_present(pack)
+    archive_present = _path_present(archive)
+    if pack_present and archive_present:
+        raise OrchestratorError(
+            "PLAN_UNDO_CONFLICT",
+            "both the active plan and its undo archive exist; neither was changed")
+    if pack_present:
+        if pack.is_symlink() or not pack.is_dir():
+            raise OrchestratorError(
+                "PLAN_UNDO_UNSAFE", "active plan is not a regular project directory")
+        try:
+            current = loom_reliability.exact_tree_manifest(pack)
+        except loom_reliability.ReliabilityError as exc:
+            raise OrchestratorError(
+                "PLAN_UNDO_INDETERMINATE",
+                f"active plan cannot be inventoried safely: {exc}") from exc
+        if not loom_reliability.exact_tree_manifests_equal(
+                current, record["manifest"]):
+            raise OrchestratorError(
+                "PLAN_UNDO_CHANGED",
+                "the plan changed after Loom created it; undo refused without moving anything")
+        history.mkdir(parents=False, exist_ok=True)
+        if history.is_symlink() or not history.is_dir():
+            raise OrchestratorError(
+                "PLAN_UNDO_UNSAFE", "project-local Loom history is unsafe")
+        try:
+            source_identity = loom_reliability.observe_root_identity(pack)
+            loom_reliability.atomic_rename_noreplace(
+                pack, archive, expected_source_identity=source_identity,
+                source_role="active-plan", destination_role="undo-archive")
+        except loom_reliability.AtomicRenameReconciliationRequired as exc:
+            raise OrchestratorError(
+                "PLAN_UNDO_RECONCILIATION_REQUIRED",
+                "the atomic plan archive changed namespace but durability or final state "
+                "requires a fresh Loom undo check before any claim: "
+                + json.dumps(exc.state, sort_keys=True, separators=(",", ":")),
+                status="action-required") from exc
+        except OSError as exc:
+            raise OrchestratorError(
+                "PLAN_UNDO_FAILED",
+                f"same-project atomic plan archive failed: {exc}") from exc
+        except loom_reliability.ReliabilityError as exc:
+            raise OrchestratorError(
+                "PLAN_UNDO_FAILED",
+                f"same-project atomic no-replace plan archive failed: {exc}") from exc
+        archive_present = True
+    if not archive_present or archive.is_symlink() or not archive.is_dir():
+        raise OrchestratorError(
+            "PLAN_UNDO_INDETERMINATE",
+            "neither the exact active plan nor its exact undo archive is available")
+    try:
+        archived = loom_reliability.exact_tree_manifest(archive)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "PLAN_UNDO_INDETERMINATE",
+            f"plan undo archive cannot be verified: {exc}") from exc
+    if not loom_reliability.exact_tree_manifests_equal(
+            archived, record["manifest"]):
+        raise OrchestratorError(
+            "PLAN_UNDO_INDETERMINATE",
+            "plan undo archive differs from its sealed manifest")
+    record = {
+        **record,
+        "state": "undone",
+        "archive_path": expected_relative,
+        "undone_at": _stamp(now),
+    }
+    prior["host_result"] = {
+        **(prior.get("host_result") or {}),
+        "plan_author": record,
+    }
+    _write_action(prior_path, prior, prior_security)
+    evidence = "undo-" + record["manifest"]["root_sha256"][:24]
+    return {
+        "status": "completed", "code": "undo-complete", "success": True,
+        "metrics": {}, "evidence_ids": [evidence],
+        "reversible_action_ids": [],
+        "user_message": (
+            f"The unchanged Loom plan was archived to {expected_relative} "
+            f"and removed from the active project ({evidence})."),
+    }
+
+
+def _safe_plan_undo_handler(action, memory, *, now):
+    try:
+        return _plan_undo_handler(action, memory, now=now)
+    except OrchestratorError as exc:
+        return {
+            "status": "blocked",
+            "code": exc.code.lower().replace("_", "-"),
+            "success": False,
+            "metrics": {},
+            "evidence_ids": [],
+            "reversible_action_ids": [],
+            "user_message": exc.message,
+        }
 
 
 def invoke(*, request, cwd, home, install_root, explicit_target=None,
@@ -3025,6 +3381,7 @@ def resolve(*, request, cwd, action_path, action_sha256, home, install_root, now
                     "ACTION_CORRUPT", "verified action digest does not match the hook receipt")
             _path, action, _security = _read_action(
                 path, owner_home=home, install_root=install_root)
+            _reconcile_plan_authoring(action)
             try:
                 after = hashlib.sha256(path.read_bytes()).hexdigest()
             except OSError as exc:
@@ -3115,6 +3472,123 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
                 or not re.fullmatch(r"WO-[0-9]{3,}", work_order):
             raise OrchestratorError(
                 "ACTION_CORRUPT", "pending work-order identity is invalid")
+    semantic_draft_shape = None
+    if action["intent"] == "plan" and action["plan_contract"] is not None:
+        semantic_draft_shape = {
+            "schema": "schemas/plan-draft.schema.json",
+            "top_level_fields": sorted(loom_plan_author.TOP_FIELDS),
+            "current_fact_fields": sorted(loom_plan_author.FACT_FIELDS),
+            "release_exposure_fields": sorted(loom_plan_author.EXPOSURE_FIELDS),
+            "work_order_fields": sorted(loom_plan_author.WORK_ORDER_FIELDS),
+            "routing_values": sorted(loom_plan_author.ROUTING),
+            "size_values": sorted(loom_plan_author.SIZE),
+            "domain_evidence_fields": sorted(
+                loom_plan_author.DOMAIN_EVIDENCE_FIELDS),
+            "domain_evidence_required": bool(
+                (action["plan_contract"].get("domain_discovery") or {}).get(
+                    "required")),
+            "domain_answer_fields": [
+                key for key, _question in loom_domain_discovery.QUESTIONS],
+            "domain_source_fields": sorted(
+                loom_plan_author.DOMAIN_SOURCE_FIELDS),
+            "domain_invariant_fields": sorted(
+                loom_plan_author.DOMAIN_INVARIANT_FIELDS),
+            "domain_scope_fields": sorted(
+                loom_plan_author.DOMAIN_SCOPE_FIELDS),
+            "domain_source_key_pattern": loom_plan_author.SOURCE_KEY_PATTERN,
+            "domain_source_class_values": sorted(
+                loom_plan_author.SOURCE_CLASSES),
+            "domain_locator_visibility_values": sorted(
+                loom_plan_author.LOCATOR_VISIBILITY),
+            "domain_currentness_values": sorted(
+                loom_plan_author.CURRENTNESS),
+            "domain_invariant_type_values": sorted(
+                loom_plan_author.INVARIANT_TYPES),
+            "domain_invariant_type_guidance": dict(
+                loom_plan_author.INVARIANT_TYPE_GUIDANCE),
+            "domain_consequence_values": sorted(
+                loom_plan_author.CONSEQUENCE_CLASSES),
+            "domain_authority_requirement_values": sorted(
+                loom_plan_author.AUTHORITY_REQUIREMENTS),
+            "domain_authority_availability": {
+                "semantic_source_supported": [
+                    "owner-authority", "repository-evidence"],
+                "receipt_required": sorted(
+                    loom_plan_author.AUTHORITY_REQUIREMENTS - {
+                        "owner-authority", "repository-evidence"}),
+            },
+            "domain_limits": loom_plan_author.DOMAIN_DRAFT_LIMITS,
+            "active_domain_values": list(
+                (action["plan_contract"].get("domain_route") or {}).get(
+                    "active_task_domains") or action["domains"]),
+            "timestamp_contract": (
+                "RFC3339 date-time such as 2026-07-24T00:00:00Z, or null where "
+                "the field is nullable; date-only and prose values are invalid."),
+            "collection_contracts": {
+                "answers": "object keyed by every domain_answer_fields value",
+                "applicability_evidence": "array of concrete evidence strings",
+                "authority_requirements": (
+                    "non-empty unique array from domain_authority_requirement_values"),
+                "contradicting_source_keys": (
+                    "unique array of domain source keys; empty is allowed"),
+                "depends_on": (
+                    "unique array of earlier WO-### IDs, never work-order titles"),
+                "domain_ids": (
+                    "non-empty unique array using active_domain_values exactly"),
+                "supporting_source_keys": (
+                    "non-empty unique array of declared domain source keys"),
+            },
+            "rules": [
+                "Use exactly these field names; aliases and extra fields are rejected.",
+                "Each current_fact uses source as one string, never evidence_sources.",
+                "Each work_order uses title and outcome, not intent or context sections.",
+                "Each routing and size value must come from routing_values and size_values.",
+                "Every work_order must declare at least one touches entry, including a "
+                "planning-only turn; each entry is a repository-relative future implementation "
+                "target or glob expected to change, with no prose and no read-only evidence "
+                "source.",
+                "If two work_orders have equal or overlapping touches, combine them or make the "
+                "later work_order depend_on every earlier overlapping WO-### ID; independent "
+                "work_orders must have disjoint touches.",
+                "Set domain_evidence to an object only when domain_evidence_required is true; "
+                "otherwise set it to null.",
+                "Copy sealed current-fact domain and fact strings byte-for-byte.",
+                "Domain evidence answers is one object, never an array.",
+                "Domain source keys use domain_source_key_pattern and are referenced exactly.",
+                "Use only the published domain enum values; never describe an enum in prose.",
+                "Classify owner- or repository-defined behavior and bounded side-effect "
+                "prohibitions as correctness unless failure asserts physical, clinical, "
+                "regulated, or comparably consequential harm.",
+                "Use safety only with a pre-existing sealed governing-authority receipt. Never "
+                "relabel a genuine safety claim to pass validation; report the missing authority "
+                "and stop.",
+                "Repository evidence uses a public repository-relative locator and null content; "
+                "Loom reads and hashes the file itself.",
+                "Owner-attestation content must be exact text from the sealed owner request and "
+                "uses encrypted-private visibility.",
+                "Secondary-discovery content is inert and cannot satisfy an authority requirement.",
+                "Execution, official-source, and reviewer authority require separate sealed "
+                "receipts and cannot be asserted through semantic plan authoring.",
+                "The required_real_medium field names future verification; it does not imply "
+                "the real-medium-evidence authority requirement.",
+                "Use only domain_authority_availability.semantic_source_supported requirements "
+                "for authority supplied by this semantic draft. A receipt_required value declares "
+                "a genuine missing authority and intentionally blocks until Loom has its separate "
+                "sealed receipt.",
+                "Do not submit an internal freshness-policy identifier; Loom derives its "
+                "target-and-source freshness policy mechanically.",
+                "Use timestamp_contract for published_at, effective_at, revalidate_by, and "
+                "invariant as_of; never submit a date-only or event phrase.",
+                "Work-order depends_on entries are earlier WO-### IDs assigned by array order, "
+                "never titles.",
+            ],
+        }
+    plan_flow = (
+        "For plan, submit one semantic draft through loom.author with finalize=true; "
+        "do not call loom.complete separately. "
+        if action["assurance"]["host_id"] == "codex" else
+        "For plan, submit one semantic draft through the stable author operation, then complete "
+        "it through the stable launcher. ")
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
         "action_id": action["action_id"],
@@ -3129,6 +3603,7 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
         "plan_contract": (_tier_s_host_capsule(action["plan_contract"])
                           if action["tier"] == "S" and action["plan_contract"] is not None
                           else action["plan_contract"]),
+        "semantic_draft_shape": semantic_draft_shape,
         "context_manifest": action["context_manifest"],
         "continuation_authority": action["continuation_authority"],
         "resolved_terminal_block": resolved_terminal_block,
@@ -3141,11 +3616,15 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
         "session_environment": session_environment,
         "required_outcome": (
             "The sealed plan_contract and bounded context capsule are complete; do not reload "
-            "static Loom guidance. For plan, author the exact plan_contract; otherwise perform "
-            "only the routed intent. Do not mutate undeclared target paths. Then call complete "
-            "with all five measured token categories. The orchestrator owns validation, gates, "
-            "learning, and the final receipt. A prior terminal block never authorizes fallback "
-            "work; only this fresh sealed action can authorize its declared frontier."),
+            "static Loom guidance. " + plan_flow +
+            "Use only semantic_draft_shape field names, copying sealed current facts exactly, "
+            "and honoring both semantic_draft_limits and "
+            "semantic_draft_shape.domain_limits; otherwise "
+            "perform only the routed intent. Do not mutate undeclared target paths. "
+            "Attach usage only when the host exposes genuine provider counters. "
+            "The orchestrator owns validation, gates, learning, and the final receipt. A prior "
+            "terminal block never authorizes fallback work; only this fresh sealed action can "
+            "authorize its declared frontier."),
     }
 
 
@@ -3164,6 +3643,41 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     if opened.terminal_receipt is not None:
         return opened.terminal_receipt.to_dict()
     prepared = opened.prepared
+    created_at = _stamp(now)
+    domain_contract = loom_domain.select_domains(
+        request, explicit=list(prepared.domains),
+        project_facts=loom_project_inspection.facts(
+            loom_runtime._thaw(prepared.project_inspection)),
+        project_inspection=loom_runtime._thaw(prepared.project_inspection)
+    )["domain_contract"]
+    if prepared.intent == "plan" and prepared.route_contract["tier"] == "S" \
+            and not prepared.route_contract["blocked"]:
+        preview_action = {
+            "tier": "S",
+            "domains": list(prepared.domains),
+            "domain_contract": domain_contract,
+            "request": request,
+            "survey_hash": prepared.survey_hash,
+            "initial_pack_hash": "0" * 64,
+            "project_id": prepared.project_id,
+            "created_at": created_at,
+        }
+        try:
+            _tier_s_host_capsule(_make_plan_contract(preview_action, prepared))
+        except OrchestratorError as exc:
+            if exc.code != "TIER_PROMOTION_REQUIRED":
+                raise
+            prepared = loom_runtime.promote_prepared_tier(
+                prepared, "M", evidence="tier-s-host-capsule-overflow")
+            opened = loom_session.OpenSession(
+                prepared=prepared,
+                session_id=opened.session_id,
+                operation_id=opened.operation_id,
+                journal_path=opened.journal_path,
+                started_at=opened.started_at,
+                terminal_receipt=opened.terminal_receipt,
+                resolved_terminal_block=opened.resolved_terminal_block,
+            )
     conflict_selector = getattr(memory, "relevant_preference_conflicts", None)
     conflicts = (conflict_selector(
         domains=prepared.domains, project_id=prepared.project_id)
@@ -3181,7 +3695,6 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared).to_dict()
     context_capsule = controller.prepare_context(opened, request)
-    created_at = _stamp(now)
     expires_at = _stamp(
         loom_runtime._parse_time(created_at) + dt.timedelta(seconds=timeout_seconds))
     action_id = invocation_id
@@ -3205,12 +3718,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         "work_order": None, "prepared": prepared.to_dict(),
         "context": context_capsule,
         "repair_plan": None, "host_result": None, "plan_contract": None,
-        "domain_contract": loom_domain.select_domains(
-            request, explicit=list(prepared.domains),
-            project_facts=loom_project_inspection.facts(
-                loom_runtime._thaw(prepared.project_inspection)),
-            project_inspection=loom_runtime._thaw(prepared.project_inspection)
-        )["domain_contract"],
+        "domain_contract": domain_contract,
         "context_manifest": loom_performance.production_context_manifest(install_root),
         "continuation_authority": loom_authority.decide(
             loom_authority.facts_for_intent(prepared.intent),
@@ -3247,7 +3755,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         _write_action(path, action, action_security)
         return receipt.to_dict()
     if prepared.intent in {"status", "why", "undo", "forget", "remember"}:
-        immediate = _controller(action).run(
+        immediate_controller = _controller(action)
+        if prepared.intent == "undo":
+            immediate_controller.handlers["undo"] = \
+                lambda _context: _safe_plan_undo_handler(
+                    action, immediate_controller.memory,
+                    now=loom_runtime._parse_time(created_at))
+        immediate = immediate_controller.run(
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared, selected_context=context_capsule)
@@ -3381,10 +3895,77 @@ def complete(action_path, usage_path=None, *, result_path=None, now=None,
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
 
 
+def author(action_path, draft, *, now=None, owner_home=None, install_root=None):
+    """Machine-author one pending plan from a bounded semantic draft."""
+    action_path = _absolute(action_path, "action")
+    try:
+        with loom_reliability.exclusive_file_lock(
+                _orchestration_lock(action_path.parent)):
+            path, action, _action_security = _read_action(
+                action_path, owner_home=owner_home, install_root=install_root)
+            _reconcile_plan_authoring(action)
+            try:
+                checked = loom_install.check(action["install_root"])
+            except loom_install.InstallError as exc:
+                raise OrchestratorError("INSTALL_CHANGED", str(exc)) from exc
+            if checked["status"] != "installed":
+                raise OrchestratorError(
+                    "INSTALL_CHANGED", "installation receipt is not current")
+            if action["status"] != "pending" or action["intent"] != "plan" \
+                    or not isinstance(action["plan_contract"], dict):
+                raise OrchestratorError(
+                    "ACTION_NOT_AUTHORABLE",
+                    "only one pending sealed planning action can be machine-authored")
+            instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
+            if instant > loom_runtime._parse_time(action["expires_at"]):
+                raise OrchestratorError(
+                    "ACTION_TIMEOUT", "planning action expired before authoring",
+                    status="expired")
+            current = loom_runtime.prepare_invocation(
+                action["request"], instance_id=action["instance_id"],
+                invocation_id=action["invocation_id"], cwd=action["cwd"],
+                explicit_target=action["explicit_target"],
+                owner_home=action["owner_home"], now=instant)
+            if current.survey_hash != action["survey_hash"] \
+                    or current.project_id != action["project_id"] \
+                    or current.intent != "plan":
+                raise OrchestratorError(
+                    "TARGET_DRIFT",
+                    "target, project, or routed intent changed before plan authoring")
+            root = Path(action["explicit_target"] or action["cwd"])
+            version = (
+                Path(action["install_root"]) / "VERSION").read_text(
+                    encoding="utf-8").strip()
+            try:
+                receipt = loom_plan_author.author(
+                    root / "plans", contract=action["plan_contract"], draft=draft,
+                    request=action["request"], version=version, repo=root,
+                    transaction_path=_plan_author_transaction_path(action),
+                    now=instant,
+                    validate_stage=lambda stage: _validate_authored_plan(
+                        action, pack_override=stage))
+                _validate_authored_plan(action)
+            except loom_plan_author.PlanAuthorError as exc:
+                detail = exc.message
+                if exc.diagnostics:
+                    detail += ": " + "; ".join(
+                        f"{item['code']} {item['path']}: {item['message']}"
+                        for item in exc.diagnostics[:8])
+                raise OrchestratorError(exc.code, detail, status="action-required") from exc
+            return {
+                **receipt, "action_id": action["action_id"],
+                "action_path": str(path), "ready_for_completion": True,
+            }
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
+
+
 def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=None,
                          owner_home=None, install_root=None):
     path, action, action_security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
+    _reconcile_plan_authoring(action)
     try:
         checked = loom_install.check(action["install_root"])
     except loom_install.InstallError as exc:
@@ -3429,7 +4010,10 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     if action["intent"] == "repair":
         action["host_result"] = _read_repair_result(result_path, action)
     elif result_path is not None:
-        action["host_result"] = _read_host_outcome(result_path, action)
+        action["host_result"] = {
+            **(action.get("host_result") or {}),
+            **_read_host_outcome(result_path, action),
+        }
     sealed = loom_runtime.PreparedInvocation.from_dict(action["prepared"])
     if action["intent"] == "repair" and action["tier"] == "S":
         project = loom_runtime.resolve_project(
@@ -3488,7 +4072,33 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     validated_domain_bundle = None
     if action["intent"] == "plan":
         validated_domain_bundle = _validate_authored_plan(action)
-    controller = _controller(action, usage=usage)
+    seal_plan_author = None
+    if action["intent"] == "plan" and action["pack_seed"]["created_pack"]:
+        def seal_plan_author():
+            pack = Path(action["explicit_target"] or action["cwd"]) / "plans"
+            try:
+                manifest = loom_reliability.exact_tree_manifest(pack)
+                loom_reliability.validate_exact_tree_manifest(manifest)
+            except loom_reliability.ReliabilityError as exc:
+                raise OrchestratorError(
+                    "PLAN_UNDO_EVIDENCE_FAILED",
+                    f"completed plan could not be bound to safe undo evidence: {exc}") from exc
+            action["host_result"] = {
+                **(action.get("host_result") or {}),
+                "plan_author": {
+                    "schema_version": 1,
+                    "action_id": action["action_id"],
+                    "state": "active",
+                    "manifest": manifest,
+                    "archive_path": None,
+                    "completed_at": _stamp(instant),
+                    "undone_at": None,
+                },
+            }
+            _write_action(path, action, action_security)
+            return action["action_id"]
+    controller = _controller(
+        action, usage=usage, seal_plan_author=seal_plan_author)
     try:
         controller, opened = _reopen(action, controller=controller)
         receipt = controller.seal(
@@ -3537,6 +4147,7 @@ def cancel(action_path, *, now=None, owner_home=None, install_root=None):
 def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=None):
     path, action, action_security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
+    _reconcile_plan_authoring(action)
     try:
         loom_install.check(action["install_root"])
     except loom_install.InstallError as exc:
@@ -3572,6 +4183,9 @@ def main(argv=None):
     resolve_parser = commands.add_parser("resolve-stdio")
     resolve_parser.add_argument("--home", required=True)
     resolve_parser.add_argument("--install-root", required=True)
+    author_parser = commands.add_parser("author-stdio")
+    author_parser.add_argument("--home", required=True)
+    author_parser.add_argument("--install-root", required=True)
     complete_parser = commands.add_parser("complete")
     complete_parser.add_argument("--action", required=True)
     complete_parser.add_argument("--usage")
@@ -3601,6 +4215,12 @@ def main(argv=None):
                 action_path=message["action"],
                 action_sha256=message["action_sha256"],
                 home=args.home, install_root=args.install_root)
+        elif args.command == "author-stdio":
+            message = loom_adapter_protocol.read_single_frame(
+                sys.stdin.buffer, message_type="author")
+            result = author(
+                message["action"], message["draft"],
+                owner_home=args.home, install_root=args.install_root)
         elif args.command == "complete":
             result = complete(
                 args.action, args.usage, result_path=args.result,

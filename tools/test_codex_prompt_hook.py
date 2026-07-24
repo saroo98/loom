@@ -299,13 +299,17 @@ class HookContractTests(unittest.TestCase):
         self.assertEqual("", completed.stdout)
         self.assertFalse(self.home.exists())
 
-    def test_plugin_does_not_activate_a_duplicate_prompt_hook(self):
+    def test_plugin_startup_migration_hook_does_not_activate_prompt_hook(self):
         manifest = json.loads((ROOT / ".codex-plugin" / "plugin.json").read_text(
             encoding="utf-8"))
-        self.assertNotIn("hooks", manifest)
+        self.assertEqual("./hooks/hooks.json", manifest["hooks"])
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(
             encoding="utf-8"))
-        self.assertEqual({}, hooks["hooks"])
+        self.assertEqual({"SessionStart"}, set(hooks["hooks"]))
+        entry = hooks["hooks"]["SessionStart"][0]["hooks"][0]
+        self.assertIn("python3 -B", entry["command"])
+        self.assertIn("py -3 -B", entry["commandWindows"])
+        self.assertNotIn("UserPromptSubmit", hooks["hooks"])
 
 
 if __name__ == "__main__":

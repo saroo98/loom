@@ -1,4 +1,4 @@
-# Loom 1.8.9 advanced architecture
+# Loom 1.8.10 advanced architecture
 
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.
@@ -36,6 +36,16 @@ integrity enforcement. A passing G1 must declare an independent reviewer and zer
 findings; an explicitly author-reviewed plan cannot be sealed or authorized. Any unknown at a
 trust boundary is a typed block. Declared independence is mechanically required but remains a
 host assertion until an external reviewer adapter supplies independent identity proof.
+
+Machine plan authoring owns the complete pack namespace. It renders into a sibling staging tree,
+requires zero lint errors and zero warnings, performs final contract validation there, and only
+then atomically replaces the seed pack. Invalid semantic drafts and failed final checks leave the
+unchanged seed plus no candidate files. Unknown-domain repository evidence is read directly from
+one bounded, link-free repository-relative file and content-bound by the runtime. An owner
+attestation must be exact text from the sealed request. Agent-labeled execution, official-source,
+or reviewer claims cannot mint authority through the semantic draft; those classes require a
+separate sealed provenance receipt. Secondary discovery remains inert and can inform a draft but
+cannot make an invariant gate-ready.
 
 Real-medium verification commands run against a link-free disposable snapshot of the target, not
 the owner's working tree. Any mutation of that snapshot invalidates the evidence and the snapshot

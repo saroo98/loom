@@ -155,6 +155,14 @@ def render_host(host_id):
     assurance = ""
     if host_id == "codex":
         assurance = (
+            "## Canonical route\n\n"
+            "For a marketplace installation, the enabled plugin's skill and local stdio MCP "
+            "server are canonical. The global roots above are direct-source fallback routes, "
+            "not additional routes to retain beside the plugin. During an approved plugin "
+            "migration, Loom removes only an exact receipt-owned user MCP registration and "
+            "moves only an exact receipt-owned direct skill into a private rollback archive. "
+            "An unowned, changed, or ambiguous duplicate blocks migration instead of being "
+            "overwritten or deleted.\n\n"
             "## Assurance modes\n\n"
             "- **Standard:** the plugin-provided local MCP server bootstraps and delegates to the "
             "stable launcher. It needs no lifecycle-hook trust and makes no hook-enforcement "
