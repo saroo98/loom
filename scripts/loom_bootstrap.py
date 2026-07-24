@@ -724,28 +724,71 @@ def _hook_event():
         return 0
     if not isinstance(event, dict) or event.get("hook_event_name") not in {None, "SessionStart"}:
         return 0
-    plugin_root = Path(os.environ.get("PLUGIN_ROOT", Path(__file__).resolve().parents[1]))
+    plugin_root = Path(os.environ.get(
+        "PLUGIN_ROOT", Path(__file__).resolve().parents[1]))
+    user_home_text = (
+        os.environ.get("USERPROFILE")
+        if os.name == "nt"
+        else os.environ.get("HOME"))
+    user_home = Path(user_home_text).resolve() if user_home_text else Path.home().resolve()
+    loom_home = Path(
+        os.environ.get("LOOM_HOME", user_home / ".loom")).resolve()
     try:
         plugin = _load(plugin_root / ".codex-plugin" / "plugin.json", "plugin manifest")
-        loom_home = Path(os.environ.get("LOOM_HOME", Path.home() / ".loom")).resolve()
         pointer_path = loom_home / "runtime" / "current.json"
         current = _load(pointer_path, "runtime pointer") if pointer_path.is_file() else None
-        integration_path = loom_home / "adapters" / "receipts" / "codex-integration.json"
-        integration = (_load(integration_path, "Codex integration receipt")
-                       if integration_path.is_file() else None)
-    except Exception:
+    except Exception as exc:
+        message = str(exc).replace("\r", " ").replace("\n", " ")[:512]
+        print(json.dumps({
+            "continue": True,
+            "systemMessage": f"Loom plugin startup verification blocked safely: {message}",
+        }, separators=(",", ":")))
         return 0
-    if current is None or current.get("version") != plugin.get("version"):
-        print(json.dumps({"continue": True, "systemMessage":
-            "A Loom update is available. It will be verified before the next /loom request."},
-            separators=(",", ":")))
-    elif integration is not None and (
-            integration.get("schema_version") not in {1, 2, 3}
-            or integration.get("mcp_name") not in {None, "loom"}
-            or not isinstance(integration.get("entries"), dict)):
-        print(json.dumps({"continue": True, "systemMessage":
-            "Loom integration health is unknown. Run /loom show status before relying on verified mode."},
-            separators=(",", ":")))
+    try:
+        bootstrap = reconcile(plugin_root, loom_home)
+        launcher_value = bootstrap.get("launcher")
+        launcher = (
+            Path(launcher_value["python_launcher"]).resolve()
+            if isinstance(launcher_value, dict)
+            and isinstance(launcher_value.get("python_launcher"), str)
+            else None)
+        if launcher is None or not launcher.is_file() or launcher.is_symlink():
+            raise BootstrapError("verified startup produced no safe launcher")
+        completed = subprocess.run(
+            [sys.executable, "-B", str(launcher), "--home", str(loom_home),
+             "codex-plugin-canonicalize", "--approved"],
+            capture_output=True, text=True, timeout=30, check=False)
+        if completed.returncode != 0 or len(completed.stdout.encode("utf-8")) > MAX_INPUT:
+            detail = (completed.stdout or completed.stderr or
+                      "plugin route canonicalization failed").strip()
+            raise BootstrapError(detail[:512])
+        try:
+            integration = json.loads(completed.stdout)
+        except json.JSONDecodeError as exc:
+            raise BootstrapError(
+                "plugin route canonicalization returned invalid JSON") from exc
+        if integration.get("status") not in {"current", "installed"}:
+            raise BootstrapError("plugin route canonicalization was not completed")
+    except Exception as exc:
+        message = str(exc).replace("\r", " ").replace("\n", " ")[:512]
+        print(json.dumps({
+            "continue": True,
+            "systemMessage": (
+                "Loom plugin setup is blocked safely. No unowned route was changed. "
+                f"Reason: {message}"),
+        }, separators=(",", ":")))
+        return 0
+    changed = current is None or current.get("version") != plugin.get("version") \
+        or bootstrap.get("status") != "current" \
+        or integration.get("status") == "installed"
+    if changed:
+        print(json.dumps({
+            "continue": True,
+            "systemMessage": (
+                f"Loom {plugin.get('version')} is ready. The verified plugin is the "
+                "canonical Loom route for this task; any exact receipt-owned legacy "
+                "route was archived for rollback."),
+        }, separators=(",", ":")))
     return 0
 
 

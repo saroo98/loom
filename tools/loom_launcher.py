@@ -129,7 +129,10 @@ def main(argv=None):
     probe.add_argument("--protocol-min", type=int, default=2)
     probe.add_argument("--protocol-max", type=int, default=2)
     sub.add_parser("bridge")
-    sub.add_parser("mcp")
+    mcp = sub.add_parser("mcp")
+    mcp.add_argument(
+        "--integration-source", choices=("codex-plugin", "user-config"),
+        default="user-config")
     sub.add_parser("hook-user-prompt")
     sub.add_parser("hook-session-start")
     sub.add_parser("hook-lifecycle")
@@ -138,11 +141,15 @@ def main(argv=None):
     codex_install.add_argument("--standard-only", action="store_true")
     codex_install.add_argument("--hooks-only", action="store_true")
     codex_install.add_argument("--codex")
+    codex_canonicalize = sub.add_parser("codex-plugin-canonicalize")
+    codex_canonicalize.add_argument("--approved", action="store_true")
+    codex_canonicalize.add_argument("--codex")
     codex_uninstall = sub.add_parser("codex-uninstall")
     codex_uninstall.add_argument("--approved", action="store_true")
     codex_uninstall.add_argument("--codex")
     sub.add_parser("invoke-stdio")
     sub.add_parser("resolve-stdio")
+    sub.add_parser("author-stdio")
     complete = sub.add_parser("complete")
     complete.add_argument("--action", required=True)
     complete.add_argument("--usage")
@@ -153,7 +160,11 @@ def main(argv=None):
     if args.command == "bridge":
         return loom_adapter_bridge.serve(args.home, Path(__file__).resolve())
     if args.command == "mcp":
-        return loom_mcp_server.serve(args.home, Path(__file__).resolve())
+        pointer, _runtime = _current(args.home)
+        return loom_mcp_server.serve(
+            args.home, Path(__file__).resolve(),
+            server_version=pointer["version"],
+            integration_source=args.integration_source)
     if args.command in {"hook-user-prompt", "hook-session-start", "hook-lifecycle"}:
         raw = sys.stdin.buffer.read(MAX_HOOK_EVENT_BYTES + 1)
         if len(raw) > MAX_HOOK_EVENT_BYTES:
@@ -181,7 +192,8 @@ def main(argv=None):
         sys.stdout.buffer.write(completed.stdout)
         sys.stdout.buffer.flush()
         return completed.returncode
-    if args.command in {"codex-install", "codex-uninstall"}:
+    if args.command in {
+            "codex-install", "codex-plugin-canonicalize", "codex-uninstall"}:
         user_home = Path(args.home).resolve().parent
         try:
             if args.command == "codex-install":
@@ -191,7 +203,12 @@ def main(argv=None):
                 result = loom_codex_integration.install(
                     user_home, args.home, approved=args.approved,
                     codex_executable=args.codex, verified=not args.standard_only,
-                    manage_mcp=not args.hooks_only)
+                    manage_mcp=not args.hooks_only,
+                    plugin_mode=args.hooks_only)
+            elif args.command == "codex-plugin-canonicalize":
+                result = loom_codex_integration.canonicalize_plugin(
+                    user_home, args.home, approved=args.approved,
+                    codex_executable=args.codex)
             else:
                 result = loom_codex_integration.uninstall(
                     user_home, args.home, approved=args.approved,
@@ -207,12 +224,14 @@ def main(argv=None):
     runtime_healthy = False
     trust_failure = None
     try:
-        if args.command in {"invoke-stdio", "resolve-stdio"}:
+        if args.command in {"invoke-stdio", "resolve-stdio", "author-stdio"}:
             envelope = loom_adapter_protocol.read_single_frame(
                 sys.stdin.buffer, message_type=(
-                    "request-envelope" if args.command == "invoke-stdio" else "resolve"))
+                    "request-envelope" if args.command == "invoke-stdio"
+                    else "resolve" if args.command == "resolve-stdio" else "author"))
         manager = loom_update.SharedRuntime(args.home)
-        if args.command in {"invoke-stdio", "resolve-stdio", "complete", "cancel"}:
+        if args.command in {
+                "invoke-stdio", "resolve-stdio", "author-stdio", "complete", "cancel"}:
             if args.command == "invoke-stdio":
                 _reject_local_shadow(envelope["cwd"])
             lease_data = manager.begin_session()
@@ -239,6 +258,10 @@ def main(argv=None):
         elif args.command == "resolve-stdio":
             command = [
                 sys.executable, "-B", str(orchestrator), "resolve-stdio",
+                "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
+        elif args.command == "author-stdio":
+            command = [
+                sys.executable, "-B", str(orchestrator), "author-stdio",
                 "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
         elif args.command == "complete":
             command = [sys.executable, "-B", str(orchestrator), "complete",

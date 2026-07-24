@@ -637,6 +637,7 @@ def _receipt_from_data(value, *, repeated):
     message_factory = (
         loom_message.legacy_from_session if message_version == 1 else
         loom_message.v2_from_session if message_version == 2 else
+        loom_message.v3_from_session if message_version == 3 else
         loom_message.from_session)
     message_arguments = {
         "status": data["status"], "code": data["code"], "tier": data["tier"],
@@ -645,10 +646,13 @@ def _receipt_from_data(value, *, repeated):
         "detail": data["user_message"],
         "receipt_id": "session-" + data["operation_id"][:16],
     }
-    if message_factory in {loom_message.v2_from_session, loom_message.from_session}:
+    if message_factory in {
+            loom_message.v2_from_session, loom_message.v3_from_session,
+            loom_message.from_session}:
         message_arguments["intent"] = data["intent"]
     if data["schema_version"] == RECEIPT_SCHEMA_VERSION:
-        if message_factory is not loom_message.from_session:
+        if message_factory not in {
+                loom_message.v3_from_session, loom_message.from_session}:
             raise SessionBlocked(
                 "SESSION_CORRUPT", "current session receipt requires current owner message")
         reason = data["block_reason"]
@@ -669,7 +673,8 @@ def _receipt_from_data(value, *, repeated):
                 "SESSION_CORRUPT", "terminal authority does not match the session result")
         message_arguments["block_reason"] = reason
     else:
-        if message_factory is loom_message.from_session:
+        if message_factory in {
+                loom_message.v3_from_session, loom_message.from_session}:
             raise SessionBlocked(
                 "SESSION_CORRUPT", "legacy session receipt cannot carry a current owner message")
         data["block_reason"] = None

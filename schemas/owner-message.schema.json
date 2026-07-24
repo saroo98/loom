@@ -31,7 +31,7 @@
           "additionalProperties": false,
           "required": ["schema_version", "state", "consequence", "verification", "freshness", "changes_made", "undo_status", "summary", "decision", "recommendation", "next_action", "receipt_id", "human"],
           "properties": {
-            "schema_version": {"const": 3},
+            "schema_version": {"enum": [3, 4]},
             "state": {"enum": ["progress", "completed", "decision-needed", "blocked", "stale", "uncertain", "promoted", "failed"]},
             "consequence": {"enum": ["ordinary", "material", "high", "critical"]},
             "verification": {"enum": ["pending", "verified", "blocked", "failed", "unknown"]},

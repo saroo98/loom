@@ -13,7 +13,7 @@ import loom_adapter_protocol
 
 MCP_PROTOCOL = "2025-06-18"
 MAX_FRAME_BYTES = 256 * 1024
-SERVER_INFO = {"name": "loom", "version": "1.0.0"}
+_PLAN_DRAFT_SCHEMA = None
 
 
 class McpError(RuntimeError):
@@ -28,6 +28,27 @@ def _strict_object(pairs):
         if key in value:
             raise McpError(-32600, f"duplicate JSON field: {key}")
         value[key] = item
+    return value
+
+
+def _plan_draft_schema():
+    """Load the installed, integrity-covered semantic authoring contract."""
+    global _PLAN_DRAFT_SCHEMA
+    if _PLAN_DRAFT_SCHEMA is not None:
+        return _PLAN_DRAFT_SCHEMA
+    path = Path(__file__).resolve().parents[1] / "schemas" / "plan-draft.schema.json"
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object)
+    except (OSError, UnicodeError, json.JSONDecodeError, McpError) as exc:
+        raise McpError(
+            -32603, "installed Loom plan-draft schema is missing or invalid") from exc
+    if not isinstance(value, dict) \
+            or value.get("$id") != "loom/schemas/plan-draft.schema.json" \
+            or value.get("type") != "object" \
+            or value.get("additionalProperties") is not False:
+        raise McpError(-32603, "installed Loom plan-draft schema is not authoritative")
+    _PLAN_DRAFT_SCHEMA = value
     return value
 
 
@@ -56,7 +77,27 @@ def _write(stream, value):
 
 
 def _tools():
-    path = {"type": "string", "minLength": 1, "maxLength": 4096}
+    path = {
+        "type": "string", "minLength": 1, "maxLength": 4096,
+        "description": "Existing absolute filesystem path.",
+    }
+    action_path = {
+        **path,
+        "description": "Existing absolute path returned by Loom as action_path.",
+    }
+    usage_path = {
+        **path,
+        "description": (
+            "Optional existing absolute path to a private usage-receipt-v3 JSON file. "
+            "Omit when the host exposes no trustworthy usage counters."),
+    }
+    result_path = {
+        **path,
+        "description": (
+            "Optional existing absolute path to structured repair-result or "
+            "host-outcome JSON. Omit result for ordinary plan completion. Never pass prose, "
+            "a summary, JSON text, or a path that does not already exist."),
+    }
     return [
         {
             "name": "invoke",
@@ -100,12 +141,42 @@ def _tools():
                             "idempotentHint": True, "openWorldHint": False},
         },
         {
-            "name": "complete", "description": "Complete one existing Loom action.",
+            "name": "complete",
+            "description": (
+                "Validate and complete one existing Loom action. For an ordinary plan, "
+                "send only action and omit result."),
             "inputSchema": {
                 "type": "object", "additionalProperties": False,
                 "required": ["action"],
-                "properties": {"action": path, "usage": {"anyOf": [path, {"type": "null"}]},
-                               "result": {"anyOf": [path, {"type": "null"}]}},
+                "properties": {
+                    "action": action_path,
+                    "usage": {"anyOf": [usage_path, {"type": "null"}]},
+                    "result": {"anyOf": [result_path, {"type": "null"}]},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                            "idempotentHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "author",
+            "description": (
+                "Machine-author a sealed planning pack from one bounded semantic draft. "
+                "Set finalize=true for an ordinary plan to run completion immediately after "
+                "successful authoring and return the final sealed receipt in this same tool call."),
+            "inputSchema": {
+                "type": "object", "additionalProperties": False,
+                "required": ["action", "draft"],
+                "properties": {
+                    "action": action_path,
+                    "draft": _plan_draft_schema(),
+                    "finalize": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": (
+                            "When true, complete the ordinary plan only after authoring succeeds. "
+                            "False preserves the legacy separate author-then-complete flow."),
+                    },
+                },
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": False,
                             "idempotentHint": True, "openWorldHint": False},
@@ -113,7 +184,8 @@ def _tools():
         {
             "name": "cancel", "description": "Cancel one existing Loom action safely.",
             "inputSchema": {"type": "object", "additionalProperties": False,
-                            "required": ["action"], "properties": {"action": path}},
+                            "required": ["action"],
+                            "properties": {"action": action_path}},
             "annotations": {"readOnlyHint": False, "destructiveHint": True,
                             "idempotentHint": True, "openWorldHint": False},
         },
@@ -138,6 +210,9 @@ def _adapter_message(name, arguments):
         expected = {"action", "usage", "result"}
         arguments = {"usage": None, "result": None, **arguments}
         message = {**common, "message_type": "complete", **arguments}
+    elif name == "author":
+        expected = {"action", "draft"}
+        message = {**common, "message_type": "author", **arguments}
     elif name == "cancel":
         expected = {"action"}
         message = {**common, "message_type": "cancel", **arguments}
@@ -173,21 +248,75 @@ def _initialize_bridge(home, launcher, session):
         raise McpError(-32603, "Loom bridge initialization failed")
 
 
-def _call_tool(name, arguments, *, home, launcher, bridge_session):
+def _call_tool(
+        name, arguments, *, home, launcher, bridge_session,
+        integration_source, launcher_resolver=None):
+    if launcher_resolver is not None:
+        launcher = launcher_resolver()
+    if launcher is None:
+        raise McpError(-32603, "Loom stable launcher is unavailable")
+    launcher = Path(launcher).resolve()
+    if not launcher.is_file() or launcher.is_symlink():
+        raise McpError(-32603, "Loom stable launcher is invalid")
     _initialize_bridge(home, launcher, bridge_session)
-    message = _adapter_message(name, arguments)
+    finalize = False
+    adapter_arguments = arguments
+    if name == "author":
+        adapter_arguments = dict(arguments)
+        finalize = adapter_arguments.pop("finalize", False)
+        if type(finalize) is not bool:
+            raise McpError(-32602, "Loom author finalize must be a boolean")
+    message = _adapter_message(name, adapter_arguments)
     response = loom_adapter_bridge.dispatch(
         message, home=home, launcher=launcher, session=bridge_session)
     if response["message_type"] == "error":
         raise McpError(-32000, response["message"])
+    if name == "author" and finalize and response["returncode"] == 0:
+        completion = _adapter_message(
+            "complete", {"action": adapter_arguments["action"]})
+        response = loom_adapter_bridge.dispatch(
+            completion, home=home, launcher=launcher, session=bridge_session)
+        if response["message_type"] == "error":
+            raise McpError(-32000, response["message"])
     payload = response["payload"]
+    if name == "status" and isinstance(payload, dict):
+        payload = {
+            **payload,
+            "codex_integration": {
+                "assurance": "standard",
+                "source": integration_source,
+                "user_config_registration": integration_source == "user-config",
+            },
+        }
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+    # Loom intentionally uses the universally compatible TextContent form only.
+    # Returning the same payload again as structuredContent doubles large planning
+    # contracts in model context without adding a distinct machine contract.
     return {"content": [{"type": "text", "text": text}],
-            "structuredContent": payload,
             "isError": response["returncode"] != 0}
 
 
-def serve(home, launcher, *, input_stream=None, output_stream=None):
+def _tool_call(params):
+    if not isinstance(params, dict):
+        raise McpError(-32602, "tool call parameters are invalid")
+    if not set(params).issubset({"name", "arguments", "_meta"}) \
+            or "name" not in params or not isinstance(params["name"], str):
+        raise McpError(-32602, "tool call parameters are invalid")
+    metadata = params.get("_meta", {})
+    if not isinstance(metadata, dict):
+        raise McpError(-32602, "tool call metadata is invalid")
+    arguments = params.get("arguments", {})
+    if not isinstance(arguments, dict):
+        raise McpError(-32602, "tool call arguments are invalid")
+    return params["name"], arguments
+
+
+def serve(
+        home, launcher, *, input_stream=None, output_stream=None,
+        server_version="0.0.0", integration_source="user-config",
+        launcher_resolver=None):
+    if integration_source not in {"codex-plugin", "user-config"}:
+        raise ValueError("MCP integration source is invalid")
     source = input_stream or sys.stdin.buffer
     target = output_stream or sys.stdout.buffer
     bridge_session = {}
@@ -210,7 +339,8 @@ def serve(home, launcher, *, input_stream=None, output_stream=None):
                     raise McpError(-32602, "initialize parameters are invalid")
                 result = {"protocolVersion": MCP_PROTOCOL,
                           "capabilities": {"tools": {"listChanged": False}},
-                          "serverInfo": SERVER_INFO,
+                          "serverInfo": {
+                              "name": "loom", "version": server_version},
                           "instructions": (
                               "Use resolve for a verified hook receipt; otherwise use invoke.")}
             elif method == "ping":
@@ -220,13 +350,16 @@ def serve(home, launcher, *, input_stream=None, output_stream=None):
                     raise McpError(-32002, "MCP client has not initialized")
                 result = {"tools": _tools()}
             elif method == "tools/call":
-                if not initialized or not isinstance(params, dict) \
-                        or set(params) != {"name", "arguments"} \
-                        or not isinstance(params["name"], str):
+                if not initialized:
                     raise McpError(-32602, "tool call parameters are invalid")
+                name, arguments = _tool_call(params)
                 result = _call_tool(
-                    params["name"], params["arguments"], home=Path(home).resolve(),
-                    launcher=Path(launcher).resolve(), bridge_session=bridge_session)
+                    name, arguments, home=Path(home).resolve(),
+                    launcher=(Path(launcher).resolve()
+                              if launcher is not None else None),
+                    bridge_session=bridge_session,
+                    integration_source=integration_source,
+                    launcher_resolver=launcher_resolver)
             else:
                 raise McpError(-32601, "method not found")
             _write(target, {"jsonrpc": "2.0", "id": request_id, "result": result})

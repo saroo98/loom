@@ -62,7 +62,7 @@ def validate(value):
         "receipt_id", "human",
     }
     if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != 3 \
+            or value.get("schema_version") not in {3, 4} \
             or value.get("state") not in STATES \
             or value.get("consequence") not in CONSEQUENCES \
             or value.get("verification") not in VERIFICATION \
@@ -101,7 +101,7 @@ def build(*, state, consequence, verification, freshness, changes_made, undo_sta
     decision = _text(decision, "decision", nullable=True)
     recommendation = _text(recommendation, "recommendation", nullable=True)
     value = {
-        "schema_version": 3, "state": state, "consequence": consequence,
+        "schema_version": 4, "state": state, "consequence": consequence,
         "verification": verification, "freshness": freshness,
         "changes_made": changes_made, "undo_status": undo_status, "summary": summary,
         "decision": decision, "recommendation": recommendation,
@@ -132,6 +132,112 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
         state = "promoted" if "promot" in low else "completed"
         verification = "verified"
         freshness = "current"
+        summary = normalized_detail or "Loom completed the safe verified frontier."
+        next_action = {
+            "plan": "Review the declared work-order frontier, then continue when ready.",
+            "resume": "Continue with the next declared frontier when ready.",
+            "execute": "Review the captured evidence, then continue when ready.",
+            "review": "Review the findings and choose the next declared frontier.",
+            "repair": "Review the repair evidence, then continue when ready.",
+            "close": "Leave the closed lifecycle unchanged or begin a new request.",
+            "status": "Continue only if the reported state matches your intent.",
+            "remember": "Continue normally; Loom will scope this memory automatically.",
+            "forget": "Continue normally; forgotten material remains inactive.",
+            "why": "Continue only if the explanation matches your intent.",
+            "undo": "Continue with a new request or leave the project unchanged.",
+        }[intent]
+        decision = recommendation = None
+        changes_made = intent in {
+            "plan", "execute", "repair", "close", "remember", "forget", "undo"}
+        undo_status = ("available" if reversible_action_ids else
+                       "unavailable" if changes_made else "not-applicable")
+    else:
+        preference_conflict = "preference-conflict" in low
+        state = ("decision-needed" if preference_conflict else
+                 "stale" if "stale" in low or "regate" in low else
+                 "failed" if status == "interrupted" else
+                 "decision-needed" if owner_input_required else "blocked")
+        verification = "failed" if status == "interrupted" else "blocked"
+        freshness = "stale" if state == "stale" else "unknown"
+        if block_reason is not None:
+            try:
+                loom_block_reason.validate(block_reason)
+            except loom_block_reason.BlockReasonError as exc:
+                raise MessageError(f"session block reason is invalid: {exc}") from exc
+            location = f" at {block_reason['safe_path']}" \
+                if block_reason["safe_path"] else ""
+            if block_reason["code"] == "plan-scope-decision-required":
+                summary = "Loom needs one project detail before it can plan safely."
+                decision = "Name the project kind and its smallest desired outcome."
+                recommendation = (
+                    "Reply with one concrete outcome, such as a Python CLI that greets a name.")
+                next_action = block_reason["next_action"]
+            else:
+                summary = (
+                    f"Loom stopped{location}: {block_reason['observed']}"[:240].rstrip())
+                decision = "No implementation or fallback is authorized by this receipt."
+                recommendation = "Follow the receipt's exact bounded next action."
+                next_action = block_reason["next_action"]
+        elif preference_conflict:
+            summary = "Two stated preferences conflict, so Loom did not choose one silently."
+            decision = "State which preference should apply to this work."
+            recommendation = "Keep both conflicting preferences inactive until you choose."
+            next_action = "Reply with the preference to retain, or leave this work unchanged."
+        else:
+            summary = (f"Loom stopped: {normalized_detail}"
+                       if normalized_detail else
+                       "Loom stopped before the affected work could continue.")
+            decision = "Choose whether to resolve the reported block and continue."
+            recommendation = "Keep the affected work stopped and inspect the sealed receipt."
+            next_action = "Resolve the single blocking decision or leave the work unchanged."
+        if status == "interrupted":
+            changes_made, undo_status = None, "unknown"
+        else:
+            changes_made, undo_status = False, "not-applicable"
+    return build(
+        state=state, consequence=consequence, verification=verification,
+        freshness=freshness, changes_made=changes_made, undo_status=undo_status,
+        summary=summary, decision=decision, recommendation=recommendation,
+        next_action=next_action, receipt_id=receipt_id)
+
+
+def v3_build(*, state, consequence, verification, freshness, changes_made,
+             undo_status, summary, next_action, receipt_id, decision=None,
+             recommendation=None):
+    """Reconstruct a v3 action message only to authenticate existing actions."""
+    value = {
+        "schema_version": 3, "state": state, "consequence": consequence,
+        "verification": verification, "freshness": freshness,
+        "changes_made": changes_made, "undo_status": undo_status,
+        "summary": _text(summary, "summary"),
+        "decision": _text(decision, "decision", nullable=True),
+        "recommendation": _text(recommendation, "recommendation", nullable=True),
+        "next_action": _text(next_action, "next action"),
+        "receipt_id": receipt_id, "human": "",
+    }
+    value["human"] = _render(value)
+    return validate(value)
+
+
+def v3_from_session(*, status, code, intent, tier, owner_input_required,
+                    reversible_action_ids, detail, receipt_id, block_reason=None):
+    """Reconstruct the v3 session projection for sealed receipt compatibility."""
+    if status not in {"completed", "blocked", "interrupted"} \
+            or intent not in {
+                "plan", "resume", "execute", "review", "repair", "close", "status",
+                "remember", "forget", "why", "undo"} \
+            or tier not in {"S", "M", "L", "XL"} \
+            or type(owner_input_required) is not bool \
+            or not isinstance(reversible_action_ids, (list, tuple)):
+        raise MessageError("session message inputs are invalid")
+    consequence = {"S": "ordinary", "M": "material", "L": "high", "XL": "critical"}[tier]
+    low = str(code).casefold()
+    normalized_detail = " ".join(str(detail or "").split())[:180].strip()
+    if status == "completed":
+        if block_reason is not None:
+            raise MessageError("completed session cannot carry a block reason")
+        state = "promoted" if "promot" in low else "completed"
+        verification, freshness = "verified", "current"
         summary = "Loom completed the safe verified frontier."
         next_action = "Continue with the next safe frontier when ready."
         decision = recommendation = None
@@ -154,10 +260,18 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
                 raise MessageError(f"session block reason is invalid: {exc}") from exc
             location = f" at {block_reason['safe_path']}" \
                 if block_reason["safe_path"] else ""
-            summary = f"Loom stopped{location}: {block_reason['observed']}"[:240].rstrip()
-            decision = "No implementation or fallback is authorized by this receipt."
-            recommendation = "Follow the receipt's exact bounded next action."
-            next_action = block_reason["next_action"]
+            if block_reason["code"] == "plan-scope-decision-required":
+                summary = "Loom needs one project detail before it can plan safely."
+                decision = "Name the project kind and its smallest desired outcome."
+                recommendation = (
+                    "Reply with one concrete outcome, such as a Python CLI that greets a name.")
+                next_action = block_reason["next_action"]
+            else:
+                summary = (
+                    f"Loom stopped{location}: {block_reason['observed']}"[:240].rstrip())
+                decision = "No implementation or fallback is authorized by this receipt."
+                recommendation = "Follow the receipt's exact bounded next action."
+                next_action = block_reason["next_action"]
         elif preference_conflict:
             summary = "Two stated preferences conflict, so Loom did not choose one silently."
             decision = "State which preference should apply to this work."
@@ -174,7 +288,7 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
             changes_made, undo_status = None, "unknown"
         else:
             changes_made, undo_status = False, "not-applicable"
-    return build(
+    return v3_build(
         state=state, consequence=consequence, verification=verification,
         freshness=freshness, changes_made=changes_made, undo_status=undo_status,
         summary=summary, decision=decision, recommendation=recommendation,
@@ -219,7 +333,7 @@ def _validate_v2(value):
 def v2_from_session(*, status, code, intent, tier, owner_input_required,
                     reversible_action_ids, detail, receipt_id):
     """Reconstruct the short-lived v2 projection for sealed receipt compatibility."""
-    current = from_session(
+    current = v3_from_session(
         status=status, code=code, intent=intent, tier=tier,
         owner_input_required=owner_input_required,
         reversible_action_ids=reversible_action_ids, detail=detail,

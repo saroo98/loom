@@ -4,6 +4,7 @@
       "command": "python",
       "args": ["-B", "./scripts/loom_codex_mcp.py"],
       "cwd": ".",
+      "env_vars": ["HOME", "USERPROFILE", "CODEX_HOME", "CARGO_HOME", "RUSTUP_HOME"],
       "tool_timeout_sec": 900
     }
   }

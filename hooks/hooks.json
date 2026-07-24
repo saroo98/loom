@@ -1,4 +1,19 @@
 {
-  "description": "Loom lifecycle hooks are installed transactionally at user scope after explicit approval.",
-  "hooks": {}
+  "description": "One reviewable startup hook verifies the installed plugin and retires only exact receipt-owned legacy Loom routes. It never processes owner prompts or installs verified-mode lifecycle hooks.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -B \"$PLUGIN_ROOT/scripts/loom_bootstrap.py\"",
+            "commandWindows": "py -3 -B \"%PLUGIN_ROOT%\\scripts\\loom_bootstrap.py\"",
+            "timeout": 60,
+            "statusMessage": "Verifying Loom integration"
+          }
+        ]
+      }
+    ]
+  }
 }

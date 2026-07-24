@@ -33,18 +33,43 @@ class PluginPackageTests(unittest.TestCase):
         self.assertEqual("python", mcp["mcpServers"]["loom"]["command"])
         self.assertEqual(["-B", "./scripts/loom_codex_mcp.py"],
                          mcp["mcpServers"]["loom"]["args"])
+        self.assertEqual(
+            ["HOME", "USERPROFILE", "CODEX_HOME", "CARGO_HOME", "RUSTUP_HOME"],
+            mcp["mcpServers"]["loom"]["env_vars"])
         self.assertNotIn("apps", manifest)
         plugin_skill = (ROOT / "skills" / "loom" / "SKILL.md").read_text(encoding="utf-8")
         canonical = (ROOT / "skill" / "loom" / "SKILL.md").read_text(encoding="utf-8")
         self.assertEqual(canonical, plugin_skill)
+        self.assertLessEqual(
+            len(plugin_skill.encode("utf-8")), 3000,
+            "the Codex skill must remain a complete compact dispatcher")
         self.assertTrue((ROOT / "skills" / "loom" / ".." / ".." /
                          "START-HERE.md").resolve().is_file())
-        self.assertIn("`LOOM_ROOT/START-HERE.md`", plugin_skill)
+        self.assertIn(
+            "Do not read `START-HERE.md`, the full installation", plugin_skill)
         self.assertNotIn(
             "`LOOM_ROOT` is the installed directory containing this file", plugin_skill)
-        self.assertNotIn("hooks", manifest)
+        self.assertIn(
+            "do not characterize the request as broad, intentional, complex",
+            plugin_skill)
+        self.assertIn(
+            "Invoke Loom immediately. Do not narrate or analyze the request",
+            plugin_skill)
+        self.assertIn("Honor `semantic_draft_limits`", plugin_skill)
+        kernel = (ROOT / "START-HERE.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "host narration must not assign intent, complexity, breadth", kernel)
+        self.assertEqual("./hooks/hooks.json", manifest["hooks"])
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))
-        self.assertEqual({}, hooks["hooks"])
+        self.assertEqual({"SessionStart"}, set(hooks["hooks"]))
+        entry = hooks["hooks"]["SessionStart"][0]["hooks"][0]
+        self.assertEqual("command", entry["type"])
+        self.assertIn("python3 -B", entry["command"])
+        self.assertIn("py -3 -B", entry["commandWindows"])
+        self.assertIn("$PLUGIN_ROOT/scripts/loom_bootstrap.py", entry["command"])
+        self.assertIn("%PLUGIN_ROOT%\\scripts\\loom_bootstrap.py",
+                      entry["commandWindows"])
+        self.assertNotIn("UserPromptSubmit", hooks["hooks"])
 
 
 class AdapterTests(unittest.TestCase):
