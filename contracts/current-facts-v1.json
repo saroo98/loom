@@ -15,8 +15,8 @@
       "id": "codex.local-version",
       "claim": "The implementation environment reported codex-cli 0.128.0 and did not expose a plugin add subcommand.",
       "source": "local:codex --version; codex plugin --help",
-      "retrieved_at": "2026-07-17T00:00:00Z",
-      "expires_at": "2026-07-24T00:00:00Z",
+      "retrieved_at": "2026-07-24T19:18:00Z",
+      "expires_at": "2026-07-31T19:18:00Z",
       "verification_owner": "release-maintainer",
       "status": "observed"
     },
