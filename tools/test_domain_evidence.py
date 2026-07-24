@@ -30,6 +30,18 @@ class DomainEvidenceTests(unittest.TestCase):
         self.assertFalse(result["satisfied"])
         self.assertIn("official-vendor", result["missing"])
 
+    def test_source_class_cannot_claim_the_wrong_trust_state(self):
+        source = copy.deepcopy(domain_test_support.source(
+            "executed-observation", "observation", "real rig test"))
+        source["trust_state"] = "trusted-authority"
+        body = dict(source); body.pop("canonical_digest")
+        source["canonical_digest"] = loom_domain_contract.digest(
+            "domain-source-v1", body)
+        with self.assertRaisesRegex(
+                loom_domain_contract.DomainContractError,
+                "trust state are inconsistent"):
+            loom_domain_contract.validate_source(source)
+
     def test_wrong_target_blocks_bundle(self):
         bundle = domain_test_support.gate_ready_bundle()
         changed = copy.deepcopy(bundle)

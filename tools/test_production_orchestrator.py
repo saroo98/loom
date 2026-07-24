@@ -4,6 +4,7 @@ import datetime as dt
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -18,9 +19,12 @@ import loom_improvement  # noqa: E402
 import loom_lifecycle  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_adapter_protocol  # noqa: E402
+import loom_domain_discovery  # noqa: E402
 import loom_memory  # noqa: E402
 import loom_orchestrator  # noqa: E402
+import loom_plan_author  # noqa: E402
 import loom_performance  # noqa: E402
+import loom_reliability  # noqa: E402
 import loom_release  # noqa: E402
 from test_loom_vault_v11 import TestCrypto  # noqa: E402
 
@@ -69,7 +73,7 @@ status: active
 execution_mode: planned
 last_verified: {TODAY}
 loom_version: "{version}"
-plan_contract_version: 4
+plan_contract_version: {contract["schema_version"]}
 domain_id: accounting
 domain_ids: [accounting]
 domain_coverage: adapter
@@ -339,6 +343,21 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 "-".join(("owner", "fixture", "token")),
             ], source_classification="public-release")
         loom_install.install(cls.public, cls.installed_fixture)
+        cls.repo_fixture = cls.fixture_root / "repo-fixture"
+        (cls.repo_fixture / "src").mkdir(parents=True)
+        _write(cls.repo_fixture / "src" / "app.py", "VALUE = 1\n")
+        subprocess.run(["git", "init", "-q", str(cls.repo_fixture)], check=True)
+        subprocess.run([
+            "git", "-C", str(cls.repo_fixture), "config", "user.email",
+            "test@example.invalid"], check=True)
+        subprocess.run([
+            "git", "-C", str(cls.repo_fixture), "config", "user.name", "test"],
+            check=True)
+        subprocess.run(
+            ["git", "-C", str(cls.repo_fixture), "add", "-A"], check=True)
+        subprocess.run([
+            "git", "-C", str(cls.repo_fixture), "commit", "-qm", "baseline"],
+            check=True)
 
     @classmethod
     def tearDownClass(cls):
@@ -355,16 +374,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         self.repo = self.root / "target"
-        (self.repo / "src").mkdir(parents=True)
-        _write(self.repo / "src" / "app.py", "VALUE = 1\n")
-        subprocess.run(["git", "init", "-q", str(self.repo)], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "config", "user.email",
-                        "test@example.invalid"], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "config", "user.name", "test"],
-                       check=True)
-        subprocess.run(["git", "-C", str(self.repo), "add", "-A"], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm", "baseline"],
-                       check=True)
+        shutil.copytree(self.repo_fixture, self.repo)
         self.request = "Plan a financial double-entry accounting change to src/app.py"
         self.request_sequence = 0
 
@@ -407,6 +417,120 @@ class ProductionOrchestratorTests(unittest.TestCase):
              *values], input=stdin, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=60)
 
+    def complete_machine_authored_plan(self):
+        action = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        contract = action["plan_contract"]
+        shape = action["semantic_draft_shape"]
+        self.assertEqual(
+            ["domain", "fact", "source"], shape["current_fact_fields"])
+        self.assertNotIn("evidence_sources", shape["current_fact_fields"])
+        self.assertEqual(
+            sorted(loom_plan_author.WORK_ORDER_FIELDS),
+            shape["work_order_fields"])
+        self.assertEqual(
+            sorted(loom_plan_author.ROUTING), shape["routing_values"])
+        self.assertEqual(
+            sorted(loom_plan_author.SIZE), shape["size_values"])
+        self.assertEqual(
+            loom_plan_author.SOURCE_KEY_PATTERN,
+            shape["domain_source_key_pattern"])
+        self.assertEqual(
+            sorted(loom_plan_author.SOURCE_CLASSES),
+            shape["domain_source_class_values"])
+        self.assertEqual(
+            sorted(loom_plan_author.LOCATOR_VISIBILITY),
+            shape["domain_locator_visibility_values"])
+        self.assertEqual(
+            sorted(loom_plan_author.CURRENTNESS),
+            shape["domain_currentness_values"])
+        self.assertEqual(
+            sorted(loom_plan_author.INVARIANT_TYPES),
+            shape["domain_invariant_type_values"])
+        self.assertEqual(
+            sorted(loom_plan_author.CONSEQUENCE_CLASSES),
+            shape["domain_consequence_values"])
+        self.assertEqual(
+            sorted(loom_plan_author.AUTHORITY_REQUIREMENTS),
+            shape["domain_authority_requirement_values"])
+        self.assertEqual(
+            ["owner-authority", "repository-evidence"],
+            shape["domain_authority_availability"]["semantic_source_supported"])
+        self.assertIn(
+            "real-medium-evidence",
+            shape["domain_authority_availability"]["receipt_required"])
+        self.assertEqual(["accounting"], shape["active_domain_values"])
+        self.assertFalse(shape["domain_evidence_required"])
+        self.assertEqual(
+            8192, shape["domain_limits"]["sources"]["content_bytes"])
+        self.assertNotIn(
+            "freshness_policy", shape["domain_invariant_fields"])
+        self.assertIn(
+            "semantic_draft_shape.domain_limits",
+            action["required_outcome"])
+        self.assertIn("RFC3339", shape["timestamp_contract"])
+        self.assertIn(
+            "object", shape["collection_contracts"]["answers"])
+        self.assertIn(
+            "WO-###", shape["collection_contracts"]["depends_on"])
+        self.assertIn(
+            "implementation target", " ".join(shape["rules"]))
+        self.assertIn(
+            "overlapping touches", " ".join(shape["rules"]))
+        self.assertIn(
+            "does not imply the real-medium-evidence authority requirement",
+            " ".join(shape["rules"]))
+        self.assertIn(
+            "use only semantic_draft_shape field names",
+            action["required_outcome"].casefold())
+        draft = {
+            "schema_version": 1,
+            "title": "Preserve double-entry correctness",
+            "summary": (
+                "Plan one bounded change to src/app.py while preserving the shipped "
+                "accounting invariants."),
+            "assumptions": [
+                "The requested change remains limited to the existing src/app.py boundary."],
+            "decisions": [
+                "Reject any posting path that could leave debits and credits unbalanced."],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped accounting adapter",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Preserve double-entry correctness",
+                "outcome": "Requested behavior preserves all accounting invariants.",
+                "tasks": [
+                    "Inspect the existing posting boundary.",
+                    "Implement the requested bounded behavior.",
+                    "Run executable positive and negative accounting checks.",
+                ],
+                "acceptance": [
+                    "`python -m unittest` exits 0 for balanced postings.",
+                    "A precision edge case preserves its exact decimal result.",
+                ],
+                "negative_acceptance": [
+                    "an unbalanced posting fails without a partial write"],
+                "out_of_scope": ["Tax policy and data migration."],
+                "escalation": ["Stop if a dated jurisdiction rule is required."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+        loom_orchestrator.author(
+            action["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        completed = loom_orchestrator.complete(
+            action["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        return action, completed
+
     def test_legacy_test_backend_requires_exact_disposable_marker(self):
         marker = self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER
         self.assertTrue(loom_orchestrator._disposable_test_legacy_backend_allowed(
@@ -429,7 +553,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         action = json.loads(opened.stdout)
         self.assertEqual("L", action["tier"])
         self.assertEqual(["llm-agent"], action["domains"])
-        self.assertEqual(4, action["plan_contract"]["schema_version"])
+        self.assertEqual(
+            loom_orchestrator.PLAN_CONTRACT_SCHEMA_VERSION,
+            action["plan_contract"]["schema_version"])
         active = {item["id"] for item in action["plan_contract"]
                   ["planning_intelligence"]["active_modules"]}
         self.assertTrue({"outcomes-requirements", "architecture-boundaries",
@@ -453,7 +579,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("progress", action["owner_message"]["state"])
         self.assertEqual(2, len(action["owner_message"]["human"].splitlines()))
         contract = action["plan_contract"]
-        self.assertEqual(4, contract["schema_version"])
+        self.assertEqual(
+            loom_orchestrator.PLAN_CONTRACT_SCHEMA_VERSION,
+            contract["schema_version"])
         self.assertEqual(contract["domain_route"]["route_digest"],
                          contract["route_digest"])
         self.assertEqual(contract["domain_route"]["graph_digest"],
@@ -528,11 +656,882 @@ class ProductionOrchestratorTests(unittest.TestCase):
             cycle_install, confirmation=receipt["install_id"])
         self.assertTrue(removed["target_removed"])
 
+    def test_machine_authoring_produces_a_lint_clean_authorized_medium_plan(self):
+        action = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        contract = action["plan_contract"]
+        draft = {
+            "schema_version": 1,
+            "title": "Preserve double-entry correctness",
+            "summary": (
+                "Plan one bounded change to src/app.py while preserving the shipped "
+                "accounting invariants."),
+            "assumptions": [
+                "The requested change remains limited to the existing src/app.py boundary."],
+            "decisions": [
+                "Reject any posting path that could leave debits and credits unbalanced."],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": (
+                    "sealed project inspection and the shipped accounting adapter; "
+                    "implementation must recheck any dated external rule"),
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Preserve double-entry correctness",
+                "outcome": (
+                    "The requested src/app.py behavior changes without violating balanced "
+                    "posting, precision, audit, reconciliation, or close invariants."),
+                "tasks": [
+                    "Inspect the current src/app.py posting boundary.",
+                    "Implement only the requested behavior inside that boundary.",
+                    "Add executable positive and negative accounting checks.",
+                ],
+                "acceptance": [
+                    "`python -m unittest` exits 0 and exercises balanced postings.",
+                    "A 0.10 plus 0.20 precision edge case returns exactly 0.30.",
+                ],
+                "negative_acceptance": [
+                    "an unbalanced posting exits nonzero without a partial write"],
+                "out_of_scope": ["Tax-policy changes and data migration."],
+                "escalation": [
+                    "Stop if a dated jurisdiction rule or a second component is required."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+
+        authored = loom_orchestrator.author(
+            action["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("authored", authored["status"])
+        self.assertTrue(authored["ready_for_completion"])
+        self.assertFalse([
+            item for item in authored["diagnostics"] if item["level"] == "ERROR"])
+        self.assertFalse([
+            item for item in authored["diagnostics"] if item["level"] == "WARN"])
+        report = loom_lint.lint(
+            self.repo / "plans", repo_path=self.repo,
+            enforce_lifecycle=False, check_repo_state=False)
+        self.assertEqual([], report.findings)
+
+        completed = loom_orchestrator.complete(
+            action["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+        self.assertEqual("plan-complete", completed["code"])
+        self.assertIn(
+            "Only the declared work-order frontier is authorized",
+            completed["owner_message"]["human"])
+        self.assertNotIn(
+            "Implementation may proceed",
+            completed["owner_message"]["human"])
+        self.assertEqual([], loom_gate.verify(
+            self.repo / "plans", self.repo, require_authorized=True))
+
+    def test_completed_machine_authored_plan_is_exactly_reversible(self):
+        action, completed = self.complete_machine_authored_plan()
+        self.assertEqual([action["action_id"]], completed["reversible_action_ids"])
+        sealed = json.loads(
+            Path(action["action_path"]).read_text(encoding="utf-8"))
+        self.assertEqual(
+            "active", sealed["host_result"]["plan_author"]["state"])
+
+        undone = loom_orchestrator.invoke(
+            request="Undo the last Loom plan", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", undone["status"])
+        self.assertEqual("undo-complete", undone["code"])
+        self.assertIn(
+            f"undone-plan-{action['action_id']}",
+            undone["owner_message"]["human"])
+        self.assertNotIn(
+            "completed the requested safe frontier",
+            undone["owner_message"]["human"])
+        self.assertFalse((self.repo / "plans").exists())
+        archive = (
+            self.repo / ".loom-history" /
+            f"undone-plan-{action['action_id']}")
+        self.assertTrue(archive.is_dir())
+        _path, restored, _security = loom_orchestrator._read_action(
+            action["action_path"])
+        record = restored["host_result"]["plan_author"]
+        self.assertEqual("undone", record["state"])
+        self.assertEqual(
+            archive.relative_to(self.repo).as_posix(), record["archive_path"])
+
+    def test_plan_undo_refuses_changed_pack_without_moving_it(self):
+        _action, _completed = self.complete_machine_authored_plan()
+        decisions = self.repo / "plans" / "decisions.md"
+        decisions.write_text(
+            decisions.read_text(encoding="utf-8") + "\nowner change\n",
+            encoding="utf-8")
+
+        refused = loom_orchestrator.invoke(
+            request="Undo the last Loom plan", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("blocked", refused["status"])
+        self.assertEqual("plan-undo-changed", refused["code"])
+        self.assertTrue((self.repo / "plans").is_dir())
+        self.assertFalse((self.repo / ".loom-history").exists())
+
+    def test_plan_undo_refuses_destination_collision_without_overwriting(self):
+        action, _completed = self.complete_machine_authored_plan()
+        archive = (
+            self.repo / ".loom-history" /
+            f"undone-plan-{action['action_id']}")
+        archive.mkdir(parents=True)
+        marker = archive / "unowned.txt"
+        marker.write_text("preserve\n", encoding="utf-8")
+
+        refused = loom_orchestrator.invoke(
+            request="Undo the last Loom plan", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("blocked", refused["status"])
+        self.assertEqual("plan-undo-conflict", refused["code"])
+        self.assertTrue((self.repo / "plans").is_dir())
+        self.assertEqual("preserve\n", marker.read_text(encoding="utf-8"))
+
+    def test_plan_undo_recovers_move_completed_before_receipt_update(self):
+        action, _completed = self.complete_machine_authored_plan()
+        history = self.repo / ".loom-history"
+        history.mkdir()
+        archive = history / f"undone-plan-{action['action_id']}"
+        os.replace(self.repo / "plans", archive)
+
+        recovered = loom_orchestrator.invoke(
+            request="Undo the last Loom plan", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", recovered["status"])
+        self.assertEqual("undo-complete", recovered["code"])
+        self.assertFalse((self.repo / "plans").exists())
+        self.assertTrue(archive.is_dir())
+        _path, restored, _security = loom_orchestrator._read_action(
+            action["action_path"])
+        self.assertEqual(
+            "undone", restored["host_result"]["plan_author"]["state"])
+
+    def test_machine_authoring_seals_semantic_unknown_domain_evidence(self):
+        authority_text = (
+            "Every glossary definition must cite AUTHORITY.md and retain the "
+            "canonical term spelling.\n")
+        _write(self.repo / "AUTHORITY.md", authority_text)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "add", "AUTHORITY.md"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "commit", "-qm", "add authority"],
+            check=True)
+        request = (
+            "Plan a quantum optics glossary research note in src/app.py using "
+            "AUTHORITY.md as the governing repository source.")
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual("M", action["tier"])
+        contract = action["plan_contract"]
+        stamp = dt.datetime.now(dt.timezone.utc).replace(
+            microsecond=0).isoformat().replace("+00:00", "Z")
+        future = (
+            dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        draft = {
+            "schema_version": 1, "title": "Quantum optics glossary",
+            "summary": "Plan a source-traceable quantum optics glossary research note.",
+            "assumptions": [], "decisions": [
+                "Use only definitions traceable to the sealed repository source."],
+            "current_facts": [],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Author traceable glossary",
+                "outcome": "Every glossary definition is source-traceable.",
+                "tasks": ["Write the glossary note in src/app.py."],
+                "acceptance": [
+                    "Every definition has one AUTHORITY.md citation."],
+                "negative_acceptance": [
+                    "an uncited definition is rejected before completion"],
+                "out_of_scope": ["Laboratory control and safety guidance."],
+                "escalation": ["Stop if a definition lacks repository authority."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "specialist", "size": "S",
+            }],
+            "domain_evidence": {
+                "retrieval_rounds": 1,
+                "answers": {
+                    key: "Bound to the cited research note and rendered glossary."
+                    for key, _question in loom_domain_discovery.QUESTIONS
+                },
+                "sources": [{
+                    "key": "authority", "title": "Repository terminology authority",
+                    "locator": "AUTHORITY.md",
+                    "locator_visibility": "public",
+                    "publisher": "Repository",
+                    "source_class": "repository",
+                    "content": None,
+                    "retrieval_method": "runtime repository read",
+                    "document_id": "AUTHORITY.md", "version": "1",
+                    "published_at": stamp, "effective_at": stamp,
+                    "revalidate_by": future, "jurisdiction": None,
+                    "product_class": "research-note", "environment": "local",
+                    "currentness": "current", "ambiguity": None,
+                }],
+                "invariants": [{
+                    "statement": (
+                        "every glossary definition is traceable to AUTHORITY.md"),
+                    "invariant_type": "correctness",
+                    "domain_ids": contract["domains"],
+                    "subsystem_ids": ["domain-quantum-optics"],
+                    "scope": {
+                        "component": "glossary", "jurisdiction": None,
+                        "product_class": "research-note", "environment": "local",
+                        "version_range": "1", "effective_period": stamp[:10],
+                    },
+                    "consequence_class": "ordinary",
+                    "failure": "an unsupported definition is published",
+                    "authority_requirements": ["repository-evidence"],
+                    "supporting_source_keys": ["authority"],
+                    "contradicting_source_keys": [],
+                    "applicability_evidence": [
+                        "topic, source, and verification scope match"],
+                    "required_real_medium": "rendered glossary inspection",
+                    "acceptance_target": "every definition has one source citation",
+                    "as_of": stamp, "revalidate_by": future,
+                    "revision_identity": "1",
+                }],
+            },
+        }
+
+        authored = loom_orchestrator.author(
+            action["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        self.assertIn("domain-discovery.json", authored["files"])
+        self.assertEqual([], authored["diagnostics"])
+        bundle = json.loads(
+            (self.repo / "plans" / "domain-discovery.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual("gate-ready", bundle["discovery"]["status"])
+        self.assertNotIn("content", bundle["sources"][0])
+        self.assertEqual(
+            hashlib.sha256((self.repo / "AUTHORITY.md").read_bytes()).hexdigest(),
+            bundle["sources"][0]["content_sha256"])
+        self.assertEqual(
+            "loom-runtime-repository-read",
+            bundle["sources"][0]["retrieval_method"])
+        self.assertRegex(bundle["invariants"][0]["invariant_id"], r"^inv-")
+        report = loom_lint.lint(
+            self.repo / "plans", repo_path=self.repo,
+            enforce_lifecycle=False, check_repo_state=False)
+        self.assertEqual([], report.findings)
+        completed = loom_orchestrator.complete(
+            action["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+        self.assertEqual([], loom_gate.verify(
+            self.repo / "plans", self.repo, require_authorized=True))
+
+    def test_unknown_domain_semantics_cannot_mint_missing_authority(self):
+        request = (
+            "Plan a quantum optics glossary research note in src/app.py. "
+            "Use this terminology.")
+        action = loom_orchestrator.invoke(
+            request=request,
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        contract = action["plan_contract"]
+        self.assertTrue(action["semantic_draft_shape"]["domain_evidence_required"])
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        evidence = {
+            "retrieval_rounds": 0,
+            "answers": {
+                key: "Bounded test answer."
+                for key, _question in loom_domain_discovery.QUESTIONS
+            },
+            "sources": [{
+                "key": "owner", "title": "Owner statement",
+                "locator": "receipt:owner-statement",
+                "locator_visibility": "encrypted-private",
+                "publisher": "Owner", "source_class": "owner-attestation",
+                "content": "Use this terminology.",
+                "retrieval_method": "direct owner statement",
+                "document_id": "owner-statement", "version": None,
+                "published_at": None, "effective_at": None,
+                "revalidate_by": None, "jurisdiction": None,
+                "product_class": "research-note", "environment": "local",
+                "currentness": "current", "ambiguity": None,
+            }],
+            "invariants": [{
+                "statement": "definitions must follow primary research",
+                "invariant_type": "correctness",
+                "domain_ids": contract["domains"], "subsystem_ids": [],
+                "scope": {
+                    "component": "glossary", "jurisdiction": None,
+                    "product_class": "research-note", "environment": "local",
+                    "version_range": None, "effective_period": None,
+                },
+                "consequence_class": "ordinary",
+                "failure": "an unsupported definition is published",
+                "authority_requirements": ["primary-research"],
+                "supporting_source_keys": ["owner"],
+                "contradicting_source_keys": [],
+                "applicability_evidence": ["owner statement names the topic"],
+                "required_real_medium": "rendered glossary inspection",
+                "acceptance_target": "every definition has one citation",
+                "as_of": None, "revalidate_by": None,
+                "revision_identity": None,
+            }],
+        }
+        with self.assertRaisesRegex(
+                loom_plan_author.PlanAuthorError, "missing authority"):
+            loom_plan_author._semantic_domain_bundle(
+                evidence, contract, now=now, repo=self.repo, request=request)
+
+    def test_owner_defined_no_io_constraint_is_correctness_without_retry(self):
+        _write(
+            self.repo / "AUTHORITY.md",
+            "The local CLI must not access the network or write files.\n")
+        request = (
+            "Plan a fictional local CLI in src/app.py. Follow AUTHORITY.md exactly.")
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        contract = action["plan_contract"]
+        self.assertIn(
+            "bounded prohibitions on network access",
+            action["semantic_draft_shape"]["domain_invariant_type_guidance"][
+                "correctness"])
+        self.assertIn(
+            "pre-existing sealed governing-authority receipt",
+            action["semantic_draft_shape"]["domain_invariant_type_guidance"]["safety"])
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        evidence = {
+            "retrieval_rounds": 0,
+            "answers": {
+                key: "Bound to AUTHORITY.md and a real local process observation."
+                for key, _question in loom_domain_discovery.QUESTIONS
+            },
+            "sources": [{
+                "key": "authority", "title": "Repository authority",
+                "locator": "AUTHORITY.md", "locator_visibility": "public",
+                "publisher": "Repository", "source_class": "repository",
+                "content": None, "retrieval_method": "runtime repository read",
+                "document_id": "AUTHORITY.md", "version": "1",
+                "published_at": None, "effective_at": None,
+                "revalidate_by": None, "jurisdiction": None,
+                "product_class": "local-cli", "environment": "local",
+                "currentness": "current", "ambiguity": None,
+            }],
+            "invariants": [{
+                "statement": "the local CLI never accesses the network or writes files",
+                "invariant_type": "correctness",
+                "domain_ids": contract["domains"],
+                "subsystem_ids": [
+                    f"domain-{domain}" for domain in contract["domains"]],
+                "scope": {
+                    "component": "local-cli", "jurisdiction": None,
+                    "product_class": "local-cli", "environment": "local",
+                    "version_range": "1", "effective_period": None,
+                },
+                "consequence_class": "material",
+                "failure": "the CLI performs an undeclared external side effect",
+                "authority_requirements": ["repository-evidence"],
+                "supporting_source_keys": ["authority"],
+                "contradicting_source_keys": [],
+                "applicability_evidence": [
+                    "the request names AUTHORITY.md as governing"],
+                "required_real_medium": "isolated real-process observation",
+                "acceptance_target": "no network or filesystem mutation is observed",
+                "as_of": None, "revalidate_by": None,
+                "revision_identity": "1",
+            }],
+        }
+        bundle = loom_plan_author._semantic_domain_bundle(
+            evidence, contract, now=now, repo=self.repo, request=request)
+        self.assertEqual("gate-ready", bundle["discovery"]["status"])
+        self.assertEqual("correctness", bundle["invariants"][0]["invariant_type"])
+
+        safety = json.loads(json.dumps(evidence))
+        safety["invariants"][0]["invariant_type"] = "safety"
+        with self.assertRaises(loom_plan_author.PlanAuthorError) as caught:
+            loom_plan_author._semantic_domain_bundle(
+                safety, contract, now=now, repo=self.repo, request=request)
+        self.assertEqual("DOMAIN_EVIDENCE_NOT_READY", caught.exception.code)
+        self.assertEqual(
+            "SAFETY_AUTHORITY_REQUIRED",
+            caught.exception.diagnostics[0]["code"])
+
+    def test_unknown_domain_repository_source_is_runtime_bound(self):
+        _write(self.repo / "AUTHORITY.md", "canonical source bytes\n")
+        request = (
+            "Plan a quantum optics glossary in src/app.py using AUTHORITY.md.")
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        contract = action["plan_contract"]
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        evidence = {
+            "retrieval_rounds": 0,
+            "answers": {
+                key: "Bounded answer."
+                for key, _question in loom_domain_discovery.QUESTIONS},
+            "sources": [{
+                "key": "authority", "title": "Repository authority",
+                "locator": "AUTHORITY.md", "locator_visibility": "public",
+                "publisher": "Agent claim", "source_class": "repository",
+                "content": "agent-authored summary",
+                "retrieval_method": "agent claim", "document_id": "agent claim",
+                "version": None, "published_at": None, "effective_at": None,
+                "revalidate_by": None, "jurisdiction": None,
+                "product_class": None, "environment": None,
+                "currentness": "current", "ambiguity": None,
+            }],
+            "invariants": [],
+        }
+        with self.assertRaisesRegex(
+                loom_plan_author.PlanAuthorError, "runtime-read"):
+            loom_plan_author._semantic_domain_bundle(
+                evidence, contract, now=now, repo=self.repo, request=request)
+
+    def test_unknown_domain_cannot_assert_executed_observation(self):
+        request = "Plan a quantum optics glossary in src/app.py."
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        contract = action["plan_contract"]
+        now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+        evidence = {
+            "retrieval_rounds": 0,
+            "answers": {
+                key: "Bounded answer."
+                for key, _question in loom_domain_discovery.QUESTIONS},
+            "sources": [{
+                "key": "observation", "title": "Claimed execution",
+                "locator": "receipt:claimed",
+                "locator_visibility": "encrypted-private",
+                "publisher": "Agent", "source_class": "executed-observation",
+                "content": "A test allegedly ran.",
+                "retrieval_method": "agent claim", "document_id": "claimed",
+                "version": None, "published_at": None, "effective_at": None,
+                "revalidate_by": None, "jurisdiction": None,
+                "product_class": None, "environment": None,
+                "currentness": "current", "ambiguity": None,
+            }],
+            "invariants": [],
+        }
+        with self.assertRaisesRegex(
+                loom_plan_author.PlanAuthorError, "unsupported"):
+            loom_plan_author._semantic_domain_bundle(
+                evidence, contract, now=now, repo=self.repo, request=request)
+
+    def test_medium_semantic_budget_is_machine_enforced(self):
+        action = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        contract = action["plan_contract"]
+        self.assertEqual(5, contract["semantic_draft_limits"]["tasks"]["maximum_items"])
+        draft = {
+            "schema_version": 1, "title": "Bounded accounting change",
+            "summary": "Plan one accounting change in src/app.py.",
+            "assumptions": [], "decisions": [],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped adapter",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Bounded accounting change",
+                "outcome": "Preserve balanced postings.",
+                "tasks": [f"Task {index}" for index in range(6)],
+                "acceptance": ["`python -m unittest` exits 0."],
+                "negative_acceptance": ["an unbalanced posting is rejected"],
+                "out_of_scope": ["Tax policy."],
+                "escalation": ["Stop if another component changes."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+        with self.assertRaisesRegex(
+                loom_plan_author.PlanAuthorError, "sealed semantic limit"):
+            loom_plan_author.validate_draft(
+                draft, contract, now=dt.datetime.now(dt.timezone.utc))
+
+    def test_machine_authoring_preserves_compact_tier_s_path(self):
+        request = "Plan a tiny Python command-line greeting flag in src/app.py."
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual("S", action["tier"])
+        contract = action["plan_contract"]
+        self.assertTrue(contract["semantic_draft_limits"]["copy_current_facts_exactly"])
+        self.assertEqual(
+            3, contract["semantic_draft_limits"]["tasks"]["maximum_items"])
+        self.assertEqual(
+            1, contract["semantic_draft_limits"]["touches"]["minimum_items"])
+        self.assertEqual(
+            0, contract["semantic_draft_limits"]["assumptions"]["minimum_items"])
+        self.assertTrue(any(
+            "Every work_order must declare at least one touches entry" in rule
+            for rule in action["semantic_draft_shape"]["rules"]))
+        draft = {
+            "schema_version": 1,
+            "title": "Add one greeting flag",
+            "summary": "Add one bounded CLI greeting flag in src/app.py.",
+            "assumptions": [], "decisions": [],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped CLI adapter",
+            } for item in contract["current_facts"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Add greeting flag",
+                "outcome": "The CLI accepts one greeting flag without changing other behavior.",
+                "tasks": ["Implement the one flag in src/app.py."],
+                "acceptance": [
+                    "`python -m unittest` exits 0 and the new flag prints one greeting."],
+                "negative_acceptance": [
+                    "an unknown flag exits nonzero without normal output"],
+                "out_of_scope": ["Packaging and architecture changes."],
+                "escalation": ["Stop if another component must change."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+
+        authored = loom_orchestrator.author(
+            action["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual([".loom-small-lifecycle.json", "WO-001.md"], authored["files"])
+        self.assertEqual(
+            [], loom_lint.lint(
+                self.repo / "plans", repo_path=self.repo).errors)
+        completed = loom_orchestrator.complete(
+            action["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+        self.assertEqual([], loom_gate.verify_small(
+            self.repo / "plans" / ".loom-small-lifecycle.json"))
+        self.assertEqual(
+            [], loom_lint.lint(
+                self.repo / "plans", repo_path=self.repo).errors)
+        compact_wo = self.repo / "plans" / "WO-001.md"
+        compact_wo.write_text(
+            compact_wo.read_text(encoding="utf-8").replace(
+                "Add greeting flag", "Tampered greeting flag", 1),
+            encoding="utf-8")
+        self.assertTrue(
+            loom_lint.lint(
+                self.repo / "plans", repo_path=self.repo).errors)
+
+    def test_machine_authoring_rejects_malformed_draft_without_replacing_seed(self):
+        action = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        pack = self.repo / "plans"
+        before = loom_orchestrator._pack_hash(pack)
+        malformed = {
+            "schema_version": 1, "title": "Bad", "summary": "Bad",
+            "assumptions": [], "decisions": [], "current_facts": [],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [], "domain_evidence": None,
+        }
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.author(
+                action["action_path"], malformed, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("PLAN_DRAFT_INVALID", caught.exception.code)
+        self.assertEqual(before, loom_orchestrator._pack_hash(pack))
+        self.assertEqual(
+            ["MANIFEST.md", "lifecycle.json"],
+            sorted(path.relative_to(pack).as_posix()
+                   for path in pack.rglob("*") if path.is_file()))
+        self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
+        self.assertEqual([], list(self.repo.glob(".loom-plan-backup-*")))
+
+    def test_machine_authoring_runs_final_contract_validation_before_activation(self):
+        action = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        pack = self.repo / "plans"
+        before = loom_orchestrator._pack_hash(pack)
+        contract = action["plan_contract"]
+        draft = {
+            "schema_version": 1,
+            "title": "Preserve double-entry correctness",
+            "summary": "Plan one bounded accounting change in src/app.py.",
+            "assumptions": [], "decisions": [],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped accounting adapter",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Preserve double-entry correctness",
+                "outcome": "The requested change preserves balanced posting.",
+                "tasks": ["Implement the bounded change in src/app.py."],
+                "acceptance": ["The accounting test suite exits 0."],
+                "negative_acceptance": [
+                    "an unbalanced posting is rejected before any write"],
+                "out_of_scope": ["Tax-policy and migration changes."],
+                "escalation": ["Stop if a second component must change."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+        original_validate = loom_orchestrator._validate_authored_plan
+
+        def reject_staged(candidate_action, *, pack_override=None):
+            if pack_override is not None:
+                raise loom_orchestrator.OrchestratorError(
+                    "PLAN_CONTRACT_MISMATCH",
+                    "injected final contract validation failure")
+            return original_validate(candidate_action)
+
+        with mock.patch.object(
+                loom_orchestrator, "_validate_authored_plan",
+                side_effect=reject_staged), \
+                self.assertRaisesRegex(
+                    loom_orchestrator.OrchestratorError,
+                    "injected final contract validation failure"):
+            loom_orchestrator.author(
+                action["action_path"], draft, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual(before, loom_orchestrator._pack_hash(pack))
+        self.assertEqual(
+            ["MANIFEST.md", "lifecycle.json"],
+            sorted(path.relative_to(pack).as_posix()
+                   for path in pack.rglob("*") if path.is_file()))
+        self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
+        self.assertEqual([], list(self.repo.glob(".loom-plan-backup-*")))
+
+    def test_machine_authoring_refuses_a_warning_before_activation(self):
+        action = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        pack = self.repo / "plans"
+        before = loom_orchestrator._pack_hash(pack)
+        contract = action["plan_contract"]
+        draft = {
+            "schema_version": 1,
+            "title": "Preserve double-entry correctness",
+            "summary": "Plan one bounded accounting change in src/app.py.",
+            "assumptions": [], "decisions": [],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped accounting adapter",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Preserve double-entry correctness",
+                "outcome": "The requested change preserves balanced posting.",
+                "tasks": ["Implement the bounded change in src/app.py."],
+                "acceptance": ["The accounting test suite exits 0."],
+                "negative_acceptance": [
+                    "an unbalanced posting is rejected before any write"],
+                "out_of_scope": ["Tax-policy and migration changes."],
+                "escalation": ["Stop if a second component must change."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+        original_lint = loom_lint.lint
+
+        def warning_lint(*args, **kwargs):
+            report = original_lint(*args, **kwargs)
+            report.add(
+                "WARN", "W99", Path(args[0]) / "MANIFEST.md", 1,
+                "injected machine-author warning")
+            return report
+
+        with mock.patch.object(loom_plan_author.loom_lint, "lint", warning_lint), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.author(
+                action["action_path"], draft, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("PLAN_AUTHOR_VALIDATION_FAILED", caught.exception.code)
+        self.assertIn("1 warning", str(caught.exception))
+        self.assertEqual(before, loom_orchestrator._pack_hash(pack))
+        self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
+        self.assertEqual([], list(self.repo.glob(".loom-plan-backup-*")))
+
+    def test_machine_authoring_rejects_world_drift_before_any_plan_write(self):
+        action = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        pack = self.repo / "plans"
+        before = loom_orchestrator._pack_hash(pack)
+        _write(self.repo / "unexpected.txt", "drift\n")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.author(
+                action["action_path"], {}, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("TARGET_DRIFT", caught.exception.code)
+        self.assertEqual(before, loom_orchestrator._pack_hash(pack))
+
+    def test_plan_activation_restores_the_seed_if_second_rename_fails(self):
+        pack = self.root / "activation-target" / "plans"
+        transaction_id = "a" * 32
+        stage = self.root / "activation-target" / (
+            ".loom-plan-stage-" + transaction_id)
+        transaction = self.root / "activation-target" / (
+            ".loom-plan-transaction-action.json")
+        _write(pack / "MANIFEST.md", "seed\n")
+        _write(stage / "WO-001.md", "candidate\n")
+        before = loom_reliability.exact_tree_manifest(pack)
+        after = loom_reliability.exact_tree_manifest(stage)
+        real_replace = os.replace
+        def fail_second(source, target):
+            if Path(source).resolve() == stage.resolve() \
+                    and Path(target).resolve() == pack.resolve():
+                raise OSError("injected activation failure")
+            return real_replace(source, target)
+
+        with mock.patch.object(os, "replace", side_effect=fail_second):
+            with self.assertRaises(loom_plan_author.PlanAuthorError):
+                loom_plan_author._safe_replace_pack(
+                    pack, stage, transaction, before=before, after=after,
+                    transaction_id=transaction_id)
+
+        self.assertEqual("seed\n", (pack / "MANIFEST.md").read_text(encoding="utf-8"))
+        self.assertFalse(stage.exists())
+        self.assertFalse(transaction.exists())
+        self.assertFalse(list(pack.parent.glob(".loom-plan-backup-*")))
+
+    def test_plan_activation_reconciles_process_death_after_source_move(self):
+        target = self.root / "source-move-recovery"
+        pack = target / "plans"
+        transaction_id = "b" * 32
+        stage = target / (".loom-plan-stage-" + transaction_id)
+        backup = target / (".loom-plan-backup-" + transaction_id)
+        transaction = target / ".loom-plan-transaction-action.json"
+        _write(pack / "MANIFEST.md", "seed\n")
+        _write(stage / "WO-001.md", "candidate\n")
+        before = loom_reliability.exact_tree_manifest(pack)
+        after = loom_reliability.exact_tree_manifest(stage)
+        loom_plan_author._write_transaction(
+            transaction, loom_plan_author._transaction_value(
+                transaction_id, "prepared", before, after))
+        os.replace(pack, backup)
+
+        result = loom_plan_author.reconcile(pack, transaction)
+
+        self.assertEqual("rolled-back", result["status"])
+        self.assertEqual("seed\n", (pack / "MANIFEST.md").read_text(encoding="utf-8"))
+        self.assertFalse(stage.exists())
+        self.assertFalse(backup.exists())
+        self.assertFalse(transaction.exists())
+
+    def test_plan_activation_reconciles_process_death_after_candidate_move(self):
+        target = self.root / "candidate-move-recovery"
+        pack = target / "plans"
+        transaction_id = "c" * 32
+        stage = target / (".loom-plan-stage-" + transaction_id)
+        backup = target / (".loom-plan-backup-" + transaction_id)
+        transaction = target / ".loom-plan-transaction-action.json"
+        _write(pack / "MANIFEST.md", "seed\n")
+        _write(stage / "WO-001.md", "candidate\n")
+        before = loom_reliability.exact_tree_manifest(pack)
+        after = loom_reliability.exact_tree_manifest(stage)
+        loom_plan_author._write_transaction(
+            transaction, loom_plan_author._transaction_value(
+                transaction_id, "source-moved", before, after))
+        os.replace(pack, backup)
+        os.replace(stage, pack)
+
+        result = loom_plan_author.reconcile(pack, transaction)
+
+        self.assertEqual("activated", result["status"])
+        self.assertEqual(
+            "candidate\n", (pack / "WO-001.md").read_text(encoding="utf-8"))
+        self.assertFalse(backup.exists())
+        self.assertFalse(transaction.exists())
+
+    def test_plan_activation_finishes_interrupted_receipt_owned_cleanup(self):
+        target = self.root / "cleanup-recovery"
+        pack = target / "plans"
+        transaction_id = "d" * 32
+        stage = target / (".loom-plan-stage-" + transaction_id)
+        backup = target / (".loom-plan-backup-" + transaction_id)
+        transaction = target / ".loom-plan-transaction-action.json"
+        _write(pack / "MANIFEST.md", "seed\n")
+        _write(pack / "old.md", "old\n")
+        _write(stage / "WO-001.md", "candidate\n")
+        before = loom_reliability.exact_tree_manifest(pack)
+        after = loom_reliability.exact_tree_manifest(stage)
+        os.replace(pack, backup)
+        os.replace(stage, pack)
+        (backup / "old.md").unlink()
+        loom_plan_author._write_transaction(
+            transaction, loom_plan_author._transaction_value(
+                transaction_id, "cleanup-backup", before, after))
+
+        result = loom_plan_author.reconcile(pack, transaction)
+
+        self.assertEqual("activated", result["status"])
+        self.assertFalse(backup.exists())
+        self.assertFalse(transaction.exists())
+
+    def test_plan_activation_refuses_changed_recovery_namespace(self):
+        target = self.root / "changed-recovery"
+        pack = target / "plans"
+        transaction_id = "e" * 32
+        stage = target / (".loom-plan-stage-" + transaction_id)
+        transaction = target / ".loom-plan-transaction-action.json"
+        _write(pack / "MANIFEST.md", "seed\n")
+        _write(stage / "WO-001.md", "candidate\n")
+        before = loom_reliability.exact_tree_manifest(pack)
+        after = loom_reliability.exact_tree_manifest(stage)
+        loom_plan_author._write_transaction(
+            transaction, loom_plan_author._transaction_value(
+                transaction_id, "prepared", before, after))
+        _write(stage / "unowned.md", "changed\n")
+
+        with self.assertRaisesRegex(
+                loom_plan_author.PlanAuthorError, "no longer matches"):
+            loom_plan_author.reconcile(pack, transaction)
+
+        self.assertEqual("seed\n", (pack / "MANIFEST.md").read_text(encoding="utf-8"))
+        self.assertTrue((stage / "unowned.md").is_file())
+        self.assertTrue(transaction.is_file())
+
     def test_non_git_plan_reports_missing_authored_contract_before_route_drift(self):
         """Loom's own seed pack must not turn premature completion into target drift."""
         non_git = self.root / "empty-non-git-target"
         non_git.mkdir()
-        request = "Plan a very simple test project."
+        request = "Plan a tiny Python command-line greeting tool."
         opened = self.cli(
             "invoke", "--request", request, "--cwd", non_git,
             "--home", self.home, "--install-root", self.installed,
@@ -551,7 +1550,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_duplicate_pending_plan_reuses_exact_frontier_in_unchanged_world(self):
         non_git = self.root / "duplicate-hook-target"
         non_git.mkdir()
-        request = "Plan a very simple test project."
+        request = "Plan a tiny Python command-line greeting tool."
         first = loom_orchestrator.invoke(
             request=request, cwd=non_git, home=self.home,
             install_root=self.installed,
@@ -568,7 +1567,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_verified_hook_action_resolves_once_without_creating_another_action(self):
         target = self.root / "verified-resolve-target"
         target.mkdir()
-        request = "Plan a very simple test project."
+        request = "Plan a tiny Python command-line greeting tool."
         capabilities = {
             key: key in {"invoke", "complete", "cancel", "status", "markdown"}
             for key in loom_adapter_protocol.CAPABILITY_KEYS
@@ -626,7 +1625,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_standard_action_cannot_be_relabelled_as_verified_by_resolve(self):
         target = self.root / "standard-resolve-target"
         target.mkdir()
-        request = "Plan a very simple test project."
+        request = "Plan a tiny Python command-line greeting tool."
         opened = loom_orchestrator.invoke(
             request=request, cwd=target, home=self.home,
             install_root=self.installed)
@@ -641,7 +1640,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_same_plan_request_after_world_change_creates_new_frontier(self):
         non_git = self.root / "changed-world-target"
         non_git.mkdir()
-        request = "Plan a very simple test project."
+        request = "Plan a tiny Python command-line greeting tool."
         first = loom_orchestrator.invoke(
             request=request, cwd=non_git, home=self.home,
             install_root=self.installed)
@@ -655,7 +1654,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_replayed_transport_id_after_world_change_fails_closed(self):
         non_git = self.root / "replayed-transport-target"
         non_git.mkdir()
-        request = "Plan a very simple test project."
+        request = "Plan a tiny Python command-line greeting tool."
         transport_id = "90a28883-6a01-5ffd-a9d9-4da1f69f1e78"
         loom_orchestrator.invoke(
             request=request, cwd=non_git, home=self.home,
@@ -669,6 +1668,46 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 install_root=self.installed,
                 transport_invocation_id=transport_id)
         self.assertEqual("TARGET_DRIFT", caught.exception.code)
+
+    def test_placeholder_plan_asks_one_scope_question_without_creating_pack(self):
+        for index, prefix in enumerate((
+                "",
+                "[$loom:loom](C:\\Users\\owner\\.codex\\skills\\loom\\SKILL.md) ")):
+            with self.subTest(prefix=prefix):
+                target = self.root / f"placeholder-plan-target-{index}"
+                target.mkdir()
+
+                result = loom_orchestrator.invoke(
+                    request=prefix + "Plan a very simple test project.",
+                    cwd=target, home=self.home, install_root=self.installed)
+
+                self.assertEqual("blocked", result["status"])
+                self.assertEqual("plan_scope_decision_required", result["code"])
+                self.assertEqual("S", result["tier"])
+                self.assertIn("kind of project", result["user_message"])
+                self.assertIn(
+                    "What kind of project should Loom plan",
+                    result["block_reason"]["next_action"])
+                self.assertIn(
+                    "Loom needs one project detail",
+                    result["owner_message"]["human"])
+                self.assertNotIn(
+                    "Follow the receipt", result["owner_message"]["human"])
+                self.assertFalse((target / "plans").exists())
+
+    def test_missing_unknown_domain_authority_asks_once_without_creating_pack(self):
+        target = self.root / "missing-domain-authority"
+        target.mkdir()
+        result = loom_orchestrator.invoke(
+            request=(
+                "Plan a release-ready calibration procedure for an Arcturus-Z9 "
+                "cryogenic flux sensor. The sensor is fictional and no manufacturer "
+                "specifications are available. Planning only."),
+            cwd=target, home=self.home, install_root=self.installed)
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("domain_authority_required", result["code"])
+        self.assertIn("governing specification", result["user_message"])
+        self.assertFalse((target / "plans").exists())
 
     def test_partial_project_inspection_routes_but_cannot_seal_g1(self):
         _write(self.repo / ".gitignore", "unknown-output/\n")
@@ -822,6 +1861,191 @@ class ProductionOrchestratorTests(unittest.TestCase):
                          action["plan_contract"]["target_fingerprint"])
         self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
         self.assertFalse((self.repo / "plans" / ".loom-small-lifecycle.json").exists())
+
+    def test_named_opaque_domain_survives_known_cli_routing(self):
+        _write(
+            self.repo / "AUTHORITY.md",
+            "# QuantaLex authority\n\n"
+            "Calibration output must preserve the declared unit and tolerance.\n")
+        subprocess.run(["git", "-C", str(self.repo), "add", "AUTHORITY.md"], check=True)
+        subprocess.run(
+            ["git", "-C", str(self.repo), "commit", "-qm", "add domain authority"],
+            check=True)
+
+        opened = loom_orchestrator.invoke(
+            request=(
+                "Plan a release-ready Python CLI for the fictional QuantaLex "
+                "calibration engine. Follow the committed AUTHORITY.md exactly. "
+                "Planning only; do not implement."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", opened["status"])
+        self.assertEqual("M", opened["tier"])
+        self.assertEqual(["cli", "unclassified"], opened["domains"])
+        self.assertEqual(
+            "partial", opened["plan_contract"]["domain_route"]["coverage_state"])
+        self.assertTrue(opened["plan_contract"]["domain_discovery"]["required"])
+        self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
+        self.assertFalse((self.repo / "plans" / ".loom-small-lifecycle.json").exists())
+        contract = opened["plan_contract"]
+        stamp = dt.datetime.now(dt.timezone.utc).replace(
+            microsecond=0).isoformat().replace("+00:00", "Z")
+        future = (
+            dt.datetime.now(dt.timezone.utc) + dt.timedelta(days=30)
+        ).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+        draft = {
+            "schema_version": 1,
+            "title": "QuantaLex calibration CLI",
+            "summary": "Plan one authority-bound calibration command-line engine.",
+            "assumptions": [],
+            "decisions": [
+                "Treat AUTHORITY.md as the governing repository source.",
+            ],
+            "current_facts": [{
+                "domain": item["domain"],
+                "fact": item["fact"],
+                "source": "sealed project inspection and shipped adapter",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0,
+                "irreversible": False,
+                "data_migration": False,
+                "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Plan authority-bound calibration behavior",
+                "outcome": "Every calibration result preserves its declared unit and tolerance.",
+                "tasks": [
+                    "Define the bounded CLI input and output contract in src/app.py.",
+                    "Verify unit and tolerance preservation against AUTHORITY.md.",
+                ],
+                "acceptance": [
+                    "A real CLI process proves the declared unit and tolerance are preserved.",
+                ],
+                "negative_acceptance": [
+                    "a result with a changed unit or tolerance is rejected",
+                ],
+                "out_of_scope": ["Inventing rules absent from AUTHORITY.md."],
+                "escalation": [
+                    "Stop if AUTHORITY.md does not define an applicable calibration rule.",
+                ],
+                "touches": ["src/app.py"],
+                "depends_on": [],
+                "routing": "specialist",
+                "size": "S",
+            }],
+            "domain_evidence": {
+                "retrieval_rounds": 1,
+                "answers": {
+                    key: "Bound to AUTHORITY.md and a real CLI calibration observation."
+                    for key, _question in loom_domain_discovery.QUESTIONS
+                },
+                "sources": [{
+                    "key": "authority",
+                    "title": "QuantaLex repository authority",
+                    "locator": "AUTHORITY.md",
+                    "locator_visibility": "public",
+                    "publisher": "Repository",
+                    "source_class": "repository",
+                    "content": None,
+                    "retrieval_method": "runtime repository read",
+                    "document_id": "AUTHORITY.md",
+                    "version": "1",
+                    "published_at": stamp,
+                    "effective_at": stamp,
+                    "revalidate_by": future,
+                    "jurisdiction": None,
+                    "product_class": "calibration-engine",
+                    "environment": "local",
+                    "currentness": "current",
+                    "ambiguity": None,
+                }],
+                "invariants": [{
+                    "statement": (
+                        "every calibration result preserves the declared unit and tolerance"),
+                    "invariant_type": "correctness",
+                    "domain_ids": contract["domains"],
+                    "subsystem_ids": ["domain-cli", "domain-unclassified"],
+                    "scope": {
+                        "component": "calibration-engine",
+                        "jurisdiction": None,
+                        "product_class": "calibration-engine",
+                        "environment": "local",
+                        "version_range": "1",
+                        "effective_period": stamp[:10],
+                    },
+                    "consequence_class": "material",
+                    "failure": "a calibration result changes its declared unit or tolerance",
+                    "authority_requirements": ["repository-evidence"],
+                    "supporting_source_keys": ["authority"],
+                    "contradicting_source_keys": [],
+                    "applicability_evidence": [
+                        "the request names the engine and AUTHORITY.md as governing",
+                    ],
+                    "required_real_medium": "real CLI calibration observation",
+                    "acceptance_target": (
+                        "the observed output retains the declared unit and tolerance"),
+                    "as_of": stamp,
+                    "revalidate_by": future,
+                    "revision_identity": "1",
+                }],
+            },
+        }
+        authored = loom_orchestrator.author(
+            opened["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual([], authored["diagnostics"])
+        report = loom_lint.lint(
+            self.repo / "plans", repo_path=self.repo,
+            enforce_lifecycle=False, check_repo_state=False)
+        self.assertEqual([], report.findings)
+        completed = loom_orchestrator.complete(
+            opened["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+
+    def test_tier_s_capsule_overflow_promotes_before_pack_creation(self):
+        original = loom_orchestrator._tier_s_host_capsule
+
+        def force_small_overflow(contract):
+            if contract["tier"] == "S":
+                raise loom_orchestrator.OrchestratorError(
+                    "TIER_PROMOTION_REQUIRED",
+                    "complete Tier S decision context exceeds the host capsule bound")
+            return original(contract)
+
+        target = self.root / "capsule-promotion-target"
+        target.mkdir()
+        with mock.patch.object(
+                loom_orchestrator, "_tier_s_host_capsule",
+                side_effect=force_small_overflow):
+            opened = loom_orchestrator.invoke(
+                request="Plan a tiny Python command-line greeting tool.",
+                cwd=target, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", opened["status"])
+        self.assertEqual("M", opened["tier"])
+        action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
+        self.assertIn(
+            "tier-s-host-capsule-overflow",
+            action["prepared"]["route_contract"]["evidence"])
+        self.assertTrue((target / "plans" / "MANIFEST.md").is_file())
+        self.assertFalse((target / "plans" / ".loom-small-lifecycle.json").exists())
+
+    def test_plan_contract_preflight_failure_leaves_no_visible_pack(self):
+        target = self.root / "preflight-failure-target"
+        target.mkdir()
+        with mock.patch.object(
+                loom_orchestrator, "_make_plan_contract",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "PLAN_CONTRACT_INVALID", "seed-independent preflight failed")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+                loom_orchestrator.invoke(
+                    request="Plan a tiny Python command-line greeting tool.",
+                    cwd=target, home=self.home, install_root=self.installed)
+
+        self.assertEqual("PLAN_CONTRACT_INVALID", caught.exception.code)
+        self.assertFalse((target / "plans").exists())
 
     def test_whole_domain_deliverables_receive_domain_aware_tiers(self):
         cases = (
@@ -1101,6 +2325,41 @@ planning_obligations: [{obligations}]
         path.write_text(json.dumps(action), encoding="utf-8")
         _path, restored, _security = loom_orchestrator._read_action(path)
         self.assertEqual("completed", restored["status"])
+
+    def test_plan_contract_v4_terminal_is_readable_but_open_action_requires_reprepare(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        action = json.loads(path.read_text(encoding="utf-8"))
+        contract = dict(action["plan_contract"])
+        contract.pop("project_id")
+        contract.pop("semantic_draft_limits")
+        contract["schema_version"] = (
+            loom_orchestrator.LEGACY_PLAN_CONTRACT_SCHEMA_VERSION)
+        contract["contract_hash"] = loom_orchestrator._hash({
+            key: value for key, value in contract.items()
+            if key != "contract_hash"
+        })
+        action["plan_contract"] = contract
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError,
+                "cannot resume under plan-contract-v5") as raised:
+            loom_orchestrator._read_action(path)
+        self.assertEqual("ACTION_REPREPARE_REQUIRED", raised.exception.code)
+
+        action["status"] = "completed"
+        action["result"] = {"status": "completed", "code": "legacy-v4-terminal"}
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+        _path, restored, _security = loom_orchestrator._read_action(path)
+        self.assertEqual("completed", restored["status"])
+        self.assertEqual(
+            loom_orchestrator.LEGACY_PLAN_CONTRACT_SCHEMA_VERSION,
+            restored["plan_contract"]["schema_version"])
 
     def test_production_host_outcome_records_controlled_provider_replay_pair(self):
         instance_id = loom_memory.initialize(self.home, self.installed)

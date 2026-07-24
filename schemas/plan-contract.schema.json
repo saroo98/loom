@@ -7,14 +7,15 @@
   "required": [
     "schema_version", "request_hash", "survey_hash", "tier", "domains",
     "domain_route", "route_digest", "composition_graph_digest", "target_fingerprint",
-    "project_inspection", "inspection_obligations",
+    "project_inspection", "inspection_obligations", "project_id",
     "pack_baseline_hash", "pack_root", "allowed_host_write_paths",
     "artifact_matrix", "required_domain_invariants", "domain_invariants", "domain_discovery", "planning_intelligence", "current_facts_to_verify",
-    "verification_media", "budget", "work_order_topology", "completion_gates",
+    "verification_media", "budget", "work_order_topology",
+    "semantic_draft_limits", "completion_gates",
     "contract_hash"
   ],
   "properties": {
-    "schema_version": {"const": 4},
+    "schema_version": {"const": 5},
     "request_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "survey_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "tier": {"enum": ["S", "M", "L", "XL"]},
@@ -27,6 +28,11 @@
     "composition_graph_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "target_fingerprint": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "project_inspection": {"$ref": "project-inspection-capsule.schema.json"},
+    "project_id": {
+      "type": "string",
+      "pattern": "^p-[0-9a-f]{16,64}$",
+      "description": "Stable owner-vault project identity used only to bind discovered-domain applicability."
+    },
     "inspection_obligations": {
       "type": "array", "maxItems": 32,
       "items": {
@@ -133,10 +139,45 @@
         "acceptance_evidence_required": {"const": true}
       }
     },
+    "semantic_draft_limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema", "copy_current_facts_exactly", "assumptions", "decisions",
+        "tasks", "acceptance", "negative_acceptance", "out_of_scope",
+        "escalation", "touches"
+      ],
+      "properties": {
+        "schema": {"const": "schemas/plan-draft.schema.json"},
+        "copy_current_facts_exactly": {"const": true},
+        "assumptions": {"$ref": "#/$defs/semanticLimit"},
+        "decisions": {"$ref": "#/$defs/semanticLimit"},
+        "tasks": {"$ref": "#/$defs/semanticLimit"},
+        "acceptance": {"$ref": "#/$defs/semanticLimit"},
+        "negative_acceptance": {"$ref": "#/$defs/semanticLimit"},
+        "out_of_scope": {"$ref": "#/$defs/semanticLimit"},
+        "escalation": {"$ref": "#/$defs/semanticLimit"},
+        "touches": {"$ref": "#/$defs/semanticLimit"}
+      }
+    },
     "completion_gates": {
       "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,
       "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"}
     },
     "contract_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "semanticLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum_items", "maximum_items", "maximum_item_characters"],
+      "properties": {
+        "minimum_items": {"type": "integer", "minimum": 0, "maximum": 64},
+        "maximum_items": {"type": "integer", "minimum": 1, "maximum": 64},
+        "maximum_item_characters": {
+          "type": "integer", "minimum": 1, "maximum": 1024
+        }
+      }
+    }
   }
 }

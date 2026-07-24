@@ -464,6 +464,22 @@ _ARTIFACT_NOUN_RE = re.compile(
     r"\b(?:dashboard|page|screen|tool|app|application|service|system|pipeline|"
     r"log|report|support|feature|workflow|integration|library|utility|module|"
     r"component|adapter|program|website)\b")
+_PLACEHOLDER_PLAN_RE = re.compile(
+    r"(?is)^\s*(?:/loom\s+)?(?:please\s+)?"
+    r"(?:plan|build|create|make|implement|develop|write|design|add|generate)\s+"
+    r"(?:(?:a|an|the)\s+)?"
+    r"(?:(?:very|really|super|tiny|small|simple|basic|minimal|quick|new)\s+)*"
+    r"(?:(?:test|sample|demo|example)\s+)*"
+    r"(?:project|app|application|program|tool|system|thing|something|prototype)"
+    r"\s*[.!?]*\s*$")
+_DOMAIN_AUTHORITY_UNAVAILABLE_RE = re.compile(
+    r"(?is)\b(?:no|without|missing|unavailable|unknown)\s+"
+    r"(?:any\s+)?(?:manufacturer|vendor|official|governing|authoritative|domain)?\s*"
+    r"(?:[a-z][a-z-]*\s+){0,2}"
+    r"(?:specification(?:s)?|specs|documentation|standard(?:s)?|rules?|limits?|"
+    r"data|evidence|authority)\b|"
+    r"\b(?:specification(?:s)?|specs|documentation|standard(?:s)?|rules?|limits?|"
+    r"data|evidence|authority)\s+(?:do|does|are|is)\s+not\s+(?:exist|available)\b")
 _SAFETY_PREFERENCE_RE = re.compile(
     r"\b(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?\s+"
     r"(?:deploy|publish|delete|drop|destroy|erase|overwrite|spend|pay|purchase|"
@@ -515,6 +531,14 @@ _NEGATED_CONTROL_PREFIX_RE = re.compile(
     r"(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?)\s+"
     r"(?P<body>.+)$")
 MAX_ROUTE_CLAUSES = 16
+
+
+def _semantic_request(request):
+    """Remove only Loom invocation wrappers; the sealed request remains unchanged elsewhere."""
+    text = re.sub(
+        r"(?i)^\s*\[(?:\$|@)?loom(?::loom)?\]\([^)\r\n]*\)\s*",
+        "", request, count=1)
+    return re.sub(r"(?i)^\s*/loom(?=\s|$)\s*", "", text, count=1)
 
 
 def _is_build_request(text):
@@ -573,6 +597,7 @@ def _classify_control_clause(clause):
     negated = _NEGATED_CONTROL_PREFIX_RE.match(clause)
     body = negated.group("body").strip() if negated else clause
     body = re.sub(r"^(?:either|instead)\s+", "", body)
+    control = None
     if re.match(
             r"^(?:remember\b|retain\s+(?:this|that)\s+preference\b|"
             r"correct\s+(?:what you learned|my preference|that preference|"
@@ -597,9 +622,18 @@ def _classify_control_clause(clause):
         intent = "close"
     elif _is_build_request(body) or _POSITIVE_SOFTWARE_CLAUSE_RE.search(body):
         intent = "plan"
+        control = (
+            "planning"
+            if re.match(r"^(?:now\s+)?(?:please\s+)?plan\b", body)
+            else "implementation"
+        )
     else:
         return None
-    return {"intent": intent, "negated": negated is not None}
+    return {
+        "intent": intent,
+        "negated": negated is not None,
+        "control": control or intent,
+    }
 
 
 def _continue_route_intent(state):
@@ -636,11 +670,11 @@ def _resolve_clause_roles(request, state):
     negatives = [item for item in classified if item["negated"]]
     positive_intents = {item["intent"] for item in positives}
     negative_intents = {item["intent"] for item in negatives}
+    positive_controls = {(item["intent"], item["control"]) for item in positives}
+    negative_controls = {(item["intent"], item["control"]) for item in negatives}
     has_or = any(item["separator"] == "or" for item in classified[1:])
-    has_soft_and = any(item["separator"] == "and" for item in classified[1:])
-    conflicting_polarity = bool(positive_intents & negative_intents)
+    conflicting_polarity = bool(positive_controls & negative_controls)
     multiple_positive_outcomes = len(positive_intents) > 1
-    unclear_coordination = bool(positives and negatives and has_soft_and)
     opposed_lifecycle = (
         ("close" in negative_intents and "continue" in positive_intents)
         or ("continue" in negative_intents and "close" in positive_intents))
@@ -650,8 +684,7 @@ def _resolve_clause_roles(request, state):
             confidence=0.0, evidence=("negated-lifecycle",),
             recommendation="Keep lifecycle state unchanged; state one positive next action.")
     if has_or and len(classified) > 1 \
-            or conflicting_polarity or multiple_positive_outcomes \
-            or unclear_coordination:
+            or conflicting_polarity or multiple_positive_outcomes:
         return _decision(
             "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
             confidence=0.0, evidence=("clause-role-conflict",),
@@ -699,9 +732,13 @@ def resolve_intent(request, state=None):
     if not isinstance(request, str) or not request.strip():
         raise RuntimeError("request must be non-empty natural language")
     state = dict(state or {})
-    text = " ".join(request.casefold().split())
-    task_text = " ".join(loom_domain.task_language(request).casefold().split())
-    clause_decision = _resolve_clause_roles(request, state)
+    semantic_request = _semantic_request(request)
+    if not semantic_request:
+        raise RuntimeError("request must contain natural language after /loom")
+    text = " ".join(semantic_request.casefold().split())
+    task_text = " ".join(
+        loom_domain.task_language(semantic_request).casefold().split())
+    clause_decision = _resolve_clause_roles(semantic_request, state)
     if clause_decision is not None:
         return _synchronize_block_reason(clause_decision, category="intent")
     safety_preference = _SAFETY_PREFERENCE_RE.search(text)
@@ -1056,6 +1093,34 @@ class PreparedInvocation:
         data["hard_stops"] = tuple(data["hard_stops"])
         data["project_inspection"] = _freeze(data["project_inspection"])
         return cls(**data)
+
+
+def promote_prepared_tier(prepared, tier, *, evidence):
+    """Return the same immutable preparation with a higher, evidenced tier.
+
+    This is used only for a mechanical host-contract bound discovered after the
+    pure runtime preparation. Project identity, request identity, world state,
+    domains, and operation identity remain unchanged.
+    """
+    if not isinstance(prepared, PreparedInvocation):
+        raise RuntimeError("tier promotion requires a prepared invocation")
+    order = {"S": 0, "M": 1, "L": 2, "XL": 3}
+    current = prepared.route_contract["tier"]
+    if tier not in order or order[tier] <= order[current]:
+        raise RuntimeError("tier promotion must select a strictly higher supported tier")
+    if not isinstance(evidence, str) or not ID_RE.fullmatch(evidence):
+        raise RuntimeError("tier promotion evidence must be a safe identifier")
+    route = _thaw(prepared.route_contract)
+    route["tier"] = tier
+    route["evidence"] = list(dict.fromkeys([
+        *route["evidence"][:15], evidence,
+    ]))
+    _validate_route(route, schema_version=prepared.schema_version)
+    values = prepared.to_dict()
+    values.pop("prepared_hash")
+    values["route_contract"] = route
+    return PreparedInvocation.build(
+        **values, operation_fingerprint=prepared.operation_fingerprint)
 
 
 def _bounded_read(path, limit, label):
@@ -1713,6 +1778,27 @@ def _request_touch_paths(request):
     return tuple(sorted(paths, key=os.fsencode))
 
 
+def _underspecified_plan_request(request, decision, domains_result):
+    """Identify only placeholder plan requests that cannot anchor a useful contract.
+
+    A named but unknown domain must continue into bounded domain discovery.  This
+    guard is intentionally narrow: it fires only when the entire request is a
+    placeholder description and domain routing found no concrete active domain.
+    """
+    return decision["intent"] == "plan" \
+        and domains_result["active_task_domains"] == [] \
+        and domains_result["coverage_state"] == "unknown" \
+        and _PLACEHOLDER_PLAN_RE.fullmatch(_semantic_request(request)) is not None
+
+
+def _domain_authority_is_explicitly_unavailable(request, decision, domains_result):
+    """Block before pack creation when the request itself denies governing evidence."""
+    return decision["intent"] == "plan" \
+        and domains_result["requires_domain_discovery"] \
+        and _DOMAIN_AUTHORITY_UNAVAILABLE_RE.search(
+            _semantic_request(request)) is not None
+
+
 def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
                    prepared_time=None, touch_paths=()):
     """Read one complete preparation snapshot through owned bounded primitives."""
@@ -1805,7 +1891,8 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
     # planning route must not erase an unknown domain to ``unclassified``.
     domains = domains_result["active_task_domains"] or ["unclassified"]
     tier = (pack_route["tier"] if pack_route is not None
-            else loom_tier.classify(request, domains=domains)["tier"])
+            else loom_tier.classify(
+                loom_domain.task_language(request), domains=domains)["tier"])
     requires_discovery = (
         domains_result["requires_domain_discovery"]
         or not project_inspection["relevant_coverage_complete"])
@@ -1824,6 +1911,55 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
         "project_inspection_digest": project_inspection["receipt_digest"],
         "project_inspection_g1_eligible": project_inspection["g1_eligible"],
     })
+    if _underspecified_plan_request(request, decision, domains_result):
+        question = (
+            "What kind of project should Loom plan, and what is its smallest desired outcome?")
+        decision.update({
+            "blocked": True,
+            "code": "PLAN_SCOPE_DECISION_REQUIRED",
+            "needs_owner": True,
+            "confidence": 1.0,
+            "tier": "S",
+            "requires_domain_discovery": False,
+            "recommendation": question,
+            "evidence": [*decision["evidence"][:14], "placeholder-plan-request"],
+            "block_reason": loom_block_reason.build(
+                code="plan-scope-decision-required", category="intent",
+                expected="One concrete project kind and one smallest desired outcome.",
+                observed="The request names neither a project kind nor an outcome.",
+                finding_codes=["PLAN_SCOPE_DECISION_REQUIRED"], finding_count=1,
+                ownership="not-applicable", pristine_proof="not-applicable",
+                automatic_recovery="owner-decision", next_action=question),
+        })
+    elif _domain_authority_is_explicitly_unavailable(
+            request, decision, domains_result):
+        question = (
+            "Provide the governing specification or measured safe operating limits "
+            "for this domain, or confirm that Loom should produce only a clearly "
+            "labeled research agenda rather than a release-ready plan.")
+        decision.update({
+            "blocked": True,
+            "code": "DOMAIN_AUTHORITY_REQUIRED",
+            "needs_owner": True,
+            "confidence": 1.0,
+            "requires_domain_discovery": True,
+            "recommendation": question,
+            "evidence": [
+                *decision["evidence"][:14],
+                "request-explicitly-denies-domain-authority",
+            ],
+            "block_reason": loom_block_reason.build(
+                code="domain-authority-required", category="domain",
+                expected=(
+                    "Current governing authority and a real verification medium "
+                    "for every material invariant."),
+                observed=(
+                    "The request explicitly states that governing specifications "
+                    "or equivalent evidence are unavailable."),
+                finding_codes=["DOMAIN_AUTHORITY_REQUIRED"], finding_count=1,
+                ownership="not-applicable", pristine_proof="not-applicable",
+                automatic_recovery="owner-decision", next_action=question),
+        })
     if not project_inspection["relevant_coverage_complete"]:
         decision["evidence"] = [*decision["evidence"][:15],
                                 "project-inspection-incomplete"]
@@ -1840,7 +1976,9 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "evidence": ["invalid-config"],
             "block_reason": _config_block_reason(config_error),
         })
-    elif state.get("state_error") in {"STALE_LIFECYCLE", "STALE_TIME"}:
+    elif state.get("state_error") in {"STALE_LIFECYCLE", "STALE_TIME"} \
+            and decision["intent"] not in {
+                "status", "why", "undo", "forget", "remember"}:
         decision.update({
             "intent": "repair",
             "blocked": False,
@@ -1853,7 +1991,8 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
                 "elapsed-time-drift" if state.get("state_error") == "STALE_TIME"
                 else "target-drift"],
         })
-    elif state.get("state_error"):
+    elif state.get("state_error") and decision["intent"] not in {
+            "status", "why", "undo", "forget", "remember"}:
         decision.update({
             "blocked": True,
             "code": str(state["state_error"]),

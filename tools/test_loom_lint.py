@@ -3,6 +3,7 @@
 import datetime as dt
 import json
 import re
+import sqlite3
 import sys
 import tempfile
 import unittest
@@ -272,6 +273,36 @@ class LintTests(unittest.TestCase):
             wo.read_text(encoding="utf-8").replace(
                 "title: Build UI", "title: " + ("x" * 101)), encoding="utf-8")
         self.assertIn("E18", codes(self.lint()))
+
+    def test_lifecycle_verification_does_not_wrap_pack_lint_errors(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(
+            wo.read_text(encoding="utf-8").replace(
+                "title: Build UI", "title: " + ("x" * 101)), encoding="utf-8")
+        report = self.lint()
+        self.assertTrue(
+            any(item["code"] == "E18" and "title" in item["msg"]
+                for item in report.errors),
+            report.errors)
+        self.assertFalse(
+            any(item["code"] == "E17" and "pack lint" in item["msg"]
+                for item in report.errors),
+            report.errors)
+
+    def test_missing_work_order_keys_are_reported_once_before_schema_validation(self):
+        wo = Path(self.root) / "work-orders" / "WO-001-build-ui.md"
+        wo.write_text(
+            wo.read_text(encoding="utf-8").replace(
+                "title: Build UI\n", ""), encoding="utf-8")
+        report = self.lint()
+        self.assertTrue(
+            any(item["code"] == "E03" and "'title'" in item["msg"]
+                for item in report.errors),
+            report.errors)
+        self.assertFalse(
+            any(item["code"] == "E18" and "missing 'title'" in item["msg"]
+                for item in report.errors),
+            report.errors)
 
     def test_wo_filename_mismatch(self):
         p = Path(self.root) / "work-orders/WO-001-build-ui.md"
@@ -715,6 +746,13 @@ We will build the best app for everyone.
 """)
         self.assertNotIn("W10", codes(self.lint()))
 
+    def test_explicit_acceptance_and_blocking_criteria_are_observable(self):
+        self._add_wo("WO-004", "[docs/**]", body="""## Acceptance criteria
+- [ ] The gate blocks implementation until the governing specification is recorded.
+- [ ] The reviewer accepts only evidence from the named real verification medium.
+""")
+        self.assertNotIn("W10", codes(self.lint()))
+
     def test_heads_match_short_forms(self):
         self.assertTrue(loom_lint.heads_match("f47546c567e6bc2980", "f47546c"))
         self.assertTrue(loom_lint.heads_match("f47546c", "f47546c567e6bc2980"))
@@ -790,9 +828,11 @@ last_verified: {TODAY}
         self._add_wo("WO-002", body=body)
         self.assertIn("W13", codes(self.lint()))
 
-    def test_heft_and_title_warns(self):
-        self._add_wo("WO-002", title="Build UI and API")
-        self.assertIn("W13", codes(self.lint()))
+    def test_single_outcome_title_with_conjunction_does_not_warn(self):
+        self._add_wo(
+            "WO-002",
+            title="Obtain authoritative inputs and hold the implementation gate")
+        self.assertNotIn("W13", codes(self.lint()))
 
     def test_done_wo_heft_ignored(self):
         self._add_wo("WO-002", title="Build UI and API", status="done")
@@ -1093,6 +1133,38 @@ class HomeLintTests(unittest.TestCase):
 
     def test_cli_home_flag(self):
         self.assertEqual(loom_lint.main(["--home", str(self.home)]), 0)
+
+    def test_transactional_owner_vault_runtime_partition_is_clean(self):
+        for name in loom_lint.HOME_FILES:
+            (self.home / name).unlink()
+        runtime = self.home / "instances" / (
+            "3821d9cc-f813-4f9c-ba56-b6945b2de85f") / "runtime"
+        runtime.mkdir(parents=True)
+        database = self.home / "vault" / "owner.sqlite3"
+        database.parent.mkdir()
+        connection = sqlite3.connect(database)
+        try:
+            connection.executescript(
+                "CREATE TABLE metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);"
+                "CREATE TABLE events(id TEXT PRIMARY KEY);"
+                "CREATE TABLE quarantine(id TEXT PRIMARY KEY);"
+                "INSERT INTO metadata(key,value) VALUES"
+                "('schema_version','3'),('generation','1');")
+            connection.commit()
+        finally:
+            connection.close()
+        self.assertEqual([], loom_lint.lint_home(self.home).findings)
+
+    def test_transactional_owner_vault_corruption_fails_closed(self):
+        for name in loom_lint.HOME_FILES:
+            (self.home / name).unlink()
+        database = self.home / "vault" / "owner.sqlite3"
+        database.parent.mkdir()
+        database.write_bytes(b"not a SQLite vault")
+        report = loom_lint.lint_home(self.home)
+        self.assertTrue(any(item["code"] == "E21"
+                            and "cannot be verified" in item["msg"]
+                            for item in report.errors), report.findings)
 
 
 if __name__ == "__main__":

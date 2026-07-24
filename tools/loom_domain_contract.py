@@ -163,6 +163,22 @@ def validate_source(value, *, now=None):
     if value["source_class"] not in SOURCE_CLASSES \
             or value["trust_state"] not in TRUST_STATES:
         raise DomainContractError("source class or trust state is invalid")
+    expected_trust = {
+        "repository": "trusted-local",
+        "executed-observation": "trusted-local",
+        "official-law": "trusted-authority",
+        "regulator": "trusted-authority",
+        "official-vendor": "trusted-authority",
+        "governing-standard": "trusted-authority",
+        "primary-research": "trusted-authority",
+        "qualified-reviewer": "trusted-authority",
+        "owner-attestation": "trusted-local",
+        "secondary-discovery": "untrusted-data",
+        "shipped-adapter": "trusted-authority",
+    }[value["source_class"]]
+    if value["trust_state"] != expected_trust:
+        raise DomainContractError(
+            "source class and trust state are inconsistent")
     _unique_strings(value["authority_claims"], "source authority claims", maximum=8)
     for key in ("version", "jurisdiction", "product_class", "environment", "ambiguity"):
         if value[key] is not None:

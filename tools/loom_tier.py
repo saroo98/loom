@@ -35,7 +35,9 @@ DISCIPLINED_DELIVERABLE_RE = re.compile(
     r"research paper|literature review)\b")
 SMALL_RE = re.compile(
     r"(?i)\b(single[- ]file|one file|small script|bug fix|add a flag|landing page|"
-    r"static page|command[- ]line flag|rename|copy change)\b")
+    r"static page|command[- ]line flag|rename|copy change|"
+    r"(?:tiny|simple|minimal|basic)\s+(?:python\s+)?"
+    r"(?:cli|command[- ]line tool|script|app|program|tool))\b")
 GREENFIELD_RE = re.compile(
     r"(?i)\b(?:build|create|develop|design|implement)\s+"
     r"(?:(?:a|an|the|new|offline[- ]first)\s+){0,4}"

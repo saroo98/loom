@@ -101,7 +101,8 @@ CATALOG = {
                        "DPI/input variance", "installer/signing", "update/rollback path"],
     },
     "library-sdk": {
-        "keywords": [r"\blibrary\b", r"\bsdk\b", r"\bpackage\b", r"\bpublic api\b"],
+        "keywords": [r"(?<!standard[- ])\blibrary\b", r"\bsdk\b", r"\bpackage\b",
+                     r"\bpublic api\b"],
         "invariants": ["public API contract", "compatibility/version policy", "examples in CI",
                        "deprecation path", "clean consumer install", "registry rollback"],
     },
@@ -199,6 +200,23 @@ DISCOVERY_CATALOG = {
     "quantum-optics": [
         r"\bquantum optics\b", r"\boptical rig\b", r"\bphotonics\b",
     ],
+}
+
+# A named opaque system can carry domain rules that no implementation-shape adapter
+# knows. Preserve that uncertainty instead of allowing words such as "CLI" or
+# "desktop" to make the whole request appear covered. This remains intentionally
+# narrow: the marker must explicitly say that a capitalized named system is fictional,
+# proprietary, unpublished, or internal-only.
+OPAQUE_NAMED_SYSTEM_RE = re.compile(
+    r"\b(?:fictional|proprietary|unpublished|internal-only)\s+"
+    r"[A-Z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*\b")
+LOCAL_DOMAIN_AUTHORITY_RE = re.compile(
+    r"(?i)\b(?:follow|use|using|governed by|according to)\b[^.\n]{0,160}"
+    r"\b(?:authority|specification|policy|rules?|requirements?)"
+    r"(?:[-_. ][A-Za-z0-9]+)*\.(?:md|txt|json|ya?ml)\b")
+IMPLEMENTATION_SHAPE_DOMAINS = {
+    "automation", "browser-extension", "cli", "desktop", "library-sdk",
+    "llm-agent", "mobile", "web-app", "website",
 }
 
 # A Codex plugin manifest plus an Agent Skill entry point is stronger evidence for an
@@ -444,7 +462,9 @@ def task_language(description):
     source material.  They remain available to the host, but cannot become positive
     routing evidence.
     """
-    low = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", str(description or ""))
+    low = re.sub(
+        r"(?i)^\s*/loom(?=\s|$)\s*", " ", str(description or ""), count=1)
+    low = re.sub(r"\[[^\]]*\]\([^)]*\)", " ", low)
     low = re.sub(
         r"\b(?:report|research|source|example)\s+(?:says?|states?|contains?)\s+"
         r"(?P<quote>['\"]).*?(?P=quote)", " source-material ", low,
@@ -561,6 +581,20 @@ def select_domains(description, explicit=None, project_facts=None, host_proposal
             hits = _positive_keyword_hits(patterns, low)
             if hits:
                 matches.append(_unknown_result(domain_id, keyword_hits=hits))
+        known_match_ids = {
+            item["id"] for item in matches if item["coverage"] == "adapter"}
+        opaque_subject_evidence = (
+            OPAQUE_NAMED_SYSTEM_RE.search(description) is not None
+            or (
+                LOCAL_DOMAIN_AUTHORITY_RE.search(description) is not None
+                and known_match_ids
+                and known_match_ids <= IMPLEMENTATION_SHAPE_DOMAINS
+            )
+        )
+        if opaque_subject_evidence \
+                and not any(item["coverage"] == "unknown" for item in matches):
+            matches.append(_unknown_result(
+                "unclassified", keyword_hits=["opaque-named-system"]))
         source = "language-evidence" if matches else "no-active-task-evidence"
 
     # Host/model judgment may rank alternatives, but it cannot activate a domain or memory

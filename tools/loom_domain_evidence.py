@@ -31,6 +31,20 @@ SOURCE_TO_AUTHORITY = {
     "owner-attestation": {"owner-authority"},
 }
 
+SOURCE_TRUST = {
+    "repository": "trusted-local",
+    "executed-observation": "trusted-local",
+    "official-law": "trusted-authority",
+    "regulator": "trusted-authority",
+    "official-vendor": "trusted-authority",
+    "governing-standard": "trusted-authority",
+    "primary-research": "trusted-authority",
+    "qualified-reviewer": "trusted-authority",
+    "owner-attestation": "trusted-local",
+    "secondary-discovery": "untrusted-data",
+    "shipped-adapter": "trusted-authority",
+}
+
 INSTRUCTION_PATTERNS = (
     r"(?i)\bignore\s+(?:all\s+)?(?:previous|loom|system)\s+instructions\b",
     r"(?i)\b(?:run|execute|invoke)\s+(?:this\s+)?(?:command|script|tool)\b",
@@ -112,7 +126,12 @@ def evaluate_authority(invariant, sources):
     observed, invalid = set(), []
     for source in sources:
         loom_domain_contract.validate_source(source)
-        observed.update(SOURCE_TO_AUTHORITY.get(source["source_class"], set()))
+        expected_trust = SOURCE_TRUST.get(source["source_class"])
+        if expected_trust != source["trust_state"]:
+            invalid.append(
+                f"{source['source_id']}:invalid-trust-state")
+        elif source["trust_state"] != "untrusted-data":
+            observed.update(SOURCE_TO_AUTHORITY.get(source["source_class"], set()))
         # A source may describe what it claims; it cannot mint an authority class.
         invalid.extend(item for item in source["authority_claims"]
                        if item not in loom_domain_contract.AUTHORITY_CLASSES)

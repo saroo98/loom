@@ -95,6 +95,36 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
                     request, intent="plan", blocked=False, code="ROUTE_PLAN",
                     state=DRIFTED_STATE)
 
+    def test_planning_only_is_not_confused_with_implementation_authority(self):
+        requests = [
+            "Plan a tiny Python CLI. Do not implement it.",
+            "/loom Plan a tiny Python CLI. Do not implement it.",
+            "Plan a tiny Python CLI; do not implement.",
+            "Plan a tiny Python CLI, and do not implement it.",
+            "Plan a tiny Python CLI and do not implement it.",
+            (
+                "Plan a tiny Python CLI greeter that accepts a name and prints "
+                "Hello, <name>!, with one standard-library unittest. "
+                "Planning only; do not implement."
+            ),
+        ]
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertRoute(
+                    request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_implementation_request_and_implementation_prohibition_conflict(self):
+        requests = [
+            "Implement the bridge. Do not implement the bridge.",
+            "Build a CLI; do not implement it.",
+            "Create the application and do not implement it.",
+        ]
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertRoute(
+                    request, intent="status", blocked=True,
+                    code="INTENT_AMBIGUOUS")
+
     def test_positive_repair_clause_survives_a_separate_memory_prohibition(self):
         requests = [
             "Fix the stale plan; do not remember this request.",
