@@ -19,6 +19,11 @@ read its vault, select memory, migrate state, or keep host-specific policy.
 - Codex Standard mode uses the plugin's local stdio MCP server. The plugin bootstrap replaces
   itself with the receipt-owned stable launcher before accepting Loom tools. It opens no network
   listener and needs no hook trust.
+- In plugin mode, the plugin skill and MCP server are the only canonical Codex route. An approved
+  migration retires an older user-level MCP registration only when its exact transport is proven
+  by Loom's ownership receipt. It moves an older direct skill only when its complete file tree is
+  proven receipt-owned, retaining it outside Codex discovery as a rollback archive. Changed,
+  unowned, incomplete, or ambiguous routes block without being overwritten or deleted.
 - Codex Verified mode is a separate, explicit user-hook installation. It preserves unrelated
   hooks, refuses unowned Loom-like entries, owns exact entry hashes, and can be removed without
   removing the vault. `UserPromptSubmit` forwards only explicit `/loom` or Loom-skill requests;
@@ -37,7 +42,7 @@ result as real-host verification.
 
 | Host | Adapter location | Current evidence | Connection policy |
 | --- | --- | --- | --- |
-| Codex | plugin skill plus local MCP; optional user hooks | source-tested; clean installed-host invocation pending | plugin installation; one-time hook trust only for Verified mode |
+| Codex | canonical plugin skill plus local MCP; optional user hooks; direct-source fallback | source-tested; clean installed-host invocation pending | plugin installation; approved ownership-safe retirement of legacy shadows; one-time hook trust only for Verified mode |
 | Claude Code | `~/.claude/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |
 | Gemini CLI | `~/.gemini/skills/loom/SKILL.md` | stale | detected, not connected during host transition |
 | OpenCode | `~/.config/opencode/skills/loom/SKILL.md` | simulated-conformant | eligible after detection and owner approval |

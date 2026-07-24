@@ -14,7 +14,11 @@ Proof expiry: **30 days**
 - `.agents/skills/loom/SKILL.md`
 - `.codex/skills/loom/SKILL.md`
 
-Precedence policy: `duplicates-block`. Duplicate Loom routes block execution.
+Precedence policy: `plugin-canonical; owned-legacy-retired; other-duplicates-block`. Duplicate Loom routes block execution.
+
+## Canonical route
+
+For a marketplace installation, the enabled plugin's skill and local stdio MCP server are canonical. The global roots above are direct-source fallback routes, not additional routes to retain beside the plugin. During an approved plugin migration, Loom removes only an exact receipt-owned user MCP registration and moves only an exact receipt-owned direct skill into a private rollback archive. An unowned, changed, or ambiguous duplicate blocks migration instead of being overwritten or deleted.
 
 ## Assurance modes
 

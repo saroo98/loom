@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-<strong>Loom 1.8.9 · Planning intelligence for AI coding agents.</strong><br>
+<strong>Loom 1.8.10 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.9">Latest release</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.10">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -55,6 +55,45 @@ sandbox: Codex documents that specialized tool paths may bypass ordinary tool ho
 Both modes use the same runtime, owner vault, planning method, memory selection, and sealed action
 format. A receipt labels the mode, so Standard work can never be reported as Verified work.
 
+The enabled plugin is the canonical Codex route. Loom does not retain a second user-level MCP
+registration beside it. During an approved migration, Loom retires an older MCP registration only
+when its exact transport is covered by Loom's receipt, and moves an older direct skill only when
+its complete tree is proven receipt-owned. The skill is kept outside Codex discovery as a rollback
+archive. Any changed, unowned, incomplete, or ambiguous duplicate blocks instead of being
+overwritten or deleted.
+
+## What changed in 1.8.10
+
+Loom 1.8.10 closes the gap between a successful invocation and a genuinely executable plan:
+
+- **Small ambiguity produces one small question.** A placeholder such as “Plan a very simple test
+  project” no longer causes Loom or the host agent to invent a project, promote it to Tier M, or
+  create a speculative plan directory. Loom asks for the one missing scope decision and stops.
+- **Plan structure is machine-owned.** The agent supplies one closed, bounded plan draft. Loom
+  renders every required artifact, validates the complete candidate against its sealed contract,
+  runs lint, and activates the pack atomically. A malformed candidate cannot replace a valid pack.
+- **Codex MCP calls are client-compatible and still strict.** Optional transport metadata and an
+  omitted argument object for zero-argument tools are accepted; unknown or malformed tool
+  arguments still fail closed.
+- **Invocation wrappers cannot distort routing.** `/loom` and explicit Codex skill-selection
+  wrappers remain part of the sealed request identity but are excluded from semantic
+  classification. Bootstrap failures return bounded diagnostics instead of a bare closed
+  transport.
+- **The plugin is the canonical Codex route.** An approved migration removes only an exact
+  receipt-owned legacy MCP route and archives only an exact receipt-owned direct skill. Changed,
+  unowned, incomplete, or ambiguous duplicates block without being overwritten or deleted.
+- **Failures are concise and actionable.** Repeated lint and gate findings are consolidated without
+  weakening any underlying invariant.
+- **The Codex skill is self-contained and bounded.** It no longer rereads the non-Codex kernel on
+  every request. An ordinary plan uses one invoke call and one combined author-and-finalize call,
+  while retaining the same sealed runtime, validation, and authorization boundaries.
+- **Unknown-domain evidence has an explicit invariant taxonomy.** Ordinary repository-defined
+  side-effect constraints remain correctness rules; genuine safety or regulatory claims still
+  require pre-existing governing authority and cannot be relabeled to pass.
+
+This source becomes the immutable signed `v1.8.10` release only after the exact public artifact,
+platform matrix, and disposable fresh-Codex scenarios all pass from `main`.
+
 ## What changed in 1.8.9
 
 Loom 1.8.9 completes the Codex integration path that turns a selected Loom skill into a usable
@@ -72,8 +111,7 @@ sealed planning action:
 - **Timeouts are truly bounded.** Bootstrap and bridge work share one total deadline rather than
   stacking independent timeout budgets.
 
-This candidate becomes the published signed `v1.8.9` artifact only after it is verified and
-published from `main`.
+The signed `v1.8.9` artifact was published from its verified default-branch release commit.
 
 ## What changed in 1.8.6
 
@@ -151,10 +189,12 @@ python "$HOME/.loom/bin/loom.py" --home "$HOME/.loom" codex-install --approved
 ```
 
 The third command is a preview and changes nothing. Review it, then run the fourth command to add
-the exact local MCP and Verified hooks. A marketplace plugin install provides Standard MCP mode
-without these source-install integration commands. Marketplace owners can opt into only the
-Verified hook layer with `codex-install --hooks-only`, preview it, then repeat with
-`--hooks-only --approved`.
+the exact local MCP and Verified hooks for a direct-source fallback installation. A marketplace
+plugin already provides Standard mode and must not receive a second user-level MCP registration.
+Marketplace owners can preview the optional Verified hook layer with
+`codex-install --hooks-only`, then approve it with `codex-install --hooks-only --approved`.
+That approved migration also retires only exact receipt-owned legacy routes; it refuses all
+unowned or changed conflicts.
 
 Then open a project and ask for the work you want:
 
@@ -180,8 +220,8 @@ metadata is incomplete.
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
-For the verified release artifact, download `loom-plugin-v1.8.9.zip` from
-[the v1.8.9 release](https://github.com/saroo98/loom/releases/tag/v1.8.9), verify it before
+For the verified release artifact, download `loom-plugin-v1.8.10.zip` from
+[the v1.8.10 release](https://github.com/saroo98/loom/releases/tag/v1.8.10), verify it before
 installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request
