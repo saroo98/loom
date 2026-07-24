@@ -103,7 +103,10 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn('"rebuild_sha256": digest(rebuild)', helper)
         self.assertIn('"provenance_sha256": digest(provenance_path)', helper)
         self.assertIn('"independent_build": True', helper)
-        self.assertIn("_verify_helper_receipt(", helper)
+        self.assertIn(
+            'Path(".").resolve(), os.environ["LOOM_SOURCE_SHA"], source_digest,',
+            helper,
+        )
 
     def test_exact_cut_forbidden_token_cannot_match_shipped_workflow_bytes(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")

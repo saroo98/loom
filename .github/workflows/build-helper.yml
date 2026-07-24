@@ -134,7 +134,7 @@ jobs:
           loom_plugin_package._verify_helper_receipt(
               os.environ["LOOM_PLATFORM"], binary, receipt,
               {"rebuild": rebuild, "sbom": sbom, "provenance": provenance_path},
-              Path(".").resolve(), os.environ["LOOM_SOURCE_SHA"],
+              Path(".").resolve(), os.environ["LOOM_SOURCE_SHA"], source_digest,
           )
           PY
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
