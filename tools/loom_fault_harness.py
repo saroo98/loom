@@ -27,6 +27,7 @@ ORCHESTRATION_CRASH_CODES = {
     "after-pointer-clear": 112,
 }
 MAX_CHILD_PAYLOAD_BYTES = 256 * 1024
+MAX_GIT_DIAGNOSTIC_CHARS = 4000
 
 
 def disposable_environment(home):
@@ -53,6 +54,72 @@ def disposable_environment(home):
         "TMPDIR": str(temporary),
     })
     return environment
+
+
+def _run_fixture_git(arguments, *, home, timeout=30):
+    environment = disposable_environment(home)
+    environment.update({
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_TERMINAL_PROMPT": "0",
+    })
+    try:
+        result = subprocess.run(
+            ["git", *arguments], env=environment, capture_output=True, text=True,
+            timeout=timeout, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise FaultError("disposable Git fixture command failed to run") from exc
+    if result.returncode != 0:
+        diagnostic = "\n".join(
+            item.strip() for item in (result.stdout, result.stderr) if item.strip())
+        diagnostic = diagnostic[-MAX_GIT_DIAGNOSTIC_CHARS:] or "no Git diagnostic"
+        raise FaultError(
+            f"disposable Git fixture command failed with exit "
+            f"{result.returncode}: {diagnostic}")
+    return result
+
+
+def initialize_git_fixture(repo, home):
+    """Initialize one maintenance-free repository for isolated test clones."""
+    repo = Path(repo).resolve()
+    home = Path(home).resolve()
+    home.mkdir(parents=True, exist_ok=True)
+    _run_fixture_git(["init", "-q", str(repo)], home=home)
+    for key, value in (
+            ("user.email", "test@example.invalid"),
+            ("user.name", "test"),
+            ("maintenance.auto", "false"),
+            ("gc.auto", "0")):
+        _run_fixture_git(
+            ["-C", str(repo), "config", "--local", key, value], home=home)
+    _run_fixture_git(["-C", str(repo), "add", "-A"], home=home)
+    _run_fixture_git(
+        ["-C", str(repo), "commit", "-qm", "baseline"], home=home)
+    if (repo / ".git" / "objects" / "maintenance.lock").exists():
+        raise FaultError("disposable Git fixture retained a maintenance lock")
+    return repo
+
+
+def clone_git_fixture(source, destination, home):
+    """Clone a fixture without traversing a live ``.git`` directory."""
+    source = Path(source).resolve()
+    destination = Path(destination).resolve()
+    home = Path(home).resolve()
+    if destination.exists() or not (source / ".git").is_dir():
+        raise FaultError("disposable Git fixture source or destination is invalid")
+    home.mkdir(parents=True, exist_ok=True)
+    _run_fixture_git([
+        "-c", "maintenance.auto=false", "-c", "gc.auto=0",
+        "clone", "--quiet", "--no-local", str(source), str(destination),
+    ], home=home)
+    for key, value in (
+            ("user.email", "test@example.invalid"),
+            ("user.name", "test"),
+            ("maintenance.auto", "false"),
+            ("gc.auto", "0")):
+        _run_fixture_git(
+            ["-C", str(destination), "config", "--local", key, value],
+            home=home)
+    return destination
 
 
 def _child_command(root):

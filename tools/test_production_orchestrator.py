@@ -4,7 +4,6 @@ import datetime as dt
 import hashlib
 import json
 import os
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_gate  # noqa: E402
+import loom_fault_harness  # noqa: E402
 import loom_install  # noqa: E402
 import loom_improvement  # noqa: E402
 import loom_lifecycle  # noqa: E402
@@ -346,18 +346,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         cls.repo_fixture = cls.fixture_root / "repo-fixture"
         (cls.repo_fixture / "src").mkdir(parents=True)
         _write(cls.repo_fixture / "src" / "app.py", "VALUE = 1\n")
-        subprocess.run(["git", "init", "-q", str(cls.repo_fixture)], check=True)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "config", "user.email",
-            "test@example.invalid"], check=True)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "config", "user.name", "test"],
-            check=True)
-        subprocess.run(
-            ["git", "-C", str(cls.repo_fixture), "add", "-A"], check=True)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "commit", "-qm", "baseline"],
-            check=True)
+        cls.fixture_home = cls.fixture_root / "fixture-home"
+        loom_fault_harness.initialize_git_fixture(
+            cls.repo_fixture, cls.fixture_home)
 
     @classmethod
     def tearDownClass(cls):
@@ -374,7 +365,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         self.repo = self.root / "target"
-        shutil.copytree(self.repo_fixture, self.repo)
+        loom_fault_harness.clone_git_fixture(
+            self.repo_fixture, self.repo, self.home / "git-home")
         self.request = "Plan a financial double-entry accounting change to src/app.py"
         self.request_sequence = 0
 
