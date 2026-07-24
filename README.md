@@ -5,13 +5,13 @@
 </p>
 
 <p align="center">
-<strong>Loom 1.8.10 · Planning intelligence for AI coding agents.</strong><br>
+<strong>Loom 1.8.11 · Planning intelligence for AI coding agents.</strong><br>
   Plan from the current world. Verify in the real one.
 </p>
 
 <p align="center">
   <a href="https://saroo98.github.io/loom/">Website</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.10">Latest release</a> ·
+  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.11">Latest release</a> ·
   <a href="#install">Install</a> ·
   <a href="#what-happens-after-one-request">How it works</a> ·
   <a href="#how-learning-works">Learning</a> ·
@@ -62,9 +62,9 @@ its complete tree is proven receipt-owned. The skill is kept outside Codex disco
 archive. Any changed, unowned, incomplete, or ambiguous duplicate blocks instead of being
 overwritten or deleted.
 
-## What changed in 1.8.10
+## What changed in 1.8.11
 
-Loom 1.8.10 closes the gap between a successful invocation and a genuinely executable plan:
+Loom 1.8.11 closes the gap between a successful invocation and a genuinely executable plan:
 
 - **Small ambiguity produces one small question.** A placeholder such as “Plan a very simple test
   project” no longer causes Loom or the host agent to invent a project, promote it to Tier M, or
@@ -91,7 +91,7 @@ Loom 1.8.10 closes the gap between a successful invocation and a genuinely execu
   side-effect constraints remain correctness rules; genuine safety or regulatory claims still
   require pre-existing governing authority and cannot be relabeled to pass.
 
-This source becomes the immutable signed `v1.8.10` release only after the exact public artifact,
+This source becomes the immutable signed `v1.8.11` release only after the exact public artifact,
 platform matrix, and disposable fresh-Codex scenarios all pass from `main`.
 
 ## What changed in 1.8.9
@@ -220,8 +220,8 @@ metadata is incomplete.
 This repository is directly installable. A public Codex marketplace listing is not claimed until
 submission and approval actually happen.
 
-For the verified release artifact, download `loom-plugin-v1.8.10.zip` from
-[the v1.8.10 release](https://github.com/saroo98/loom/releases/tag/v1.8.10), verify it before
+For the verified release artifact, download `loom-plugin-v1.8.11.zip` from
+[the v1.8.11 release](https://github.com/saroo98/loom/releases/tag/v1.8.11), verify it before
 installation, and retain the prior runtime until the new version has passed its bootstrap checks.
 
 ## What happens after one request

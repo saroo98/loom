@@ -11,11 +11,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class Phase7ProtocolTests(unittest.TestCase):
-    def test_current_fact_manifest_is_current_at_implementation_date(self):
+    def test_current_fact_manifest_is_current_at_latest_observation(self):
         value = json.loads((ROOT / "contracts" / "current-facts-v1.json").read_text(
             encoding="utf-8"))
+        retrieved = [
+            dt.datetime.fromisoformat(fact["retrieved_at"].replace("Z", "+00:00"))
+            for fact in value["facts"]
+            if fact.get("retrieved_at")
+        ]
         result = loom_current_facts.validate(
-            value, as_of=dt.datetime(2026, 7, 17, 12, tzinfo=dt.timezone.utc))
+            value, as_of=max(retrieved))
         self.assertEqual("current", result["status"])
         self.assertIn("hosts.third-party-contracts", result["unverified"])
 

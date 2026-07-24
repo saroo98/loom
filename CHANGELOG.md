@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.8.11
+
+- Refresh the release-maintainer observation of the installed Codex CLI and plugin command surface
+  before its evidence deadline. The signed-release gate continues to fail closed when any
+  time-bounded operational fact is stale.
+
 ## 1.8.10
 
 - Refuse to invent a project type for an underspecified small planning request.
