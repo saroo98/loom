@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Focused adversarial tests for exact-tree deletion-authority evidence."""
 
+import hashlib
 import json
 import os
 import stat
@@ -82,6 +83,25 @@ class ExactTreeManifestTests(unittest.TestCase):
             (self.root / f"entry-{index}").mkdir()
         with self.assertRaisesRegex(loom_reliability.ReliabilityError, "entry bound"):
             loom_reliability.exact_tree_manifest(self.root, max_entries=2)
+
+    def test_explicit_larger_policy_does_not_change_the_safe_default(self):
+        for index in range(257):
+            (self.root / f"entry-{index:03d}.txt").write_bytes(b"x")
+        with self.assertRaisesRegex(loom_reliability.ReliabilityError, "entry bound"):
+            loom_reliability.exact_tree_manifest(self.root)
+        manifest = loom_reliability.exact_tree_manifest(
+            self.root, max_entries=300,
+            max_file_bytes=loom_reliability.MAX_EXACT_TREE_FILE_BYTES,
+            max_total_bytes=loom_reliability.MAX_EXACT_TREE_TOTAL_BYTES)
+        self.assertEqual(257, manifest["file_count"])
+        self.assertEqual(257, manifest["total_bytes"])
+
+    def test_explicit_policy_cannot_exceed_the_hard_ceiling(self):
+        with self.assertRaisesRegex(
+                loom_reliability.ReliabilityError, "entry bound"):
+            loom_reliability.exact_tree_manifest(
+                self.root,
+                max_entries=loom_reliability.MAX_EXACT_TREE_POLICY_ENTRIES + 1)
 
     def test_exact_equality_and_partial_subset_are_separate_proofs(self):
         expected_root = self.root / "expected"
@@ -223,6 +243,17 @@ class ExactTreeManifestTests(unittest.TestCase):
                         loom_reliability.exact_tree_manifest(self.root)
                 finally:
                     os.unlink(stream)
+
+    @unittest.skipUnless(os.name == "nt", "Windows executable metadata semantics")
+    def test_windows_executable_extension_has_stable_descriptor_identity(self):
+        helper = self.root / "helper.exe"
+        helper.write_bytes(b"MZ-test")
+        manifest = loom_reliability.exact_tree_manifest(self.root)
+        entry = next(
+            item for item in manifest["entries"] if item["path"] == "helper.exe")
+        self.assertEqual(len(b"MZ-test"), entry["bytes"])
+        self.assertEqual(
+            hashlib.sha256(b"MZ-test").hexdigest(), entry["sha256"])
 
     def test_nested_mount_boundary_is_rejected(self):
         nested = self.root / "nested"

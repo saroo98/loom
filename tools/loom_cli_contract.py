@@ -3,6 +3,7 @@
 
 import argparse
 import ast
+import concurrent.futures
 import json
 import os
 import subprocess
@@ -101,6 +102,31 @@ def _tree_digest(root):
     return entries
 
 
+def _refusal_violations(result, before, after):
+    violations = []
+    if result.returncode != 2:
+        violations.append(f"exit={result.returncode}, expected=2")
+    if result.stdout.strip():
+        violations.append(
+            f"stdout_bytes={len(result.stdout.encode('utf-8'))}, expected=0")
+    if "usage:" not in result.stderr.casefold():
+        violations.append("stderr did not contain usage")
+    if after != before:
+        before_entries = {item[0]: item[1:] for item in before}
+        after_entries = {item[0]: item[1:] for item in after}
+        before_paths = set(before_entries)
+        after_paths = set(after_entries)
+        added = sorted(after_paths - before_paths)[:3]
+        removed = sorted(before_paths - after_paths)[:3]
+        changed = sorted(
+            path for path in before_paths & after_paths
+            if before_entries[path] != after_entries[path])[:3]
+        violations.append(
+            "filesystem changed "
+            f"(added={added}, removed={removed}, changed={changed})")
+    return violations
+
+
 def _runtime_help_options(root, path, subcommands):
     environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     outputs = []
@@ -121,102 +147,120 @@ def _runtime_help_options(root, path, subcommands):
     return result
 
 
+def _inventory_tool(root, path):
+    name = path.stem
+    writes = WRITE_CLASS.get(name, "none")
+    subcommands = _subcommands(path)
+    options = _parser_options(path)
+    options.update({key: value for key, value in
+                    _runtime_help_options(root, path, subcommands).items()
+                    if key not in options})
+    return {
+        "name": name,
+        "path": path.relative_to(root).as_posix(),
+        "surface": "runtime" if name in RUNTIME else "maintenance",
+        "writes": writes,
+        "idempotency": ("read-only" if writes == "none" else
+                        "operation-id-guarded" if writes == "owner-state" else
+                        "receipt-guarded"),
+        "machine_output": ("text" if name in TEXT_OUTPUT else
+                           "mixed" if name in MIXED_OUTPUT else "json"),
+        "exit_codes": {"success": 0, "refused": [1, 2]},
+        "options": dict(sorted(options.items())),
+        "subcommands": subcommands,
+    }
+
+
 def inventory(root):
     root = Path(root).resolve()
     if not (root / "tools").is_dir():
         raise ContractError("repository tools directory is missing")
-    tools = []
-    for path in _entrypoints(root):
-        name = path.stem
-        writes = WRITE_CLASS.get(name, "none")
-        subcommands = _subcommands(path)
-        options = _parser_options(path)
-        options.update({key: value for key, value in
-                        _runtime_help_options(root, path, subcommands).items()
-                        if key not in options})
-        tools.append({
-            "name": name,
-            "path": path.relative_to(root).as_posix(),
-            "surface": "runtime" if name in RUNTIME else "maintenance",
-            "writes": writes,
-            "idempotency": ("read-only" if writes == "none" else
-                            "operation-id-guarded" if writes == "owner-state" else
-                            "receipt-guarded"),
-            "machine_output": ("text" if name in TEXT_OUTPUT else
-                               "mixed" if name in MIXED_OUTPUT else "json"),
-            "exit_codes": {"success": 0, "refused": [1, 2]},
-            "options": dict(sorted(options.items())),
-            "subcommands": subcommands,
-        })
+    paths = _entrypoints(root)
+    workers = min(8, max(1, len(paths)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        tools = list(executor.map(
+            lambda path: _inventory_tool(root, path), paths))
     return {"schema_version": 1, "tools": tools}
+
+
+def _verify_tool(root, item, environment):
+    command = [sys.executable, "-B", str(root / item["path"]), "--help"]
+    try:
+        probe = subprocess.run(
+            command, cwd=root / "tools", env=environment, capture_output=True,
+            text=True, timeout=10, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ContractError(f"{item['name']} --help exceeded 10 seconds") from exc
+    if probe.returncode != 0 or "usage:" not in probe.stdout.casefold() \
+            or probe.stderr.strip():
+        raise ContractError(
+            f"{item['name']} --help violated its zero-exit stdout-only contract")
+    help_outputs = [probe.stdout]
+    for command_name in item["subcommands"]:
+        subprobe = subprocess.run(
+            [sys.executable, "-B", str(root / item["path"]), command_name, "--help"],
+            cwd=root / "tools", env=environment, capture_output=True,
+            text=True, timeout=10, check=False)
+        if subprobe.returncode != 0 or "usage:" not in subprobe.stdout.casefold() \
+                or subprobe.stderr.strip():
+            raise ContractError(
+                f"{item['name']} {command_name} --help violated its contract")
+        help_outputs.append(subprobe.stdout)
+    advertised = set(re.findall(
+        r"(?<!\w)(--?[a-zA-Z][a-zA-Z0-9-]*)", "\n".join(help_outputs)))
+    contracted = set(item["options"])
+    if advertised != contracted:
+        raise ContractError(
+            f"{item['name']} advertised options differ from its parser contract")
+    with tempfile.TemporaryDirectory(prefix="loom-cli-contract-") as temporary:
+        sandbox = Path(temporary)
+        isolated = dict(environment, HOME=str(sandbox), USERPROFILE=str(sandbox),
+                        LOOM_HOME=str(sandbox / ".loom"))
+        before = _tree_digest(sandbox)
+        invalid = subprocess.run(
+            [sys.executable, "-B", str(root / item["path"]),
+             "--loom-contract-invalid-option"],
+            cwd=sandbox, env=isolated, capture_output=True, text=True,
+            timeout=10, check=False)
+        invalid_violations = _refusal_violations(
+            invalid, before, _tree_digest(sandbox))
+        if invalid_violations:
+            raise ContractError(
+                f"{item['name']} invalid-option refusal violated its contract: "
+                + "; ".join(invalid_violations))
+        value_flags = [flag for flag, contract in item["options"].items()
+                       if flag.startswith("--") and contract["requires_value"]]
+        missing_value_exit = None
+        if value_flags:
+            missing = subprocess.run(
+                [sys.executable, "-B", str(root / item["path"]), value_flags[0]],
+                cwd=sandbox, env=isolated, capture_output=True, text=True,
+                timeout=10, check=False)
+            missing_value_exit = missing.returncode
+            missing_violations = _refusal_violations(
+                missing, before, _tree_digest(sandbox))
+            if missing_violations:
+                raise ContractError(
+                    f"{item['name']} missing-value refusal violated its contract: "
+                    + "; ".join(missing_violations))
+    return {"name": item["name"], "help_exit": probe.returncode,
+            "invalid_exit": invalid.returncode,
+            "missing_value_exit": missing_value_exit,
+            "options": len(contracted),
+            "subcommands": len(item["subcommands"]),
+            "stdout_bytes": len(probe.stdout.encode("utf-8"))}
 
 
 def verify(root):
     root = Path(root).resolve()
     value = inventory(root)
-    receipts = []
     environment = dict(os.environ)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
-    for item in value["tools"]:
-        command = [sys.executable, "-B", str(root / item["path"]), "--help"]
-        try:
-            probe = subprocess.run(
-                command, cwd=root / "tools", env=environment, capture_output=True,
-                text=True, timeout=10, check=False)
-        except subprocess.TimeoutExpired as exc:
-            raise ContractError(f"{item['name']} --help exceeded 10 seconds") from exc
-        if probe.returncode != 0 or "usage:" not in probe.stdout.casefold() \
-                or probe.stderr.strip():
-            raise ContractError(
-                f"{item['name']} --help violated its zero-exit stdout-only contract")
-        help_outputs = [probe.stdout]
-        for command_name in item["subcommands"]:
-            subprobe = subprocess.run(
-                [sys.executable, "-B", str(root / item["path"]), command_name, "--help"],
-                cwd=root / "tools", env=environment, capture_output=True,
-                text=True, timeout=10, check=False)
-            if subprobe.returncode != 0 or "usage:" not in subprobe.stdout.casefold() \
-                    or subprobe.stderr.strip():
-                raise ContractError(f"{item['name']} {command_name} --help violated its contract")
-            help_outputs.append(subprobe.stdout)
-        advertised = set(re.findall(
-            r"(?<!\w)(--?[a-zA-Z][a-zA-Z0-9-]*)", "\n".join(help_outputs)))
-        contracted = set(item["options"])
-        if advertised != contracted:
-            raise ContractError(f"{item['name']} advertised options differ from its parser contract")
-        with tempfile.TemporaryDirectory(prefix="loom-cli-contract-") as temporary:
-            sandbox = Path(temporary)
-            isolated = dict(environment, HOME=str(sandbox), USERPROFILE=str(sandbox),
-                            LOOM_HOME=str(sandbox / ".loom"))
-            before = _tree_digest(sandbox)
-            invalid = subprocess.run(
-                [sys.executable, "-B", str(root / item["path"]),
-                 "--loom-contract-invalid-option"],
-                cwd=sandbox, env=isolated, capture_output=True, text=True,
-                timeout=10, check=False)
-            if invalid.returncode != 2 or invalid.stdout.strip() or "usage:" not in \
-                    invalid.stderr.casefold() or _tree_digest(sandbox) != before:
-                raise ContractError(f"{item['name']} invalid-option refusal is not side-effect-free")
-            value_flags = [flag for flag, contract in item["options"].items()
-                           if flag.startswith("--") and contract["requires_value"]]
-            missing_value_exit = None
-            if value_flags:
-                missing = subprocess.run(
-                    [sys.executable, "-B", str(root / item["path"]), value_flags[0]],
-                    cwd=sandbox, env=isolated, capture_output=True, text=True,
-                    timeout=10, check=False)
-                missing_value_exit = missing.returncode
-                if missing.returncode != 2 or missing.stdout.strip() \
-                        or "usage:" not in missing.stderr.casefold() \
-                        or _tree_digest(sandbox) != before:
-                    raise ContractError(
-                        f"{item['name']} missing-value refusal is not side-effect-free")
-        receipts.append({"name": item["name"], "help_exit": probe.returncode,
-                         "invalid_exit": invalid.returncode,
-                         "missing_value_exit": missing_value_exit,
-                         "options": len(contracted),
-                         "subcommands": len(item["subcommands"]),
-                         "stdout_bytes": len(probe.stdout.encode("utf-8"))})
+    tools = value["tools"]
+    workers = min(8, max(1, len(tools)))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
+        receipts = list(executor.map(
+            lambda item: _verify_tool(root, item, environment), tools))
     return {"status": "verified", "tools": len(receipts), "receipts": receipts,
             "inventory": value}
 

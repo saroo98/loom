@@ -49,7 +49,7 @@ jobs:
           [[ "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]]
           test "$RELEASE_TAG" = "v$(cat VERSION)"
           test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "${GITHUB_SHA}"
-          printf 'xizirsaro@gmail.com %s\n' "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" \
+          printf 'loom-release@users.noreply.github.com %s\n' "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" \
             > "$RUNNER_TEMP/loom-release-allowed-signers"
           git config gpg.format ssh
           git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/loom-release-allowed-signers"

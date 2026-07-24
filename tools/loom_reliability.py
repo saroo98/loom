@@ -22,6 +22,9 @@ MAX_MIGRATION_FILES = 256
 MAX_EXACT_TREE_ENTRIES = 256
 MAX_EXACT_TREE_FILE_BYTES = 256 * 1024
 MAX_EXACT_TREE_TOTAL_BYTES = 2 * 1024 * 1024
+MAX_EXACT_TREE_POLICY_ENTRIES = 4096
+MAX_EXACT_TREE_POLICY_FILE_BYTES = 32 * 1024 * 1024
+MAX_EXACT_TREE_POLICY_TOTAL_BYTES = 128 * 1024 * 1024
 MAX_EXACT_TREE_PATH_BYTES = 512
 EXACT_TREE_POLICY = "exact-tree-no-extended-data-v1"
 ROOT_IDENTITY_SCHEMA_VERSION = 1
@@ -1636,9 +1639,9 @@ def _exact_tree_platform():
 
 def _validate_exact_tree_bounds(max_entries, max_file_bytes, max_total_bytes):
     limits = (
-        (max_entries, MAX_EXACT_TREE_ENTRIES, "entry"),
-        (max_file_bytes, MAX_EXACT_TREE_FILE_BYTES, "per-file byte"),
-        (max_total_bytes, MAX_EXACT_TREE_TOTAL_BYTES, "aggregate byte"),
+        (max_entries, MAX_EXACT_TREE_POLICY_ENTRIES, "entry"),
+        (max_file_bytes, MAX_EXACT_TREE_POLICY_FILE_BYTES, "per-file byte"),
+        (max_total_bytes, MAX_EXACT_TREE_POLICY_TOTAL_BYTES, "aggregate byte"),
     )
     for value, ceiling, label in limits:
         if type(value) is not int or not 1 <= value <= ceiling:
@@ -1670,9 +1673,10 @@ def _stat_time_ns(info, field):
     return int(getattr(info, field) * 1_000_000_000)
 
 
-def _stat_identity(info):
+def _stat_identity(info, *, include_mode=True):
     return (
-        int(info.st_dev), int(info.st_ino), int(info.st_mode),
+        int(info.st_dev), int(info.st_ino),
+        int(info.st_mode) if include_mode else stat.S_IFMT(info.st_mode),
         int(info.st_nlink), int(info.st_size),
         # Windows lstat() and fstat() expose different ctime semantics for the
         # same handle on supported Python builds. mtime, identity, size, mode,
@@ -1864,7 +1868,9 @@ def _exact_file_entry(path, relative, initial, root_device, max_file_bytes):
         descriptor = os.open(path, flags)
         opened = os.fstat(descriptor)
         if not stat.S_ISREG(opened.st_mode) \
-                or _stat_identity(opened) != _stat_identity(initial):
+                or _stat_identity(
+                    opened, include_mode=False) != _stat_identity(
+                        initial, include_mode=False):
             raise ReliabilityError(f"exact-tree file identity changed before read: {path}")
         while True:
             chunk = os.read(descriptor, min(1024 * 1024, max_file_bytes + 1 - size))
@@ -2120,7 +2126,7 @@ def validate_exact_tree_entry(root, expected, *,
                               max_file_bytes=MAX_EXACT_TREE_FILE_BYTES):
     """Re-observe one manifested entry safely; never deletes or recursively traverses."""
     if type(max_file_bytes) is not int \
-            or not 1 <= max_file_bytes <= MAX_EXACT_TREE_FILE_BYTES:
+            or not 1 <= max_file_bytes <= MAX_EXACT_TREE_POLICY_FILE_BYTES:
         raise ReliabilityError("exact-tree per-file byte bound is invalid")
     _validate_exact_tree_entry_shape(expected)
     root = _absolute(root, "exact-tree validation root", must_exist=True)

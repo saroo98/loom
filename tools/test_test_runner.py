@@ -10,18 +10,25 @@ import loom_test
 
 
 class TestRunnerTests(unittest.TestCase):
-    def test_fast_gate_is_real_bounded_and_has_no_loader_errors(self):
-        # The dedicated CI fast-gate job enforces the production 30-second budget.
-        # A wider ceiling here prevents a loaded full-suite process from duplicating
-        # that wall-clock gate and turning host contention into a correctness failure.
+    def test_fast_gate_inventory_is_real_bounded_and_has_no_loader_errors(self):
+        # The full suite executes every selected test once, while the dedicated CI
+        # fast-gate job executes this exact inventory under the 30-second wall clock.
+        # Re-executing the same tests recursively here adds no distinct coverage.
         self.assertEqual(30.0, loom_test.FAST_GATE_MAX_SECONDS)
-        report = loom_test.run("fast", max_seconds=120, verbosity=0)
-        self.assertEqual(len(loom_test.FAST_TESTS), report["tests_run"])
-        self.assertEqual((0, 0), (report["failures"], report["errors"]))
-        self.assertTrue(report["within_budget"], report)
-        self.assertTrue(report["successful"], report)
-        self.assertEqual(report["tests_run"], len(report["timings"]))
-        self.assertGreater(report["suppressed_stdout_chars"], 0)
+        suite = unittest.defaultTestLoader.loadTestsFromNames(loom_test.FAST_TESTS)
+
+        def flatten(value):
+            for test in value:
+                if isinstance(test, unittest.TestSuite):
+                    yield from flatten(test)
+                else:
+                    yield test
+
+        loaded = list(flatten(suite))
+        self.assertEqual(len(loom_test.FAST_TESTS), len(loaded))
+        self.assertFalse(any(
+            test.__class__.__name__ == "_FailedTest" for test in loaded))
+        self.assertEqual(len(set(loom_test.FAST_TESTS)), len(loom_test.FAST_TESTS))
 
     def test_fast_gate_budget_boundary_is_deterministically_enforced(self):
         suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)])
@@ -38,6 +45,16 @@ class TestRunnerTests(unittest.TestCase):
         self.assertFalse(report["within_budget"])
         self.assertFalse(report["successful"])
         self.assertEqual("failed", report["status"])
+
+    def test_full_release_suite_has_no_duplicate_wall_clock_correctness_gate(self):
+        suite = unittest.TestSuite([unittest.FunctionTestCase(lambda: None)])
+        with mock.patch.object(
+                loom_test.unittest.defaultTestLoader, "discover",
+                return_value=suite):
+            report = loom_test.run("full", verbosity=0)
+        self.assertIsNone(report["max_seconds"])
+        self.assertTrue(report["within_budget"])
+        self.assertTrue(report["successful"])
 
     def test_skip_can_never_produce_successful_certification(self):
         skipped = unittest.skip("capability-fixture")(lambda: None)

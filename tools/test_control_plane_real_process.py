@@ -51,6 +51,26 @@ class RealProcessControlPlaneTests(unittest.TestCase):
             ],
             source_classification="public-release")
         loom_install.install(cls.public, cls.installed)
+        cls.repo_fixture = cls.fixture_root / "repo-fixture"
+        _write(cls.repo_fixture / "src" / "app.py", "VALUE = 1\n")
+        fixture_home = cls.fixture_root / "fixture-home"
+        fixture_home.mkdir()
+        environment = loom_fault_harness.disposable_environment(fixture_home)
+        subprocess.run(
+            ["git", "init", "-q", str(cls.repo_fixture)],
+            check=True, env=environment)
+        subprocess.run([
+            "git", "-C", str(cls.repo_fixture), "config", "user.email",
+            "test@example.invalid"], check=True, env=environment)
+        subprocess.run([
+            "git", "-C", str(cls.repo_fixture), "config", "user.name", "test"],
+            check=True, env=environment)
+        subprocess.run([
+            "git", "-C", str(cls.repo_fixture), "add", "-A"],
+            check=True, env=environment)
+        subprocess.run([
+            "git", "-C", str(cls.repo_fixture), "commit", "-qm", "baseline"],
+            check=True, env=environment)
 
     @classmethod
     def tearDownClass(cls):
@@ -65,28 +85,14 @@ class RealProcessControlPlaneTests(unittest.TestCase):
     def tearDown(self):
         self.temp.cleanup()
 
-    @staticmethod
-    def _initialize_case(root):
+    @classmethod
+    def _initialize_case(cls, root):
         home = root / "home"
         home.mkdir(parents=True)
         (home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         repo = root / "target"
-        _write(repo / "src" / "app.py", "VALUE = 1\n")
-        environment = loom_fault_harness.disposable_environment(home)
-        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(repo), "config", "user.email", "test@example.invalid",
-        ], check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(repo), "config", "user.name", "test",
-        ], check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(repo), "add", "-A",
-        ], check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(repo), "commit", "-qm", "baseline",
-        ], check=True, env=environment)
+        shutil.copytree(cls.repo_fixture, repo)
         return home, repo
 
     def make_case(self):

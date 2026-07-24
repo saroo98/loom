@@ -683,7 +683,7 @@ def collect_release(root, *, now=None):
         "tests_run": observed["tests_run"],
         "failures": 0 if observed["passed"] else 1,
         "errors": 0, "skipped": len(observed["skip_receipts"]),
-        "elapsed_seconds": observed["elapsed_seconds"], "max_seconds": 900,
+        "elapsed_seconds": observed["elapsed_seconds"], "max_seconds": None,
         "within_budget": observed["passed"],
         "capability_complete": observed["capability_complete"],
         "status": ("passed" if observed["capability_complete"]
