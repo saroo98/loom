@@ -16,6 +16,7 @@ import copy
 
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_install  # noqa: E402
+import loom_fault_harness  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_release  # noqa: E402
 import loom_reliability  # noqa: E402
@@ -55,18 +56,9 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         loom_install.install(cls.public, cls.installed)
         cls.repo_fixture = cls.fixture_root / "repo-fixture"
         _write(cls.repo_fixture / "src" / "app.py", "VALUE = 1\n")
-        subprocess.run(["git", "init", "-q", str(cls.repo_fixture)], check=True)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "config", "user.email",
-            "test@example.invalid"], check=True)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "config", "user.name", "test"],
-            check=True)
-        subprocess.run(
-            ["git", "-C", str(cls.repo_fixture), "add", "-A"], check=True)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "commit", "-qm", "baseline"],
-            check=True)
+        cls.fixture_home = cls.fixture_root / "fixture-home"
+        loom_fault_harness.initialize_git_fixture(
+            cls.repo_fixture, cls.fixture_home)
 
     @classmethod
     def tearDownClass(cls):
@@ -82,7 +74,8 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         self.repo = self.root / "target"
-        shutil.copytree(self.repo_fixture, self.repo)
+        loom_fault_harness.clone_git_fixture(
+            self.repo_fixture, self.repo, self.home / "git-home")
         self.request = "Plan a financial double-entry accounting change to src/app.py"
 
     def tearDown(self):
@@ -105,7 +98,8 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         (home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         repo = root / "target"
-        shutil.copytree(self.repo_fixture, repo)
+        loom_fault_harness.clone_git_fixture(
+            self.repo_fixture, repo, home / "git-home")
         return temporary, home, repo
 
     def invoke_case(self, home, repo, *, now=None):

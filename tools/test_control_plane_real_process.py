@@ -54,23 +54,8 @@ class RealProcessControlPlaneTests(unittest.TestCase):
         cls.repo_fixture = cls.fixture_root / "repo-fixture"
         _write(cls.repo_fixture / "src" / "app.py", "VALUE = 1\n")
         fixture_home = cls.fixture_root / "fixture-home"
-        fixture_home.mkdir()
-        environment = loom_fault_harness.disposable_environment(fixture_home)
-        subprocess.run(
-            ["git", "init", "-q", str(cls.repo_fixture)],
-            check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "config", "user.email",
-            "test@example.invalid"], check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "config", "user.name", "test"],
-            check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "add", "-A"],
-            check=True, env=environment)
-        subprocess.run([
-            "git", "-C", str(cls.repo_fixture), "commit", "-qm", "baseline"],
-            check=True, env=environment)
+        loom_fault_harness.initialize_git_fixture(
+            cls.repo_fixture, fixture_home)
 
     @classmethod
     def tearDownClass(cls):
@@ -92,7 +77,8 @@ class RealProcessControlPlaneTests(unittest.TestCase):
         (home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         repo = root / "target"
-        shutil.copytree(cls.repo_fixture, repo)
+        loom_fault_harness.clone_git_fixture(
+            cls.repo_fixture, repo, home / "git-home")
         return home, repo
 
     def make_case(self):
