@@ -1,28 +1,34 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
-  <title id="title">Loom — plan before the agent builds</title>
-  <desc id="desc">A local-first planning runtime for AI coding agents.</desc>
-  <defs>
-    <pattern id="grid" width="74" height="74" patternUnits="userSpaceOnUse"><path d="M74 0H0V74" fill="none" stroke="#f0ecdf" stroke-opacity=".07"/></pattern>
-    <radialGradient id="heat" cx="88%" cy="6%" r="65%"><stop stop-color="#d66d49" stop-opacity=".18"/><stop offset="1" stop-color="#121311" stop-opacity="0"/></radialGradient>
-  </defs>
-  <rect width="1200" height="630" fill="#121311"/>
-  <rect width="1200" height="630" fill="url(#grid)"/>
-  <rect width="1200" height="630" fill="url(#heat)"/>
-  <g transform="translate(74 64)">
-    <g fill="none" stroke-linecap="square" stroke-width="3"><path d="M7 0v40M20 0v40M33 0v40M46 0v40" stroke="#f0ecdf"/><path d="M0 10h53M0 21h53M0 32h53" stroke="#d66d49"/></g>
-    <text x="72" y="32" fill="#f0ecdf" font-family="Segoe UI Variable, Arial, sans-serif" font-size="32" font-weight="700" letter-spacing="-1">Loom</text>
-  <text x="164" y="30" fill="#9e9c93" font-family="Cascadia Code, monospace" font-size="12" letter-spacing="1.5">1.8.15</text>
+  <title id="title">Loom: one request, a plan that earns execution</title>
+  <desc id="desc">A topographic route from request through current world, domain, plan, proof, and learning.</desc>
+  <rect width="1200" height="630" fill="#dafa3f"/>
+  <g fill="none" stroke="#0a0b0a" stroke-width="1.5" opacity=".36">
+    <path d="M710 18c102-25 222 6 274 76 44 59 29 132-35 178-69 49-178 58-263 21-75-33-117-101-94-160 20-51 87-87 158-81 59 5 104 39 108 83 4 42-31 80-84 90-46 9-94-9-111-42-16-31 2-69 40-87 34-17 78-12 101 11 21 21 17 50-9 67-22 15-55 14-75 0-17-13-19-34-5-48"/>
+    <path d="M821 11c135 0 251 61 279 148 26 81-30 165-132 199-96 32-219 10-291-52"/>
+    <path d="M1118 22c74 72 90 164 35 236-54 70-168 108-279 93"/>
+    <path d="M625 436c137-71 335-74 481-8 29 13 55 29 78 47"/>
+    <path d="M685 500c104-50 250-51 358-4 29 13 54 29 75 47"/>
+    <path d="M770 559c65-27 150-28 216-1"/>
   </g>
-  <text x="74" y="216" fill="#d66d49" font-family="Cascadia Code, monospace" font-size="14" font-weight="700" letter-spacing="2.6">PLAN BEFORE THE AGENT BUILDS</text>
-  <text x="74" y="302" fill="#f0ecdf" font-family="Segoe UI Variable, Arial, sans-serif" font-size="66" font-weight="680" letter-spacing="-3.8">One request.</text>
-  <text x="74" y="378" fill="#9e9c93" font-family="Segoe UI Variable, Arial, sans-serif" font-size="66" font-weight="520" letter-spacing="-3.8">A plan bound to reality.</text>
-  <g transform="translate(74 464)"><rect width="278" height="52" fill="#d66d49"/><text x="20" y="33" fill="#121311" font-family="Cascadia Code, monospace" font-size="15" font-weight="700">/loom &lt;request&gt;</text></g>
-  <g transform="translate(716 104)" fill="none">
-    <path d="M0 30C96 30 76 102 184 102s128-72 250-72" stroke="#f0ecdf" stroke-opacity=".58" stroke-width="2" stroke-dasharray="11 8"/>
-    <path d="M0 124c105 0 90 72 205 72s126-72 229-72" stroke="#d66d49" stroke-width="2" stroke-dasharray="11 8"/>
-    <path d="M0 218c98 0 78 72 194 72s132-72 240-72" stroke="#f0ecdf" stroke-opacity=".58" stroke-width="2" stroke-dasharray="11 8"/>
-    <path d="M0 312c104 0 88 66 214 66s128-66 220-66" stroke="#d66d49" stroke-width="2" stroke-dasharray="11 8"/>
-    <path d="M78 0v420M188 0v420M298 0v420M408 0v420" stroke="#f0ecdf" stroke-opacity=".13"/>
+  <g font-family="Arial, Helvetica, sans-serif" fill="#0a0b0a">
+    <text x="70" y="78" font-size="24" font-weight="900" letter-spacing="4">LOOM 1.8.15</text>
+    <text x="70" y="198" font-size="76" font-weight="900" letter-spacing="-4">One request.</text>
+    <text x="70" y="280" font-size="76" font-weight="900" letter-spacing="-4">A plan that</text>
+    <text x="70" y="362" font-size="76" font-weight="900" letter-spacing="-4">earns execution.</text>
+    <rect x="70" y="414" width="236" height="54" fill="#0a0b0a"/>
+    <text x="91" y="448" font-family="Consolas, monospace" font-size="17" font-weight="700" fill="#f5f5ed">/loom &lt;request&gt;</text>
+    <text x="70" y="552" font-size="16" font-weight="800" letter-spacing="1.4">CURRENT WORLD · DOMAIN RULES · EXACT WORK · REAL PROOF · SCOPED LEARNING</text>
   </g>
-  <text x="74" y="574" fill="#9e9c93" font-family="Cascadia Code, monospace" font-size="12" letter-spacing="1.7">CURRENT WORLD · DOMAIN RULES · EXACT WORK ORDERS · REAL PROOF · NO TELEMETRY</text>
+  <g fill="none" stroke="#0a0b0a" stroke-width="2.2">
+    <path d="M675 294h98"/>
+    <path d="M773 294c42 0 42-102 94-102h55"/>
+    <path d="M773 294h149"/>
+    <path d="M773 294c42 0 42 102 94 102h55"/>
+    <path d="M990 192h140M990 294h140M990 396h140"/>
+  </g>
+  <g fill="#0a0b0a">
+    <circle cx="675" cy="294" r="8"/><circle cx="773" cy="294" r="8"/>
+    <circle cx="922" cy="192" r="8"/><circle cx="922" cy="294" r="8"/><circle cx="922" cy="396" r="8"/>
+    <circle cx="1130" cy="192" r="8"/><circle cx="1130" cy="294" r="8"/><circle cx="1130" cy="396" r="8"/>
+  </g>
 </svg>
