@@ -1,4 +1,4 @@
-# Loom 1.8.11 agent kernel
+# Loom 1.8.15 agent kernel
 
 The entire owner-facing interface is:
 
@@ -42,7 +42,8 @@ runtime below. Never read every Loom file into context.
    unstaged, untracked, conservatively proven generated, lifecycle, and owner state. It derives one
    typed project-inspection receipt from the same frozen census. Unsafe or changing state blocks.
 2. Accept the inferred tier unless consequence or uncertainty requires promotion. Tier S uses one
-   work order. For planning, submit one bounded semantic draft through `loom.author`; never
+   work order. For planning, serialize one bounded semantic draft as strict JSON and submit it
+   through `loom.author`; never
    reconstruct or patch pack files by hand. The content-hashed `plan_contract` already contains
    every consumer-driven produce/skip decision, domain invariant, current fact, real verification
    medium, budget, work-order topology, semantic draft limits, and pack baseline. Copy sealed
