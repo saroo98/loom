@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.8.15
+
+- Keep the machine-authoring tool visible in Codex by advertising a compact, host-portable MCP
+  schema. The semantic draft remains bounded strict JSON and is still validated against Loom's
+  complete installed plan-draft schema before any planning file is written.
+- Add a discovery-budget regression that prevents one oversized tool schema from being silently
+  omitted by a real host while the rest of Loom appears healthy.
+
 ## 1.8.11
 
 - Refresh the release-maintainer observation of the installed Codex CLI and plugin command surface
