@@ -612,6 +612,16 @@ class CodexIntegrationTests(unittest.TestCase):
                     loom_codex_integration.IntegrationError, "exactly one enabled"):
             loom_codex_integration._verified_loom_plugin(
                 self.codex, codex_home=self.codex_home)
+        duplicate = {
+            **row, "pluginId": "loom@other", "marketplaceName": "other"}
+        with mock.patch.object(
+                loom_codex_integration, "_plugin_rows",
+                return_value=[row, duplicate]), \
+                self.assertRaisesRegex(
+                    loom_codex_integration.IntegrationError,
+                    r"observed 2: loom@other, loom@test"):
+            loom_codex_integration._verified_loom_plugin(
+                self.codex, codex_home=self.codex_home)
 
     def test_next_invocation_rolls_back_interrupted_mcp_install_as_one_unit(self):
         hooks_path = self.codex_home / "hooks.json"

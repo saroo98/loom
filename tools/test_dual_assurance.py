@@ -114,13 +114,11 @@ class McpServerTests(unittest.TestCase):
             tool for tool in responses[1]["result"]["tools"]
             if tool["name"] == "author")
         draft = author["inputSchema"]["properties"]["draft"]
-        self.assertEqual(
-            "loom/schemas/plan-draft.schema.json", draft["$id"])
-        self.assertFalse(draft["additionalProperties"])
-        self.assertIn("current_facts", draft["required"])
+        self.assertEqual("string", draft["type"])
+        self.assertLess(
+            len(json.dumps(author, separators=(",", ":"))), 4096)
         self.assertIn(
-            "Copy every domain and fact string exactly",
-            draft["properties"]["current_facts"]["description"])
+            "schemas/plan-draft.schema.json", draft["description"])
         complete = next(
             tool for tool in responses[1]["result"]["tools"]
             if tool["name"] == "complete")
@@ -131,8 +129,8 @@ class McpServerTests(unittest.TestCase):
         self.assertIn("Never pass prose", result_schema["description"])
         self.assertIn(
             "omit result", result_schema["description"].lower())
-        self.assertFalse(
-            author["inputSchema"]["properties"]["finalize"]["default"])
+        self.assertNotIn(
+            "default", author["inputSchema"]["properties"]["finalize"])
         self.assertIn("same tool call", author["description"])
 
     def test_invoke_remains_structured_at_the_mcp_boundary(self):
@@ -289,7 +287,8 @@ class McpServerTests(unittest.TestCase):
             "work_orders": [], "domain_evidence": None,
         }
         arguments = {
-            "action": "C:/owner/.loom/orchestration/action.json", "draft": draft}
+            "action": "C:/owner/.loom/orchestration/action.json",
+            "draft": json.dumps(draft, sort_keys=True, separators=(",", ":"))}
         calls = []
 
         def call(name, value, **_kwargs):
@@ -347,7 +346,12 @@ class McpServerTests(unittest.TestCase):
                         loom_mcp_server.loom_adapter_bridge, "dispatch",
                         side_effect=dispatch):
                 result = loom_mcp_server._call_tool(
-                    "author", {"action": action, "draft": draft, "finalize": True},
+                    "author", {
+                        "action": action,
+                        "draft": json.dumps(
+                            draft, sort_keys=True, separators=(",", ":")),
+                        "finalize": True,
+                    },
                     home=root / "home", launcher=launcher,
                     bridge_session={"initialized": True},
                     integration_source="codex-plugin")
@@ -390,7 +394,9 @@ class McpServerTests(unittest.TestCase):
                 result = loom_mcp_server._call_tool(
                     "author", {
                         "action": str(root / "action.json"),
-                        "draft": draft, "finalize": True,
+                        "draft": json.dumps(
+                            draft, sort_keys=True, separators=(",", ":")),
+                        "finalize": True,
                     },
                     home=root / "home", launcher=launcher,
                     bridge_session={"initialized": True},
@@ -398,6 +404,35 @@ class McpServerTests(unittest.TestCase):
 
         self.assertEqual(["author"], [item["message_type"] for item in calls])
         self.assertTrue(result["isError"])
+
+    def test_author_rejects_malformed_duplicate_and_non_object_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            launcher = root / "loom.py"
+            launcher.write_text("# test launcher\n", encoding="utf-8")
+            cases = (
+                "{",
+                '{"schema_version":1,"schema_version":1}',
+                "[]",
+            )
+            for draft in cases:
+                with self.subTest(draft=draft), self.assertRaises(
+                        loom_mcp_server.McpError):
+                    loom_mcp_server._call_tool(
+                        "author", {
+                            "action": str(root / "action.json"),
+                            "draft": draft,
+                        },
+                        home=root / "home", launcher=launcher,
+                        bridge_session={"initialized": True},
+                        integration_source="codex-plugin")
+
+    def test_all_mcp_tool_schemas_stay_within_host_discovery_budget(self):
+        for tool in loom_mcp_server._tools():
+            with self.subTest(tool=tool["name"]):
+                self.assertLessEqual(
+                    len(json.dumps(tool, separators=(",", ":")).encode("utf-8")),
+                    4096)
 
     def test_tool_call_before_initialize_fails_closed(self):
         source = io.BytesIO((json.dumps({

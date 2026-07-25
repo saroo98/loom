@@ -13,6 +13,7 @@ import loom_adapter_protocol
 
 MCP_PROTOCOL = "2025-06-18"
 MAX_FRAME_BYTES = 256 * 1024
+MAX_AUTHOR_DRAFT_BYTES = 192 * 1024
 _PLAN_DRAFT_SCHEMA = None
 
 
@@ -161,6 +162,7 @@ def _tools():
             "name": "author",
             "description": (
                 "Machine-author a sealed planning pack from one bounded semantic draft. "
+                "Pass draft as strict UTF-8 JSON matching the installed plan-draft schema. "
                 "Set finalize=true for an ordinary plan to run completion immediately after "
                 "successful authoring and return the final sealed receipt in this same tool call."),
             "inputSchema": {
@@ -168,10 +170,15 @@ def _tools():
                 "required": ["action", "draft"],
                 "properties": {
                     "action": action_path,
-                    "draft": _plan_draft_schema(),
+                    "draft": {
+                        "type": "string",
+                        "description": (
+                            "Strict JSON object conforming to "
+                            "schemas/plan-draft.schema.json. Loom parses duplicate fields "
+                            "strictly and validates the complete installed schema before writing."),
+                    },
                     "finalize": {
                         "type": "boolean",
-                        "default": False,
                         "description": (
                             "When true, complete the ordinary plan only after authoring succeeds. "
                             "False preserves the legacy separate author-then-complete flow."),
@@ -266,6 +273,23 @@ def _call_tool(
         finalize = adapter_arguments.pop("finalize", False)
         if type(finalize) is not bool:
             raise McpError(-32602, "Loom author finalize must be a boolean")
+        draft_json = adapter_arguments.get("draft")
+        if not isinstance(draft_json, str):
+            raise McpError(-32602, "Loom author draft must be strict JSON text")
+        try:
+            raw_draft = draft_json.encode("utf-8")
+        except UnicodeError as exc:
+            raise McpError(-32602, "Loom author draft is not valid UTF-8") from exc
+        if len(raw_draft) > MAX_AUTHOR_DRAFT_BYTES:
+            raise McpError(-32602, "Loom author draft exceeds its byte bound")
+        try:
+            parsed_draft = json.loads(
+                draft_json, object_pairs_hook=_strict_object)
+        except (json.JSONDecodeError, McpError) as exc:
+            raise McpError(-32602, "Loom author draft is not strict JSON") from exc
+        if not isinstance(parsed_draft, dict):
+            raise McpError(-32602, "Loom author draft must decode to an object")
+        adapter_arguments["draft"] = parsed_draft
     message = _adapter_message(name, adapter_arguments)
     response = loom_adapter_bridge.dispatch(
         message, home=home, launcher=launcher, session=bridge_session)

@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Invoke Loom immediately with no preamble or request classification; Loom 1.8.11 turns the exact request into a safe, evidence-backed execution plan.
+description: Invoke Loom immediately with no preamble or request classification; Loom 1.8.15 turns the exact request into a safe, evidence-backed execution plan.
 ---
 
 # Loom
@@ -27,8 +27,12 @@ On Codex:
 2. Otherwise call `loom.invoke` exactly once with the exact request and absolute working
    directory. Missing optional hook context is not an error.
 3. A blocked receipt is terminal. Return its `owner_message.human` and stop.
-4. For a plan action, submit one semantic draft through `loom.author` with `finalize: true`. Do not hand-author or patch
-   plan files. Copy sealed current facts exactly. Honor `semantic_draft_limits`. For an unknown
+4. For a plan action, serialize one semantic draft as strict JSON and submit it through
+   `loom.author` with `finalize: true`. Do not hand-author or patch plan files. Copy sealed
+   current facts exactly. Honor `semantic_draft_limits`. Encode `release_exposure` as exactly
+   `{"external_users": <integer>, "irreversible": <boolean>, "data_migration": <boolean>,
+   "regulated": <boolean>}`. Do not substitute strings, arrays, or booleans for
+   `external_users`. For an unknown
    domain, submit only the readable `domain_evidence` requested by the draft schema. Never create
    source IDs, applicability IDs, invariant IDs, hashes, digests, discovery receipts, or sealed
    bundles; Loom derives and validates all of them. Follow

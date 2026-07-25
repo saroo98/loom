@@ -590,8 +590,17 @@ def _verified_loom_plugin(codex, *, codex_home):
         and row.get("installed") is True and row.get("enabled") is True
     ]
     if len(rows) != 1:
+        identities = sorted({
+            str(row.get("pluginId") or (
+                f"loom@{row.get('marketplaceName')}"
+                if isinstance(row.get("marketplaceName"), str)
+                else "loom@unknown"))
+            for row in rows
+        })[:8]
+        detail = ", ".join(identities) if identities else "none"
         raise IntegrationError(
-            "exactly one enabled Loom plugin is required before plugin-mode migration")
+            "exactly one enabled Loom plugin is required before plugin-mode migration; "
+            f"observed {len(rows)}: {detail}")
     row = rows[0]
     if not isinstance(row.get("version"), str) or not row["version"] \
             or not isinstance(row.get("marketplaceName"), str) \
