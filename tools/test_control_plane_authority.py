@@ -195,7 +195,7 @@ class ControlPlaneMessageTests(unittest.TestCase):
         self.assertIn("fresh Loom request", reason["next_action"])
         self.assertEqual("not-applicable", receipt.owner_message["undo_status"])
         self.assertIn("plans/lifecycle.json", receipt.owner_message["human"])
-        self.assertIn("No implementation or fallback", receipt.owner_message["human"])
+        self.assertIn("before changing anything", receipt.owner_message["human"])
         self.assertLessEqual(receipt.owner_message["human"].count("\n"), 1)
 
     def test_diagnostics_reject_secrets_absolute_owner_paths_and_oversize(self):

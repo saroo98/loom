@@ -64,7 +64,7 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertEqual(len(observed), 1)
         self.assertEqual(observed[0], (
             "plan", receipt.project_id, receipt.session_id))
-        self.assertEqual(4, receipt.owner_message["schema_version"])
+        self.assertEqual(5, receipt.owner_message["schema_version"])
 
     def test_current_v3_receipt_remains_readable_after_owner_message_v4(self):
         controller = loom_session.SessionController(

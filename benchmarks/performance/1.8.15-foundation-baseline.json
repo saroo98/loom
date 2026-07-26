@@ -1,0 +1,662 @@
+{
+  "all_local_metrics_stable": true,
+  "baseline_id": "8cdd6b67-044c-537d-ab22-d61d28c22c7a",
+  "corpus": [
+    {
+      "declared_file_count": 1,
+      "id": "doc-typo",
+      "request_sha256": "940dcb6a71336703ff69fc3992b5cdec10b38115ea2cdb0c5a915235b5fbbc03"
+    },
+    {
+      "declared_file_count": 3,
+      "id": "cli-flag",
+      "request_sha256": "2cc18fad2a919f8a076fe443c145208809e27a2b7613847e14608d10551e8960"
+    },
+    {
+      "declared_file_count": 3,
+      "id": "pure-bug",
+      "request_sha256": "808c3b730366671cd99b69b1eea55dea204c95ad0ac463f5ee97443d9c247510"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "ui-copy",
+      "request_sha256": "9ba40995a597f5c0abd67c44069071ddae2587e770bcc02ce6d56d512ed09d96"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "config-key",
+      "request_sha256": "a06a96b12e2db2fcbd80ae8c34a01797328b9550c83a301dd5ba3861d15179bc"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "non-git",
+      "request_sha256": "eb47c8bc2ce9d36d2f729ae47f9a5a0597d682ba3466f597d1295d113d61c5ef"
+    },
+    {
+      "declared_file_count": 20,
+      "id": "dirty-git",
+      "request_sha256": "dd55d5e101e0894f7be03fc108c4322f0f9ea40961ae216ecb70755ed1eabc84"
+    },
+    {
+      "declared_file_count": 20,
+      "id": "warm-session",
+      "request_sha256": "20684121972654c0348e1e0c6cfbe45daa037ee252b96cc387b92231ca721580"
+    },
+    {
+      "declared_file_count": 20,
+      "id": "project-switch",
+      "request_sha256": "8657b130472750b5c73594fbc10dbadef7cb308c0a3f0a56bcac800d929da400"
+    },
+    {
+      "declared_file_count": 20,
+      "id": "stale-resume",
+      "request_sha256": "f713635f67b8e6e0fc254265430ca71af7eee751349d0ab34edf901fc73ff885"
+    },
+    {
+      "declared_file_count": 1000,
+      "id": "repo-1000",
+      "request_sha256": "940dcb6a71336703ff69fc3992b5cdec10b38115ea2cdb0c5a915235b5fbbc03"
+    },
+    {
+      "declared_file_count": 10000,
+      "id": "repo-10000",
+      "request_sha256": "940dcb6a71336703ff69fc3992b5cdec10b38115ea2cdb0c5a915235b5fbbc03"
+    },
+    {
+      "declared_file_count": 20,
+      "id": "year-owner",
+      "request_sha256": "06797c049567a869b3836168eaf2accbfe6be1eb1f4d78cc2a54961e426566f1"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "unknown-domain",
+      "request_sha256": "a0c63ad86cd795edb30ae3fe5d74f533641e36cc6e1287da209d372c2cc354ca"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "tax-small",
+      "request_sha256": "965c97517ed6178b49bc0467267da8248fe32c76aad3b883ded1d26a56272981"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "auth-small",
+      "request_sha256": "909f979ae42d66ca79226b9b555b904e5372ad88503ebaa44fb087f8fa897257"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "migration-small",
+      "request_sha256": "165ee34b0b479349a484a9af459015fe4358dc81bbf5fb78eb935e079f94706c"
+    },
+    {
+      "declared_file_count": 5,
+      "id": "firmware-small",
+      "request_sha256": "48b3764b9cef68fbc68cdd74c943a343520ef850ab4ab876762886d37bb28b49"
+    },
+    {
+      "declared_file_count": 50,
+      "id": "tier-m-plan",
+      "request_sha256": "f52189726e55e116176ec2681cdadbaf529f7f72d8f412d7fbf4806cde30136e"
+    },
+    {
+      "declared_file_count": 1,
+      "id": "single-ui-incident",
+      "request_sha256": "835bd126b928a7949c312b77c72e2477126afed2ac4efe990e8a3505421e34c8"
+    }
+  ],
+  "environment": {
+    "architecture": "amd64",
+    "measurement_boundary": "local-runtime-and-wrapper-separated",
+    "os": "windows",
+    "python": "3.11.9"
+  },
+  "measurement_boundaries": {
+    "complete_wall_time": "unavailable",
+    "local_runtime": "observed",
+    "provider_queue": "unavailable",
+    "provider_response": "unavailable",
+    "wrapper_process": "observed"
+  },
+  "preregistration": {
+    "corpus_sha256": "c7fc40963f0c691e21b0aaa7ce52f20ade3591388ee86ca2836232f4573ca861",
+    "relative_spread_tolerance": 1.0,
+    "required_cases": [
+      "doc-typo",
+      "project-switch",
+      "single-ui-incident",
+      "stale-resume",
+      "unknown-domain",
+      "warm-session",
+      "year-owner"
+    ],
+    "runs": 3,
+    "warmups": 1
+  },
+  "provider_native": {
+    "reason": "No provider-attested response and queue receipts were supplied.",
+    "status": "unavailable"
+  },
+  "receipt_sha256": "a7fe8a57b8eaf64b1f95663ce4856d1e09941b88b6393468e233b1c82bacf58b",
+  "results": [
+    {
+      "id": "cold_start",
+      "measurement_class": "local-runtime-operation",
+      "non_time_metrics": {
+        "cache_bytes": 0,
+        "cache_hits": 0,
+        "disk_bytes": 400,
+        "disk_reads": 2
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 1766300,
+      "p95_runtime_ns": 1888100,
+      "relative_spread": 0.1800939817698013,
+      "samples": [
+        1570000,
+        1888100,
+        1766300
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "project_switch",
+      "measurement_class": "local-runtime-operation",
+      "non_time_metrics": {
+        "cache_bytes": 160,
+        "cache_hits": 1,
+        "disk_bytes": 200,
+        "disk_reads": 1
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 840700,
+      "p95_runtime_ns": 878200,
+      "relative_spread": 0.11252527655525157,
+      "samples": [
+        783600,
+        840700,
+        878200
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "resume",
+      "measurement_class": "local-runtime-operation",
+      "non_time_metrics": {
+        "cache_bytes": 0,
+        "cache_hits": 0,
+        "disk_bytes": 720,
+        "disk_reads": 1
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 655000,
+      "p95_runtime_ns": 664500,
+      "relative_spread": 0.0650381679389313,
+      "samples": [
+        655000,
+        621900,
+        664500
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "warm_session",
+      "measurement_class": "local-runtime-operation",
+      "non_time_metrics": {
+        "cache_bytes": 400,
+        "cache_hits": 2,
+        "disk_bytes": 0,
+        "disk_reads": 0
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 266400,
+      "p95_runtime_ns": 282800,
+      "relative_spread": 0.12762762762762764,
+      "samples": [
+        248800,
+        266400,
+        282800
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "year_long",
+      "measurement_class": "local-runtime-operation",
+      "non_time_metrics": {
+        "active_records_considered": 256,
+        "cache_bytes": 0,
+        "cache_hits": 0,
+        "capsule_chars": 409,
+        "capsule_records": 3,
+        "disk_bytes": 0,
+        "disk_reads": 0
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 85200,
+      "p95_runtime_ns": 87800,
+      "relative_spread": 0.06690140845070422,
+      "samples": [
+        82100,
+        85200,
+        87800
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "doc-typo",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 280520300,
+      "p95_runtime_ns": 286776100,
+      "relative_spread": 0.027861441756621533,
+      "samples": [
+        286776100,
+        278960400,
+        280520300
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "cli-flag",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "S"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 281401600,
+      "p95_runtime_ns": 284797000,
+      "relative_spread": 0.013920674225022175,
+      "samples": [
+        281401600,
+        284797000,
+        280879700
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "pure-bug",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 266355600,
+      "p95_runtime_ns": 271468600,
+      "relative_spread": 0.029806394158786224,
+      "samples": [
+        266355600,
+        271468600,
+        263529500
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "ui-copy",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 270646100,
+      "p95_runtime_ns": 270823700,
+      "relative_spread": 0.001983401940763233,
+      "samples": [
+        270286900,
+        270646100,
+        270823700
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "config-key",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 276370600,
+      "p95_runtime_ns": 289221400,
+      "relative_spread": 0.06501632228608976,
+      "samples": [
+        271252800,
+        289221400,
+        276370600
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "non-git",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "S"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 142043400,
+      "p95_runtime_ns": 144678900,
+      "relative_spread": 0.024340448060240744,
+      "samples": [
+        141221500,
+        144678900,
+        142043400
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "dirty-git",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 300399100,
+      "p95_runtime_ns": 302308700,
+      "relative_spread": 0.01512854066473568,
+      "samples": [
+        300399100,
+        297764100,
+        302308700
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "warm-session",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 295535000,
+      "p95_runtime_ns": 308408200,
+      "relative_spread": 0.0661123048031536,
+      "samples": [
+        295535000,
+        308408200,
+        288869700
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "project-switch",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 294661300,
+      "p95_runtime_ns": 299392700,
+      "relative_spread": 0.018132683185745804,
+      "samples": [
+        294661300,
+        299392700,
+        294049700
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "stale-resume",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 316609500,
+      "p95_runtime_ns": 319593200,
+      "relative_spread": 0.05583155274873306,
+      "samples": [
+        316609500,
+        301916400,
+        319593200
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "repo-1000",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 1786835900,
+      "p95_runtime_ns": 2093957300,
+      "relative_spread": 0.1739596232647889,
+      "samples": [
+        1783120000,
+        2093957300,
+        1786835900
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "repo-10000",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 15635033700,
+      "p95_runtime_ns": 15732247500,
+      "relative_spread": 0.007323131001630012,
+      "samples": [
+        15732247500,
+        15635033700,
+        15617750100
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "year-owner",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 298412400,
+      "p95_runtime_ns": 299695500,
+      "relative_spread": 0.029991045948492757,
+      "samples": [
+        298412400,
+        290745800,
+        299695500
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "unknown-domain",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 274036100,
+      "p95_runtime_ns": 274047300,
+      "relative_spread": 0.016326681046767197,
+      "samples": [
+        274036100,
+        274047300,
+        269573200
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "tax-small",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 281219700,
+      "p95_runtime_ns": 302372000,
+      "relative_spread": 0.1158194109445391,
+      "samples": [
+        281219700,
+        302372000,
+        269801300
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "auth-small",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 274663100,
+      "p95_runtime_ns": 291158300,
+      "relative_spread": 0.06313734899227454,
+      "samples": [
+        273816800,
+        291158300,
+        274663100
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "migration-small",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 271083300,
+      "p95_runtime_ns": 280581200,
+      "relative_spread": 0.0429030486201105,
+      "samples": [
+        271083300,
+        280581200,
+        268950900
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "firmware-small",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 271771400,
+      "p95_runtime_ns": 272923600,
+      "relative_spread": 0.005390559860235477,
+      "samples": [
+        272923600,
+        271771400,
+        271458600
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "tier-m-plan",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 353379500,
+      "p95_runtime_ns": 359022300,
+      "relative_spread": 0.03085125198264189,
+      "samples": [
+        353379500,
+        348120100,
+        359022300
+      ],
+      "within_preregistered_tolerance": true
+    },
+    {
+      "id": "single-ui-incident",
+      "measurement_class": "request-preparation",
+      "non_time_metrics": {
+        "inspection_state": "complete",
+        "intent": "plan",
+        "status": "prepared",
+        "tier": "M"
+      },
+      "non_time_metrics_stable": true,
+      "p50_runtime_ns": 262633600,
+      "p95_runtime_ns": 264558300,
+      "relative_spread": 0.015274130956587428,
+      "samples": [
+        264558300,
+        262633600,
+        260546800
+      ],
+      "within_preregistered_tolerance": true
+    }
+  ],
+  "schema_version": 2,
+  "source_commit": "21008bc3e4ef35172cd45cccc1032f3724e0aa68",
+  "wrapper_process": {
+    "includes": [
+      "python-process-startup",
+      "fixture-construction",
+      "git-fixture-operations",
+      "all-request-preparations",
+      "local-runtime-operations"
+    ],
+    "p50_elapsed_ns": 34866613800,
+    "p95_elapsed_ns": 35146069400,
+    "samples": [
+      34866613800,
+      35146069400,
+      34494209900
+    ]
+  }
+}

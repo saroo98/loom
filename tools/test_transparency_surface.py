@@ -119,10 +119,17 @@ class TransparencySurfaceTests(unittest.TestCase):
             now="2026-07-14T10:00:00Z")
         view = receipt.owner_view()
         self.assertEqual(2, len(view.splitlines()))
-        self.assertIn("verification: verified", view)
-        self.assertIn("freshness: current", view)
-        self.assertIn("undo: available", view)
-        self.assertIn("Receipt: session-", view)
+        self.assertEqual(
+            "Your project plan is ready.\n"
+            "Next: Review the plan, then say continue when you want the agent to start.",
+            view)
+        self.assertEqual("verified", receipt.owner_message["verification"])
+        self.assertEqual("current", receipt.owner_message["freshness"])
+        self.assertEqual("available", receipt.owner_message["undo_status"])
+        self.assertTrue(receipt.owner_message["details_available"])
+        self.assertRegex(receipt.owner_message["receipt_id"], r"^session-")
+        self.assertNotIn("verification:", view)
+        self.assertNotIn("Receipt:", view)
         self.assertLessEqual(len(view), 600)
 
     def test_natural_profile_request_is_answered_without_a_user_handler(self):

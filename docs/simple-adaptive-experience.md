@@ -1,10 +1,12 @@
 # Simple adaptive experience
 
 Loom keeps one visible surface: `/loom` plus ordinary language. Routine success returns the sealed
-`owner_message.human` value in no more than two lines. That message always states consequence,
-verification and freshness, reversibility, one next action, and a short receipt ID. A stopped or
-uncertain run presents exactly one decision and one recommendation. Full machine receipts remain
-available through ordinary inspect or explain requests.
+`owner_message.human` value in no more than two lines. It names the result, gives its safe relative
+location when there is one, and states one plain-language next action. Consequence, verification,
+freshness, reversibility, and receipt identity remain in the sealed structured message instead of
+being forced into the default prose. A stopped or uncertain run presents exactly one decision and
+one recommendation. Full machine receipts remain available through ordinary inspect or explain
+requests.
 
 ## Automatic continuation
 

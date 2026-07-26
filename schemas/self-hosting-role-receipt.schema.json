@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/self-hosting-role-receipt.schema.json",
+  "title": "Loom self-hosting authority receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "receipt_id", "controller_subject", "candidate_subject",
+    "candidate_source_digest", "dirty_diff_digest", "candidate_build_digest",
+    "roles", "allowed_actions", "issued_at", "expires_at", "historical_work",
+    "causal_scope", "external_verification_digest", "receipt_hash", "authority"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "receipt_id": {"type": "string", "format": "uuid"},
+    "controller_subject": {"$ref": "#/$defs/digest"},
+    "candidate_subject": {"$ref": "#/$defs/digest"},
+    "candidate_source_digest": {"$ref": "#/$defs/digest"},
+    "dirty_diff_digest": {"$ref": "#/$defs/digest"},
+    "candidate_build_digest": {"$ref": "#/$defs/digest"},
+    "roles": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "owner", "stable_controller", "candidate_runtime", "candidate_self_test",
+        "external_verifier", "release_authority"
+      ],
+      "properties": {
+        "owner": {"$ref": "#/$defs/actor"},
+        "stable_controller": {"$ref": "#/$defs/actor"},
+        "candidate_runtime": {"$ref": "#/$defs/actor"},
+        "candidate_self_test": {"$ref": "#/$defs/actor"},
+        "external_verifier": {"$ref": "#/$defs/actor"},
+        "release_authority": {"$ref": "#/$defs/actor"}
+      }
+    },
+    "allowed_actions": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "enum": ["plan", "authorize", "repair", "self-test", "verify", "certify", "sign"]
+      }
+    },
+    "issued_at": {"type": "string", "format": "date-time"},
+    "expires_at": {"type": "string", "format": "date-time"},
+    "historical_work": {"type": "boolean"},
+    "causal_scope": {"enum": ["implementation", "verification-only"]},
+    "external_verification_digest": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+    },
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "key_id", "public_key", "signature"],
+      "properties": {
+        "algorithm": {"const": "ed25519"},
+        "key_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+        },
+        "public_key": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 44,
+          "maxLength": 44
+        },
+        "signature": {
+          "type": "string",
+          "contentEncoding": "base64",
+          "minLength": 88,
+          "maxLength": 88
+        }
+      }
+    },
+    "receipt_hash": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "actor": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:@/-]{0,127}$"
+    }
+  }
+}
