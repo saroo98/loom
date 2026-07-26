@@ -67,12 +67,20 @@ class ReleaseStandardTests(unittest.TestCase):
             "returncode": 1, "receipt_sha256": "a" * 64,
             "status": "failed", "primary_failure": "nonzero-exit",
         }
-        with mock.patch.object(
-                loom_release.loom_operation_supervisor, "run",
-                return_value=(
-                    operation, json.dumps(report).encode("utf-8"),
-                    b"10 tests passed; 1 skipped")) as run:
-            result = loom_release._suite(self.root)
+        cargo_home = self.root / "cargo-home"
+        rustup_home = self.root / "rustup-home"
+        cargo_home.mkdir()
+        rustup_home.mkdir()
+        with mock.patch.dict(
+                loom_release.os.environ,
+                {"CARGO_HOME": str(cargo_home),
+                 "RUSTUP_HOME": str(rustup_home)}):
+            with mock.patch.object(
+                    loom_release.loom_operation_supervisor, "run",
+                    return_value=(
+                        operation, json.dumps(report).encode("utf-8"),
+                        b"10 tests passed; 1 skipped")) as run:
+                result = loom_release._suite(self.root)
 
         self.assertTrue(result["passed"])
         self.assertFalse(result["capability_complete"])
@@ -89,6 +97,8 @@ class ReleaseStandardTests(unittest.TestCase):
             environment["CODEX_HOME"])
         self.assertEqual(environment["TEMP"], environment["TMP"])
         self.assertEqual(environment["TEMP"], environment["TMPDIR"])
+        self.assertEqual(str(cargo_home), environment["CARGO_HOME"])
+        self.assertEqual(str(rustup_home), environment["RUSTUP_HOME"])
         self.assertEqual(2, len(run.call_args.kwargs["allowed_roots"]))
 
     def test_suite_failure_names_failed_tests_without_full_transcripts(self):
