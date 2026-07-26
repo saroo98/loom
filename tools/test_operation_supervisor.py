@@ -1,4 +1,5 @@
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -84,6 +85,24 @@ class OperationSupervisorTests(unittest.TestCase):
             self.assertEqual("failed", receipt["status"])
             self.assertEqual("timed-out", receipt["primary_failure"])
             self.assertTrue(receipt["survivors_confirmed_zero"])
+        with mock.patch.object(
+                loom_operation_supervisor.shutil, "which", return_value="/bin/ps"), \
+                mock.patch.object(
+                    loom_operation_supervisor.subprocess, "run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[], returncode=0,
+                        stdout=" 10 42 Z\n 11 42 S\n", stderr="")):
+            self.assertTrue(
+                loom_operation_supervisor._ps_group_live_state(42))
+        with mock.patch.object(
+                loom_operation_supervisor.shutil, "which", return_value="/bin/ps"), \
+                mock.patch.object(
+                    loom_operation_supervisor.subprocess, "run",
+                    return_value=subprocess.CompletedProcess(
+                        args=[], returncode=0,
+                        stdout=" 10 42 Z\n 12 99 S\n", stderr="")):
+            self.assertFalse(
+                loom_operation_supervisor._ps_group_live_state(42))
 
     def test_cancellation_is_distinct_and_reconciles_descendants(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -272,6 +273,9 @@ def _posix_group_live_state(process_group):
             if group == process_group and state != "Z":
                 return True
         return None if uncertain else False
+    observed = _ps_group_live_state(process_group)
+    if observed is not None:
+        return observed
     try:
         os.killpg(process_group, 0)
     except ProcessLookupError:
@@ -279,6 +283,36 @@ def _posix_group_live_state(process_group):
     except OSError:
         return None
     return True
+
+
+def _ps_group_live_state(process_group):
+    """Census a process group on POSIX hosts without a Linux /proc filesystem."""
+    executable = shutil.which("ps")
+    if executable is None:
+        return None
+    try:
+        result = subprocess.run(
+            [executable, "-axo", "pid=,pgid=,stat="],
+            capture_output=True, text=True, timeout=5, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    uncertain = False
+    for line in result.stdout.splitlines():
+        fields = line.split(None, 2)
+        if len(fields) != 3:
+            if line.strip():
+                uncertain = True
+            continue
+        try:
+            group = int(fields[1])
+        except ValueError:
+            uncertain = True
+            continue
+        if group == process_group and not fields[2].startswith("Z"):
+            return True
+    return None if uncertain else False
 
 
 def _terminate(process, containment):
