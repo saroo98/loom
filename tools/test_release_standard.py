@@ -97,6 +97,9 @@ class ReleaseStandardTests(unittest.TestCase):
             environment["CODEX_HOME"])
         self.assertEqual(environment["TEMP"], environment["TMP"])
         self.assertEqual(environment["TEMP"], environment["TMPDIR"])
+        self.assertEqual(
+            str(Path(environment["HOME"]) / "c"),
+            environment["LOOM_TEST_CACHE_ROOT"])
         self.assertEqual(str(cargo_home), environment["CARGO_HOME"])
         self.assertEqual(str(rustup_home), environment["RUSTUP_HOME"])
         self.assertEqual(2, len(run.call_args.kwargs["allowed_roots"]))

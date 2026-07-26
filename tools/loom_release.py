@@ -869,10 +869,12 @@ def _suite(root):
             real_home / ".codex" / "hooks.json",
         ) if path.exists()
     ]
-    with tempfile.TemporaryDirectory(prefix="loom-release-suite-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="loom-rs-") as temporary:
         disposable_home = Path(temporary).resolve()
         disposable_temp = disposable_home / "tmp"
+        cargo_cache = disposable_home / "c"
         disposable_temp.mkdir()
+        cargo_cache.mkdir()
         environment = {
             "HOME": str(disposable_home),
             "USERPROFILE": str(disposable_home),
@@ -880,6 +882,7 @@ def _suite(root):
             "TMPDIR": str(disposable_temp),
             "TEMP": str(disposable_temp),
             "TMP": str(disposable_temp),
+            "LOOM_TEST_CACHE_ROOT": str(cargo_cache),
         }
         if cargo_home.is_dir():
             environment["CARGO_HOME"] = str(cargo_home)

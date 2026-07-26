@@ -22,7 +22,7 @@ BUILD_ENVIRONMENT_KEYS = (
     "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTFLAGS",
     "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
     "PATH", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir",
-    "WindowsSdkDir", "WindowsSDKVersion",
+    "WindowsSdkDir", "WindowsSDKVersion", "LOOM_TEST_CACHE_ROOT",
 )
 
 
@@ -161,6 +161,20 @@ def _native_build_environment(environment=None):
     return environment
 
 
+def _test_cache_root():
+    configured = os.environ.get("LOOM_TEST_CACHE_ROOT")
+    if not configured:
+        return Path(tempfile.gettempdir()).resolve() / "loom-cargo-test-cache"
+    lexical = Path(os.path.abspath(configured))
+    if not lexical.is_absolute() or lexical.is_symlink():
+        raise RuntimeError("vault-helper test cache root is unsafe")
+    lexical.mkdir(parents=True, exist_ok=True)
+    resolved = lexical.resolve()
+    if resolved != lexical:
+        raise RuntimeError("vault-helper test cache root is redirected")
+    return resolved
+
+
 @lru_cache(maxsize=1)
 def _rustc_identity():
     """Read the compiler identity once per suite with a contention-tolerant bound."""
@@ -259,7 +273,7 @@ def build_vault_helper(root):
         digest.update(len(relative).to_bytes(4, "big") + relative)
         digest.update(len(raw).to_bytes(8, "big") + raw)
     source_key = digest.hexdigest()
-    cache_root = Path(tempfile.gettempdir()) / "loom-cargo-test-cache"
+    cache_root = _test_cache_root()
     artifact = cache_root / "artifacts" / source_key
     binary = artifact / "release" / ("loom-vault.exe" if os.name == "nt" else "loom-vault")
     receipt = artifact / "loom-test-helper-receipt.json"
