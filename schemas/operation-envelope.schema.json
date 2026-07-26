@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/operation-envelope.schema.json",
+  "title": "Loom common write-ahead operation envelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "operation_id", "operation_class", "subject_digest",
+    "typed_sidecar", "created_at", "events", "envelope_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "operation_id": {"type": "string", "format": "uuid"},
+    "operation_class": {"$ref": "#/$defs/safeName"},
+    "subject_digest": {"$ref": "#/$defs/digest"},
+    "typed_sidecar": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "digest"],
+      "properties": {
+        "type": {"$ref": "#/$defs/safeName"},
+        "id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/event"}
+    },
+    "envelope_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "safeName": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence", "phase", "recorded_at", "previous_digest",
+        "side_effect_boundary", "state_may_have_changed", "primary_failure",
+        "secondary_failures", "cleanup_disposition", "terminal_state",
+        "event_digest"
+      ],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 0, "maximum": 127},
+        "phase": {
+          "enum": [
+            "created", "started", "effect", "passed", "failed", "crashed",
+            "timed-out", "cancelled", "incomplete", "reconciled"
+          ]
+        },
+        "recorded_at": {"type": "string", "format": "date-time"},
+        "previous_digest": {"$ref": "#/$defs/digest"},
+        "side_effect_boundary": {"type": "string", "minLength": 1, "maxLength": 240},
+        "state_may_have_changed": {"type": "boolean"},
+        "primary_failure": {"type": ["string", "null"], "maxLength": 240},
+        "secondary_failures": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 240}
+        },
+        "cleanup_disposition": {
+          "enum": [
+            "not-started", "not-needed", "completed", "preserved",
+            "quarantined", "failed"
+          ]
+        },
+        "terminal_state": {
+          "type": ["string", "null"],
+          "enum": [
+            null, "passed", "failed", "crashed", "timed-out", "cancelled",
+            "reconciled"
+          ]
+        },
+        "event_digest": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

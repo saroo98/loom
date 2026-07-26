@@ -6,13 +6,13 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
 import loom_reliability
 import loom_release_subject
+import loom_operation_supervisor
 
 
 class CleanRoomError(RuntimeError):
@@ -36,22 +36,37 @@ def _prepare_rust_environment(cut, home, environment):
     cargo = shutil.which("cargo")
     if not rustc or not cargo:
         raise CleanRoomError("clean-room Rust verification requires rustc and cargo")
+    def run_tool(command, *, cwd=cut, child_environment=environment, timeout=30):
+        receipt, stdout, stderr = loom_operation_supervisor.run(
+            operation_class="clean-room-toolchain",
+            command=command, cwd=Path(cwd).resolve(), environment=child_environment,
+            timeout=timeout, allowed_roots=[cut, home],
+            capabilities=["local-process", "descendant-containment"],
+            capture_output=True)
+        return receipt, stdout.decode("utf-8", errors="replace"), \
+            stderr.decode("utf-8", errors="replace")
     try:
-        sysroot_result = subprocess.run(
-            [rustc, "--print", "sysroot"], capture_output=True, text=True,
-            timeout=30, check=True)
-        sysroot = Path(sysroot_result.stdout.strip()).resolve()
+        sysroot_receipt, sysroot_stdout, sysroot_stderr = run_tool(
+            [rustc, "--print", "sysroot"])
+        if sysroot_receipt["status"] != "passed":
+            raise CleanRoomError(
+                "could not resolve the Rust sysroot: " + _tail(sysroot_stderr))
+        sysroot = Path(sysroot_stdout.strip()).resolve()
         tool_bin = sysroot / "bin"
         direct_rustc = tool_bin / ("rustc.exe" if os.name == "nt" else "rustc")
         direct_cargo = tool_bin / ("cargo.exe" if os.name == "nt" else "cargo")
         if not direct_rustc.is_file() or not direct_cargo.is_file():
             raise CleanRoomError("resolved Rust toolchain is incomplete")
-        rustc_version = subprocess.run(
-            [str(direct_rustc), "--version", "--verbose"], capture_output=True,
-            text=True, timeout=30, check=True).stdout.strip()
-        cargo_version = subprocess.run(
-            [str(direct_cargo), "--version"], capture_output=True, text=True,
-            timeout=30, check=True).stdout.strip()
+        rustc_receipt, rustc_stdout, rustc_stderr = run_tool(
+            [str(direct_rustc), "--version", "--verbose"])
+        cargo_receipt, cargo_stdout, cargo_stderr = run_tool(
+            [str(direct_cargo), "--version"])
+        if rustc_receipt["status"] != "passed" or cargo_receipt["status"] != "passed":
+            raise CleanRoomError(
+                "resolved Rust toolchain is not executable: "
+                + _tail(rustc_stderr + cargo_stderr))
+        rustc_version = rustc_stdout.strip()
+        cargo_version = cargo_stdout.strip()
         vendor = home / "cargo-vendor"
         cargo_home = home / ".cargo"
         cargo_home.mkdir(parents=True)
@@ -67,23 +82,23 @@ def _prepare_rust_environment(cut, home, environment):
             "CARGO": str(direct_cargo),
             "PATH": os.pathsep.join([str(tool_bin), environment.get("PATH", "")]),
         })
-        vendored = subprocess.run(
+        vendored, vendored_stdout, vendored_stderr = run_tool(
             [str(direct_cargo), "vendor", "--locked", "--manifest-path",
-             str(manifest), str(vendor)], cwd=cut, env=provision_environment,
-            capture_output=True, text=True, timeout=180, check=False)
-        if vendored.returncode != 0:
+             str(manifest), str(vendor)], child_environment=provision_environment,
+            timeout=180)
+        if vendored["status"] != "passed":
             raise CleanRoomError(
                 "could not vendor locked Rust inputs: "
-                f"return code {vendored.returncode}; "
-                f"stdout tail={_tail(vendored.stdout)!r}; "
-                f"stderr tail={_tail(vendored.stderr)!r}")
-        config = vendored.stdout.strip()
+                f"return code {vendored['returncode']}; "
+                f"stdout tail={_tail(vendored_stdout)!r}; "
+                f"stderr tail={_tail(vendored_stderr)!r}")
+        config = vendored_stdout.strip()
         if not config or not vendor.is_dir():
             raise CleanRoomError("Cargo did not produce a locked vendor fixture")
         (cargo_home / "config.toml").write_text(config + "\n", encoding="utf-8")
     except CleanRoomError:
         raise
-    except (OSError, subprocess.SubprocessError) as exc:
+    except (OSError, loom_operation_supervisor.SupervisorError) as exc:
         raise CleanRoomError(f"could not provision clean-room Rust inputs: {exc}") from exc
     path_entries = [str(tool_bin)]
     for entry in environment.get("PATH", "").split(os.pathsep):
@@ -137,38 +152,54 @@ def verify(cut, *, timeout=2100):
         home = Path(temporary)
         disposable_temp = home / "tmp"
         disposable_temp.mkdir()
-        environment = {key: value for key, value in os.environ.items()
-                       if not any(token in key.upper() for token in
-                                  ("TOKEN", "SECRET", "API_KEY", "PASSWORD"))}
-        environment.update({"HOME": str(home), "USERPROFILE": str(home),
-                            "CODEX_HOME": str(home / ".codex"),
-                            "TMPDIR": str(disposable_temp),
-                            "TEMP": str(disposable_temp),
-                            "TMP": str(disposable_temp),
-                            "PYTHONDONTWRITEBYTECODE": "1"})
+        environment = loom_operation_supervisor.minimal_environment({
+            "HOME": str(home), "USERPROFILE": str(home),
+            "CODEX_HOME": str(home / ".codex"),
+            "TMPDIR": str(disposable_temp),
+            "TEMP": str(disposable_temp),
+            "TMP": str(disposable_temp),
+        })
         rust_environment, rust_metadata = _prepare_rust_environment(
             cut, home, environment)
         environment.update(rust_environment)
+        real_home = Path.home().resolve()
+        protected = [
+            path for path in (
+                real_home / ".loom",
+                real_home / ".codex" / "config.toml",
+                real_home / ".codex" / "hooks.json",
+            ) if path.exists()
+        ]
         try:
-            result = subprocess.run(
-                [sys.executable, "-B", str(cut / "tools" / "loom_release.py"),
-                 "verify-cut", str(cut)], cwd=cut / "tools", env=environment,
-                capture_output=True, text=True, timeout=timeout, check=False)
-        except (OSError, subprocess.SubprocessError) as exc:
+            operation, stdout, stderr = loom_operation_supervisor.run(
+                operation_class="clean-room-verification",
+                command=[
+                    sys.executable, "-B", str(cut / "tools" / "loom_release.py"),
+                    "verify-cut", str(cut),
+                ],
+                cwd=cut / "tools", environment=environment, timeout=timeout,
+                allowed_roots=[cut, home], protected_roots=protected,
+                capabilities=["local-process", "descendant-containment"],
+                capture_output=True)
+            stdout_text = stdout.decode("utf-8", errors="replace")
+            stderr_text = stderr.decode("utf-8", errors="replace")
+        except (OSError, loom_operation_supervisor.SupervisorError) as exc:
             raise CleanRoomError(f"clean-room verification failed to run: {exc}") from exc
         home_inventory = _bounded_home_inventory(home)
     after = loom_release_subject._tree(cut)
     if before != after:
         raise CleanRoomError("clean-room verification changed the public cut")
-    passed = result.returncode == 0
+    passed = operation["status"] == "passed"
     body = {"schema_version": 1, "evidence_class": "mechanical-local",
             "status": "passed" if passed else "failed", "subject_sha256": before["sha256"],
-            "returncode": result.returncode,
-            "stdout_sha256": hashlib.sha256(result.stdout.encode()).hexdigest(),
-            "stderr_sha256": hashlib.sha256(result.stderr.encode()).hexdigest(),
+            "returncode": operation["returncode"],
+            "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+            "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
             "disposable_home": home_inventory,
             "maintainer_state_loaded": False, "network_isolation_proven": False,
             "rust_toolchain": rust_metadata,
+            "operation_receipt_sha256": operation["receipt_sha256"],
+            "containment_provider": operation["containment_provider"],
             "limitations": [
                 "Standard-library execution does not prove host-level network isolation.",
                 "Locked public Rust dependencies may be fetched into the disposable workspace "
@@ -180,9 +211,10 @@ def verify(cut, *, timeout=2100):
     if not passed:
         raise CleanRoomError(
             "public cut failed clean-room verification: "
-            f"return code {result.returncode}; "
-            f"stdout tail={_tail(result.stdout)!r}; "
-            f"stderr tail={_tail(result.stderr)!r}")
+            f"return code {operation['returncode']}; "
+            f"failure={operation['primary_failure']}; "
+            f"stdout tail={_tail(stdout_text)!r}; "
+            f"stderr tail={_tail(stderr_text)!r}")
     return body
 
 

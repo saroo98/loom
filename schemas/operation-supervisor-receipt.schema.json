@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/operation-supervisor-receipt.schema.json",
+  "title": "Loom hermetic operation supervisor receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "operation_id", "operation_class", "command_sha256",
+    "executable", "cwd", "environment_keys", "allowed_roots",
+    "protected_roots", "capabilities",
+    "timeout_seconds", "containment_provider", "network_isolation_proven",
+    "status", "returncode", "survivors_confirmed_zero", "protected_roots_unchanged",
+    "primary_failure", "secondary_failures", "stdout_sha256",
+    "stderr_sha256", "stdout_bytes", "stderr_bytes", "started_at",
+    "completed_at", "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "operation_id": {"type": "string", "format": "uuid"},
+    "operation_class": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"},
+    "command_sha256": {"$ref": "#/$defs/digest"},
+    "executable": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "cwd": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "environment_keys": {
+      "type": "array", "maxItems": 64, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 128}
+    },
+    "allowed_roots": {
+      "type": "array", "maxItems": 32, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    },
+    "protected_roots": {
+      "type": "array", "maxItems": 32, "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 4096}
+    },
+    "capabilities": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[a-z][a-z0-9._-]{0,63}$"}
+    },
+    "timeout_seconds": {"type": "number", "exclusiveMinimum": 0, "maximum": 3600},
+    "containment_provider": {
+      "enum": ["windows-job-object", "posix-process-group"]
+    },
+    "network_isolation_proven": {"type": "boolean"},
+    "status": {"enum": ["passed", "failed"]},
+    "returncode": {"type": ["integer", "null"]},
+    "survivors_confirmed_zero": {"type": "boolean"},
+    "protected_roots_unchanged": {"type": "boolean"},
+    "primary_failure": {"type": ["string", "null"], "maxLength": 240},
+    "secondary_failures": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"type": "string", "minLength": 1, "maxLength": 240}
+    },
+    "stdout_sha256": {"$ref": "#/$defs/digest"},
+    "stderr_sha256": {"$ref": "#/$defs/digest"},
+    "stdout_bytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+    "stderr_bytes": {"type": "integer", "minimum": 0, "maximum": 1048576},
+    "started_at": {"type": "string", "format": "date-time"},
+    "completed_at": {"type": "string", "format": "date-time"},
+    "receipt_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

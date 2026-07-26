@@ -75,13 +75,20 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
             (cut / "tools").mkdir(parents=True)
             (cut / "tools" / "loom_release.py").write_text("# fixture\n", encoding="utf-8")
             called = {}
-            def run(*args, **kwargs):
+            def run(**kwargs):
                 called.update(kwargs)
-                return subprocess.CompletedProcess(args[0], 0, "ok", "")
-            with mock.patch.object(loom_clean_room.subprocess, "run", side_effect=run):
+                return ({
+                    "status": "passed", "returncode": 0,
+                    "receipt_sha256": "a" * 64,
+                    "containment_provider": "test-provider",
+                    "primary_failure": None,
+                }, b"ok", b"")
+            with mock.patch.object(
+                    loom_clean_room.loom_operation_supervisor, "run",
+                    side_effect=run):
                 receipt = loom_clean_room.verify(cut)
             self.assertEqual((cut / "tools").resolve(), Path(called["cwd"]).resolve())
-            child_environment = called["env"]
+            child_environment = called["environment"]
             child_temp = Path(child_environment["TMPDIR"]).resolve()
             self.assertEqual(child_temp, Path(child_environment["TEMP"]).resolve())
             self.assertEqual(child_temp, Path(child_environment["TMP"]).resolve())
@@ -119,9 +126,15 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
             cut = Path(temporary) / "cut"
             (cut / "tools").mkdir(parents=True)
             (cut / "tools" / "loom_release.py").write_text("# fixture\n", encoding="utf-8")
-            result = subprocess.CompletedProcess(
-                ["python"], 7, "x" * 3000 + "stdout-marker", "stderr-marker")
-            with mock.patch.object(loom_clean_room.subprocess, "run", return_value=result):
+            result = ({
+                "status": "failed", "returncode": 7,
+                "receipt_sha256": "a" * 64,
+                "containment_provider": "test-provider",
+                "primary_failure": "nonzero-exit",
+            }, ("x" * 3000 + "stdout-marker").encode(), b"stderr-marker")
+            with mock.patch.object(
+                    loom_clean_room.loom_operation_supervisor, "run",
+                    return_value=result):
                 with self.assertRaisesRegex(
                         loom_clean_room.CleanRoomError, "stdout-marker.*stderr-marker") as raised:
                     loom_clean_room.verify(cut)

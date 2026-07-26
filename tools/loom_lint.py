@@ -608,7 +608,15 @@ def lint_home(home_path):
         rep.add("WARN", "W20", home, 1,
                 "user home does not exist yet — created on first retro or /loom profile set")
         return rep
-    vault_database = home / "vault" / "owner.sqlite3"
+    try:
+        import loom_owner
+    except ImportError:
+        vault_database = home / "vault" / "owner.sqlite3"
+    else:
+        try:
+            vault_database = loom_owner.owner_vault_path(home)
+        except loom_owner.OwnerError:
+            vault_database = home / "vault" / "owner.sqlite3"
     vault_present = vault_database.exists()
     if vault_present:
         if not vault_database.is_file() or vault_database.is_symlink():

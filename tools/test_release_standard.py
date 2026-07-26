@@ -63,16 +63,22 @@ class ReleaseStandardTests(unittest.TestCase):
             "tests_run": 10,
             "timings": [],
         }
-        completed = mock.Mock(
-            returncode=1, stdout=json.dumps(report), stderr="10 tests passed; 1 skipped")
-        with mock.patch.object(subprocess, "run", return_value=completed) as run:
+        operation = {
+            "returncode": 1, "receipt_sha256": "a" * 64,
+            "status": "failed", "primary_failure": "nonzero-exit",
+        }
+        with mock.patch.object(
+                loom_release.loom_operation_supervisor, "run",
+                return_value=(
+                    operation, json.dumps(report).encode("utf-8"),
+                    b"10 tests passed; 1 skipped")) as run:
             result = loom_release._suite(self.root)
 
         self.assertTrue(result["passed"])
         self.assertFalse(result["capability_complete"])
         self.assertEqual("requires-matrix", result["capability_status"])
         self.assertEqual(report["skip_receipts"], result["skip_receipts"])
-        command = run.call_args.args[0]
+        command = run.call_args.kwargs["command"]
         self.assertNotIn("--max-seconds", command)
         self.assertEqual(loom_release.FULL_SUITE_MAX_SECONDS,
                          run.call_args.kwargs["timeout"])
@@ -96,8 +102,14 @@ class ReleaseStandardTests(unittest.TestCase):
                 {"test": "tests.Passed", "seconds": 1.0, "status": "passed"},
             ],
         }
-        completed = mock.Mock(returncode=1, stdout=json.dumps(report), stderr="failure")
-        with mock.patch.object(subprocess, "run", return_value=completed):
+        operation = {
+            "returncode": 1, "receipt_sha256": "a" * 64,
+            "status": "failed", "primary_failure": "nonzero-exit",
+        }
+        with mock.patch.object(
+                loom_release.loom_operation_supervisor, "run",
+                return_value=(
+                    operation, json.dumps(report).encode("utf-8"), b"failure")):
             result = loom_release._suite(self.root)
         self.assertEqual(1, result["failure_count"])
         self.assertEqual(0, result["error_count"])
