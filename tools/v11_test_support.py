@@ -3,7 +3,6 @@
 import hashlib
 import json
 import os
-import platform
 import struct
 import subprocess
 import tempfile
@@ -12,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import loom_reliability
+import loom_update
 
 
 MAX_CARGO_DIAGNOSTIC_CHARS = 4000
@@ -23,6 +23,7 @@ BUILD_ENVIRONMENT_KEYS = (
     "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
     "PATH", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir",
     "WindowsSdkDir", "WindowsSDKVersion", "LOOM_TEST_CACHE_ROOT",
+    "CARGO_BUILD_JOBS",
 )
 
 
@@ -198,6 +199,7 @@ def _compile_vault_helper(root, crate, target, environment=None):
         **_native_build_environment(environment),
         "CARGO_TARGET_DIR": str(target),
     }
+    environment.setdefault("CARGO_BUILD_JOBS", "1")
     environment["RUST_MIN_STACK"] = str(RUST_COMPILER_STACK_BYTES)
     if os.name == "nt":
         environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
@@ -334,12 +336,10 @@ def _platform_fixture(platform_id):
 
 
 def _host_platform():
-    system = platform.system().lower()
-    machine = platform.machine().lower()
-    family = {"windows": "windows", "darwin": "macos", "linux": "linux"}.get(system)
-    architecture = "arm64" if machine in {"arm64", "aarch64"} else (
-        "x64" if machine in {"amd64", "x86_64"} else None)
-    return f"{family}-{architecture}" if family and architecture else None
+    try:
+        return loom_update.platform_id()
+    except loom_update.UpdateError:
+        return None
 
 
 def package_evidence(root, directory, platforms, *, native_helper=None):

@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_operation_supervisor
 
@@ -12,7 +13,11 @@ class OperationSupervisorTests(unittest.TestCase):
         previous = os.environ.get("LOOM_TEST_API_KEY")
         os.environ["LOOM_TEST_API_KEY"] = "not-forwarded"
         try:
-            environment = loom_operation_supervisor.minimal_environment()
+            with mock.patch.dict(os.environ, {
+                    "PROCESSOR_ARCHITECTURE": "AMD64",
+                    "PROCESSOR_ARCHITEW6432": "AMD64",
+            }):
+                environment = loom_operation_supervisor.minimal_environment()
         finally:
             if previous is None:
                 os.environ.pop("LOOM_TEST_API_KEY", None)
@@ -20,6 +25,8 @@ class OperationSupervisorTests(unittest.TestCase):
                 os.environ["LOOM_TEST_API_KEY"] = previous
         self.assertNotIn("LOOM_TEST_API_KEY", environment)
         self.assertEqual("1", environment["PYTHONNOUSERSITE"])
+        self.assertEqual("AMD64", environment["PROCESSOR_ARCHITECTURE"])
+        self.assertEqual("AMD64", environment["PROCESSOR_ARCHITEW6432"])
 
     def test_success_is_contained_and_protected_root_is_unchanged(self):
         with tempfile.TemporaryDirectory() as temporary:

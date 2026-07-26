@@ -25,8 +25,8 @@ import loom_reliability
 import loom_update
 from v11_test_support import (
     RUSTC_IDENTITY_TIMEOUT_SECONDS, _build_environment_identity,
-    _msvc_environment_from_roots, _rustc_identity, build_vault_helper,
-    package_evidence, package_source_commit,
+    _host_platform, _msvc_environment_from_roots, _rustc_identity,
+    build_vault_helper, package_evidence, package_source_commit,
 )
 
 
@@ -113,6 +113,9 @@ class BootstrapIntegrationTests(unittest.TestCase):
                       environment["PATH"])
         self.assertIn(str(msvc / "lib" / "x64"), environment["LIB"])
         self.assertEqual(version + os.sep, environment["WindowsSDKVersion"])
+        with mock.patch.object(loom_update, "platform_id",
+                               return_value="windows-x64"):
+            self.assertEqual("windows-x64", _host_platform())
 
     def test_plugin_session_start_canonicalizes_without_prompt_transport(self):
         with tempfile.TemporaryDirectory() as temporary:
