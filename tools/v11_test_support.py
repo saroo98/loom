@@ -21,6 +21,8 @@ RUSTC_IDENTITY_TIMEOUT_SECONDS = 60
 BUILD_ENVIRONMENT_KEYS = (
     "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTFLAGS",
     "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
+    "PATH", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir",
+    "WindowsSdkDir", "WindowsSDKVersion",
 )
 
 
@@ -54,6 +56,111 @@ def _build_environment_identity(environment=None):
         sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
+def _version_key(path):
+    pieces = []
+    for item in path.name.split("."):
+        try:
+            pieces.append(int(item))
+        except ValueError:
+            pieces.append(-1)
+    return tuple(pieces)
+
+
+def _msvc_environment_from_roots(environment, installation, windows_sdk):
+    """Build the minimum native x64 environment from verified local roots."""
+    installation = Path(installation).resolve()
+    windows_sdk = Path(windows_sdk).resolve()
+    msvc_parent = installation / "VC" / "Tools" / "MSVC"
+    sdk_lib_parent = windows_sdk / "Lib"
+    if not msvc_parent.is_dir() or not sdk_lib_parent.is_dir():
+        return None
+    msvc_candidates = sorted(
+        (item for item in msvc_parent.iterdir() if item.is_dir()),
+        key=_version_key, reverse=True)
+    sdk_candidates = sorted(
+        (item for item in sdk_lib_parent.iterdir() if item.is_dir()),
+        key=_version_key, reverse=True)
+    for msvc in msvc_candidates:
+        linker = msvc / "bin" / "Hostx64" / "x64" / "link.exe"
+        if not linker.is_file():
+            continue
+        for sdk_lib in sdk_candidates:
+            sdk_version = sdk_lib.name
+            sdk_include = windows_sdk / "Include" / sdk_version
+            required = (
+                msvc / "include",
+                msvc / "lib" / "x64",
+                sdk_include / "ucrt",
+                sdk_include / "shared",
+                sdk_include / "um",
+                sdk_lib / "ucrt" / "x64",
+                sdk_lib / "um" / "x64",
+            )
+            if not all(path.is_dir() for path in required):
+                continue
+            result = dict(environment)
+            path_entries = [
+                msvc / "bin" / "Hostx64" / "x64",
+                windows_sdk / "bin" / sdk_version / "x64",
+            ]
+            result["PATH"] = os.pathsep.join(
+                [*(str(path) for path in path_entries if path.is_dir()),
+                 environment.get("PATH", "")])
+            result["INCLUDE"] = os.pathsep.join(str(path) for path in (
+                msvc / "include", sdk_include / "ucrt",
+                sdk_include / "shared", sdk_include / "um",
+                sdk_include / "winrt") if path.is_dir())
+            result["LIB"] = os.pathsep.join(str(path) for path in (
+                msvc / "lib" / "x64", sdk_lib / "ucrt" / "x64",
+                sdk_lib / "um" / "x64"))
+            result["LIBPATH"] = str(msvc / "lib" / "x64")
+            result["VCINSTALLDIR"] = str(installation / "VC") + os.sep
+            result["VCToolsInstallDir"] = str(msvc) + os.sep
+            result["WindowsSdkDir"] = str(windows_sdk) + os.sep
+            result["WindowsSDKVersion"] = sdk_version + os.sep
+            return result
+    return None
+
+
+def _windows_toolchain_roots(environment):
+    program_files_x86 = Path(environment.get(
+        "ProgramFiles(x86)", r"C:\Program Files (x86)"))
+    vswhere = (program_files_x86 / "Microsoft Visual Studio" / "Installer" /
+               "vswhere.exe")
+    installations = []
+    if vswhere.is_file():
+        try:
+            result = subprocess.run([
+                str(vswhere), "-latest", "-products", "*", "-requires",
+                "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
+                "-property", "installationPath",
+            ], capture_output=True, text=True, timeout=30, check=False)
+            if result.returncode == 0 and result.stdout.strip():
+                installations.append(Path(result.stdout.strip()))
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+    visual_studio = program_files_x86 / "Microsoft Visual Studio"
+    if visual_studio.is_dir():
+        installations.extend(
+            product for year in visual_studio.iterdir() if year.is_dir()
+            for product in year.iterdir() if product.is_dir())
+    sdk = program_files_x86 / "Windows Kits" / "10"
+    return installations, sdk
+
+
+def _native_build_environment(environment=None):
+    """Return a build environment that is hermetic but can find native tools."""
+    environment = dict(os.environ if environment is None else environment)
+    if os.name != "nt" or shutil.which("link.exe", path=environment.get("PATH")):
+        return environment
+    installations, sdk = _windows_toolchain_roots(environment)
+    for installation in installations:
+        result = _msvc_environment_from_roots(environment, installation, sdk)
+        if result is not None:
+            return result
+    return environment
+
+
 @lru_cache(maxsize=1)
 def _rustc_identity():
     """Read the compiler identity once per suite with a contention-tolerant bound."""
@@ -69,11 +176,14 @@ def _rustc_identity():
     return result.stdout.encode("utf-8")
 
 
-def _compile_vault_helper(root, crate, target):
+def _compile_vault_helper(root, crate, target, environment=None):
     """Build in a caller-owned target and return bounded actionable failures."""
     target = Path(target).resolve()
     target.mkdir(parents=True, exist_ok=True)
-    environment = {**os.environ, "CARGO_TARGET_DIR": str(target)}
+    environment = {
+        **_native_build_environment(environment),
+        "CARGO_TARGET_DIR": str(target),
+    }
     environment["RUST_MIN_STACK"] = str(RUST_COMPILER_STACK_BYTES)
     if os.name == "nt":
         environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
@@ -137,10 +247,12 @@ def build_vault_helper(root):
     if any(not path.is_file() for path in source_files):
         raise RuntimeError("vault-helper test source is incomplete")
     rustc = _rustc_identity()
+    build_environment = _native_build_environment()
     build_policy = (b"release-v4-stack64-windows-brepro"
                     if os.name == "nt" else b"release-v4-stack64")
     digest = hashlib.sha256(
-        rustc + b"\x00" + build_policy + b"\x00" + _build_environment_identity())
+        rustc + b"\x00" + build_policy + b"\x00"
+        + _build_environment_identity(build_environment))
     for path in source_files:
         relative = path.relative_to(crate).as_posix().encode("utf-8")
         raw = path.read_bytes()
@@ -157,7 +269,8 @@ def build_vault_helper(root):
             if not _cache_entry_valid(binary, receipt, source_key):
                 target = cache_root / "builds" / source_key
                 _reset_private_build_target(cache_root, target, source_key)
-                built = _compile_vault_helper(root, crate, target)
+                built = _compile_vault_helper(
+                    root, crate, target, environment=build_environment)
                 _publish_cached_helper(binary, receipt, source_key, built)
     return binary
 
