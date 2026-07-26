@@ -857,13 +857,34 @@ def _suite(root):
     command = ([sys.executable, "-B", "loom_test.py", "full", "--quiet"]
                if runner.is_file() else
                [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
-    operation, stdout, stderr = loom_operation_supervisor.run(
-        operation_class="release-suite",
-        command=command, cwd=(root / "tools").resolve(),
-        environment={"PYTHONDONTWRITEBYTECODE": "1"},
-        timeout=FULL_SUITE_MAX_SECONDS, allowed_roots=[root.resolve()],
-        capabilities=["local-process", "descendant-containment"],
-        capture_output=True)
+    real_home = Path.home().resolve()
+    protected = [
+        path for path in (
+            real_home / ".loom",
+            real_home / ".codex" / "config.toml",
+            real_home / ".codex" / "hooks.json",
+        ) if path.exists()
+    ]
+    with tempfile.TemporaryDirectory(prefix="loom-release-suite-") as temporary:
+        disposable_home = Path(temporary).resolve()
+        disposable_temp = disposable_home / "tmp"
+        disposable_temp.mkdir()
+        operation, stdout, stderr = loom_operation_supervisor.run(
+            operation_class="release-suite",
+            command=command, cwd=(root / "tools").resolve(),
+            environment={
+                "HOME": str(disposable_home),
+                "USERPROFILE": str(disposable_home),
+                "CODEX_HOME": str(disposable_home / ".codex"),
+                "TMPDIR": str(disposable_temp),
+                "TEMP": str(disposable_temp),
+                "TMP": str(disposable_temp),
+            },
+            timeout=FULL_SUITE_MAX_SECONDS,
+            allowed_roots=[root.resolve(), disposable_home],
+            protected_roots=protected,
+            capabilities=["local-process", "descendant-containment"],
+            capture_output=True)
     stdout_text = stdout.decode("utf-8", errors="replace")
     stderr_text = stderr.decode("utf-8", errors="replace")
     returncode = operation["returncode"] if operation["returncode"] is not None else 1

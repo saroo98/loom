@@ -82,6 +82,14 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertNotIn("--max-seconds", command)
         self.assertEqual(loom_release.FULL_SUITE_MAX_SECONDS,
                          run.call_args.kwargs["timeout"])
+        environment = run.call_args.kwargs["environment"]
+        self.assertEqual(environment["HOME"], environment["USERPROFILE"])
+        self.assertEqual(
+            str(Path(environment["HOME"]) / ".codex"),
+            environment["CODEX_HOME"])
+        self.assertEqual(environment["TEMP"], environment["TMP"])
+        self.assertEqual(environment["TEMP"], environment["TMPDIR"])
+        self.assertEqual(2, len(run.call_args.kwargs["allowed_roots"]))
 
     def test_suite_failure_names_failed_tests_without_full_transcripts(self):
         tools = self.root / "tools"
