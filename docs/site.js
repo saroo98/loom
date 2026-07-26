@@ -1,161 +1,131 @@
-document.documentElement.classList.add("js");
-
 (() => {
   "use strict";
 
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const header = document.querySelector("[data-header]");
+  const copyButton = document.querySelector("[data-copy-button]");
+  const copyValue = document.querySelector("[data-copy-value]");
+  const copyLabel = document.querySelector("[data-copy-label]");
+  const copyToast = document.querySelector("[data-copy-toast]");
 
-  const routeData = {
-    small: {
-      request: "Fix the CSV export header typo.",
-      world: "Complete file state",
-      domain: "Known local change",
-      plan: "One work order",
-      verify: "Targeted real check",
-      learn: "Outcome, if useful",
-      status: "EXAMPLE: READY FOR EXECUTION",
-      detail: "SEALED / TIER S / ONE WORK ORDER",
-      summary: "Illustrative route: small work stays small without skipping verification."
-    },
-    system: {
-      request: "Migrate local authentication to passkeys.",
-      world: "State + threat model",
-      domain: "Security + migration",
-      plan: "Dependency work graph",
-      verify: "Real flow + rollback",
-      learn: "Measured migration outcome",
-      status: "EXAMPLE: G1 REVIEW REQUIRED",
-      detail: "SEALED / TIER L / DEPENDENCY GRAPH",
-      summary: "Illustrative route: consequential work earns deeper architecture, security, migration, and rollback planning."
-    },
-    unknown: {
-      request: "Plan a laboratory instrument calibration procedure.",
-      world: "Project state observed",
-      domain: "Authority still unknown",
-      plan: "Draft route only",
-      verify: "Proof medium unknown",
-      learn: "Nothing admitted yet",
-      status: "EXAMPLE: DISCOVERY REQUIRED",
-      detail: "BLOCKED / UNKNOWN DOMAIN / NO EXECUTION",
-      summary: "Illustrative route: Loom names missing authority and proof instead of inventing domain expertise."
-    }
+  const updateHeader = () => {
+    if (!header) return;
+    header.classList.toggle("is-scrolled", window.scrollY > 24);
   };
 
-  const terrain = document.querySelector(".terrain");
-  const routePanel = document.getElementById("route-story");
-  const tabs = [...document.querySelectorAll("[role='tab'][data-route]")];
-  const fields = {
-    request: document.getElementById("map-request"),
-    world: document.getElementById("label-world"),
-    domain: document.getElementById("label-domain"),
-    plan: document.getElementById("label-plan"),
-    verify: document.getElementById("label-verify"),
-    learn: document.getElementById("label-learn"),
-    status: document.getElementById("seal-status"),
-    detail: document.getElementById("seal-detail"),
-    summary: document.getElementById("route-summary")
-  };
+  updateHeader();
+  window.addEventListener("scroll", updateHeader, { passive: true });
 
-  const restartRouteAnimation = () => {
-    if (reducedMotion || !terrain) return;
-    const network = terrain.querySelector(".route-active");
-    if (!network) return;
-    network.style.animation = "none";
-    network.querySelectorAll("path").forEach((path) => {
-      path.style.animation = "none";
-      void path.getBoundingClientRect();
-      path.style.animation = "";
-    });
-    network.style.animation = "";
-  };
-
-  const selectRoute = (tab, focus = false) => {
-    const next = routeData[tab.dataset.route];
-    if (!next || !terrain) return;
-
-    tabs.forEach((item) => {
-      const selected = item === tab;
-      item.setAttribute("aria-selected", String(selected));
-      item.tabIndex = selected ? 0 : -1;
-    });
-
-    terrain.dataset.routeMode = tab.dataset.route;
-    if (routePanel) routePanel.setAttribute("aria-labelledby", tab.id);
-    Object.entries(fields).forEach(([key, element]) => {
-      if (element) element.textContent = next[key];
-    });
-    restartRouteAnimation();
-    if (focus) tab.focus();
-  };
-
-  tabs.forEach((tab, index) => {
-    tab.addEventListener("click", () => selectRoute(tab));
-    tab.addEventListener("keydown", (event) => {
-      if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-      event.preventDefault();
-      let next = index;
-      if (event.key === "ArrowLeft") next = (index - 1 + tabs.length) % tabs.length;
-      if (event.key === "ArrowRight") next = (index + 1) % tabs.length;
-      if (event.key === "Home") next = 0;
-      if (event.key === "End") next = tabs.length - 1;
-      selectRoute(tabs[next], true);
-    });
-  });
-
-  const copyText = async (value) => {
-    if (navigator.clipboard && window.isSecureContext) {
-      await navigator.clipboard.writeText(value);
-      return;
-    }
-    const field = document.createElement("textarea");
-    field.value = value;
-    field.setAttribute("readonly", "");
-    field.style.position = "fixed";
-    field.style.opacity = "0";
-    document.body.appendChild(field);
-    field.select();
-    const copied = document.execCommand("copy");
-    field.remove();
-    if (!copied) throw new Error("Clipboard unavailable");
-  };
-
-  document.querySelectorAll("[data-copy]").forEach((button) => {
-    button.addEventListener("click", async () => {
-      const status = document.getElementById(button.getAttribute("aria-describedby"));
-      const original = button.textContent;
+  if (copyButton && copyValue) {
+    copyButton.addEventListener("click", async () => {
+      const text = copyValue.textContent.trim();
       try {
-        await copyText(button.dataset.copy);
-        button.textContent = "Copied";
-        if (status) status.textContent = "Request copied to the clipboard.";
+        await navigator.clipboard.writeText(text);
+        if (copyLabel) copyLabel.textContent = "Copied";
+        if (copyToast) {
+          copyToast.textContent = "Marketplace command copied.";
+          copyToast.classList.add("is-visible");
+        }
+        window.setTimeout(() => {
+          if (copyLabel) copyLabel.textContent = "Copy";
+          if (copyToast) copyToast.classList.remove("is-visible");
+        }, 1800);
       } catch {
-        button.textContent = "Copy failed";
-        if (status) status.textContent = "Clipboard access failed. Select and copy the request manually.";
+        const selection = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(copyValue);
+        selection.removeAllRanges();
+        selection.addRange(range);
+        if (copyToast) {
+          copyToast.textContent = "Command selected. Press Ctrl+C or Command+C.";
+          copyToast.classList.add("is-visible");
+        }
       }
-      window.setTimeout(() => { button.textContent = original; }, 1800);
     });
-  });
+  }
 
-  const evidenceFields = [...document.querySelectorAll("[data-evidence-key]")];
-  const versionFields = [...document.querySelectorAll("[data-loom-version]")];
+  const createSignalField = (canvas, compact = false) => {
+    if (!canvas) return;
 
-  fetch("generated-evidence.json", { cache: "no-store" })
-    .then((response) => {
-      if (!response.ok) throw new Error("Evidence inventory unavailable");
-      return response.json();
-    })
-    .then((evidence) => {
-      evidenceFields.forEach((element) => {
-        const value = evidence[element.dataset.evidenceKey];
-        element.textContent = Number.isInteger(value) ? String(value) : "unverified";
-      });
-      if (typeof evidence.loom_version === "string") {
-        versionFields.forEach((element) => {
-          element.textContent = evidence.loom_version;
-          element.dataset.loomVersion = evidence.loom_version;
-        });
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) return;
+
+    let width = 0;
+    let height = 0;
+    let animationFrame = 0;
+    let points = [];
+    let pointerX = 0.7;
+    let pointerY = 0.45;
+
+    const resize = () => {
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(1, rect.width);
+      height = Math.max(1, rect.height);
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+      const density = compact ? 28 : Math.min(72, Math.max(38, Math.round(width / 22)));
+      points = Array.from({ length: density }, (_, index) => ({
+        phase: index * 0.37,
+        offset: ((index * 73) % 101) / 101,
+        weight: 0.3 + ((index * 29) % 70) / 100
+      }));
+    };
+
+    const draw = (time = 0) => {
+      context.clearRect(0, 0, width, height);
+      const elapsed = time * 0.00022;
+
+      context.lineWidth = 0.65;
+      for (let index = 0; index < points.length; index += 1) {
+        const point = points[index];
+        const yBase = height * (0.12 + point.offset * 0.76);
+        const influenceY = (pointerY - 0.5) * height * 0.1;
+        const amplitude = (compact ? 18 : 34) + point.weight * 44;
+
+        context.beginPath();
+        for (let step = 0; step <= 48; step += 1) {
+          const x = (step / 48) * width;
+          const normalizedX = x / width;
+          const pointerPull = Math.exp(-Math.pow(normalizedX - pointerX, 2) / 0.028);
+          const y =
+            yBase +
+            Math.sin(normalizedX * 8.5 + elapsed + point.phase) * amplitude +
+            Math.cos(normalizedX * 3.8 - elapsed * 0.7 + point.phase) * amplitude * 0.35 +
+            pointerPull * influenceY;
+          if (step === 0) context.moveTo(x, y);
+          else context.lineTo(x, y);
+        }
+        const alpha = 0.045 + point.weight * 0.095;
+        context.strokeStyle = `rgba(255,255,255,${alpha})`;
+        context.stroke();
       }
-    })
-    .catch(() => {
-      evidenceFields.forEach((element) => { element.textContent = "unverified"; });
-    });
+
+      if (!reducedMotion) {
+        animationFrame = window.requestAnimationFrame(draw);
+      }
+    };
+
+    const updatePointer = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      pointerX = Math.min(1, Math.max(0, (event.clientX - rect.left) / rect.width));
+      pointerY = Math.min(1, Math.max(0, (event.clientY - rect.top) / rect.height));
+    };
+
+    resize();
+    draw();
+    window.addEventListener("resize", resize, { passive: true });
+    canvas.addEventListener("pointermove", updatePointer, { passive: true });
+
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener("resize", resize);
+      canvas.removeEventListener("pointermove", updatePointer);
+    };
+  };
+
+  createSignalField(document.querySelector("[data-signal-field]"));
+  createSignalField(document.querySelector("[data-closing-field]"), true);
 })();

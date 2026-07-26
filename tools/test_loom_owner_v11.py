@@ -2,13 +2,16 @@
 
 import json
 import os
+import sqlite3
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 import loom_owner
+import loom_activation
 import loom_crypto
+import loom_reliability
 import loom_vault
 from v11_test_support import build_vault_helper
 
@@ -46,6 +49,27 @@ class OwnerBootstrapTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def activate_current_vault(self, vault, *, version="1.8.15"):
+        runtime = self.home / "runtime" / "versions" / version
+        runtime.mkdir(parents=True, exist_ok=True)
+        content = b"runtime"
+        (runtime / "loom-runtime.txt").write_bytes(content)
+        pointer = {
+            "version": version,
+            "path": version,
+            "payload_sha256": __import__("hashlib").sha256(content).hexdigest(),
+            "release_sequence": 15,
+            "previous": None,
+        }
+        store = loom_activation.ActivationStore(self.home)
+        activated = store.create(
+            pointer, state_source=vault.path,
+            schema_range={"minimum": 1, "maximum": 3},
+            previous_activation_set_id=None, purpose="baseline-adoption")
+        loom_reliability.atomic_write_json(
+            self.home / "runtime" / "current.json", activated)
+        return activated, store.state_path(activated)
 
     def test_fresh_bootstrap_reopens_same_owner_without_file_key_material(self):
         first = loom_owner.initialize_owner_vault(
@@ -163,6 +187,61 @@ class OwnerBootstrapTests(unittest.TestCase):
             status = connection.execute(
                 "SELECT status FROM devices WHERE device_id=?", (remote_id,)).fetchone()[0]
         self.assertEqual("active", status)
+
+    def test_activated_revocation_switches_state_generation_without_replacing_old_bytes(self):
+        initialized = loom_owner.initialize_owner_vault(
+            self.home, self.helper, key_store=self.store)
+        remote_keys = loom_crypto.generate_keys(self.helper)
+        remote_id = "00000000-0000-4000-8000-000000009805"
+        initialized["vault"].authorize_device(
+            remote_id, remote_keys["signing_public"])
+        old_pointer, old_path = self.activate_current_vault(initialized["vault"])
+        old_bytes = old_path.read_bytes()
+
+        result = loom_owner.revoke_device_and_rotate(
+            self.home, self.helper, remote_id, key_store=self.store)
+        current = json.loads((
+            self.home / "runtime" / "current.json").read_text(encoding="utf-8"))
+        new_path = loom_activation.ActivationStore(self.home).state_path(current)
+
+        self.assertEqual("rotated", result["status"])
+        self.assertNotEqual(
+            old_pointer["activation_set_id"], current["activation_set_id"])
+        self.assertNotEqual(old_path, new_path)
+        self.assertEqual(old_bytes, old_path.read_bytes())
+        with result["vault"]._connect() as connection:
+            self.assertEqual("revoked", connection.execute(
+                "SELECT status FROM devices WHERE device_id=?",
+                (remote_id,)).fetchone()[0])
+
+    def test_activated_schema_migration_clones_then_switches_without_touching_old_state(self):
+        initialized = loom_owner.initialize_owner_vault(
+            self.home, self.helper, key_store=self.store)
+        connection = sqlite3.connect(initialized["vault"].path)
+        try:
+            connection.execute(
+                "UPDATE metadata SET value='2' WHERE key='schema_version'")
+            connection.commit()
+        finally:
+            connection.close()
+        _pointer, old_path = self.activate_current_vault(initialized["vault"])
+        old_bytes = old_path.read_bytes()
+
+        migrated, _crypto = loom_owner.open_owner_vault(
+            self.home, self.helper, key_store=self.store)
+        current = json.loads((
+            self.home / "runtime" / "current.json").read_text(encoding="utf-8"))
+        new_path = loom_activation.ActivationStore(self.home).state_path(current)
+
+        self.assertNotEqual(old_path, new_path)
+        self.assertEqual(old_bytes, old_path.read_bytes())
+        connection = sqlite3.connect(old_path)
+        try:
+            self.assertEqual("2", connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'").fetchone()[0])
+        finally:
+            connection.close()
+        self.assertEqual(3, migrated.identity()["schema_version"])
 
 
 if __name__ == "__main__":

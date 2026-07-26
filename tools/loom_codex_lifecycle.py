@@ -58,7 +58,7 @@ def _active_action(home, install_root, cwd):
     install_root = Path(install_root).resolve()
     cwd = Path(cwd).resolve()
     helper = loom_orchestrator._vault_helper(install_root)
-    if helper is None or not (home / "vault" / "owner.sqlite3").is_file():
+    if helper is None or not loom_owner.owner_vault_path(home).is_file():
         return None
     opened = loom_owner.open_owner_vault(home, helper)
     instance_id = opened["vault"].identity()["owner_vault_id"]

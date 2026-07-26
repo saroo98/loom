@@ -18,6 +18,8 @@ SAFE_ID = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 MAX_HUMAN_CHARS = 600
 UNDO_STATUSES = {"available", "not-applicable", "unavailable", "unknown"}
 TRANSITIONAL_UNDO_STATUSES = {"available", "not-available", "not-needed", "unknown"}
+SAFE_RESULT_PATH = re.compile(
+    r"^(?![A-Za-z]:)(?!/)(?!.*(?:^|[\\/])\.\.(?:[\\/]|$))[^\r\n]{1,512}$")
 
 
 class MessageError(ValueError):
@@ -31,6 +33,17 @@ def _text(value, label, *, maximum=240, nullable=False):
             or "\n" in value or "\r" in value:
         raise MessageError(f"{label} is invalid")
     return value.strip()
+
+
+def _result_detail(value):
+    """Read Loom's closed result locator without trusting arbitrary prose as a path."""
+    prefix = "LOOM_RESULT "
+    if not value.startswith(prefix):
+        return None, value
+    marker, separator, remainder = value[len(prefix):].partition(" | ")
+    if not separator or SAFE_RESULT_PATH.fullmatch(marker) is None:
+        raise MessageError("owner result locator is invalid")
+    return marker, remainder
 
 
 def _render(value):
@@ -51,7 +64,59 @@ def _render(value):
     return first + "\n" + second
 
 
+def _render_v5(value):
+    first = value["summary"]
+    if value["result_path"] is not None:
+        first += f" Open: {value['result_path']}."
+    return first + "\n" + f"Next: {value['next_action']}"
+
+
+def _validate_v5(value):
+    fields = {
+        "schema_version", "state", "consequence", "verification", "freshness",
+        "changes_made", "undo_status", "summary", "decision", "recommendation",
+        "next_action", "receipt_id", "result_path", "details_available", "human",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 5 \
+            or value.get("state") not in STATES \
+            or value.get("consequence") not in CONSEQUENCES \
+            or value.get("verification") not in VERIFICATION \
+            or value.get("freshness") not in FRESHNESS \
+            or (value.get("changes_made") is not None
+                and type(value.get("changes_made")) is not bool) \
+            or value.get("undo_status") not in UNDO_STATUSES \
+            or not isinstance(value.get("receipt_id"), str) \
+            or not SAFE_ID.fullmatch(value["receipt_id"]) \
+            or value.get("details_available") is not True \
+            or (value.get("result_path") is not None and (
+                not isinstance(value["result_path"], str)
+                or SAFE_RESULT_PATH.fullmatch(value["result_path"]) is None)):
+        raise MessageError("owner message fields are invalid")
+    if (value["changes_made"] is False and value["undo_status"] != "not-applicable") \
+            or (value["changes_made"] is None and value["undo_status"] != "unknown") \
+            or (value["changes_made"] is True and value["undo_status"] not in {
+                "available", "unavailable"}):
+        raise MessageError("owner message change and undo status disagree")
+    _text(value["summary"], "summary")
+    _text(value["next_action"], "next action")
+    intervention = value["state"] in INTERVENTIONS
+    if intervention:
+        _text(value["decision"], "decision")
+        _text(value["recommendation"], "recommendation")
+    elif value["decision"] is not None or value["recommendation"] is not None:
+        raise MessageError("non-intervention message cannot contain an owner decision")
+    human = value.get("human")
+    if not isinstance(human, str) or not human.strip() \
+            or len(human) > MAX_HUMAN_CHARS or "\r" in human \
+            or human.count("\n") > 1 or human != _render_v5(value):
+        raise MessageError("owner message exceeds two lines")
+    return value
+
+
 def validate(value):
+    if isinstance(value, dict) and value.get("schema_version") == 5:
+        return _validate_v5(value)
     if isinstance(value, dict) and value.get("schema_version") == 1:
         return _validate_legacy(value)
     if isinstance(value, dict) and value.get("schema_version") == 2:
@@ -95,26 +160,154 @@ def validate(value):
 
 
 def build(*, state, consequence, verification, freshness, changes_made, undo_status, summary,
-          next_action, receipt_id, decision=None, recommendation=None):
+          next_action, receipt_id, decision=None, recommendation=None, result_path=None):
     summary = _text(summary, "summary")
     next_action = _text(next_action, "next action")
     decision = _text(decision, "decision", nullable=True)
     recommendation = _text(recommendation, "recommendation", nullable=True)
     value = {
-        "schema_version": 4, "state": state, "consequence": consequence,
+        "schema_version": 5, "state": state, "consequence": consequence,
         "verification": verification, "freshness": freshness,
         "changes_made": changes_made, "undo_status": undo_status, "summary": summary,
         "decision": decision, "recommendation": recommendation,
         "next_action": next_action, "receipt_id": receipt_id,
+        "result_path": result_path, "details_available": True,
         "human": "",
+    }
+    value["human"] = _render_v5(value)
+    return validate(value)
+
+
+def from_session(*, status, code, intent, tier, owner_input_required, reversible_action_ids,
+                 detail, receipt_id, block_reason=None, result_path=None):
+    """Project a sealed session result into one safe owner-facing envelope."""
+    if status not in {"completed", "blocked", "interrupted"} \
+            or intent not in {
+                "plan", "resume", "execute", "review", "repair", "close", "status",
+                "remember", "forget", "why", "undo"} \
+            or tier not in {"S", "M", "L", "XL"} \
+            or type(owner_input_required) is not bool \
+            or not isinstance(reversible_action_ids, (list, tuple)):
+        raise MessageError("session message inputs are invalid")
+    consequence = {"S": "ordinary", "M": "material", "L": "high", "XL": "critical"}[tier]
+    low = str(code).casefold()
+    normalized_detail = " ".join(str(detail or "").split())[:180].strip()
+    derived_path, normalized_detail = _result_detail(normalized_detail)
+    if result_path is None:
+        result_path = derived_path
+    elif derived_path is not None and result_path != derived_path:
+        raise MessageError("owner result path disagrees with the sealed result")
+    if status == "completed":
+        if block_reason is not None:
+            raise MessageError("completed session cannot carry a block reason")
+        state = "promoted" if "promot" in low else "completed"
+        verification = "verified"
+        freshness = "current"
+        summary = {
+            "plan": "Your project plan is ready.",
+            "resume": "Your project plan is current and ready to continue.",
+            "execute": "The planned work is complete and its checks are recorded.",
+            "review": "The review is complete.",
+            "repair": "The affected plan sections were checked again.",
+            "close": "This project plan is closed.",
+            "status": "The current project status is ready.",
+            "remember": "Loom saved this preference for the matching scope.",
+            "forget": "Loom removed this information from active memory.",
+            "why": "Loom prepared the reason for the earlier decision.",
+            "undo": "The previous reversible Loom action was undone.",
+        }[intent]
+        if normalized_detail and intent not in {"plan", "resume", "execute"}:
+            summary = normalized_detail
+        next_action = {
+            "plan": "Review the plan, then say continue when you want the agent to start.",
+            "resume": "Say continue when you want the agent to resume the next planned step.",
+            "execute": "Review the result and its checks.",
+            "review": "Review the findings and choose the suggested next step.",
+            "repair": "Review the updated plan before work resumes.",
+            "close": "Start a new request whenever you need more work.",
+            "status": "Continue only if this matches what you expected.",
+            "remember": "Continue with your normal request.",
+            "forget": "Continue with your normal request.",
+            "why": "Review the explanation and correct Loom if it misunderstood.",
+            "undo": "Start a new request or leave the project unchanged.",
+        }[intent]
+        decision = recommendation = None
+        changes_made = intent in {
+            "plan", "execute", "repair", "close", "remember", "forget", "undo"}
+        undo_status = ("available" if reversible_action_ids else
+                       "unavailable" if changes_made else "not-applicable")
+    else:
+        preference_conflict = "preference-conflict" in low
+        state = ("decision-needed" if preference_conflict else
+                 "stale" if "stale" in low or "regate" in low else
+                 "failed" if status == "interrupted" else
+                 "decision-needed" if owner_input_required else "blocked")
+        verification = "failed" if status == "interrupted" else "blocked"
+        freshness = "stale" if state == "stale" else "unknown"
+        if block_reason is not None:
+            try:
+                loom_block_reason.validate(block_reason)
+            except loom_block_reason.BlockReasonError as exc:
+                raise MessageError(f"session block reason is invalid: {exc}") from exc
+            location = f" at {block_reason['safe_path']}" \
+                if block_reason["safe_path"] else ""
+            if block_reason["code"] == "plan-scope-decision-required":
+                summary = "Loom needs one project detail before it can plan safely."
+                decision = "Name the project kind and its smallest desired outcome."
+                recommendation = (
+                    "Reply with one concrete outcome, such as a Python CLI that greets a name.")
+                next_action = block_reason["next_action"]
+            else:
+                summary = (
+                    f"Loom stopped before changing anything{location}: "
+                    f"{block_reason['observed']}"[:240].rstrip())
+                decision = "No implementation or fallback is authorized by this receipt."
+                recommendation = "Follow the receipt's exact bounded next action."
+                next_action = block_reason["next_action"]
+        elif preference_conflict:
+            summary = "Two stated preferences conflict, so Loom did not choose one silently."
+            decision = "State which preference should apply to this work."
+            recommendation = "Keep both conflicting preferences inactive until you choose."
+            next_action = "Reply with the preference to retain, or leave this work unchanged."
+        else:
+            summary = (f"Loom stopped: {normalized_detail}"
+                       if normalized_detail else
+                       "Loom stopped before the affected work could continue.")
+            decision = "Choose whether to resolve the reported block and continue."
+            recommendation = "Keep the affected work stopped and inspect the sealed receipt."
+            next_action = "Resolve the single blocking decision or leave the work unchanged."
+        if status == "interrupted":
+            changes_made, undo_status = None, "unknown"
+        else:
+            changes_made, undo_status = False, "not-applicable"
+    return build(
+        state=state, consequence=consequence, verification=verification,
+        freshness=freshness, changes_made=changes_made, undo_status=undo_status,
+        summary=summary, decision=decision, recommendation=recommendation,
+        next_action=next_action, receipt_id=receipt_id, result_path=result_path)
+
+
+def v4_build(*, state, consequence, verification, freshness, changes_made,
+             undo_status, summary, next_action, receipt_id, decision=None,
+             recommendation=None):
+    """Reconstruct a v4 message only to authenticate existing sealed data."""
+    value = {
+        "schema_version": 4, "state": state, "consequence": consequence,
+        "verification": verification, "freshness": freshness,
+        "changes_made": changes_made, "undo_status": undo_status,
+        "summary": _text(summary, "summary"),
+        "decision": _text(decision, "decision", nullable=True),
+        "recommendation": _text(recommendation, "recommendation", nullable=True),
+        "next_action": _text(next_action, "next action"),
+        "receipt_id": receipt_id, "human": "",
     }
     value["human"] = _render(value)
     return validate(value)
 
 
-def from_session(*, status, code, intent, tier, owner_input_required, reversible_action_ids,
-                 detail, receipt_id, block_reason=None):
-    """Project a sealed session result into one safe owner-facing envelope."""
+def v4_from_session(*, status, code, intent, tier, owner_input_required,
+                    reversible_action_ids, detail, receipt_id, block_reason=None):
+    """Reconstruct the v4 session projection for sealed receipt compatibility."""
     if status not in {"completed", "blocked", "interrupted"} \
             or intent not in {
                 "plan", "resume", "execute", "review", "repair", "close", "status",
@@ -130,8 +323,7 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
         if block_reason is not None:
             raise MessageError("completed session cannot carry a block reason")
         state = "promoted" if "promot" in low else "completed"
-        verification = "verified"
-        freshness = "current"
+        verification, freshness = "verified", "current"
         summary = normalized_detail or "Loom completed the safe verified frontier."
         next_action = {
             "plan": "Review the declared work-order frontier, then continue when ready.",
@@ -194,7 +386,7 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
             changes_made, undo_status = None, "unknown"
         else:
             changes_made, undo_status = False, "not-applicable"
-    return build(
+    return v4_build(
         state=state, consequence=consequence, verification=verification,
         freshness=freshness, changes_made=changes_made, undo_status=undo_status,
         summary=summary, decision=decision, recommendation=recommendation,

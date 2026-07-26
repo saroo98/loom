@@ -609,7 +609,7 @@ def reconcile(plugin_root, home):
     if manager.current_path.is_file():
         current = manager.current()
         current_runtime = manager.versions / current["path"]
-    vault_path = home / "vault" / "owner.sqlite3"
+    vault_path = loom_owner.owner_vault_path(home)
     if vault_path.is_file():
         vault, _crypto = loom_owner.open_owner_vault(home, helper)
         before_hash = vault.semantic_inventory()["sha256"]
@@ -643,7 +643,11 @@ def reconcile(plugin_root, home):
             [sys.executable, "-B", "-c", syntax_script, str(staged / "tools")],
             capture_output=True, timeout=30, check=False)
         disposable = False
+        state_check = vault is None
+        after_hash = before_hash
         with tempfile.TemporaryDirectory(prefix="loom-health-") as temporary:
+            temporary = Path(temporary).resolve()
+            disposable_home = temporary / ".loom"
             script = (
                 "import sys,uuid;sys.path.insert(0,sys.argv[1]);import loom_runtime;"
                 "p=loom_runtime.prepare_invocation('plan a safe text file',"
@@ -653,15 +657,36 @@ def reconcile(plugin_root, home):
             identity = vault.identity()["owner_vault_id"] if vault is not None \
                 else "00000000-0000-4000-8000-000000000001"
             probe = subprocess.run(
-                [sys.executable, "-B", "-c", script, str(staged / "tools"), identity,
-                 temporary, str(home)], capture_output=True, timeout=30, check=False)
+                [sys.executable, "-I", "-B", "-c", script,
+                 str(staged / "tools"), identity, str(temporary),
+                 str(disposable_home)],
+                capture_output=True, timeout=30, check=False)
             disposable = probe.returncode == 0
-        after_hash = before_hash
-        if vault_path.is_file():
-            reopened, _crypto = loom_owner.open_owner_vault(home, staged_helper)
-            after_hash = reopened.semantic_inventory()["sha256"]
-        return {"healthy": compile_result.returncode == 0 and disposable,
-                "migration_complete": before_hash == after_hash,
+            if vault is not None:
+                candidate = disposable_home / "vault" / "owner.sqlite3"
+                candidate.parent.mkdir(parents=True)
+                vault.online_backup(candidate)
+                state_script = (
+                    "import json,sys;sys.path.insert(0,sys.argv[1]);"
+                    "import loom_owner;"
+                    "v,_=loom_owner.open_owner_vault(sys.argv[2],sys.argv[3]);"
+                    "print(json.dumps(v.semantic_inventory(),sort_keys=True,"
+                    "separators=(',',':')))")
+                state_probe = subprocess.run(
+                    [sys.executable, "-I", "-B", "-c", state_script,
+                     str(staged / "tools"), str(disposable_home),
+                     str(staged_helper)],
+                    capture_output=True, text=True, timeout=30, check=False)
+                try:
+                    inventory = json.loads(state_probe.stdout)
+                    after_hash = inventory["sha256"]
+                    state_check = state_probe.returncode == 0
+                except (json.JSONDecodeError, KeyError, TypeError):
+                    after_hash = "0" * 64
+                    state_check = False
+        return {"healthy": (
+                    compile_result.returncode == 0 and disposable and state_check),
+                "migration_complete": state_check and before_hash == after_hash,
                 "disposable_request_passed": disposable,
                 "before_inventory_sha256": before_hash,
                 "after_inventory_sha256": after_hash}

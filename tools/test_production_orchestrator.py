@@ -717,8 +717,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         self.assertEqual("completed", completed["status"])
         self.assertEqual("plan-complete", completed["code"])
+        self.assertEqual(
+            "plans/MANIFEST.md",
+            completed["owner_message"]["result_path"])
         self.assertIn(
-            "Only the declared work-order frontier is authorized",
+            "Review the plan",
+            completed["owner_message"]["human"])
+        self.assertNotIn(
+            "work-order frontier",
             completed["owner_message"]["human"])
         self.assertNotIn(
             "Implementation may proceed",

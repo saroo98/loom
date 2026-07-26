@@ -9,17 +9,14 @@ import json
 import os
 import re
 import shutil
-import signal
-import stat
-import subprocess
 import tempfile
-import time
-import uuid
 from pathlib import Path
 import sys
 
 import loom_survey
 import loom_privacy
+import loom_operation_supervisor
+import loom_reliability
 
 
 SCHEMA_VERSION = 1
@@ -36,83 +33,6 @@ MAX_SECTIONS = 128
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 WO_ID = re.compile(r"^WO-[0-9]{3,}$")
 GENERIC_MEDIA = {"checklist", "generic", "unknown", "document-review", "self-report"}
-
-
-if os.name == "nt":
-    import ctypes
-    from ctypes import wintypes
-
-    _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x00002000
-    _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS = 9
-    _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS = 1
-
-    class _JobBasicLimitInformation(ctypes.Structure):
-        _fields_ = [
-            ("PerProcessUserTimeLimit", ctypes.c_int64),
-            ("PerJobUserTimeLimit", ctypes.c_int64),
-            ("LimitFlags", wintypes.DWORD),
-            ("MinimumWorkingSetSize", ctypes.c_size_t),
-            ("MaximumWorkingSetSize", ctypes.c_size_t),
-            ("ActiveProcessLimit", wintypes.DWORD),
-            ("Affinity", ctypes.c_size_t),
-            ("PriorityClass", wintypes.DWORD),
-            ("SchedulingClass", wintypes.DWORD),
-        ]
-
-    class _IoCounters(ctypes.Structure):
-        _fields_ = [
-            ("ReadOperationCount", ctypes.c_uint64),
-            ("WriteOperationCount", ctypes.c_uint64),
-            ("OtherOperationCount", ctypes.c_uint64),
-            ("ReadTransferCount", ctypes.c_uint64),
-            ("WriteTransferCount", ctypes.c_uint64),
-            ("OtherTransferCount", ctypes.c_uint64),
-        ]
-
-    class _JobExtendedLimitInformation(ctypes.Structure):
-        _fields_ = [
-            ("BasicLimitInformation", _JobBasicLimitInformation),
-            ("IoInfo", _IoCounters),
-            ("ProcessMemoryLimit", ctypes.c_size_t),
-            ("JobMemoryLimit", ctypes.c_size_t),
-            ("PeakProcessMemoryUsed", ctypes.c_size_t),
-            ("PeakJobMemoryUsed", ctypes.c_size_t),
-        ]
-
-    class _JobBasicAccountingInformation(ctypes.Structure):
-        _fields_ = [
-            ("TotalUserTime", ctypes.c_int64),
-            ("TotalKernelTime", ctypes.c_int64),
-            ("ThisPeriodTotalUserTime", ctypes.c_int64),
-            ("ThisPeriodTotalKernelTime", ctypes.c_int64),
-            ("TotalPageFaultCount", wintypes.DWORD),
-            ("TotalProcesses", wintypes.DWORD),
-            ("ActiveProcesses", wintypes.DWORD),
-            ("TotalTerminatedProcesses", wintypes.DWORD),
-        ]
-
-    _KERNEL32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    _KERNEL32.CreateJobObjectW.argtypes = [ctypes.c_void_p, wintypes.LPCWSTR]
-    _KERNEL32.CreateJobObjectW.restype = wintypes.HANDLE
-    _KERNEL32.SetInformationJobObject.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]
-    _KERNEL32.SetInformationJobObject.restype = wintypes.BOOL
-    _KERNEL32.AssignProcessToJobObject.argtypes = [wintypes.HANDLE, wintypes.HANDLE]
-    _KERNEL32.AssignProcessToJobObject.restype = wintypes.BOOL
-    _KERNEL32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
-    _KERNEL32.TerminateJobObject.restype = wintypes.BOOL
-    _KERNEL32.QueryInformationJobObject.argtypes = [
-        wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD,
-        ctypes.POINTER(wintypes.DWORD)]
-    _KERNEL32.QueryInformationJobObject.restype = wintypes.BOOL
-    _KERNEL32.CloseHandle.argtypes = [wintypes.HANDLE]
-    _KERNEL32.CloseHandle.restype = wintypes.BOOL
-
-    _WINDOWS_VERIFIER_BOOTSTRAP = (
-        "import json,subprocess,sys; "
-        "command=json.load(sys.stdin); "
-        "raise SystemExit(subprocess.run(command,shell=False).returncode)"
-    )
 
 
 class LifecycleError(RuntimeError):
@@ -158,31 +78,10 @@ def _strict_object(pairs):
 
 
 def _atomic_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.parent.is_symlink() or path.exists() and path.is_symlink():
-        raise LifecycleError("lifecycle output path is unsafe")
-    payload = _canonical(value) + b"\n"
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    descriptor = None
     try:
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-                             stat.S_IRUSR | stat.S_IWUSR)
-        with os.fdopen(descriptor, "wb", closefd=True) as stream:
-            descriptor = None
-            stream.write(payload)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-    except OSError as exc:
+        loom_reliability.atomic_write_json(path, value)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
         raise LifecycleError(f"cannot commit lifecycle evidence: {exc}") from exc
-    finally:
-        if descriptor is not None:
-            os.close(descriptor)
-        try:
-            temporary.unlink(missing_ok=True)
-        except OSError:
-            pass
 
 
 def _pack_relative(repo, pack):
@@ -229,123 +128,26 @@ def _validate_command(command):
         raise LifecycleError("verification command is invalid")
 
 
-def _windows_error(action):
-    code = ctypes.get_last_error()
-    return LifecycleError(f"verification containment could not {action}: WinError {code}")
-
-
-def _create_windows_job():
-    job = _KERNEL32.CreateJobObjectW(None, None)
-    if not job:
-        raise _windows_error("create a Job Object")
-    limits = _JobExtendedLimitInformation()
-    limits.BasicLimitInformation.LimitFlags = _JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
-    if not _KERNEL32.SetInformationJobObject(
-            job, _JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
-            ctypes.byref(limits), ctypes.sizeof(limits)):
-        _KERNEL32.CloseHandle(job)
-        raise _windows_error("configure a Job Object")
-    return job
-
-
-def _start_contained(command, cwd, stdout_file, stderr_file):
-    if os.name != "nt":
-        try:
-            process = subprocess.Popen(
-                command, cwd=cwd, stdout=stdout_file, stderr=stderr_file,
-                shell=False, start_new_session=True)
-        except OSError as exc:
-            raise LifecycleError(
-                f"verification command could not start: {exc}") from exc
-        return process, None
-
-    job = _create_windows_job()
-    process = None
-    try:
-        process = subprocess.Popen(
-            [sys.executable, "-I", "-c", _WINDOWS_VERIFIER_BOOTSTRAP],
-            cwd=cwd, stdin=subprocess.PIPE, stdout=stdout_file, stderr=stderr_file,
-            shell=False)
-        if not _KERNEL32.AssignProcessToJobObject(
-                job, wintypes.HANDLE(int(process._handle))):
-            raise _windows_error("assign the verifier before it started")
-        process.stdin.write(_canonical(command))
-        process.stdin.close()
-        process.stdin = None
-        return process, job
-    except (OSError, BrokenPipeError, LifecycleError) as exc:
-        if process is not None:
-            process.kill()
-            process.wait()
-        _KERNEL32.CloseHandle(job)
-        if isinstance(exc, LifecycleError):
-            raise
-        raise LifecycleError(f"verification command could not start: {exc}") from exc
-
-
-def _stop_contained(process, containment):
-    if os.name != "nt":
-        try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        except OSError as exc:
-            raise LifecycleError(
-                f"verification process group could not be terminated: {exc}") from exc
-        if process.poll() is None:
-            process.wait()
-        return
-
-    try:
-        if not _KERNEL32.TerminateJobObject(containment, 1):
-            raise _windows_error("terminate its Job Object")
-        if process.poll() is None:
-            process.wait(timeout=5)
-        deadline = time.monotonic() + 5
-        while time.monotonic() < deadline:
-            accounting = _JobBasicAccountingInformation()
-            returned = wintypes.DWORD()
-            if not _KERNEL32.QueryInformationJobObject(
-                    containment, _JOB_OBJECT_BASIC_ACCOUNTING_INFORMATION_CLASS,
-                    ctypes.byref(accounting), ctypes.sizeof(accounting),
-                    ctypes.byref(returned)):
-                raise _windows_error("confirm verifier descendants exited")
-            if accounting.ActiveProcesses == 0:
-                return
-            time.sleep(0.01)
-        raise LifecycleError("verification descendants did not terminate")
-    finally:
-        _KERNEL32.CloseHandle(containment)
-
-
 def _run_bounded(command, cwd, timeout):
-    with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        process, containment = _start_contained(
-            command, cwd, stdout_file, stderr_file)
-        deadline = time.monotonic() + timeout
-        exceeded = False
-        timed_out = False
-        while process.poll() is None:
-            if time.monotonic() >= deadline:
-                timed_out = True
-                break
-            if os.fstat(stdout_file.fileno()).st_size > MAX_TRANSCRIPT_BYTES \
-                    or os.fstat(stderr_file.fileno()).st_size > MAX_TRANSCRIPT_BYTES:
-                exceeded = True
-                break
-            time.sleep(0.02)
-        returncode = process.returncode
-        _stop_contained(process, containment)
-        if timed_out:
-            raise LifecycleError("verification command timed out")
-        if exceeded:
-            raise LifecycleError("verification transcript exceeds its safety bound")
-        stdout_file.seek(0); stderr_file.seek(0)
-        stdout = stdout_file.read(MAX_TRANSCRIPT_BYTES + 1)
-        stderr = stderr_file.read(MAX_TRANSCRIPT_BYTES + 1)
-        if len(stdout) > MAX_TRANSCRIPT_BYTES or len(stderr) > MAX_TRANSCRIPT_BYTES:
-            raise LifecycleError("verification transcript exceeds its safety bound")
-        return returncode, stdout, stderr
+    try:
+        receipt, stdout, stderr = loom_operation_supervisor.run(
+            operation_class="verification",
+            command=command, cwd=Path(cwd).resolve(), timeout=timeout,
+            allowed_roots=[Path(cwd).resolve()],
+            capabilities=["local-process", "descendant-containment"],
+            max_transcript_bytes=MAX_TRANSCRIPT_BYTES, capture_output=True)
+    except loom_operation_supervisor.SupervisorError as exc:
+        raise LifecycleError(f"verification command could not start: {exc}") from exc
+    failure = receipt["primary_failure"]
+    if failure == "timed-out":
+        raise LifecycleError("verification command timed out")
+    if failure == "transcript-limit":
+        raise LifecycleError("verification transcript exceeds its safety bound")
+    if failure not in {None, "nonzero-exit"}:
+        raise LifecycleError(
+            f"verification containment failed: {failure}; "
+            f"secondary={receipt['secondary_failures'][:3]}")
+    return receipt["returncode"], stdout, stderr
 
 
 def _copy_verification_snapshot(source, destination, excluded):

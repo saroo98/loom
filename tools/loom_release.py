@@ -23,6 +23,10 @@ import loom_docs
 import loom_install
 import loom_improvement
 import loom_performance
+import loom_self_hosting
+import loom_crypto
+import loom_path_authority
+import loom_operation_supervisor
 
 
 ROOT_FILES = {
@@ -255,6 +259,9 @@ def build_public(source, destination, *, forbidden_tokens,
         source, forbidden_tokens, source_classification)
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=".loom-public-", dir=destination.parent))
+    staging_owner = loom_path_authority.create_ownership_receipt(
+        path=staging, root=destination.parent, operation_id=str(uuid.uuid4()),
+        expected_type="directory")
     try:
         copied = []
         for path in _eligible_files(source):
@@ -273,14 +280,37 @@ def build_public(source, destination, *, forbidden_tokens,
             require_owner_tokens=source_classification == "private-owner")
         if not firewall["clean"]:
             raise ReleaseError("release firewall rejected the public build")
-        os.replace(staging, destination)
+        loom_path_authority.authorize(
+            operation_class="release-package", path=destination,
+            root=destination.parent, expected_type="absent",
+            replacement_policy="atomic-no-replace",
+            cleanup_disposition="preserve", peer_path=staging,
+            require_same_volume=True)
+        source_identity = loom_reliability.observe_root_identity(staging)
+        loom_reliability.atomic_rename_noreplace(
+            staging, destination, expected_source_identity=source_identity,
+            source_role="public-staging", destination_role="public-cut")
     except loom_reliability.ReliabilityError as exc:
         if staging.exists():
-            shutil.rmtree(staging)
+            try:
+                loom_path_authority.remove_owned_tree(
+                    staging, root=destination.parent,
+                    ownership_receipt=staging_owner)
+            except BaseException as cleanup_exc:
+                exc.add_note(
+                    "secondary staging cleanup failure: "
+                    f"{type(cleanup_exc).__name__}:{str(cleanup_exc)[:200]}")
         raise ReleaseError(f"release source traversal failed: {exc}") from exc
-    except BaseException:
+    except BaseException as primary:
         if staging.exists():
-            shutil.rmtree(staging)
+            try:
+                loom_path_authority.remove_owned_tree(
+                    staging, root=destination.parent,
+                    ownership_receipt=staging_owner)
+            except BaseException as cleanup_exc:
+                primary.add_note(
+                    "secondary staging cleanup failure: "
+                    f"{type(cleanup_exc).__name__}:{str(cleanup_exc)[:200]}")
         raise
     return {"status": "built", "destination": str(destination),
             "root_sha256": payload_manifest["root_sha256"],
@@ -765,12 +795,27 @@ def _external_passed(check_id, evidence, *, trust_policy=None, now=None):
     return _cross_platform_ci_passed(payload, subject)
 
 
-def certification_report(*, local_checks, external_evidence, trust_policy=None, now=None):
+def certification_report(*, local_checks, external_evidence, trust_policy=None, now=None,
+                         self_hosting_receipt=None, actor_id=None,
+                         self_hosting_trusted_keys=None,
+                         self_hosting_signature_verifier=None):
     if not isinstance(local_checks, dict) or not isinstance(external_evidence, dict):
         raise ReleaseError("release evidence must be structured mappings")
     local_validation = _validated_local_evidence(local_checks, now=now)
     validated_checks = local_validation[0] if local_validation else {}
     local_subject = local_validation[1] if local_validation else None
+    if self_hosting_receipt is not None:
+        if local_subject is None or not isinstance(actor_id, str):
+            raise ReleaseError("self-hosted certification needs a valid local subject and actor")
+        try:
+            loom_self_hosting.authorize(
+                self_hosting_receipt, action="certify", actor=actor_id,
+                candidate_subject=_canonical_hash(local_subject),
+                now=now or dt.datetime.now(dt.timezone.utc),
+                trusted_controller_keys=self_hosting_trusted_keys,
+                signature_verifier=self_hosting_signature_verifier)
+        except loom_self_hosting.SelfHostingError as exc:
+            raise ReleaseError(f"self-hosted certification refused: {exc}") from exc
     checks = []
     for check_id in LOCAL_CHECKS:
         passed = validated_checks.get(check_id) is True
@@ -812,13 +857,51 @@ def _suite(root):
     command = ([sys.executable, "-B", "loom_test.py", "full", "--quiet"]
                if runner.is_file() else
                [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
-    result = subprocess.run(
-        command,
-        cwd=root / "tools", capture_output=True, text=True,
-        timeout=FULL_SUITE_MAX_SECONDS, check=False,
-        env=dict(os.environ, PYTHONDONTWRITEBYTECODE="1"))
+    real_home = Path.home().resolve()
+    cargo_home = Path(
+        os.environ.get("CARGO_HOME", str(real_home / ".cargo"))).resolve()
+    rustup_home = Path(
+        os.environ.get("RUSTUP_HOME", str(real_home / ".rustup"))).resolve()
+    protected = [
+        path for path in (
+            real_home / ".loom",
+            real_home / ".codex" / "config.toml",
+            real_home / ".codex" / "hooks.json",
+        ) if path.exists()
+    ]
+    with tempfile.TemporaryDirectory(prefix="loom-rs-") as temporary:
+        disposable_home = Path(temporary).resolve()
+        disposable_temp = disposable_home / "tmp"
+        cargo_cache = disposable_home / "c"
+        disposable_temp.mkdir()
+        cargo_cache.mkdir()
+        environment = {
+            "HOME": str(disposable_home),
+            "USERPROFILE": str(disposable_home),
+            "CODEX_HOME": str(disposable_home / ".codex"),
+            "TMPDIR": str(disposable_temp),
+            "TEMP": str(disposable_temp),
+            "TMP": str(disposable_temp),
+            "LOOM_TEST_CACHE_ROOT": str(cargo_cache),
+        }
+        if cargo_home.is_dir():
+            environment["CARGO_HOME"] = str(cargo_home)
+        if rustup_home.is_dir():
+            environment["RUSTUP_HOME"] = str(rustup_home)
+        operation, stdout, stderr = loom_operation_supervisor.run(
+            operation_class="release-suite",
+            command=command, cwd=(root / "tools").resolve(),
+            environment=environment,
+            timeout=FULL_SUITE_MAX_SECONDS,
+            allowed_roots=[root.resolve(), disposable_home],
+            protected_roots=protected,
+            capabilities=["local-process", "descendant-containment"],
+            capture_output=True)
+    stdout_text = stdout.decode("utf-8", errors="replace")
+    stderr_text = stderr.decode("utf-8", errors="replace")
+    returncode = operation["returncode"] if operation["returncode"] is not None else 1
     try:
-        timing = json.loads(result.stdout) if runner.is_file() else None
+        timing = json.loads(stdout_text) if runner.is_file() else None
     except json.JSONDecodeError:
         timing = None
     if runner.is_file() and isinstance(timing, dict):
@@ -827,7 +910,7 @@ def _suite(root):
         expected_status = "passed" if capability_complete else "passed-with-capability-skips"
         skips = timing.get("skip_receipts")
         correctness_passed = (
-            result.returncode == expected_returncode
+            returncode == expected_returncode
             and timing.get("failures") == 0
             and timing.get("errors") == 0
             and timing.get("within_budget") is True
@@ -837,16 +920,17 @@ def _suite(root):
             and bool(skips) is not capability_complete
         )
     else:
-        capability_complete = result.returncode == 0
-        correctness_passed = result.returncode == 0
+        capability_complete = returncode == 0
+        correctness_passed = returncode == 0
     return {
         "passed": correctness_passed,
         "capability_complete": capability_complete,
         "capability_status": ("complete" if capability_complete else "requires-matrix"),
         "skip_receipts": timing.get("skip_receipts", []) if timing else [],
-        "returncode": result.returncode,
-        "output": (result.stderr if runner.is_file()
-                   else result.stdout + result.stderr)[-4000:],
+        "returncode": returncode,
+        "output": (stderr_text if runner.is_file()
+                   else stdout_text + stderr_text)[-4000:],
+        "operation_receipt_sha256": operation["receipt_sha256"],
         "elapsed_seconds": timing.get("elapsed_seconds") if timing else None,
         "tests_run": timing.get("tests_run") if timing else None,
         "failure_count": timing.get("failures") if timing else None,
@@ -1002,6 +1086,10 @@ def main(argv=None):
     certify.add_argument("--local-checks", required=True)
     certify.add_argument("--external-evidence", required=True)
     certify.add_argument("--trust-policy", required=True)
+    certify.add_argument("--self-hosting-role-receipt")
+    certify.add_argument("--actor-id")
+    certify.add_argument("--self-hosting-trust")
+    certify.add_argument("--self-hosting-helper")
     verify = sub.add_parser("verify")
     verify.add_argument("root")
     verify.add_argument("--forbid", action="append", default=[])
@@ -1023,9 +1111,23 @@ def main(argv=None):
             local = json.loads(Path(args.local_checks).read_text(encoding="utf-8"))
             external = json.loads(Path(args.external_evidence).read_text(encoding="utf-8"))
             trust_policy = json.loads(Path(args.trust_policy).read_text(encoding="utf-8"))
+            role_receipt = (
+                json.loads(Path(args.self_hosting_role_receipt).read_text(encoding="utf-8"))
+                if args.self_hosting_role_receipt else None)
+            role_trust = (
+                json.loads(Path(args.self_hosting_trust).read_text(encoding="utf-8"))
+                if args.self_hosting_trust else None)
+            role_verifier = (
+                (lambda message, signature, public_key:
+                    loom_crypto.verify_signature(
+                        args.self_hosting_helper, message, signature, public_key))
+                if args.self_hosting_helper else None)
             result = certification_report(
                 local_checks=local, external_evidence=external,
-                trust_policy=trust_policy)
+                trust_policy=trust_policy, self_hosting_receipt=role_receipt,
+                actor_id=args.actor_id,
+                self_hosting_trusted_keys=role_trust,
+                self_hosting_signature_verifier=role_verifier)
         elif args.command == "verify":
             result = verify_local(
                 args.root, forbidden_tokens=args.forbid,

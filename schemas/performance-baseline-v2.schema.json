@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/performance-baseline-v2.schema.json",
+  "title": "Loom foundation performance baseline",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "baseline_id", "source_commit", "environment",
+    "preregistration", "corpus", "results", "wrapper_process",
+    "measurement_boundaries", "provider_native",
+    "all_local_metrics_stable", "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "baseline_id": {"type": "string", "format": "uuid"},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["os", "architecture", "python", "measurement_boundary"],
+      "properties": {
+        "os": {"type": "string", "minLength": 1, "maxLength": 40},
+        "architecture": {"type": "string", "minLength": 1, "maxLength": 40},
+        "python": {"type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$"},
+        "measurement_boundary": {
+          "const": "local-runtime-and-wrapper-separated"
+        }
+      }
+    },
+    "preregistration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "runs", "warmups", "relative_spread_tolerance", "required_cases",
+        "corpus_sha256"
+      ],
+      "properties": {
+        "runs": {"type": "integer", "minimum": 3, "maximum": 31},
+        "warmups": {"type": "integer", "minimum": 1, "maximum": 10},
+        "relative_spread_tolerance": {
+          "type": "number", "exclusiveMinimum": 0, "maximum": 1
+        },
+        "required_cases": {
+          "type": "array", "minItems": 7, "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "corpus_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "corpus": {
+      "type": "array", "minItems": 7,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "request_sha256", "declared_file_count"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1, "maxLength": 80},
+          "request_sha256": {"$ref": "#/$defs/digest"},
+          "declared_file_count": {"type": "integer", "minimum": 0}
+        }
+      }
+    },
+    "results": {
+      "type": "array", "minItems": 5,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": [
+          "id", "measurement_class", "samples", "p50_runtime_ns", "p95_runtime_ns",
+          "relative_spread", "within_preregistered_tolerance",
+          "non_time_metrics", "non_time_metrics_stable"
+        ],
+        "properties": {
+          "id": {"type": "string"},
+          "measurement_class": {
+            "enum": ["local-runtime-operation", "request-preparation"]
+          },
+          "samples": {
+            "type": "array", "minItems": 3,
+            "items": {"type": "integer", "minimum": 0}
+          },
+          "p50_runtime_ns": {"type": "integer", "minimum": 0},
+          "p95_runtime_ns": {"type": "integer", "minimum": 0},
+          "relative_spread": {"type": "number", "minimum": 0},
+          "within_preregistered_tolerance": {"type": "boolean"},
+          "non_time_metrics": {"type": "object"},
+          "non_time_metrics_stable": {"type": "boolean"}
+        }
+      }
+    },
+    "wrapper_process": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["samples", "p50_elapsed_ns", "p95_elapsed_ns", "includes"],
+      "properties": {
+        "samples": {
+          "type": "array", "minItems": 3,
+          "items": {"type": "integer", "minimum": 0}
+        },
+        "p50_elapsed_ns": {"type": "integer", "minimum": 0},
+        "p95_elapsed_ns": {"type": "integer", "minimum": 0},
+        "includes": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 80}
+        }
+      }
+    },
+    "measurement_boundaries": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "local_runtime", "wrapper_process", "provider_response",
+        "provider_queue", "complete_wall_time"
+      ],
+      "properties": {
+        "local_runtime": {"const": "observed"},
+        "wrapper_process": {"const": "observed"},
+        "provider_response": {"const": "unavailable"},
+        "provider_queue": {"const": "unavailable"},
+        "complete_wall_time": {"const": "unavailable"}
+      }
+    },
+    "provider_native": {
+      "type": "object", "additionalProperties": false,
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"const": "unavailable"},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 240}
+      }
+    },
+    "all_local_metrics_stable": {"type": "boolean"},
+    "receipt_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

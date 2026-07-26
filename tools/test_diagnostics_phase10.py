@@ -9,14 +9,22 @@ import loom_diagnostics
 
 
 class DiagnosticsPhase10Tests(unittest.TestCase):
+    @staticmethod
+    def _write_runtime_pointer(home):
+        runtime = home / "runtime"
+        runtime.mkdir(parents=True)
+        (runtime / "current.json").write_text(json.dumps({
+            "version": "1.6.0",
+            "path": "1.6.0",
+            "payload_sha256": "a" * 64,
+            "release_sequence": 16,
+            "previous": None,
+        }), encoding="utf-8")
+
     def test_doctor_reports_only_body_free_metadata(self):
         with tempfile.TemporaryDirectory(prefix="private-owner-name-") as temporary:
             home = Path(temporary) / ".loom"
-            runtime = home / "runtime"
-            runtime.mkdir(parents=True)
-            (runtime / "current.json").write_text(json.dumps({
-                "version": "1.6.0", "release_sequence": 16, "previous": None}),
-                encoding="utf-8")
+            self._write_runtime_pointer(home)
             result = loom_diagnostics.doctor(home)
             rendered = json.dumps(result)
             self.assertEqual("healthy", result["status"])
@@ -27,10 +35,7 @@ class DiagnosticsPhase10Tests(unittest.TestCase):
     def test_changed_owned_adapter_blocks_health(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary) / ".loom"
-            (home / "runtime").mkdir(parents=True)
-            (home / "runtime" / "current.json").write_text(json.dumps({
-                "version": "1.6.0", "release_sequence": 16, "previous": None}),
-                encoding="utf-8")
+            self._write_runtime_pointer(home)
             target = Path(temporary) / "skill.md"
             target.write_text("changed", encoding="utf-8")
             receipts = home / "adapters" / "receipts"
@@ -46,10 +51,7 @@ class DiagnosticsPhase10Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             home = root / ".loom"
-            (home / "runtime").mkdir(parents=True)
-            (home / "runtime" / "current.json").write_text(json.dumps({
-                "version": "1.6.0", "release_sequence": 16, "previous": None}),
-                encoding="utf-8")
+            self._write_runtime_pointer(home)
             output = root / "support.loom-encrypted"
             wrapped = {"salt": "salt", "ciphertext": "cipher", "kdf": {"name": "argon2id"}}
             with mock.patch.object(
@@ -61,6 +63,24 @@ class DiagnosticsPhase10Tests(unittest.TestCase):
             self.assertNotIn("runtime", payload)
             self.assertFalse(payload["upload"])
             self.assertRegex(payload["plaintext_sha256"], r"^[0-9a-f]{64}$")
+
+    def test_invalid_owner_state_pointer_blocks_without_exposing_private_state(self):
+        with tempfile.TemporaryDirectory(prefix="private-owner-name-") as temporary:
+            home = Path(temporary) / ".loom"
+            runtime = home / "runtime"
+            runtime.mkdir(parents=True)
+            (runtime / "current.json").write_text(json.dumps({
+                "version": "1.6.0", "release_sequence": 16, "previous": None}),
+                encoding="utf-8")
+
+            result = loom_diagnostics.doctor(home)
+            rendered = json.dumps(result)
+
+            self.assertEqual("blocked", result["status"])
+            self.assertEqual("unverifiable", result["state"]["integrity"])
+            self.assertIn("OWNER_STATE_POINTER_INVALID", result["problems"])
+            self.assertNotIn(str(home), rendered)
+            self.assertNotIn("private-owner-name", rendered)
 
 
 if __name__ == "__main__":

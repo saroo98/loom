@@ -1,6 +1,7 @@
 """Signed staged-update, session pinning, and rollback tests."""
 
 import base64
+import contextlib
 import datetime as dt
 import hashlib
 import hmac
@@ -173,12 +174,14 @@ class UpdateTests(unittest.TestCase):
 
     def test_session_pins_verified_owner_vault_generation(self):
         database = self.runtime.home / "vault" / "owner.sqlite3"
-        database.parent.mkdir(parents=True)
+        database.parent.mkdir(parents=True, exist_ok=True)
         connection = sqlite3.connect(database)
         try:
             connection.execute("CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
             connection.executemany("INSERT INTO metadata(key,value) VALUES(?,?)", [
-                ("generation", "7"), ("schema_version", "2")])
+                ("owner_vault_id", "00000000-0000-4000-8000-000000000701"),
+                ("generation", "7"), ("schema_version", "2"),
+                ("deletion_epoch", "0")])
             connection.commit()
         finally:
             connection.close()
@@ -189,9 +192,10 @@ class UpdateTests(unittest.TestCase):
 
     def test_corrupt_owner_vault_blocks_session_start(self):
         database = self.runtime.home / "vault" / "owner.sqlite3"
-        database.parent.mkdir(parents=True)
+        database.parent.mkdir(parents=True, exist_ok=True)
         database.write_bytes(b"not sqlite")
-        with self.assertRaisesRegex(loom_update.UpdateError, "unverifiable|integrity"):
+        with self.assertRaisesRegex(
+                loom_update.UpdateError, "unverifiable|integrity|inventoried"):
             self.runtime.begin_session()
 
     def test_hash_downgrade_and_health_failures_leave_working_runtime_active(self):
@@ -305,6 +309,48 @@ class UpdateTests(unittest.TestCase):
         rolled = self.runtime.rollback("bootstrap-failure")
         self.assertEqual("rolled-back", rolled["status"])
         self.assertEqual("1.0.0", self.runtime.current()["version"])
+
+    def test_rollback_pairs_previous_runtime_with_latest_forward_state(self):
+        legacy = self.runtime.home / "vault" / "owner.sqlite3"
+        legacy.parent.mkdir(parents=True, exist_ok=True)
+        with contextlib.closing(sqlite3.connect(legacy)) as connection:
+            connection.execute(
+                "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+            connection.executemany(
+                "INSERT INTO metadata(key,value) VALUES(?,?)", [
+                    ("owner_vault_id", "00000000-0000-4000-8000-000000000702"),
+                    ("generation", "1"), ("schema_version", "1"),
+                    ("deletion_epoch", "0")])
+            connection.commit()
+        lease = self.runtime.begin_session()
+        self.runtime.end_session(lease["session_id"])
+        baseline = self.runtime.current()
+        baseline_state = self.runtime.activations.state_path(baseline)
+
+        self.stage()
+        candidate = self.runtime.current()
+        candidate_state = self.runtime.activations.state_path(candidate)
+        with contextlib.closing(sqlite3.connect(candidate_state)) as connection:
+            connection.execute(
+                "UPDATE metadata SET value='2' WHERE key='generation'")
+            connection.execute(
+                "UPDATE metadata SET value='1' WHERE key='deletion_epoch'")
+            connection.commit()
+
+        rolled = self.runtime.rollback("candidate bootstrap failure")
+        active = self.runtime.current()
+        active_state = self.runtime.activations.state_path(active)
+        active_inventory = loom_update.loom_activation.state_inventory(active_state)
+        baseline_inventory = loom_update.loom_activation.state_inventory(baseline_state)
+
+        self.assertEqual("rolled-back", rolled["status"])
+        self.assertTrue(rolled["forward_state_preserved"])
+        self.assertEqual("1.0.0", active["version"])
+        self.assertNotEqual(candidate_state, active_state)
+        self.assertEqual(2, active_inventory["generation"])
+        self.assertEqual(1, active_inventory["deletion_epoch"])
+        self.assertEqual(1, baseline_inventory["generation"])
+        self.assertEqual(0, baseline_inventory["deletion_epoch"])
 
     def test_runtime_archive_extracts_and_path_traversal_fails_safe(self):
         archive_plugin = self.root / "plugin-cache" / "loom" / "1.2.0" / "payload"

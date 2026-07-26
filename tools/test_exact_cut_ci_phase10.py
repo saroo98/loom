@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest import mock
 
 import loom_exact_cut_ci
+import loom_operation_envelope
 
 
 class ExactCutCiPhase10Tests(unittest.TestCase):
@@ -23,6 +24,9 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             self.assertRegex(result["error_sha256"], r"^[0-9a-f]{64}$")
             self.assertNotIn(str(root), "".join(result["traceback_tail"]))
             self.assertEqual(result, json.loads(output.read_text(encoding="utf-8")))
+            envelope = loom_operation_envelope.read(
+                root / ".loom-operations" / f"{result['operation_id']}.json")
+            self.assertEqual("failed", envelope["events"][-1]["phase"])
 
     def test_success_receipt_binds_built_and_verified_roots(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -42,6 +46,9 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             suite = json.loads(suite_output.read_text(encoding="utf-8"))
             self.assertEqual(7, suite["tests"])
             self.assertEqual("a" * 64, suite["binding"]["public_root_sha256"])
+            envelope = loom_operation_envelope.read(
+                root / ".loom-operations" / f"{result['operation_id']}.json")
+            self.assertEqual("passed", envelope["events"][-1]["phase"])
 
     def test_suite_failure_preserves_failed_test_identity(self):
         with tempfile.TemporaryDirectory() as temporary:

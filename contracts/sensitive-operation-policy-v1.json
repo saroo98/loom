@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "designated_modules": [
+    "tools/loom_clean_room.py",
+    "tools/loom_exact_cut_ci.py",
+    "tools/loom_lifecycle.py",
+    "tools/loom_release.py"
+  ],
+  "forbidden_calls": [
+    "os.remove",
+    "os.rename",
+    "os.replace",
+    "os.unlink",
+    "shutil.move",
+    "shutil.rmtree",
+    "subprocess.Popen",
+    "subprocess.call",
+    "subprocess.check_call",
+    "subprocess.check_output",
+    "subprocess.run"
+  ],
+  "exceptions": [
+    {
+      "module": "tools/loom_release.py",
+      "function": "_git_release_identity.run",
+      "call": "subprocess.run",
+      "reason": "Read-only fixed Git identity queries; no owner request or mutable target crosses this boundary."
+    }
+  ],
+  "authorities": {
+    "process": "tools/loom_operation_supervisor.py",
+    "filesystem": "tools/loom_path_authority.py",
+    "durable_json": "tools/loom_reliability.py",
+    "write_ahead": "tools/loom_operation_envelope.py"
+  }
+}

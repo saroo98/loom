@@ -93,7 +93,10 @@ class WindowsRequestTransportTests(unittest.TestCase):
             import sys
             sys.path.insert(0, {str(TOOLS)!r})
             import loom_adapter_protocol
+            import loom_execution_chain
             import loom_orchestrator
+            loom_execution_chain.verify_loaded_modules = lambda runtime: {{
+                "module_count": 1, "modules_sha256": "a" * 64}}
 
             def transport_invoke(**kwargs):
                 request = kwargs["request"]
@@ -117,8 +120,22 @@ class WindowsRequestTransportTests(unittest.TestCase):
             import loom_launcher
 
             class Manager:
+                class Activations:
+                    @staticmethod
+                    def public_projection(current):
+                        return {{
+                            "activation_set_id": None,
+                            "runtime_version": "1.8.3",
+                            "release_sequence": 1,
+                            "state_generation": 0,
+                            "state_schema": 0,
+                            "deletion_epoch": 0,
+                        }}
+                activations = Activations()
                 def begin_session(self):
-                    return {{"session_id": "windows-test", "version": "1.8.3"}}
+                    return {{
+                        "session_id": "windows-test", "version": "1.8.3",
+                        "state_generation": 0, "state_schema": 0}}
                 def end_session(self, session_id, *, successful):
                     pass
                 def record_trust_health(self, *, healthy, reason):
@@ -133,6 +150,8 @@ class WindowsRequestTransportTests(unittest.TestCase):
             loom_launcher.__file__ = __file__
             raise SystemExit(loom_launcher.main())
         """).lstrip(), encoding="utf-8")
+        (self.runtime / "RUNTIME-MANIFEST.json").write_text(
+            '{"version":"1.8.3"}\n', encoding="utf-8")
         return launcher
 
     def _bridge(self, messages, *, timeout=60):

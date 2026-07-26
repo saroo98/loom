@@ -4,13 +4,15 @@
   "title": "Loom runtime and owner-state session lease",
   "type": "object",
   "additionalProperties": false,
-  "required": ["session_id", "version", "release_sequence", "state_generation", "state_schema", "pid", "started_at"],
+  "required": ["session_id", "version", "release_sequence", "activation_set_id", "state_generation", "state_schema", "deletion_epoch", "pid", "started_at"],
   "properties": {
     "session_id": {"type": "string", "format": "uuid"},
     "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
     "release_sequence": {"type": "integer", "minimum": 1},
+    "activation_set_id": {"type": "string", "format": "uuid"},
     "state_generation": {"type": "integer", "minimum": 0},
     "state_schema": {"type": "integer", "minimum": 0},
+    "deletion_epoch": {"type": "integer", "minimum": 0},
     "pid": {"type": "integer", "minimum": 1},
     "started_at": {"type": "string", "format": "date-time"}
   }

@@ -24,7 +24,8 @@ import loom_release_sign
 import loom_reliability
 import loom_update
 from v11_test_support import (
-    RUSTC_IDENTITY_TIMEOUT_SECONDS, _build_environment_identity, _rustc_identity,
+    RUSTC_IDENTITY_TIMEOUT_SECONDS, _build_environment_identity,
+    _host_platform, _msvc_environment_from_roots, _rustc_identity,
     build_vault_helper, package_evidence, package_source_commit,
 )
 
@@ -86,6 +87,35 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertNotEqual(baseline, temp_changed)
         self.assertNotEqual(baseline, home_changed)
         self.assertNotEqual(baseline, profile_changed)
+
+    def test_native_helper_constructs_minimal_msvc_environment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            installation = root / "Visual Studio" / "2022" / "BuildTools"
+            msvc = installation / "VC" / "Tools" / "MSVC" / "14.44.35207"
+            (msvc / "bin" / "Hostx64" / "x64").mkdir(parents=True)
+            (msvc / "bin" / "Hostx64" / "x64" / "link.exe").write_bytes(b"")
+            (msvc / "include").mkdir()
+            (msvc / "lib" / "x64").mkdir(parents=True)
+            sdk = root / "Windows Kits" / "10"
+            version = "10.0.26100.0"
+            for relative in (
+                    f"Include/{version}/ucrt", f"Include/{version}/shared",
+                    f"Include/{version}/um", f"Include/{version}/winrt",
+                    f"Lib/{version}/ucrt/x64", f"Lib/{version}/um/x64"):
+                (sdk / relative).mkdir(parents=True)
+            environment = _msvc_environment_from_roots(
+                {"PATH": "fixture-path"}, installation, sdk)
+
+        self.assertIsNotNone(environment)
+        self.assertTrue(environment["PATH"].endswith("fixture-path"))
+        self.assertIn(str(msvc / "bin" / "Hostx64" / "x64"),
+                      environment["PATH"])
+        self.assertIn(str(msvc / "lib" / "x64"), environment["LIB"])
+        self.assertEqual(version + os.sep, environment["WindowsSDKVersion"])
+        with mock.patch.object(loom_update, "platform_id",
+                               return_value="windows-x64"):
+            self.assertEqual("windows-x64", _host_platform())
 
     def test_plugin_session_start_canonicalizes_without_prompt_transport(self):
         with tempfile.TemporaryDirectory() as temporary:

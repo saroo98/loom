@@ -63,19 +63,46 @@ class ReleaseStandardTests(unittest.TestCase):
             "tests_run": 10,
             "timings": [],
         }
-        completed = mock.Mock(
-            returncode=1, stdout=json.dumps(report), stderr="10 tests passed; 1 skipped")
-        with mock.patch.object(subprocess, "run", return_value=completed) as run:
-            result = loom_release._suite(self.root)
+        operation = {
+            "returncode": 1, "receipt_sha256": "a" * 64,
+            "status": "failed", "primary_failure": "nonzero-exit",
+        }
+        cargo_home = self.root / "cargo-home"
+        rustup_home = self.root / "rustup-home"
+        cargo_home.mkdir()
+        rustup_home.mkdir()
+        with mock.patch.dict(
+                loom_release.os.environ,
+                {"CARGO_HOME": str(cargo_home),
+                 "RUSTUP_HOME": str(rustup_home)}):
+            with mock.patch.object(
+                    loom_release.loom_operation_supervisor, "run",
+                    return_value=(
+                        operation, json.dumps(report).encode("utf-8"),
+                        b"10 tests passed; 1 skipped")) as run:
+                result = loom_release._suite(self.root)
 
         self.assertTrue(result["passed"])
         self.assertFalse(result["capability_complete"])
         self.assertEqual("requires-matrix", result["capability_status"])
         self.assertEqual(report["skip_receipts"], result["skip_receipts"])
-        command = run.call_args.args[0]
+        command = run.call_args.kwargs["command"]
         self.assertNotIn("--max-seconds", command)
         self.assertEqual(loom_release.FULL_SUITE_MAX_SECONDS,
                          run.call_args.kwargs["timeout"])
+        environment = run.call_args.kwargs["environment"]
+        self.assertEqual(environment["HOME"], environment["USERPROFILE"])
+        self.assertEqual(
+            str(Path(environment["HOME"]) / ".codex"),
+            environment["CODEX_HOME"])
+        self.assertEqual(environment["TEMP"], environment["TMP"])
+        self.assertEqual(environment["TEMP"], environment["TMPDIR"])
+        self.assertEqual(
+            str(Path(environment["HOME"]) / "c"),
+            environment["LOOM_TEST_CACHE_ROOT"])
+        self.assertEqual(str(cargo_home), environment["CARGO_HOME"])
+        self.assertEqual(str(rustup_home), environment["RUSTUP_HOME"])
+        self.assertEqual(2, len(run.call_args.kwargs["allowed_roots"]))
 
     def test_suite_failure_names_failed_tests_without_full_transcripts(self):
         tools = self.root / "tools"
@@ -96,8 +123,14 @@ class ReleaseStandardTests(unittest.TestCase):
                 {"test": "tests.Passed", "seconds": 1.0, "status": "passed"},
             ],
         }
-        completed = mock.Mock(returncode=1, stdout=json.dumps(report), stderr="failure")
-        with mock.patch.object(subprocess, "run", return_value=completed):
+        operation = {
+            "returncode": 1, "receipt_sha256": "a" * 64,
+            "status": "failed", "primary_failure": "nonzero-exit",
+        }
+        with mock.patch.object(
+                loom_release.loom_operation_supervisor, "run",
+                return_value=(
+                    operation, json.dumps(report).encode("utf-8"), b"failure")):
             result = loom_release._suite(self.root)
         self.assertEqual(1, result["failure_count"])
         self.assertEqual(0, result["error_count"])

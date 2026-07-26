@@ -1,0 +1,68 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/path-authority-receipt.schema.json",
+  "title": "Loom operation-class path authority receipt",
+  "oneOf": [
+    {"$ref": "#/$defs/authority"},
+    {"$ref": "#/$defs/ownership"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "absolutePath": {"type": "string", "minLength": 1, "maxLength": 4096},
+    "authority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "operation_class", "path", "root",
+        "parent_chain_sha256", "observed_type", "replacement_policy",
+        "cleanup_disposition", "ownership_receipt_sha256", "peer_path",
+        "same_volume", "failure_precedence", "authority_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "operation_class": {
+          "enum": [
+            "archive", "staging", "release-package", "install-update",
+            "transfer-recovery", "vault-state", "adapter-config"
+          ]
+        },
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "root": {"$ref": "#/$defs/absolutePath"},
+        "parent_chain_sha256": {"$ref": "#/$defs/digest"},
+        "observed_type": {"enum": ["file", "directory", "absent"]},
+        "replacement_policy": {"enum": ["forbid", "owned-exact", "atomic-no-replace"]},
+        "cleanup_disposition": {
+          "enum": ["preserve", "remove-if-owned", "quarantine-if-uncertain"]
+        },
+        "ownership_receipt_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]
+        },
+        "peer_path": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/absolutePath"}]
+        },
+        "same_volume": {"type": ["boolean", "null"]},
+        "failure_precedence": {"const": "primary-effect-before-cleanup"},
+        "authority_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "ownership": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "operation_id", "path", "root", "expected_type",
+        "volume", "object_identity", "parent_chain_sha256", "receipt_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "operation_id": {"type": "string", "format": "uuid"},
+        "path": {"$ref": "#/$defs/absolutePath"},
+        "root": {"$ref": "#/$defs/absolutePath"},
+        "expected_type": {"enum": ["file", "directory"]},
+        "volume": {"type": "integer"},
+        "object_identity": {"type": "integer", "minimum": 0},
+        "parent_chain_sha256": {"$ref": "#/$defs/digest"},
+        "receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

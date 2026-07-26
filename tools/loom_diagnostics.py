@@ -12,6 +12,7 @@ from pathlib import Path
 
 import loom_crypto
 import loom_reliability
+import loom_owner
 
 
 MAX_BUNDLE_PLAINTEXT = 256 * 1024
@@ -33,7 +34,14 @@ def _safe_json(path):
 
 
 def _vault_health(home):
-    database = home / "vault" / "owner.sqlite3"
+    try:
+        database = loom_owner.owner_vault_path(home)
+    except loom_owner.OwnerError:
+        return {"present": False, "integrity": "unverifiable", "schema": 0,
+                "generation": 0, "events": 0, "quarantine": 0}
+    if database is None:
+        return {"present": False, "integrity": "not-initialized", "schema": 0,
+                "generation": 0, "events": 0, "quarantine": 0}
     if not database.exists():
         return {"present": False, "integrity": "not-initialized", "schema": 0,
                 "generation": 0, "events": 0, "quarantine": 0}
@@ -106,6 +114,8 @@ def doctor(home):
         problems.append("RUNTIME_POINTER_MISSING")
     if vault["integrity"] == "failed":
         problems.append("VAULT_INTEGRITY_FAILED")
+    if vault["integrity"] == "unverifiable":
+        problems.append("OWNER_STATE_POINTER_INVALID")
     if adapters["changed"]:
         problems.append("ADAPTER_OWNERSHIP_CONFLICT")
     if update and pointer and update.get("version") != pointer.get("version") \

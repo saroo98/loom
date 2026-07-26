@@ -11,6 +11,7 @@ from pathlib import Path
 import loom_crypto
 import loom_reliability
 import loom_privacy
+import loom_self_hosting
 
 
 KEY_AAD = b"loom-offline-root-key-v1"
@@ -103,7 +104,9 @@ def _unlock(helper, path, passphrase):
     return value["key_id"], secret, value["public_key"]
 
 
-def sign_release(helper, root, manifest, authorities, *, expires, output=None):
+def sign_release(helper, root, manifest, authorities, *, expires, output=None,
+                 self_hosting_receipt=None, actor_id=None, now=None,
+                 self_hosting_trusted_keys=None):
     if not isinstance(root, dict) or set(root) != {"version", "threshold", "keys", "expires"} \
             or root["threshold"] != 2 or len(root["keys"]) != 3:
         raise SigningError("trusted root policy is invalid")
@@ -112,6 +115,20 @@ def sign_release(helper, root, manifest, authorities, *, expires, output=None):
         raise SigningError("release manifest is invalid")
     if not isinstance(authorities, (list, tuple)) or len(authorities) < 2:
         raise SigningError("at least two offline authorities must sign")
+    if self_hosting_receipt is not None:
+        if not isinstance(actor_id, str):
+            raise SigningError("self-hosted signing requires a release-authority actor")
+        try:
+            loom_self_hosting.authorize(
+                self_hosting_receipt, action="sign", actor=actor_id,
+                candidate_subject=hashlib.sha256(_canonical(manifest)).hexdigest(),
+                now=now or dt.datetime.now(dt.timezone.utc),
+                trusted_controller_keys=self_hosting_trusted_keys,
+                signature_verifier=lambda message, signature, public_key:
+                    loom_crypto.verify_signature(
+                        helper, message, signature, public_key))
+        except loom_self_hosting.SelfHostingError as exc:
+            raise SigningError(f"self-hosted signing refused: {exc}") from exc
     unlocked = []
     for path, passphrase in authorities:
         key_id, secret, public = _unlock(helper, path, passphrase)
@@ -182,7 +199,8 @@ def sign_root_transition(helper, old_root, new_root, old_authorities, new_author
 
 
 def finalize_package(helper, package, root, authorities, *, expires,
-                     forbidden_tokens=()):
+                     forbidden_tokens=(), self_hosting_receipt=None,
+                     actor_id=None, now=None, self_hosting_trusted_keys=None):
     """Threshold-sign one already-built package and firewall the exact final bytes."""
     package = loom_reliability._absolute(package, "plugin package", must_exist=True)
     release = package / "release"
@@ -200,7 +218,10 @@ def finalize_package(helper, package, root, authorities, *, expires,
                package / "FINAL-PACKAGE-RECEIPT.json"]
     created_hashes = {}
     try:
-        bundle = sign_release(helper, root, manifest, authorities, expires=expires)
+        bundle = sign_release(
+            helper, root, manifest, authorities, expires=expires,
+            self_hosting_receipt=self_hosting_receipt, actor_id=actor_id, now=now,
+            self_hosting_trusted_keys=self_hosting_trusted_keys)
         loom_reliability.atomic_write_json(created[0], bundle)
         created_hashes[created[0]] = loom_reliability.file_sha256(created[0])
         loom_reliability.atomic_write_json(created[1], root)

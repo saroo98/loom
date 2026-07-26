@@ -36,10 +36,19 @@ class OwnerMessageTests(unittest.TestCase):
         value = loom_message.from_session(
             status="completed", code="plan-complete", intent="plan", tier="L",
             owner_input_required=False, reversible_action_ids=[],
-            detail="internal detail", receipt_id="session-123")
-        self.assertEqual(4, value["schema_version"])
+            detail=(
+                "LOOM_RESULT plans/loom-1.0/MANIFEST.md"
+                " | Release-ready plan validated. Only the declared work-order frontier "
+                "is authorized."),
+            receipt_id="session-123")
+        self.assertEqual(5, value["schema_version"])
         self.assertEqual("high", value["consequence"])
-        self.assertIsNone(re.search(r"\b(?:tier|gate|schema)\b", value["human"], re.I))
+        self.assertEqual("plans/loom-1.0/MANIFEST.md", value["result_path"])
+        self.assertIsNone(re.search(
+            r"\b(?:tier|gate|schema|frontier|lifecycle|receipt|ledger)\b",
+            value["human"], re.I))
+        self.assertIn("Your project plan is ready.", value["human"])
+        self.assertIn("Open: plans/loom-1.0/MANIFEST.md.", value["human"])
 
     def test_current_completed_message_explains_the_actual_operation(self):
         value = loom_message.from_session(
@@ -52,6 +61,16 @@ class OwnerMessageTests(unittest.TestCase):
             value["summary"])
         self.assertIn("new request", value["next_action"])
         self.assertNotIn("safe verified frontier", value["human"])
+
+    def test_v4_completed_message_remains_exactly_reconstructable(self):
+        value = loom_message.v4_from_session(
+            status="completed", code="undo-complete", intent="undo", tier="S",
+            owner_input_required=False, reversible_action_ids=[],
+            detail="The unchanged Loom plan was archived.",
+            receipt_id="session-v4")
+        self.assertEqual(4, value["schema_version"])
+        self.assertIn("Consequence:", value["human"])
+        loom_message.validate(value)
 
     def test_v3_completed_message_remains_exactly_reconstructable(self):
         value = loom_message.v3_from_session(
@@ -79,7 +98,7 @@ class OwnerMessageTests(unittest.TestCase):
             freshness="current", changes_made=True, undo_status="available",
             summary="Done safely.",
             next_action="Continue when ready.", receipt_id="message-bound")
-        value["human"] = value["human"].replace("verified", "unknown")
+        value["human"] = value["human"].replace("Done safely.", "Done.")
         with self.assertRaises(loom_message.MessageError):
             loom_message.validate(value)
 
@@ -93,6 +112,17 @@ class OwnerMessageTests(unittest.TestCase):
         self.assertEqual("not-applicable", value["undo_status"])
         self.assertIn("invalid JSON", value["human"])
         self.assertNotIn("reversible: no", value["human"])
+
+    def test_result_locator_rejects_absolute_and_parent_traversal_paths(self):
+        for detail in (
+                "LOOM_RESULT C:/private/plan.md | ready",
+                "LOOM_RESULT ../private/plan.md | ready"):
+            with self.subTest(detail=detail), self.assertRaises(
+                    loom_message.MessageError):
+                loom_message.from_session(
+                    status="completed", code="plan-complete", intent="plan", tier="S",
+                    owner_input_required=False, reversible_action_ids=[],
+                    detail=detail, receipt_id="session-result")
 
 
 if __name__ == "__main__":
