@@ -44,6 +44,165 @@
     });
   }
 
+  const createLoomParticleField = (canvas) => {
+    if (!canvas) return;
+
+    const context = canvas.getContext("2d", { alpha: true });
+    if (!context) return;
+
+    const smoothstep = (start, end, value) => {
+      const amount = Math.min(1, Math.max(0, (value - start) / (end - start)));
+      return amount * amount * (3 - 2 * amount);
+    };
+
+    let width = 0;
+    let height = 0;
+    let particles = [];
+    let animationFrame = 0;
+    let visible = true;
+    let pointer = { x: -1000, y: -1000, active: false };
+
+    const buildParticles = () => {
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      const rect = canvas.getBoundingClientRect();
+      width = Math.max(1, rect.width);
+      height = Math.max(1, rect.height);
+      canvas.width = Math.round(width * ratio);
+      canvas.height = Math.round(height * ratio);
+      context.setTransform(ratio, 0, 0, ratio, 0, 0);
+
+      const sampleCanvas = document.createElement("canvas");
+      const sampleContext = sampleCanvas.getContext("2d", { willReadFrequently: true });
+      if (!sampleContext) return;
+
+      sampleCanvas.width = Math.max(320, Math.round(width));
+      sampleCanvas.height = Math.max(180, Math.round(height * 0.44));
+      const fontSize = Math.min(width * 0.215, sampleCanvas.height * 0.74);
+      sampleContext.clearRect(0, 0, sampleCanvas.width, sampleCanvas.height);
+      sampleContext.fillStyle = "#fff";
+      sampleContext.font = `900 ${fontSize}px Arial Black, Arial, sans-serif`;
+      sampleContext.textAlign = "center";
+      sampleContext.textBaseline = "middle";
+      sampleContext.fillText("LOOM", sampleCanvas.width / 2, sampleCanvas.height / 2);
+
+      const pixels = sampleContext.getImageData(
+        0,
+        0,
+        sampleCanvas.width,
+        sampleCanvas.height
+      ).data;
+      const step = width < 680 ? 5 : width < 1200 ? 4 : 3;
+      const nextParticles = [];
+      const yOffset = Math.max(72, height * 0.075);
+
+      for (let y = 0; y < sampleCanvas.height; y += step) {
+        for (let x = 0; x < sampleCanvas.width; x += step) {
+          if (pixels[(y * sampleCanvas.width + x) * 4 + 3] < 150) continue;
+          const angle = ((x * 0.37 + y * 0.19) % 6.283) - 3.1415;
+          const distance = 60 + ((x * 17 + y * 13) % Math.max(90, width * 0.42));
+          const homeX = x;
+          const homeY = y + yOffset;
+          nextParticles.push({
+            homeX,
+            homeY,
+            x: width / 2 + Math.cos(angle) * distance,
+            y: homeY + Math.sin(angle) * distance * 0.42,
+            scatterX: width / 2 + Math.cos(angle) * distance,
+            scatterY: homeY + Math.sin(angle) * distance * 0.42,
+            phase: (x * 0.071 + y * 0.113) % 6.283,
+            radius: 0.78 + ((x + y) % 5) * 0.18
+          });
+        }
+      }
+
+      const maximum = width < 680 ? 1900 : 4800;
+      const stride = Math.max(1, Math.ceil(nextParticles.length / maximum));
+      particles = nextParticles.filter((_, index) => index % stride === 0);
+    };
+
+    const draw = (time = 0) => {
+      context.clearRect(0, 0, width, height);
+      const cycle = reducedMotion ? 0.34 : (time % 12000) / 12000;
+      const forming = smoothstep(0.02, 0.18, cycle);
+      const dissolving = smoothstep(0.7, 0.86, cycle);
+      const formation = reducedMotion ? 1 : forming * (1 - dissolving);
+      const drift = time * 0.00032;
+
+      for (const particle of particles) {
+        const noiseX = Math.cos(drift + particle.phase) * 7;
+        const noiseY = Math.sin(drift * 0.84 + particle.phase) * 5;
+        let targetX = particle.scatterX + noiseX;
+        let targetY = particle.scatterY + noiseY;
+        targetX += (particle.homeX - targetX) * formation;
+        targetY += (particle.homeY - targetY) * formation;
+
+        if (pointer.active) {
+          const dx = targetX - pointer.x;
+          const dy = targetY - pointer.y;
+          const distanceSquared = dx * dx + dy * dy;
+          if (distanceSquared < 7000 && distanceSquared > 0) {
+            const force = (1 - distanceSquared / 7000) * 34;
+            const distance = Math.sqrt(distanceSquared);
+            targetX += (dx / distance) * force;
+            targetY += (dy / distance) * force;
+          }
+        }
+
+        particle.x += (targetX - particle.x) * (reducedMotion ? 1 : 0.085);
+        particle.y += (targetY - particle.y) * (reducedMotion ? 1 : 0.085);
+        const alpha = 0.36 + formation * 0.58;
+        context.fillStyle = `rgba(255,255,255,${alpha})`;
+        context.fillRect(particle.x, particle.y, particle.radius, particle.radius);
+      }
+
+      if (!reducedMotion && visible && !document.hidden) {
+        animationFrame = window.requestAnimationFrame(draw);
+      }
+    };
+
+    const restart = () => {
+      window.cancelAnimationFrame(animationFrame);
+      if (visible && !document.hidden) animationFrame = window.requestAnimationFrame(draw);
+    };
+
+    const updatePointer = (event) => {
+      const rect = canvas.getBoundingClientRect();
+      pointer = {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+        active: true
+      };
+    };
+
+    const clearPointer = () => {
+      pointer.active = false;
+    };
+
+    const resize = () => {
+      buildParticles();
+      draw(reducedMotion ? 4000 : performance.now());
+      restart();
+    };
+
+    const observer =
+      "IntersectionObserver" in window
+        ? new IntersectionObserver(([entry]) => {
+            visible = entry.isIntersecting;
+            if (visible) restart();
+            else window.cancelAnimationFrame(animationFrame);
+          })
+        : null;
+
+    buildParticles();
+    draw(reducedMotion ? 4000 : performance.now());
+    restart();
+    observer?.observe(canvas);
+    window.addEventListener("resize", resize, { passive: true });
+    document.addEventListener("visibilitychange", restart);
+    canvas.addEventListener("pointermove", updatePointer, { passive: true });
+    canvas.addEventListener("pointerleave", clearPointer, { passive: true });
+  };
+
   const createSignalField = (canvas, compact = false) => {
     if (!canvas) return;
 
@@ -126,6 +285,6 @@
     };
   };
 
-  createSignalField(document.querySelector("[data-signal-field]"));
+  createLoomParticleField(document.querySelector("[data-loom-particle-field]"));
   createSignalField(document.querySelector("[data-closing-field]"), true);
 })();
