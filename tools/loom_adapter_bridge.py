@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 import loom_adapter_protocol
+import loom_execution_chain
 
 
 class BridgeError(RuntimeError):
@@ -34,7 +35,7 @@ def _payload(stdout):
 def _run(launcher, arguments, *, timeout=120):
     try:
         result = subprocess.run(
-            [sys.executable, "-B", str(launcher), *arguments],
+            loom_execution_chain.isolated_python(launcher, *arguments),
             capture_output=True, text=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise loom_adapter_protocol.ProtocolError(
@@ -47,8 +48,8 @@ def _run_request(launcher, home, message, *, command="invoke-stdio", timeout=120
     frame = loom_adapter_protocol.canonical_bytes(message) + b"\n"
     try:
         result = subprocess.run(
-            [sys.executable, "-B", str(launcher), "--home", str(home),
-             command],
+            loom_execution_chain.isolated_python(
+                launcher, "--home", str(home), command),
             input=frame, capture_output=True, timeout=timeout, check=False)
     except subprocess.TimeoutExpired as exc:
         raise loom_adapter_protocol.ProtocolError(

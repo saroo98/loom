@@ -50,6 +50,7 @@ import loom_session
 import loom_survey
 import loom_transparency
 import loom_vault_adapter
+import loom_execution_chain
 
 
 SCHEMA_VERSION = 1
@@ -874,6 +875,7 @@ def _validate_action(value, path):
     message_builder = (
         loom_message.v2_build if message_version == 2 else
         loom_message.v3_build if message_version == 3 else
+        loom_message.v4_build if message_version == 4 else
         loom_message.build)
     expected_owner_message = message_builder(
         state="progress",
@@ -2835,9 +2837,8 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
             "metrics": {}, "evidence_ids": [evidence],
             "reversible_action_ids": reversible_action_ids, "usage": usage,
             "user_message": (
-                "Release-ready plan validated. Only the declared work-order frontier "
-                "is authorized. "
-                f"Lifecycle evidence: {evidence}."),
+                f"LOOM_RESULT {pack.relative_to(root).as_posix()}/MANIFEST.md"
+                " | The plan is validated and ready for review."),
         }
 
     if intent == "execute":
@@ -3067,8 +3068,8 @@ def _disposable_test_legacy_backend_allowed(home):
         marker = candidate / TEST_LEGACY_BACKEND_MARKER
         return marker.is_file() and not marker.is_symlink() \
             and marker.read_bytes() == TEST_LEGACY_BACKEND_MARKER_BYTES \
-            and not (candidate / "vault" / "owner.sqlite3").exists()
-    except (OSError, RuntimeError, TypeError, ValueError):
+            and not loom_owner.owner_vault_path(candidate).exists()
+    except (OSError, RuntimeError, TypeError, ValueError, loom_owner.OwnerError):
         return False
 
 
@@ -4180,6 +4181,7 @@ def main(argv=None):
     invoke_parser.add_argument("--install-root", required=True)
     invoke_parser.add_argument("--target")
     invoke_parser.add_argument("--timeout-seconds", type=int, default=900)
+    invoke_parser.add_argument("--execution-chain")
     resolve_parser = commands.add_parser("resolve-stdio")
     resolve_parser.add_argument("--home", required=True)
     resolve_parser.add_argument("--install-root", required=True)
@@ -4197,16 +4199,57 @@ def main(argv=None):
     cancel_parser.add_argument("--home")
     cancel_parser.add_argument("--install-root")
     args = parser.parse_args(argv)
+    chain_id = getattr(args, "execution_chain", None)
     try:
         if args.command == "invoke-stdio":
             envelope = loom_adapter_protocol.read_single_frame(
                 sys.stdin.buffer, message_type="request-envelope")
+            if chain_id is not None:
+                module_identity = loom_execution_chain.verify_loaded_modules(
+                    args.install_root)
+                isolation = loom_execution_chain.startup_isolation()
+                if not all(isolation[key] for key in (
+                        "isolated_flag", "no_user_site", "safe_path",
+                        "pythonpath_ignored", "pythonstartup_ignored")):
+                    raise OrchestratorError(
+                        "RUNTIME_SHADOWING_UNSAFE",
+                        "runtime process isolation could not be proven")
+                loom_execution_chain.append(
+                    args.home, chain_id, "loaded-modules",
+                    {**module_identity, **isolation})
             result = invoke(
                 request=envelope["request"], cwd=envelope["cwd"], home=args.home,
                 install_root=args.install_root, explicit_target=args.target,
                 timeout_seconds=args.timeout_seconds,
                 transport_invocation_id=_transport_invocation_id(envelope),
                 assurance=envelope["assurance"])
+            if chain_id is not None:
+                context = result.get("context_manifest")
+                loom_execution_chain.append(
+                    args.home, chain_id, "project-world", {
+                        "project_id": result.get("project_id"),
+                        "action_id": result.get("action_id"),
+                        "context_manifest_sha256": (
+                            _hash(context) if isinstance(context, dict) else None),
+                        "world_observed": isinstance(context, dict),
+                    }, observability=(
+                        "observed" if isinstance(context, dict) else "unavailable"))
+                action_id = result.get("action_id")
+                session_id = result.get("session_id")
+                loom_execution_chain.append(
+                    args.home, chain_id, "operation-journal", {
+                        "action_id": action_id,
+                        "session_id": session_id,
+                        "operation_observed": bool(action_id or session_id),
+                    }, observability=(
+                        "observed" if action_id or session_id else "unavailable"))
+                loom_execution_chain.append(
+                    args.home, chain_id, "result", {
+                        "status": result.get("status"),
+                        "result_sha256": _hash(result),
+                    })
+                projection = loom_execution_chain.seal(args.home, chain_id)
+                result = {**result, "execution_chain": projection}
         elif args.command == "resolve-stdio":
             message = loom_adapter_protocol.read_single_frame(
                 sys.stdin.buffer, message_type="resolve")
@@ -4229,12 +4272,35 @@ def main(argv=None):
             result = cancel(
                 args.action, owner_home=args.home, install_root=args.install_root)
     except OrchestratorError as exc:
+        if chain_id is not None:
+            try:
+                loom_execution_chain.append(
+                    args.home, chain_id, "result", {
+                        "status": exc.status,
+                        "error_code": exc.code,
+                        "error_sha256": hashlib.sha256(
+                            exc.message.encode("utf-8")).hexdigest(),
+                    })
+                loom_execution_chain.seal(args.home, chain_id, blocked=True)
+            except loom_execution_chain.ExecutionChainError:
+                pass
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": exc.status,
             "code": exc.code, "error": exc.message,
         }, sort_keys=True))
         return 2
     except loom_adapter_protocol.ProtocolError as exc:
+        if chain_id is not None:
+            try:
+                loom_execution_chain.append(
+                    args.home, chain_id, "result", {
+                        "status": "blocked", "error_code": exc.code,
+                        "error_sha256": hashlib.sha256(
+                            str(exc).encode("utf-8")).hexdigest(),
+                    })
+                loom_execution_chain.seal(args.home, chain_id, blocked=True)
+            except loom_execution_chain.ExecutionChainError:
+                pass
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": "blocked",
             "code": exc.code, "error": str(exc),
@@ -4242,7 +4308,8 @@ def main(argv=None):
         return 2
     except (loom_memory.MemoryError, loom_crypto.CryptoError, loom_owner.OwnerError,
             loom_vault_adapter.VaultAdapterError, loom_runtime.RuntimeError,
-            loom_session.SessionError, loom_install.InstallError) as exc:
+            loom_session.SessionError, loom_install.InstallError,
+            loom_execution_chain.ExecutionChainError) as exc:
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": "blocked",
             "code": "RUNTIME_BLOCKED", "error": str(exc),

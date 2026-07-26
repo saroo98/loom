@@ -3,6 +3,15 @@
 The public surface remains `/loom <request>`. This document describes the internal engine for
 maintainers.
 
+## Persisted contract parity
+
+`tools/loom_semantic_parity.py` checks the current orchestration action, session receipt,
+recovery receipt, and owner-message projections against their closed schemas, runtime validators,
+canonical writers, supported reader versions, and this documentation. Unknown future versions are
+preserved only in quarantine and are never activated. The generated parity report is refreshed
+after the final source inventory, so a stale projection fails verification instead of silently
+becoming runtime truth.
+
 ## Trust pipeline
 
 `loom_runtime` resolves identity, surveys the world, classifies intent, tier, and domains, then
@@ -135,6 +144,25 @@ record a bounded state-machine history from download through verification, stagi
 observation, commit, quarantine, or rollback. A failed or repeatedly unhealthy runtime rolls back
 to the prior receipt-owned version without changing a running session.
 
+The active pointer now identifies an `activation-set`, not a runtime alone. Its closed receipt
+pairs one immutable runtime identity with one receipt-owned owner-state generation, the compatible
+schema range, the prior activation set, and the deletion floor observed when the pair was created.
+Sessions pin that activation-set ID and deletion floor. Release activation clones the active
+SQLite state with the online backup API, validates the clone, then switches one pointer. Schema
+migration and key rotation also operate on private clones when an activation set exists; they
+never replace the active generation in place. Rollback creates a new forward-state activation set
+for the prior runtime, preserving events and deletion commitments written after the update instead
+of copying an old database backward. Pruning removes only inactive state directories whose exact
+receipt-owned file set is still unchanged.
+
+Every invocation also writes one private `execution-chain` under the owner home. The hash-linked
+stages bind the stable launcher bytes, activation set, runtime manifest, loaded production modules,
+state generation, observable host/adapter identity, exact UTF-8 request digest, project/world
+observation, operation journal, and terminal result. Python child processes run with isolated mode,
+ignore user startup and `PYTHONPATH`, and reject any loaded `loom_*` module outside the immutable
+runtime. Unobservable host identity is recorded as unavailable, never inferred. Only a bounded
+path-free chain ID, status, stage count, and digest may leave the private runtime.
+
 A direct-source installation is a separate, explicitly weaker delivery mode. Bootstrap verifies
 every installer-owned byte before importing installed Python, stages an immutable runtime, verifies
 or locally builds the platform helper from receipt-owned locked Rust sources, runs a disposable
@@ -156,6 +184,15 @@ forgetting dominates old copies, contradictory stated preferences quarantine, un
 inactive, and materialized state remains bounded. Receipt-owned adapters for eligible Agent Skills
 locations call the same stable launcher. Launcher installation, adapter connection, upgrade, and
 removal share one journaled transaction generation and roll back completely if any write fails.
+
+Forget events are materialized before any other authenticated event in the same incoming batch, so
+delivery order cannot temporarily reactivate an older copy. Forgetting writes tombstones for the
+selected record and every known derived descendant before deleting active records, preference
+views, policy projections, state entities, and derivation edges. The monotonic deletion floor is
+checkpointed and remains in compaction commitments. A dormant device cannot contribute again until
+it accepts the exact latest checkpoint and current floor. Re-adding retired meaning requires a new
+record ID, an owner-stated provenance, explicit evidence, and a private lineage receipt; ordinary
+imports with a retired ID or semantic tag remain inactive.
 
 ## Truth surfaces
 

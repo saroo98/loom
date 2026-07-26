@@ -382,10 +382,23 @@ class AdapterTests(unittest.TestCase):
         orchestrator = runtime / "tools" / "loom_orchestrator.py"
         orchestrator.parent.mkdir(parents=True)
         orchestrator.write_text("raise SystemExit(1)\n", encoding="utf-8")
+        (runtime / "RUNTIME-MANIFEST.json").write_text(
+            '{"schema_version":1,"version":"1.1.0","platform":"test","files":[]}\n',
+            encoding="utf-8")
         manager = mock.Mock()
         manager.begin_session.return_value = {
             "session_id": "00000000-0000-4000-8000-000000000001",
             "version": "1.1.0",
+            "state_generation": 0,
+            "state_schema": 0,
+        }
+        manager.activations.public_projection.return_value = {
+            "activation_set_id": None,
+            "runtime_version": "1.1.0",
+            "runtime_release_sequence": 2,
+            "state_generation": 0,
+            "state_schema": 0,
+            "deletion_epoch": 0,
         }
         failed = mock.Mock(returncode=1)
 
@@ -414,6 +427,13 @@ class AdapterTests(unittest.TestCase):
             "00000000-0000-4000-8000-000000000001", successful=False)
         manager.record_trust_health.assert_called_once_with(
             healthy=False, reason="runtime-exit-1")
+        chains = list(
+            (self.home / ".loom" / "runtime" / "execution-chains").glob("*.json"))
+        self.assertEqual(1, len(chains))
+        chain = json.loads(chains[0].read_text(encoding="utf-8"))
+        self.assertEqual("blocked", chain["status"])
+        self.assertEqual("result", chain["stages"][-1]["name"])
+        self.assertEqual(1, chain["stages"][-1]["payload"]["exit_code"])
 
 
 if __name__ == "__main__":

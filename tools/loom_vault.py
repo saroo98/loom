@@ -805,6 +805,11 @@ class OwnerVault:
             raise VaultError("technical facts require a currentness deadline")
         if not isinstance(record["statement"], str) or not 1 <= len(record["statement"]) <= 1000:
             raise VaultError("memory statement is invalid or oversized")
+        if type(record["evidence_count"]) is not int or record["evidence_count"] < 1 \
+                or not isinstance(record["confidence"], (int, float)) \
+                or isinstance(record["confidence"], bool) \
+                or not 0 <= record["confidence"] <= 1:
+            raise VaultError("memory evidence count or confidence is invalid")
         if record["category"] == "preference":
             if record["provenance"] != "stated" \
                     or not isinstance(record["preference_key"], str) \
@@ -966,6 +971,49 @@ class OwnerVault:
 
     def import_memory(self, record, *, source_sequence):
         return self.put_memory(record, source_sequence=source_sequence)
+
+    def readd_memory(self, record, *, forgotten_record_id, evidence_id):
+        """Re-add forgotten meaning only under a new identity and explicit owner evidence."""
+        record = self._validate_record(record)
+        forgotten_record_id = _uuid(forgotten_record_id, "forgotten memory id")
+        if record["id"] == forgotten_record_id \
+                or record["provenance"] != "stated" \
+                or not isinstance(evidence_id, str) \
+                or not 1 <= len(evidence_id) <= 256:
+            raise VaultError(
+                "memory re-add requires a new ID and explicit owner evidence")
+        domain_tag, project_tag, _component_tag, _device_tag = self._tags(record)
+        payload = {
+            "record": record,
+            "forgotten_record_id": forgotten_record_id,
+            "evidence_id": evidence_id,
+        }
+
+        def write(connection):
+            event = self._next_event(
+                connection, kind="memory-readded", payload=payload,
+                scope=record["scope"], domain_tag=domain_tag,
+                project_tag=project_tag)
+            event.update({
+                "scope": record["scope"], "domain": domain_tag,
+                "project_id": project_tag,
+            })
+            receipt = {
+                "added": 0, "updated": 0, "deduplicated": 0,
+                "forgotten": 0, "recomputed": 0, "quarantined": 0,
+            }
+            self._apply_event(
+                connection, event=event,
+                body={"kind": "memory-readded", "payload": payload},
+                receipt=receipt)
+            return {
+                "id": record["id"],
+                "status": record["status"],
+                "forgotten_record_id": forgotten_record_id,
+                "evidence_id": evidence_id,
+            }
+
+        return self.run_transaction(write)
 
     def is_forgotten(self, record_id, *, legacy_fingerprint=None):
         record_id = _uuid(record_id, "memory id")
@@ -1214,18 +1262,45 @@ class OwnerVault:
         metadata = self._metadata(connection)
         event_rank = event["rank"]
 
-        if kind == "memory-upsert":
-            record = self._validate_record(payload)
+        if kind in {"memory-upsert", "memory-readded"}:
+            readd = kind == "memory-readded"
+            if readd:
+                if not isinstance(payload, dict) or set(payload) != {
+                        "record", "forgotten_record_id", "evidence_id"}:
+                    raise VaultError("memory re-add payload is invalid")
+                record = self._validate_record(payload["record"])
+                forgotten_record_id = _uuid(
+                    payload["forgotten_record_id"], "forgotten memory id")
+                evidence_id = payload["evidence_id"]
+                if record["id"] == forgotten_record_id \
+                        or record["provenance"] != "stated" \
+                        or record["evidence_count"] < 1 \
+                        or not isinstance(evidence_id, str) \
+                        or not 1 <= len(evidence_id) <= 256:
+                    raise VaultError(
+                        "memory re-add requires a new ID and explicit owner evidence")
+            else:
+                record = self._validate_record(payload)
             domain_tag, project_tag, component_tag, device_tag = self._tags(record)
             if (record["scope"], domain_tag, project_tag) != (
                     event["scope"], event["domain"], event["project_id"]):
                 raise VaultError("memory scope does not match signed envelope")
             semantic_tag = self._semantic_tag(record)
-            if connection.execute(
+            tombstone = connection.execute(
                     "SELECT 1 FROM tombstones WHERE record_id=? OR semantic_tag=?",
-                    (record["id"], semantic_tag)).fetchone():
+                    (record["id"], semantic_tag)).fetchone()
+            if tombstone and not readd:
                 receipt["deduplicated"] += 1
                 return
+            if readd:
+                forgotten = connection.execute(
+                    "SELECT 1 FROM tombstones WHERE record_id=?",
+                    (forgotten_record_id,)).fetchone()
+                if forgotten is None or connection.execute(
+                        "SELECT 1 FROM tombstones WHERE record_id=?",
+                        (record["id"],)).fetchone():
+                    raise VaultError(
+                        "memory re-add lineage is not forgotten or the new ID is retired")
 
             conflicts = []
             sequential = []
@@ -1328,6 +1403,23 @@ class OwnerVault:
                     (record["id"], record["scope"], domain_tag, project_tag, component_tag,
                      record["preference_key"], slot["status"], event["event_id"],
                      self.crypto.seal(_canonical(slot), slot_aad), _stamp()))
+            if readd:
+                proof = {
+                    "record_id": record["id"],
+                    "forgotten_record_id": forgotten_record_id,
+                    "evidence_id": evidence_id,
+                    "source_event_id": event["event_id"],
+                    "recorded_at": _stamp(),
+                }
+                proof_aad = (
+                    f"entity:{metadata['owner_vault_id']}:memory-readd:"
+                    f"{record['id']}").encode()
+                connection.execute(
+                    "INSERT INTO state_entities(entity_type,entity_id,source_sequence,"
+                    "source_event_id,source_device_id,ciphertext,updated_at) "
+                    "VALUES('memory-readd',?,?,?,?,?,?)",
+                    (record["id"], event_rank, event["event_id"], event["device_id"],
+                     self.crypto.seal(_canonical(proof), proof_aad), _stamp()))
             receipt["added" if changed and existing is None else
                     "updated" if changed else "deduplicated"] += 1
             return
@@ -1354,19 +1446,44 @@ class OwnerVault:
                 "WHERE excluded.source_sequence > tombstones.source_sequence",
                 (record_id, semantic_tag, event_rank, event["event_id"], event["device_id"],
                  self.crypto.seal(_canonical(payload), aad), payload["forgotten_at"]))
-            descendants = set()
+            descendant_rows = {}
             frontier = [record_id]
             while frontier:
                 parent = frontier.pop()
                 children = [row[0] for row in connection.execute(
                     "SELECT child_id FROM derivation_edges WHERE parent_id=?", (parent,))]
                 for child in children:
-                    if child not in descendants:
-                        descendants.add(child)
+                    if child not in descendant_rows:
+                        row = connection.execute(
+                            "SELECT record_id,semantic_tag FROM memory_records "
+                            "WHERE record_id=?", (child,)).fetchone()
+                        if row is not None:
+                            descendant_rows[child] = row["semantic_tag"]
+                        else:
+                            descendant_rows[child] = None
                         frontier.append(child)
-                if len(descendants) > 1024:
+                if len(descendant_rows) > 1024:
                     raise VaultError("forget derivation traversal exceeds bound")
-            targets = {record_id, *descendants}
+            for descendant_id, descendant_tag in sorted(descendant_rows.items()):
+                if descendant_tag is None:
+                    continue
+                descendant_payload = {
+                    "record_id": descendant_id,
+                    "reason": "derived-from-forgotten-lineage",
+                    "semantic_tag": descendant_tag,
+                    "forgotten_at": payload["forgotten_at"],
+                }
+                descendant_aad = (
+                    f"tombstone:{metadata['owner_vault_id']}:{descendant_id}").encode()
+                connection.execute(
+                    "INSERT OR IGNORE INTO tombstones(record_id,semantic_tag,source_sequence,"
+                    "source_event_id,source_device_id,ciphertext,forgotten_at) "
+                    "VALUES(?,?,?,?,?,?,?)",
+                    (descendant_id, descendant_tag, event_rank, event["event_id"],
+                     event["device_id"],
+                     self.crypto.seal(_canonical(descendant_payload), descendant_aad),
+                     payload["forgotten_at"]))
+            targets = {record_id, *descendant_rows}
             placeholders = ",".join("?" for _ in targets)
             connection.execute(
                 f"DELETE FROM memory_records WHERE record_id IN ({placeholders}) OR semantic_tag=?",
@@ -1383,6 +1500,9 @@ class OwnerVault:
             connection.execute(
                 f"DELETE FROM derivation_edges WHERE parent_id IN ({placeholders}) "
                 f"OR child_id IN ({placeholders})", (*sorted(targets), *sorted(targets)))
+            if existed:
+                receipt["deduplicated"] += 1
+                return
             self._advance_deletion_epoch(connection)
             deletion_epoch = int(self._metadata(connection)["deletion_epoch"])
             commitment_id = str(uuid.uuid5(
@@ -1391,7 +1511,7 @@ class OwnerVault:
                 "commitment_id": commitment_id, "record_id": record_id,
                 "deletion_epoch": deletion_epoch, "status": "pending-checkpoint",
                 "checkpoint_id": None, "pending_devices": [], "created_at": _stamp(),
-                "derived_removed": len(descendants),
+                "derived_removed": len(descendant_rows),
             }
             commitment_aad = (
                 f"deletion-commitment:{metadata['owner_vault_id']}:{commitment_id}").encode()
@@ -1403,7 +1523,7 @@ class OwnerVault:
                  "pending-checkpoint", event["event_id"],
                  self.crypto.seal(_canonical(commitment), commitment_aad),
                  commitment["created_at"]))
-            receipt["deduplicated" if existed else "forgotten"] += 1
+            receipt["forgotten"] += 1
             return
 
         if kind == "memory-outcome":
@@ -1716,6 +1836,9 @@ class OwnerVault:
             metadata = self._metadata(connection)
             receipt = {"added": 0, "updated": 0, "deduplicated": 0, "forgotten": 0,
                        "recomputed": 0, "quarantined": 0}
+            prepared = []
+            expected_by_device = {}
+            prepared_ranks = set()
             for event in normalized:
                 if event["owner_vault_id"] != metadata["owner_vault_id"]:
                     raise VaultError("merge event belongs to another owner vault")
@@ -1735,12 +1858,16 @@ class OwnerVault:
                 if device["status"] == "dormant":
                     raise VaultError(
                         "dormant device requires a complete current checkpoint before merging")
-                if event["device_counter"] != device["counter"] + 1:
+                expected_counter, expected_prior = expected_by_device.get(
+                    event["device_id"], (device["counter"], None))
+                if expected_prior is None:
+                    row = connection.execute(
+                        "SELECT event_hash FROM events WHERE device_id=? "
+                        "ORDER BY device_counter DESC LIMIT 1",
+                        (event["device_id"],)).fetchone()
+                    expected_prior = row["event_hash"] if row else None
+                if event["device_counter"] != expected_counter + 1:
                     raise VaultError("merge event counter is replayed or has a gap")
-                expected_prior = connection.execute(
-                    "SELECT event_hash FROM events WHERE device_id=? "
-                    "ORDER BY device_counter DESC LIMIT 1", (event["device_id"],)).fetchone()
-                expected_prior = expected_prior["event_hash"] if expected_prior else None
                 if event["prior_event_hash"] != expected_prior \
                         or event["causal_parents"] != ([expected_prior] if expected_prior else []):
                     raise VaultError("merge event signature chain is broken")
@@ -1764,11 +1891,12 @@ class OwnerVault:
                 event_rank = _collision_checked_event_rank(
                     connection,
                     event["device_counter"], event["device_id"], event["event_id"])
+                if event_rank in prepared_ranks:
+                    raise VaultError("merge event ordering rank collides")
+                prepared_ranks.add(event_rank)
+                body = None
                 if event["payload_schema_version"] != PAYLOAD_SCHEMA_VERSION:
-                    self._quarantine_connection(
-                        connection, item_id=event["event_id"], kind="unknown-event-schema",
-                        reason="inactive-unknown-schema", payload=event)
-                    receipt["quarantined"] += 1
+                    body = None
                 else:
                     try:
                         body = json.loads(self.crypto.open(ciphertext, aad).decode("utf-8"))
@@ -1776,19 +1904,48 @@ class OwnerVault:
                         raise VaultError("merge event payload authentication failed") from exc
                     if not isinstance(body, dict) or set(body) != {"kind", "payload"}:
                         raise VaultError("merge event payload is invalid")
+                prepared.append({
+                    "event": event, "rank": event_rank, "body": body,
+                    "ciphertext": ciphertext, "signature": signature,
+                })
+                expected_by_device[event["device_id"]] = (
+                    event["device_counter"], event["event_hash"])
+
+            # Deletion dominates the whole authenticated incoming batch. The event rows still
+            # retain their signed per-device order, but materialization cannot expose an older
+            # upsert before a valid forgetting event from the same merge becomes active.
+            ordered_materialization = sorted(
+                prepared, key=lambda item: (
+                    0 if item["body"] is not None and item["body"]["kind"] in {
+                        "memory-forgotten", "memory-expired",
+                        "memory-superseded-expired"} else 1,
+                    item["event"]["device_id"],
+                    item["event"]["device_counter"],
+                    item["event"]["event_id"]))
+            for item in ordered_materialization:
+                event, body = item["event"], item["body"]
+                if body is None:
+                    self._quarantine_connection(
+                        connection, item_id=event["event_id"],
+                        kind="unknown-event-schema",
+                        reason="inactive-unknown-schema", payload=event)
+                    receipt["quarantined"] += 1
+                else:
                     self._apply_event(
                         connection,
-                        event={**event, "rank": event_rank},
-                        body=body,
-                        receipt=receipt)
+                        event={**event, "rank": item["rank"]},
+                        body=body, receipt=receipt)
+
+            for item in prepared:
+                event = item["event"]
                 connection.execute(
                     "INSERT INTO events(event_id,device_id,device_counter,scope,domain_tag,project_tag,"
                     "payload_schema_version,prior_event_hash,ciphertext,signature,event_hash,recorded_at) "
                     "VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (event["event_id"], event["device_id"], event["device_counter"],
                      event["scope"], event["domain"], event["project_id"],
-                     event["payload_schema_version"], event["prior_event_hash"], ciphertext,
-                     signature, event["event_hash"], _stamp()))
+                     event["payload_schema_version"], event["prior_event_hash"],
+                     item["ciphertext"], item["signature"], event["event_hash"], _stamp()))
                 connection.execute(
                     "UPDATE devices SET counter=?,last_seen=? WHERE device_id=?",
                     (event["device_counter"], _stamp(), event["device_id"]))
@@ -1983,6 +2140,45 @@ class OwnerVault:
                     completed += 1
             return {"checkpoint_id": checkpoint_id, "device_id": device_id,
                     "status": "acknowledged", "deletion_commitments_completed": completed}
+
+        return self.run_transaction(write)
+
+    def reactivate_dormant_device(
+            self, device_id, *, checkpoint_id, root_hash, deletion_epoch):
+        """Require a dormant device to accept the current checkpoint and deletion floor."""
+        device_id = _uuid(device_id, "device id")
+        checkpoint_id = _uuid(checkpoint_id, "checkpoint id")
+        if not isinstance(root_hash, str) or len(root_hash) != 64 \
+                or type(deletion_epoch) is not int or deletion_epoch < 0:
+            raise VaultError("dormant-device checkpoint contract is invalid")
+
+        def write(connection):
+            device = connection.execute(
+                "SELECT status FROM devices WHERE device_id=?", (device_id,)).fetchone()
+            if device is None or device["status"] != "dormant":
+                raise VaultError("only an authorized dormant device may reactivate")
+            checkpoint = connection.execute(
+                "SELECT checkpoint_id,root_hash FROM checkpoints "
+                "ORDER BY rowid DESC LIMIT 1").fetchone()
+            current_floor = int(self._metadata(connection).get("deletion_epoch", "0"))
+            if checkpoint is None or checkpoint["checkpoint_id"] != checkpoint_id \
+                    or checkpoint["root_hash"] != root_hash \
+                    or deletion_epoch != current_floor:
+                raise VaultError(
+                    "dormant device must accept the complete current checkpoint")
+            connection.execute(
+                "UPDATE devices SET status='active',last_seen=? WHERE device_id=?",
+                (_stamp(), device_id))
+            connection.execute(
+                "INSERT OR REPLACE INTO checkpoint_acks("
+                "checkpoint_id,device_id,acknowledged_at) VALUES(?,?,?)",
+                (checkpoint_id, device_id, _stamp()))
+            return {
+                "device_id": device_id,
+                "status": "active",
+                "checkpoint_id": checkpoint_id,
+                "deletion_epoch": deletion_epoch,
+            }
 
         return self.run_transaction(write)
 

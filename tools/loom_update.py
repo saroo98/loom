@@ -18,6 +18,7 @@ import zipfile
 from pathlib import Path, PurePosixPath
 
 import loom_reliability
+import loom_activation
 
 
 MAX_TARGET_BYTES = 128 * 1024 * 1024
@@ -235,6 +236,7 @@ class SharedRuntime:
         self.update_state_path = self.runtime / "update-state.json"
         self.lock_path = self.runtime / "runtime-transaction.lock"
         self.usage = self.runtime / "usage"
+        self.activations = loom_activation.ActivationStore(self.home)
         roots = [loom_reliability._absolute(path, "plugin root", must_exist=True)
                  for path in plugin_roots]
         self.plugin_roots = tuple(roots)
@@ -277,10 +279,14 @@ class SharedRuntime:
         loom_reliability.atomic_write_json(self.update_state_path, value)
         return value
 
-    def _state_identity(self):
+    def _state_identity(self, pointer=None):
         """Return the exact owner-vault generation pinned by a new runtime session."""
-        database = self.home / "vault" / "owner.sqlite3"
-        if not database.exists():
+        pointer = pointer or self.current()
+        try:
+            database = self.activations.state_path(pointer)
+        except loom_activation.ActivationError as exc:
+            raise UpdateError(f"owner-vault activation is invalid: {exc}") from exc
+        if database is None or not database.exists():
             return {"state_generation": 0, "state_schema": 0}
         if not database.is_file() or _redirect(database):
             raise UpdateError("owner-vault state is missing or redirected")
@@ -300,6 +306,40 @@ class SharedRuntime:
             raise UpdateError("owner-vault integrity or generation is invalid")
         return {"state_generation": generation, "state_schema": schema}
 
+    def _ensure_activation_locked(self):
+        try:
+            value = json.loads(self.current_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            raise UpdateError(f"active runtime pointer is invalid: {exc}") from exc
+        if set(value) == loom_activation.POINTER_BASE_FIELDS:
+            try:
+                value = self.activations.adopt_legacy(value)
+            except loom_activation.ActivationError as exc:
+                raise UpdateError(f"baseline activation-set adoption failed: {exc}") from exc
+            loom_reliability.atomic_write_json(self.current_path, value)
+        elif value.get("state") is None \
+                and (self.home / "vault" / "owner.sqlite3").is_file():
+            try:
+                inventory = loom_activation.state_inventory(
+                    self.home / "vault" / "owner.sqlite3")
+                value = self.activations.create(
+                    value,
+                    state_source=self.home / "vault" / "owner.sqlite3",
+                    schema_range={
+                        "minimum": inventory["schema_version"],
+                        "maximum": inventory["schema_version"],
+                    },
+                    previous_activation_set_id=value.get("activation_set_id"),
+                    purpose="reactivation")
+            except loom_activation.ActivationError as exc:
+                raise UpdateError(
+                    f"new owner-state activation failed: {exc}") from exc
+            loom_reliability.atomic_write_json(self.current_path, value)
+        try:
+            return self.activations.validate_pointer(value)
+        except loom_activation.ActivationError as exc:
+            raise UpdateError(f"active activation set is invalid: {exc}") from exc
+
     def _usage_path(self, version):
         if not VERSION_RE.fullmatch(str(version)):
             raise UpdateError("runtime usage version is invalid")
@@ -317,7 +357,7 @@ class SharedRuntime:
         fields = {"version", "path", "payload_sha256", "release_sequence"}
         if not previous:
             fields.add("previous")
-        if not isinstance(value, dict) or set(value) != fields \
+        if not isinstance(value, dict) or not fields <= set(value) \
                 or not VERSION_RE.fullmatch(str(value.get("version", ""))) \
                 or value.get("path") != value.get("version") \
                 or not re.fullmatch(r"[0-9a-f]{64}", str(value.get("payload_sha256", ""))) \
@@ -329,6 +369,10 @@ class SharedRuntime:
             return False
         if previous:
             return True
+        try:
+            self.activations.validate_pointer(value)
+        except loom_activation.ActivationError:
+            return False
         prior = value["previous"]
         return prior is None or self._pointer_contract(prior, previous=True)
 
@@ -535,9 +579,11 @@ class SharedRuntime:
                 lease = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise UpdateError(f"session lease is invalid; freshness is unknown: {exc}") from exc
-            required = {"session_id", "version", "release_sequence", "state_generation",
-                        "state_schema", "pid", "started_at"}
-            if not isinstance(lease, dict) or set(lease) != required \
+            required_v1 = {"session_id", "version", "release_sequence", "state_generation",
+                           "state_schema", "pid", "started_at"}
+            required_v2 = required_v1 | {"activation_set_id", "deletion_epoch"}
+            if not isinstance(lease, dict) or set(lease) not in (
+                    required_v1, required_v2) \
                     or path.stem != lease.get("session_id") \
                     or not VERSION_RE.fullmatch(str(lease.get("version"))) \
                     or type(lease.get("release_sequence")) is not int \
@@ -545,6 +591,15 @@ class SharedRuntime:
                     or type(lease.get("state_schema")) is not int \
                     or type(lease.get("pid")) is not int:
                 raise UpdateError("session lease is invalid; freshness is unknown")
+            if set(lease) == required_v2:
+                try:
+                    uuid.UUID(lease["activation_set_id"])
+                except (ValueError, TypeError, AttributeError) as exc:
+                    raise UpdateError(
+                        "session activation-set identity is invalid; freshness is unknown") from exc
+                if type(lease["deletion_epoch"]) is not int or lease["deletion_epoch"] < 0:
+                    raise UpdateError(
+                        "session deletion floor is invalid; freshness is unknown")
             _time(lease["started_at"])
             if self.pid_alive(lease["pid"]):
                 active.append(path)
@@ -555,13 +610,21 @@ class SharedRuntime:
     def _begin_session_locked(self):
         if self.pending_path.is_file() and not self._active_sessions():
             self._activate_pending_locked()
+        self._ensure_activation_locked()
         current = self.current()
-        state = self._state_identity()
+        state = self._state_identity(current)
+        state_contract = current.get("state")
         session_id = str(uuid.uuid4())
         lease = {"session_id": session_id, "version": current["version"],
                  "release_sequence": current["release_sequence"], **state, "pid": os.getpid(),
                  "started_at": dt.datetime.now(dt.timezone.utc).replace(
                      microsecond=0).isoformat().replace("+00:00", "Z")}
+        if current.get("activation_set_id") is not None:
+            lease.update({
+                "activation_set_id": current["activation_set_id"],
+                "deletion_epoch": (
+                    state_contract["deletion_epoch"] if state_contract is not None else 0),
+            })
         path = self.sessions / f"{session_id}.json"
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         try:
@@ -612,6 +675,7 @@ class SharedRuntime:
         if set(manifest) != required or manifest["package"] != "loom":
             raise UpdateError("release manifest is for the wrong package or has unknown fields")
         if self.current_path.exists():
+            self._ensure_activation_locked()
             current = self.current()
         else:
             current = None
@@ -722,12 +786,27 @@ class SharedRuntime:
                              release_sequence=manifest["release_sequence"],
                              transaction_id=transaction_id)
             payload_hash = hashlib.sha256(_canonical(selected)).hexdigest()
-            pending = {"version": version, "path": version,
-                       "payload_sha256": payload_hash,
-                       "release_sequence": manifest["release_sequence"],
-                       "previous": ({key: current[key] for key in (
-                           "version", "path", "payload_sha256", "release_sequence")}
-                                    if current is not None else None)}
+            base_pending = {
+                "version": version, "path": version,
+                "payload_sha256": payload_hash,
+                "release_sequence": manifest["release_sequence"],
+                "previous": ({key: current[key] for key in (
+                    "version", "path", "payload_sha256", "release_sequence")}
+                             if current is not None else None),
+            }
+            state_source = (
+                self.activations.state_path(current) if current is not None else None)
+            try:
+                pending = self.activations.create(
+                    base_pending,
+                    state_source=state_source,
+                    schema_range=schema_range,
+                    previous_activation_set_id=(
+                        current.get("activation_set_id") if current is not None else None),
+                    purpose="release-activation")
+            except loom_activation.ActivationError as exc:
+                raise UpdateError(
+                    f"candidate activation-set construction failed: {exc}") from exc
             loom_reliability.atomic_write_json(self.pending_path, pending)
             self._transition("pending", version=version,
                              release_sequence=manifest["release_sequence"],
@@ -870,20 +949,64 @@ class SharedRuntime:
             shutil.rmtree(directory)
             self._usage_path(directory.name).unlink(missing_ok=True)
             removed.append(directory.name)
-        return {"status": "pruned", "removed": removed}
+        try:
+            activation_prune = self.activations.prune_inactive({
+                current.get("activation_set_id"),
+                current.get("previous_activation_set_id"),
+            })
+        except loom_activation.ActivationError as exc:
+            raise UpdateError(f"inactive activation-set cleanup failed: {exc}") from exc
+        return {"status": "pruned", "removed": removed, **activation_prune}
 
     def _rollback_locked(self, reason):
         if not isinstance(reason, str) or not reason or self._active_sessions():
             raise UpdateError("rollback reason is invalid or a session is active")
+        self._ensure_activation_locked()
         current = self.current()
-        previous = current["previous"]
-        if not self._pointer_contract(previous, previous=True):
+        previous_activation_id = current.get("previous_activation_set_id")
+        if previous_activation_id is None:
             raise UpdateError("no verified previous runtime is available")
-        pointer = {**previous, "previous": None}
+        try:
+            previous_receipt = self.activations.read_receipt(previous_activation_id)
+            state_source = self.activations.state_path(current)
+            previous_runtime = previous_receipt["runtime"]
+            base = {
+                **previous_runtime,
+                "previous": {key: current[key] for key in (
+                    "version", "path", "payload_sha256", "release_sequence")},
+            }
+            pointer = self.activations.create(
+                base, state_source=state_source,
+                schema_range=previous_receipt["schema_range"],
+                previous_activation_set_id=current["activation_set_id"],
+                purpose="rollback-forward-state")
+        except loom_activation.ActivationError as exc:
+            raise UpdateError(
+                f"rollback activation set could not preserve forward state: {exc}") from exc
         loom_reliability.atomic_write_json(self.current_path, pointer)
-        self._transition("rolled-back", version=previous["version"],
-                         release_sequence=previous["release_sequence"], reason=reason)
-        return {"status": "rolled-back", "version": previous["version"], "reason": reason}
+        quarantine = {
+            "schema_version": 1,
+            "source_activation_set_id": current["activation_set_id"],
+            "replacement_activation_set_id": pointer["activation_set_id"],
+            "source_state_generation": (
+                current["state"]["generation"] if current.get("state") else 0),
+            "replacement_state_generation": (
+                pointer["state"]["generation"] if pointer.get("state") else 0),
+            "semantic_inventory_sha256": (
+                pointer["state"]["inventory_sha256"] if pointer.get("state") else None),
+            "status": "forward-reconciled",
+            "reason_sha256": hashlib.sha256(reason.encode("utf-8")).hexdigest(),
+        }
+        loom_reliability.atomic_write_json(
+            self.runtime / "activation-sets" /
+            f"{current['activation_set_id']}.rollback.json", quarantine)
+        self._transition("rolled-back", version=pointer["version"],
+                         release_sequence=pointer["release_sequence"], reason=reason)
+        return {
+            "status": "rolled-back", "version": pointer["version"],
+            "reason": reason, "activation_set_id": pointer["activation_set_id"],
+            "forward_state_preserved": True,
+        }
 
     def _record_trust_health_locked(self, *, healthy, reason="runtime-health"):
         if type(healthy) is not bool or not isinstance(reason, str) or not reason:

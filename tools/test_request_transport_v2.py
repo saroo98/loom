@@ -17,6 +17,7 @@ from unittest import mock
 
 import loom_adapter_bridge
 import loom_adapter_protocol
+import loom_execution_chain
 import loom_launcher
 import loom_orchestrator
 
@@ -53,8 +54,27 @@ def resolve_message(request, cwd, action, request_id="req-resolve"):
 
 
 class FakeManager:
+    class Activations:
+        @staticmethod
+        def public_projection(_current):
+            return {
+                "activation_set_id": None,
+                "runtime_version": "test-runtime",
+                "release_sequence": 1,
+                "state_generation": 0,
+                "state_schema": 0,
+                "deletion_epoch": 0,
+            }
+
+    activations = Activations()
+
     def begin_session(self):
-        return {"session_id": "session-transport", "version": "test-runtime"}
+        return {
+            "session_id": "session-transport",
+            "version": "test-runtime",
+            "state_generation": 0,
+            "state_schema": 0,
+        }
 
     def end_session(self, _session_id, *, successful):
         self.successful = successful
@@ -91,8 +111,22 @@ class RequestTransportV2Tests(unittest.TestCase):
             orchestrator = runtime / "tools" / "loom_orchestrator.py"
             orchestrator.parent.mkdir(parents=True)
             orchestrator.write_text("# fixture\n", encoding="utf-8")
+            (runtime / "RUNTIME-MANIFEST.json").write_text(
+                '{"version":"test-runtime"}\n', encoding="utf-8")
             stdin = SimpleNamespace(buffer=io.BytesIO(frame))
             completed = SimpleNamespace(returncode=0)
+
+            def run_and_seal(command, **_kwargs):
+                chain_id = command[command.index("--execution-chain") + 1]
+                loom_execution_chain.append(
+                    root / ".loom", chain_id, "result", {
+                        "status": "transport-fixture-complete",
+                        "exit_code": 0,
+                        "orchestrator_terminal_receipt": True,
+                    })
+                loom_execution_chain.seal(root / ".loom", chain_id)
+                return completed
+
             with mock.patch.object(loom_launcher.sys, "stdin", stdin), \
                     mock.patch.object(
                         loom_launcher.loom_update, "SharedRuntime", return_value=manager), \
@@ -102,12 +136,12 @@ class RequestTransportV2Tests(unittest.TestCase):
                                       runtime)), \
                     mock.patch.object(loom_launcher, "_reject_local_shadow"), \
                     mock.patch.object(
-                        loom_launcher.subprocess, "run", return_value=completed) as run:
+                        loom_launcher.subprocess, "run", side_effect=run_and_seal) as run:
                 code = loom_launcher.main([
                     "--home", str(root / ".loom"), "invoke-stdio"])
         self.assertEqual(0, code)
         command = run.call_args.args[0]
-        self.assertEqual("invoke-stdio", command[3])
+        self.assertIn("invoke-stdio", command)
         self.assertNotIn("--request", command)
         self.assertNotIn(request, command)
         self.assertNotIn("env", run.call_args.kwargs)
@@ -143,6 +177,8 @@ class RequestTransportV2Tests(unittest.TestCase):
             orchestrator = runtime / "tools" / "loom_orchestrator.py"
             orchestrator.parent.mkdir(parents=True)
             orchestrator.write_text("# fixture\n", encoding="utf-8")
+            (runtime / "RUNTIME-MANIFEST.json").write_text(
+                '{"version":"test-runtime"}\n', encoding="utf-8")
             stdin = SimpleNamespace(buffer=io.BytesIO(frame))
             completed = SimpleNamespace(returncode=0)
             with mock.patch.object(loom_launcher.sys, "stdin", stdin), \
@@ -158,7 +194,7 @@ class RequestTransportV2Tests(unittest.TestCase):
                     "--home", str(root / ".loom"), "resolve-stdio"])
         self.assertEqual(0, code)
         command = run.call_args.args[0]
-        self.assertEqual("resolve-stdio", command[3])
+        self.assertIn("resolve-stdio", command)
         self.assertNotIn(request, command)
         self.assertEqual(frame, run.call_args.kwargs["input"])
 
@@ -248,7 +284,10 @@ class RequestTransportV2Tests(unittest.TestCase):
             import sys
             sys.path.insert(0, {str(TOOLS)!r})
             import loom_adapter_protocol
+            import loom_execution_chain
             import loom_orchestrator
+            loom_execution_chain.verify_loaded_modules = lambda runtime: {{
+                "module_count": 1, "modules_sha256": "a" * 64}}
 
             def transport_invoke(**kwargs):
                 request = kwargs["request"]
@@ -269,8 +308,22 @@ class RequestTransportV2Tests(unittest.TestCase):
             import loom_launcher
 
             class Manager:
+                class Activations:
+                    @staticmethod
+                    def public_projection(current):
+                        return {{
+                            "activation_set_id": None,
+                            "runtime_version": "test-runtime",
+                            "release_sequence": 1,
+                            "state_generation": 0,
+                            "state_schema": 0,
+                            "deletion_epoch": 0,
+                        }}
+                activations = Activations()
                 def begin_session(self):
-                    return {{"session_id": "test", "version": "test-runtime"}}
+                    return {{
+                        "session_id": "test", "version": "test-runtime",
+                        "state_generation": 0, "state_schema": 0}}
                 def end_session(self, session_id, *, successful):
                     pass
                 def record_trust_health(self, *, healthy, reason):
@@ -284,6 +337,8 @@ class RequestTransportV2Tests(unittest.TestCase):
                 Path({str(runtime)!r}))
             raise SystemExit(loom_launcher.main())
         """).lstrip(), encoding="utf-8")
+        (runtime / "RUNTIME-MANIFEST.json").write_text(
+            '{"version":"test-runtime"}\n', encoding="utf-8")
         return launcher, runtime
 
 

@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/activation-set.schema.json",
+  "title": "Immutable Loom runtime and owner-state activation set",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "activation_set_id",
+    "purpose",
+    "runtime",
+    "state",
+    "schema_range",
+    "previous_activation_set_id",
+    "created_at",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "activation_set_id": {"type": "string", "format": "uuid"},
+    "purpose": {
+      "enum": ["baseline-adoption", "release-activation", "rollback-forward-state", "reactivation"]
+    },
+    "runtime": {"$ref": "#/$defs/runtime"},
+    "state": {
+      "anyOf": [
+        {"type": "null"},
+        {"$ref": "#/$defs/state"}
+      ]
+    },
+    "schema_range": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": {"type": "integer", "minimum": 0},
+        "maximum": {"type": "integer", "minimum": 0}
+      }
+    },
+    "previous_activation_set_id": {
+      "type": ["string", "null"],
+      "format": "uuid"
+    },
+    "created_at": {"type": "string", "format": "date-time"},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "path", "payload_sha256", "release_sequence"],
+      "properties": {
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+        "path": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+        "payload_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "release_sequence": {"type": "integer", "minimum": 1}
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "state_set_id",
+        "path",
+        "owner_vault_id",
+        "generation",
+        "schema_version",
+        "deletion_epoch",
+        "inventory_sha256",
+        "baseline_sha256"
+      ],
+      "properties": {
+        "state_set_id": {"type": "string", "format": "uuid"},
+        "path": {"type": "string", "pattern": "^vault/generations/[0-9a-f-]{36}/owner\\.sqlite3$"},
+        "owner_vault_id": {"type": "string", "format": "uuid"},
+        "generation": {"type": "integer", "minimum": 1},
+        "schema_version": {"type": "integer", "minimum": 1},
+        "deletion_epoch": {"type": "integer", "minimum": 0},
+        "inventory_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "baseline_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}

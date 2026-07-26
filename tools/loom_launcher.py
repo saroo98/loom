@@ -21,6 +21,8 @@ import loom_host_registry
 import loom_mcp_server
 import loom_codex_integration
 import loom_reliability
+import loom_activation
+import loom_execution_chain
 
 
 LOCAL_SKILL_PATHS = loom_host_registry.project_skill_paths()
@@ -55,8 +57,10 @@ def _current(home):
         value = json.loads(pointer.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeError(f"Loom runtime pointer is unavailable: {exc}") from exc
-    if not isinstance(value, dict) or value.get("path") != value.get("version"):
-        raise RuntimeError("Loom runtime pointer is invalid")
+    try:
+        loom_activation.ActivationStore(home).validate_pointer(value)
+    except loom_activation.ActivationError as exc:
+        raise RuntimeError(f"Loom activation pointer is invalid: {exc}") from exc
     runtime = (home / "runtime" / "versions" / value["path"]).resolve()
     if not runtime.is_dir() or not runtime.is_relative_to((home / "runtime" / "versions").resolve()):
         raise RuntimeError("Loom runtime pointer escapes the version store")
@@ -182,10 +186,13 @@ def main(argv=None):
             return 0
         environment = {**os.environ, "PLUGIN_ROOT": str(runtime),
                        "LOOM_HOME": str(Path(args.home).resolve())}
-        command = [sys.executable, "-B", str(handler)]
+        handler_arguments = []
         if args.command == "hook-lifecycle":
-            command.extend(["--home", str(Path(args.home).resolve()),
-                            "--install-root", str(runtime)])
+            handler_arguments.extend([
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime)])
+        command = loom_execution_chain.isolated_python(
+            handler, *handler_arguments)
         completed = subprocess.run(
             command, input=raw,
             capture_output=True, timeout=180, check=False, env=environment)
@@ -221,6 +228,7 @@ def main(argv=None):
     envelope = None
     manager = None
     lease_data = None
+    chain = None
     runtime_healthy = False
     trust_failure = None
     try:
@@ -252,40 +260,91 @@ def main(argv=None):
         if not orchestrator.is_file():
             raise RuntimeError("active Loom runtime has no orchestrator")
         if args.command == "invoke-stdio":
-            command = [
-                sys.executable, "-B", str(orchestrator), "invoke-stdio",
-                "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
+            chain = loom_execution_chain.create(
+                args.home, launcher_path=Path(__file__).resolve())
+            activation_projection = manager.activations.public_projection(current)
+            loom_execution_chain.append(
+                args.home, chain["chain_id"], "activation-set",
+                activation_projection)
+            loom_execution_chain.append(
+                args.home, chain["chain_id"], "runtime-tree",
+                loom_execution_chain.runtime_manifest_identity(runtime))
+            state_contract = current.get("state")
+            loom_execution_chain.append(
+                args.home, chain["chain_id"], "state-generation", {
+                    "activation_set_id": current.get("activation_set_id"),
+                    "state_generation": (
+                        lease_data["state_generation"] if lease_data else 0),
+                    "state_schema": lease_data["state_schema"] if lease_data else 0,
+                    "deletion_epoch": (
+                        state_contract["deletion_epoch"] if state_contract else 0),
+                })
+            loom_execution_chain.append(
+                args.home, chain["chain_id"], "host-adapter", {
+                    "host_id": envelope["host"]["id"],
+                    "host_version": envelope["host"]["version"],
+                    "assurance_mode": envelope["assurance"]["mode"],
+                    "ingress": envelope["assurance"]["ingress"],
+                    "host_process_identity": "unavailable",
+                })
+            loom_execution_chain.append(
+                args.home, chain["chain_id"], "request",
+                loom_execution_chain.request_identity(envelope["request"]))
+            command = loom_execution_chain.isolated_python(
+                orchestrator, "invoke-stdio",
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime),
+                "--execution-chain", chain["chain_id"])
         elif args.command == "resolve-stdio":
-            command = [
-                sys.executable, "-B", str(orchestrator), "resolve-stdio",
-                "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
+            command = loom_execution_chain.isolated_python(
+                orchestrator, "resolve-stdio",
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime))
         elif args.command == "author-stdio":
-            command = [
-                sys.executable, "-B", str(orchestrator), "author-stdio",
-                "--home", str(Path(args.home).resolve()), "--install-root", str(runtime)]
+            command = loom_execution_chain.isolated_python(
+                orchestrator, "author-stdio",
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime))
         elif args.command == "complete":
-            command = [sys.executable, "-B", str(orchestrator), "complete",
-                       "--action", args.action,
-                       "--home", str(Path(args.home).resolve()),
-                       "--install-root", str(runtime)]
+            command = loom_execution_chain.isolated_python(
+                orchestrator, "complete", "--action", args.action,
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime))
             if args.usage:
                 command.extend(["--usage", args.usage])
             if args.result:
                 command.extend(["--result", args.result])
         else:
-            command = [sys.executable, "-B", str(orchestrator), "cancel",
-                       "--action", args.action, "--home", str(Path(args.home).resolve()),
-                       "--install-root", str(runtime)]
+            command = loom_execution_chain.isolated_python(
+                orchestrator, "cancel", "--action", args.action,
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime))
         run_options = {"check": False}
         if envelope is not None:
             run_options["input"] = loom_adapter_protocol.canonical_bytes(envelope) + b"\n"
         result = subprocess.run(command, **run_options)
+        if chain is not None:
+            observed_chain = loom_execution_chain.read(
+                args.home, chain["chain_id"])
+            if observed_chain["status"] == "open":
+                loom_execution_chain.append(
+                    args.home, chain["chain_id"], "result", {
+                        "status": "runtime-process-exited",
+                        "exit_code": result.returncode,
+                        "orchestrator_terminal_receipt": False,
+                    })
+                loom_execution_chain.seal(
+                    args.home, chain["chain_id"], blocked=True)
+                if result.returncode == 0:
+                    trust_failure = "runtime-execution-chain-incomplete"
+                    return 2
         runtime_healthy = result.returncode in {0, 2}
         if not runtime_healthy:
             trust_failure = f"runtime-exit-{result.returncode}"
         return result.returncode
     except (RuntimeError, loom_update.UpdateError,
-            loom_adapter_protocol.ProtocolError) as exc:
+            loom_adapter_protocol.ProtocolError,
+            loom_execution_chain.ExecutionChainError) as exc:
         if isinstance(exc, RuntimeError):
             trust_failure = str(exc)
         print(json.dumps({"status": "blocked", "error": str(exc)}, sort_keys=True))

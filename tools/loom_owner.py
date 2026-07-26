@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 import loom_adapters
+import loom_activation
 import loom_crypto
 import loom_reliability
 import loom_transfer
@@ -38,6 +39,107 @@ class NativeKeyStore:
 
     def delete(self, owner_vault_id):
         loom_crypto.key_store_delete(self.helper, owner_vault_id)
+
+
+def owner_vault_path(home):
+    """Resolve the state generation paired with the active runtime, or the legacy bootstrap path."""
+    home = loom_reliability._absolute(home, "Loom home")
+    pointer = home / "runtime" / "current.json"
+    if pointer.is_file():
+        try:
+            value = json.loads(pointer.read_text(encoding="utf-8"))
+            path = loom_activation.ActivationStore(home).state_path(value)
+        except (OSError, UnicodeError, json.JSONDecodeError,
+                loom_activation.ActivationError) as exc:
+            raise OwnerError(f"active owner-state pointer is invalid: {exc}") from exc
+        if path is not None:
+            return path
+    return home / "vault" / "owner.sqlite3"
+
+
+def _active_pointer(home):
+    pointer_path = home / "runtime" / "current.json"
+    if not pointer_path.is_file():
+        return None, pointer_path
+    try:
+        value = json.loads(pointer_path.read_text(encoding="utf-8"))
+        value = loom_activation.ActivationStore(home).validate_pointer(value)
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            loom_activation.ActivationError) as exc:
+        raise OwnerError(f"active runtime/state pointer is invalid: {exc}") from exc
+    return value, pointer_path
+
+
+def _schema_version(path):
+    try:
+        connection = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        try:
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'").fetchone()
+        finally:
+            connection.close()
+        return int(row[0]) if row else 0
+    except (sqlite3.Error, TypeError, ValueError) as exc:
+        raise OwnerError(f"owner vault schema cannot be read safely: {exc}") from exc
+
+
+def _activate_state_candidate(home, candidate, *, purpose="reactivation"):
+    """Clone and atomically activate a candidate state without mutating the active generation."""
+    pointer, pointer_path = _active_pointer(home)
+    if pointer is None or pointer.get("activation_set_id") is None:
+        return None
+    schema = _schema_version(candidate)
+    store = loom_activation.ActivationStore(home)
+    replacement = store.create(
+        pointer,
+        state_source=candidate,
+        schema_range={"minimum": schema, "maximum": schema},
+        previous_activation_set_id=pointer["activation_set_id"],
+        purpose=purpose)
+    loom_reliability.atomic_write_json(pointer_path, replacement)
+    return store.state_path(replacement)
+
+
+def _migrate_activated_schema(home, path, crypto):
+    """Migrate a private clone and switch the activation set only after validation."""
+    if _schema_version(path) == loom_vault.VAULT_SCHEMA_VERSION:
+        return path
+    pointer, pointer_path = _active_pointer(home)
+    if pointer is None or pointer.get("activation_set_id") is None:
+        return path
+    descriptor, name = tempfile.mkstemp(
+        prefix=".owner-schema-candidate-", suffix=".sqlite3",
+        dir=home / "vault")
+    os.close(descriptor)
+    candidate = Path(name)
+    candidate.unlink()
+    previous = dict(pointer)
+    try:
+        source = sqlite3.connect(f"file:{path.as_posix()}?mode=ro", uri=True)
+        target = sqlite3.connect(candidate)
+        try:
+            source.backup(target)
+        finally:
+            target.close()
+            source.close()
+        migrated = loom_vault.OwnerVault.open(
+            candidate, crypto=crypto,
+            allow_test_crypto=not getattr(crypto, "production_safe", False))
+        if migrated.identity()["schema_version"] != loom_vault.VAULT_SCHEMA_VERSION:
+            raise OwnerError("candidate owner-state schema migration is incomplete")
+        activated = _activate_state_candidate(home, candidate)
+        if activated is None:
+            raise OwnerError("activated owner-state migration lost its activation authority")
+        return activated
+    except BaseException:
+        current, _ = _active_pointer(home)
+        if current != previous:
+            loom_reliability.atomic_write_json(pointer_path, previous)
+        raise
+    finally:
+        for suffix in ("", "-wal", "-shm", ".schema-v1.rollback",
+                       ".schema-v2.rollback"):
+            Path(str(candidate) + suffix).unlink(missing_ok=True)
 
 
 def _pack_keys(keys):
@@ -96,13 +198,14 @@ def peek_key_slot_id(path):
 
 def open_owner_vault(home, helper, *, key_store=None):
     home = loom_reliability._absolute(home, "Loom home")
-    path = home / "vault" / "owner.sqlite3"
+    path = owner_vault_path(home)
     owner = peek_owner_vault_id(path)
     key_slot = peek_key_slot_id(path)
     store = key_store or NativeKeyStore(helper)
     master, signing, _exchange, index = _unpack_keys(store.get(key_slot))
     crypto = loom_crypto.HelperCrypto(
         helper, master_key=master, signing_key=signing, index_key=index)
+    path = _migrate_activated_schema(home, path, crypto)
     return loom_vault.OwnerVault.open(path, crypto=crypto), crypto
 
 
@@ -110,7 +213,7 @@ def initialize_owner_vault(home, helper, *, key_store=None, owner_vault_id=None,
                            device_id=None):
     """Create or reopen one vault; no unwrapped key is ever persisted to a file."""
     home = loom_reliability._absolute(home, "Loom home")
-    path = home / "vault" / "owner.sqlite3"
+    path = owner_vault_path(home)
     if path.exists():
         vault, crypto = open_owner_vault(home, helper, key_store=key_store)
         return {"status": "opened", "vault": vault, "crypto": crypto}
@@ -166,7 +269,7 @@ def initialize_owner_vault(home, helper, *, key_store=None, owner_vault_id=None,
 def revoke_device_and_rotate(home, helper, revoked_device_id, *, key_store=None):
     """Revoke one device and atomically activate a newly encrypted vault generation."""
     home = loom_reliability._absolute(home, "Loom home")
-    path = home / "vault" / "owner.sqlite3"
+    path = owner_vault_path(home)
     store = key_store or NativeKeyStore(helper)
     old_slot = peek_key_slot_id(path)
     old_secret = store.get(old_slot)
@@ -200,6 +303,7 @@ def revoke_device_and_rotate(home, helper, revoked_device_id, *, key_store=None)
     staged.unlink()
     stored = False
     activated = False
+    original_pointer, pointer_path = _active_pointer(home)
     try:
         receipt = vault.stage_key_rotation(
             staged, new_crypto=new_crypto, key_slot_id=new_slot,
@@ -216,12 +320,15 @@ def revoke_device_and_rotate(home, helper, revoked_device_id, *, key_store=None)
             raise OwnerError("key rotation changed owner-memory semantic counts")
         store.set(new_slot, new_secret)
         stored = True
-        with vault._connect() as connection:
-            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        Path(str(path) + "-wal").unlink(missing_ok=True)
-        Path(str(path) + "-shm").unlink(missing_ok=True)
-        os.replace(staged, path)
-        staged = None
+        activated_path = _activate_state_candidate(home, staged)
+        if activated_path is None:
+            with vault._connect() as connection:
+                connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            Path(str(path) + "-wal").unlink(missing_ok=True)
+            Path(str(path) + "-shm").unlink(missing_ok=True)
+            os.replace(staged, path)
+            activated_path = path
+            staged = None
         activated = True
         reopened, crypto = open_owner_vault(home, helper, key_store=store)
         return {"status": "rotated", "vault": reopened, "crypto": crypto,
@@ -229,9 +336,12 @@ def revoke_device_and_rotate(home, helper, revoked_device_id, *, key_store=None)
     except BaseException as exc:
         if activated:
             try:
-                Path(str(path) + "-wal").unlink(missing_ok=True)
-                Path(str(path) + "-shm").unlink(missing_ok=True)
-                os.replace(rollback, path)
+                if original_pointer is not None:
+                    loom_reliability.atomic_write_json(pointer_path, original_pointer)
+                else:
+                    Path(str(path) + "-wal").unlink(missing_ok=True)
+                    Path(str(path) + "-shm").unlink(missing_ok=True)
+                    os.replace(rollback, path)
                 activated = False
             except BaseException as restore:
                 raise OwnerError(

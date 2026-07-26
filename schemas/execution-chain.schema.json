@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/execution-chain.schema.json",
+  "title": "Private Loom end-to-end execution chain",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "chain_id",
+    "status",
+    "created_at",
+    "updated_at",
+    "stages",
+    "chain_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "chain_id": {"type": "string", "format": "uuid"},
+    "status": {"enum": ["open", "sealed", "blocked"]},
+    "created_at": {"type": "string", "format": "date-time"},
+    "updated_at": {"type": "string", "format": "date-time"},
+    "stages": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/stage"}
+    },
+    "chain_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "index",
+        "name",
+        "observability",
+        "prior_sha256",
+        "payload",
+        "stage_sha256"
+      ],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0, "maximum": 15},
+        "name": {
+          "enum": [
+            "launcher",
+            "activation-set",
+            "runtime-tree",
+            "loaded-modules",
+            "state-generation",
+            "host-adapter",
+            "request",
+            "project-world",
+            "operation-journal",
+            "result"
+          ]
+        },
+        "observability": {"enum": ["observed", "unavailable"]},
+        "prior_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "payload": {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["string", "integer", "boolean", "null", "array", "object"]
+          },
+          "maxProperties": 32
+        },
+        "stage_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    }
+  }
+}
