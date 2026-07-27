@@ -127,6 +127,43 @@ class OneCommandRoutingTests(unittest.TestCase):
                 self.assertEqual(decision["code"], "HIGH_CONSEQUENCE_UNCERTAIN")
                 self.assertTrue(decision["needs_owner"])
 
+    def test_dangerous_verbs_used_as_product_command_names_are_not_effects(self):
+        for verb in ("Build", "Plan"):
+            with self.subTest(verb=verb):
+                decision = loom_runtime.resolve_intent(
+                    f"{verb} a small CLI with create, list, and delete commands", {})
+                self.assertEqual("plan", decision["intent"])
+                self.assertFalse(decision["blocked"])
+
+        effect = loom_runtime.resolve_intent(
+            "Build a cleanup tool and then delete production data", {})
+        self.assertTrue(effect["blocked"])
+        self.assertEqual("HIGH_CONSEQUENCE_UNCERTAIN", effect["code"])
+
+    def test_audit_trails_in_a_product_feature_list_are_not_a_review_intent(self):
+        decision = loom_runtime.resolve_intent(
+            "Plan desktop bookkeeping software with double-entry correctness, "
+            "tax periods, filed-period locks, and audit trails.", {})
+
+        self.assertEqual("plan", decision["intent"])
+        self.assertFalse(decision["blocked"])
+
+    def test_research_and_writing_plan_owns_its_review_checkpoints(self):
+        decision = loom_runtime.resolve_intent(
+            "Create a research and writing plan for a cited comparison, "
+            "including source checks and review checkpoints. "
+            "Do not build software.", {})
+
+        self.assertEqual("plan", decision["intent"])
+        self.assertFalse(decision["blocked"])
+
+    def test_separate_plan_and_review_operations_remain_ambiguous(self):
+        decision = loom_runtime.resolve_intent(
+            "Plan the migration. Review the existing release.", {})
+
+        self.assertTrue(decision["blocked"])
+        self.assertEqual("INTENT_AMBIGUOUS", decision["code"])
+
     def test_implementation_plan_request_is_not_misread_as_release_execution(self):
         request = (
             "Now please implement C:\\Users\\Owner\\Documents\\Engineering Research\\"

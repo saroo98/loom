@@ -90,6 +90,26 @@ class UnknownDomainRoutingTests(unittest.TestCase):
             "Write a research paper and literature review with reproducible methodology")
         self.assertIn("research", result["active_task_domains"])
 
+    def test_research_and_writing_plan_routes_to_research(self):
+        result = loom_domain.select_domains(
+            "Create a research and writing plan for a cited comparison of "
+            "embedded databases, including source checks and review checkpoints. "
+            "Do not build software.")
+
+        self.assertEqual(["research"], result["active_task_domains"])
+        self.assertEqual("ordinary", result["domain_contract"]["consequence"]["class"])
+
+    def test_hyphenated_research_and_writing_brief_routes_to_research(self):
+        result = loom_domain.select_domains(
+            "Create a research-and-writing plan for a 2,000-word evidence-based "
+            "briefing on municipal heat adaptation. Include source-quality review, "
+            "fact-check review, citation verification, and a final publication "
+            "checkpoint. Do not write or publish the briefing.")
+
+        self.assertEqual(["research"], result["active_task_domains"])
+        self.assertEqual(
+            "ordinary", result["domain_contract"]["consequence"]["class"])
+
     def test_negative_domain_mention_does_not_hide_separate_positive_clause(self):
         result = loom_domain.select_domains(
             "Do not apply website rules, build a marketing website for this launch")

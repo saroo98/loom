@@ -55,10 +55,15 @@ class VaultAdapterTests(unittest.TestCase):
         summary = self.vault.improvement_summary()
         self.assertEqual(1, summary["memory_helped_count"])
         self.assertEqual("measurement-started", summary["evidence_state"])
-        self.assertIn("balanced journal entries", self.adapter.profile_summary())
+        selected_context = types.SimpleNamespace(selected_memory=selected)
+        self.assertIn(
+            "balanced journal entries",
+            self.adapter.profile_summary(selected_context))
 
     def test_session_journal_encrypts_owner_statements_and_replays_receipt(self):
-        self.adapter.remember(self.context, "Never expose the private owner phrase.")
+        self.adapter.remember(
+            self.context,
+            "For all projects, never expose the private owner phrase.")
         project = self.root / "project"
         project.mkdir()
         (project / "README.md").write_text("fixture\n", encoding="utf-8")
@@ -84,6 +89,43 @@ class VaultAdapterTests(unittest.TestCase):
         self.assertTrue(second.repeated)
         self.assertEqual(first.receipt_hash, second.receipt_hash)
         self.assertIn("private owner phrase", second.user_message)
+
+    def test_memory_scope_is_explicit_and_project_selection_is_isolated(self):
+        general = self.adapter.remember(
+            self.context,
+            "For all projects, keep owner-facing summaries concise.")
+        domain = self.adapter.remember(
+            self.context,
+            "For the accounting domain, require balanced journal entries.")
+        project = self.adapter.remember(
+            self.context,
+            "For this project, retain the local chart-of-accounts convention.")
+        self.assertEqual(
+            ("general", None, None),
+            (general["scope"], general["domain"], general["project_id"]))
+        self.assertEqual(
+            ("domain", "accounting", None),
+            (domain["scope"], domain["domain"], domain["project_id"]))
+        self.assertEqual(
+            ("project", "accounting", self.context.project_id),
+            (project["scope"], project["domain"], project["project_id"]))
+
+        same = self.adapter.select(self.context)
+        self.assertEqual(
+            {general["id"], domain["id"], project["id"]},
+            {item["id"] for item in same})
+        other = types.SimpleNamespace(
+            prepared=self.context.prepared, intent="plan",
+            project_id="p-" + "2" * 32, operation_id=str(uuid.uuid4()),
+            selected_memory=())
+        other_selected = self.adapter.select(other)
+        self.assertEqual(
+            {general["id"], domain["id"]},
+            {item["id"] for item in other_selected})
+        self.assertNotIn(
+            "chart-of-accounts",
+            self.adapter.profile_summary(
+                types.SimpleNamespace(selected_memory=other_selected)))
 
     def test_checkpoint_is_bounded_and_not_recreated_until_due(self):
         first = self.vault.checkpoint_if_due(
@@ -118,6 +160,48 @@ class VaultAdapterTests(unittest.TestCase):
         outcome = self.adapter.forget(f"forget {record['id']}", [record])
         self.assertIn(record["id"], outcome["message"])
         self.assertTrue(self.vault.is_forgotten(record["id"]))
+
+    def test_exact_id_forget_can_resolve_an_active_unselected_record(self):
+        record = self.adapter.remember(self.context, "Use audit-safe rounding.")
+        outcome = self.adapter.forget(
+            f"Permanently forget memory {record['id']}.", [])
+        self.assertIn(record["id"], outcome["message"])
+        self.assertTrue(self.vault.is_forgotten(record["id"]))
+
+    def test_repeated_statement_after_forget_reports_forgotten_not_active(self):
+        statement = "Use audit-safe rounding."
+        record = self.adapter.remember(self.context, statement)
+        self.adapter.forget(f"Permanently forget memory {record['id']}.", [])
+
+        repeated = self.adapter.remember(self.context, statement)
+
+        self.assertEqual("forgotten", repeated["status"])
+        self.assertIsNone(self.vault.get_memory(repeated["id"]))
+
+    def test_project_preference_survives_domain_switch_but_not_project_switch(self):
+        record = self.adapter.remember(
+            self.context,
+            "Plans should favor concise acceptance criteria and explicitly name "
+            "rollback evidence.")
+        self.assertEqual("preference", record["category"])
+        switched = types.SimpleNamespace(
+            prepared=types.SimpleNamespace(
+                domains=("command-line",), prepared_at="2026-07-15T12:01:00Z",
+                route_contract={"tier": "S"}),
+            intent="plan", project_id=self.context.project_id,
+            operation_id=str(uuid.uuid4()), selected_memory=())
+        selected = self.adapter.select(switched)
+        self.assertIn(record["id"], [item["id"] for item in selected])
+        switched.selected_memory = tuple(selected)
+        preferences = self.adapter.select_preferences(switched)
+        concise = [item for item in preferences if item["key"] == "report_detail"]
+        self.assertEqual("concise", concise[0]["effective_value"])
+
+        unrelated = types.SimpleNamespace(
+            **{**switched.__dict__, "project_id": "p-" + "2" * 32,
+               "selected_memory": ()})
+        self.assertNotIn(
+            record["id"], [item["id"] for item in self.adapter.select(unrelated)])
 
     def test_repeated_single_project_evidence_activates_domain_only(self):
         for index in range(3):

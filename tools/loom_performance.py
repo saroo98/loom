@@ -51,7 +51,7 @@ def adaptive_memory_budget(*, tier, intent, domain_count):
     if tier == "S":
         max_chars, max_records = 512, 3
     elif tier == "M":
-        max_chars, max_records = 960, 2
+        max_chars, max_records = 960, 3
     elif tier == "L":
         max_chars, max_records = 1664, 3
     else:

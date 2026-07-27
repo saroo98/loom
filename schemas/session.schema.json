@@ -22,7 +22,7 @@
     "world_fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "intent": {
       "enum": ["plan", "resume", "execute", "review", "repair", "close",
-               "status", "remember", "forget", "why", "undo"]
+               "status", "remember", "forget", "why", "undo", "cancel"]
     },
     "domains": {
       "type": "array", "minItems": 1, "maxItems": 16, "uniqueItems": true,

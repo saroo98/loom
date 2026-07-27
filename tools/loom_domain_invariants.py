@@ -17,6 +17,24 @@ EMPTY_SCOPE = {
     "effective_period": None,
 }
 
+SHIPPED_REAL_MEDIUM_BY_INVARIANT = {
+    "firmware-hardware": {
+        "timing/power/memory budgets":
+            "logic-analyzer timing, linker/map memory, stack high-water, and "
+            "power-analyzer energy measurements on production hardware",
+        "hardware-in-loop evidence": "hardware-in-loop run",
+        "flash/recovery path": "power-cycle and recovery test",
+        "physical rollback and safety boundary":
+            "physical rollback and flash-recovery rehearsal",
+        "watchdog and liveness recovery":
+            "watchdog reset and liveness-recovery test",
+        "flash endurance and wear budget":
+            "flash endurance and wear-budget stress test",
+        "brownout and power-loss behavior":
+            "brownout and power-loss fault injection",
+    },
+}
+
 
 def candidate_body(*, statement, invariant_type, domain_ids, subsystem_ids, scope,
                    consequence_class, failure, authority_requirements,
@@ -62,6 +80,7 @@ def compile_shipped(domain_id, adapter, guidance, *, now=None):
     as_of = now.isoformat().replace("+00:00", "Z")
     revalidate = (now + dt.timedelta(days=14)).isoformat().replace("+00:00", "Z")
     verification = list(guidance[2]) or ["domain-real-medium execution"]
+    medium_by_invariant = SHIPPED_REAL_MEDIUM_BY_INVARIANT.get(domain_id, {})
     result = []
     for index, statement in enumerate(adapter["invariants"]):
         result.append(seal_candidate(
@@ -72,7 +91,8 @@ def compile_shipped(domain_id, adapter, guidance, *, now=None):
             authority_requirements=["repository-evidence", "real-medium-evidence"],
             supporting_source_ids=[], contradicting_source_ids=[],
             applicability_receipt_ids=[],
-            required_real_medium=verification[index % len(verification)],
+            required_real_medium=medium_by_invariant.get(
+                statement, verification[index % len(verification)]),
             acceptance_target=f"prove {statement} for the sealed target",
             freshness_policy="target-and-source-v1", as_of=as_of,
             revalidate_by=revalidate, evidence_state="candidate"))

@@ -18,8 +18,10 @@ PROGRAM_RE = re.compile(
     r"etl\s+(?:and|&)\s+(?:machine[- ]learning|ml)|"
     r"(?:machine[- ]learning|ml)\s+(?:and|&)\s+etl)\b")
 PORTFOLIO_RE = re.compile(
-    r"(?i)\b(year[- ]long|portfolio|organization[- ]wide|many teams|"
-    r"multi[- ]program|multi[- ]product)\b")
+    r"(?i)\b(year[- ]long|organization[- ]wide|many teams|"
+    r"multi[- ]program|multi[- ]product|"
+    r"(?:project|product|program|organization)[- ]portfolio|"
+    r"portfolio[- ](?:program|scale|wide)|portfolio\s+of)\b")
 MULTI_PHASE_RE = re.compile(
     r"(?i)\b(?:phase|stage)\s+\d+"
     r"(?:\s*(?:,|and|&)\s*(?:(?:phase|stage)\s+)?\d+){1,}"
@@ -29,25 +31,54 @@ PLAN_IMPLEMENT_RE = re.compile(
     r"[^.!?]{0,180}\b(?:then|and)\b[^.!?]{0,100}\bimplement(?:ation)?\b"
     r"|\bplans?\b[^.!?]{0,180}\b(?:then|and)\b[^.!?]{0,100}\bimplement(?:ation)?\b")
 DISCIPLINED_DELIVERABLE_RE = re.compile(
-    r"(?i)\b(?:build|create|develop|produce|write)\s+"
+    r"(?i)\b(?:plan|build|create|develop|produce|write)\s+"
     r"(?:(?:a|an|the|new|reproducible)\s+){0,4}"
     r"(?:command[- ]line (?:developer )?tool|cli tool|research write[- ]?up|"
     r"research paper|literature review)\b")
 SMALL_RE = re.compile(
     r"(?i)\b(single[- ]file|one file|small script|bug fix|add a flag|landing page|"
     r"static page|command[- ]line flag|rename|copy change|"
-    r"(?:tiny|simple|minimal|basic)\s+(?:python\s+)?"
-    r"(?:cli|command[- ]line tool|script|app|program|tool))\b")
+    r"(?:(?:very\s+){0,2}(?:tiny|small|simple|minimal|basic))\s+(?:python\s+)?"
+    r"(?:cli|script|app|program|project|tool)|"
+    r"(?:(?:very\s+){0,2}(?:tiny|small|simple|minimal|basic))\s+(?:python\s+)?"
+    r"command[- ]line(?:\s+[a-z0-9-]+){0,3})\b")
 GREENFIELD_RE = re.compile(
     r"(?i)\b(?:build|create|develop|design|implement)\s+"
     r"(?:(?:a|an|the|new|offline[- ]first)\s+){0,4}"
     r"(?:app|application|system|pipeline|service|platform|firmware)\b")
 WHOLE_DELIVERABLE_RE = re.compile(
     r"(?i)\b(?:build|create|develop|design|implement|produce|write)\b")
+PLAN_DELIVERABLE_RE = re.compile(r"(?i)\bplan\b")
+STRUCTURAL_SCALE_RE = re.compile(
+    r"(?i)\b(?:signed (?:store )?releases?|publication package|publishable|"
+    r"hardware[- ]in[- ]loop|manufacturing calibration|bootloader rollback|"
+    r"capability registry|evidence graph|os and architecture matrix|"
+    r"independent (?:hostile )?(?:audit|review)|multi[- ]milestone|"
+    r"release program)\b")
+PRODUCT_DESCRIPTION_RE = re.compile(
+    r"(?i)\b(?:plan|build|create|develop|design|implement|produce|write)\b")
 DOMAIN_COMPLEXITY = {
     "accounting", "android", "cli", "data-etl", "desktop", "firmware-hardware",
     "ios-macos", "llm-agent", "ml", "mobile", "realtime-3d", "research", "web-app",
 }
+DELIVERY_SURFACE_DOMAINS = {
+    "android", "cli", "desktop", "ios-macos", "mobile", "web-app", "website",
+}
+
+_PRODUCT_OPERATION_NOUN_RE = re.compile(
+    r"(?i)^\s+(?:commands?|subcommands?|flags?|buttons?|endpoints?|apis?|handlers?|"
+    r"methods?|operations?|previews?|modes?)\b")
+
+
+def _risk_hits(text):
+    hits = []
+    product_description = bool(PRODUCT_DESCRIPTION_RE.search(text))
+    for match in RISK_RE.finditer(text):
+        if product_description and match.group(0).casefold() == "delete" \
+                and _PRODUCT_OPERATION_NOUN_RE.match(text[match.end():]):
+            continue
+        hits.append(match.group(0).lower())
+    return sorted(set(hits))
 
 
 def classify(description, *, files=None, days=None, new_components=0,
@@ -65,7 +96,7 @@ def classify(description, *, files=None, days=None, new_components=0,
         raise ValueError("adaptive effort observations are invalid")
     reasons = []
     tier = "S"
-    risk_hits = sorted(set(match.group(0).lower() for match in RISK_RE.finditer(text)))
+    risk_hits = _risk_hits(text)
     program_hits = sorted(set(match.group(0).lower() for match in PROGRAM_RE.finditer(text)))
     portfolio_hits = sorted(set(
         match.group(0).lower() for match in PORTFOLIO_RE.finditer(text)))
@@ -75,13 +106,25 @@ def classify(description, *, files=None, days=None, new_components=0,
     plan_and_implement = bool(PLAN_IMPLEMENT_RE.search(text))
     greenfield_unknown = bool(GREENFIELD_RE.search(text)) \
         and not disciplined_hits and not SMALL_RE.search(text)
-    whole_deliverable = bool(WHOLE_DELIVERABLE_RE.search(text)) \
-        and not SMALL_RE.search(text)
-    subsystem_signals = len(re.findall(r",|\b(?:and|with)\b", text, re.IGNORECASE))
-    cross_domain = whole_deliverable and len(domain_ids) > 1
+    explicit_small = bool(SMALL_RE.search(text))
+    planned_complex_deliverable = bool(PLAN_DELIVERABLE_RE.search(text)) \
+        and bool(domain_ids) and "unclassified" not in domain_ids \
+        and any(item in DOMAIN_COMPLEXITY for item in domain_ids) \
+        and not explicit_small
+    whole_deliverable = (
+        bool(WHOLE_DELIVERABLE_RE.search(text)) or planned_complex_deliverable
+    ) and not explicit_small
+    structural_scale_hits = sorted(set(
+        match.group(0).lower() for match in STRUCTURAL_SCALE_RE.finditer(text)))
+    substantive_domains = [
+        item for item in domain_ids if item not in DELIVERY_SURFACE_DOMAINS
+    ]
+    # A product domain and its delivery surface are one cohesive deliverable,
+    # not a program by themselves. Explicit scale, release, or composition
+    # signals below can still promote the work.
+    cross_domain = whole_deliverable and len(substantive_domains) > 1
     complex_single_domain = whole_deliverable and any(
         item in DOMAIN_COMPLEXITY for item in domain_ids)
-    multi_subsystem_domain = complex_single_domain and subsystem_signals >= 3
     consequential_domain = bool(set(domain_ids) & {
         "accounting", "firmware-hardware", "high-risk", "medical-clinical",
         "legal-regulatory", "mechanical-industrial"}) and not SMALL_RE.search(text)
@@ -89,7 +132,9 @@ def classify(description, *, files=None, days=None, new_components=0,
             or new_components >= 8 or new_boundaries >= 8 or implementers >= 6:
         tier = "XL"
         reasons.append("portfolio-scale duration, scope, or coordination requires milestone slices")
-    elif program_hits or cross_domain or multi_subsystem_domain \
+    elif program_hits or cross_domain \
+            or len(structural_scale_hits) >= 2 \
+            or (consequential_domain and bool(structural_scale_hits)) \
             or (multi_phase and plan_and_implement) \
             or ("realtime-3d" in domain_ids and not SMALL_RE.search(text)) \
             or (days is not None and days > 10) \

@@ -82,6 +82,29 @@ def explain_receipt(value):
     )
 
 
+def status_with_reason(value):
+    """Return one bounded plain-language status plus its sealed decision basis."""
+    required = {
+        "intent", "tier", "domains", "status", "code", "receipt_hash",
+        "world_fingerprint", "selected_memory_ids",
+    }
+    if not isinstance(value, dict) or not required.issubset(value):
+        raise TransparencyError("receipt cannot support status with reason")
+    domains = ", ".join(value["domains"][:3]) or "no task domain"
+    memory_count = len(value["selected_memory_ids"])
+    text = (
+        f"Status: {value['status']} ({value['code']}) for {value['intent']} work, "
+        f"size {value['tier']}, in {domains}. "
+        f"Why: Loom sealed that decision against world "
+        f"{value['world_fingerprint'][:16]} using {memory_count} scoped memory "
+        f"record{'s' if memory_count != 1 else ''}. "
+        f"Receipt: {value['receipt_hash']}."
+    )
+    if len(text) > MAX_RENDER_CHARS:
+        raise TransparencyError("status explanation exceeded its owner-facing bound")
+    return text
+
+
 def _memory_reference(text, records):
     identifiers = re.findall(
         r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",

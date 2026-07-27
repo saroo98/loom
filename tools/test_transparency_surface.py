@@ -149,6 +149,7 @@ class TransparencySurfaceTests(unittest.TestCase):
         self.assertEqual(receipt.intent, "status")
         self.assertEqual(receipt.status, "completed")
         self.assertIn("report_style: concise", receipt.user_message)
+        self.assertIn("[scope: legacy-unscoped]", receipt.user_message)
 
     def test_natural_why_undo_and_forget_use_builtin_safe_actions(self):
         project = self.root / "actions-project"

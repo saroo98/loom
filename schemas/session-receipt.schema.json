@@ -19,7 +19,7 @@
     "invocation_id": {"type": "string", "format": "uuid"},
     "project_id": {"type": "string", "pattern": "^p-[0-9a-f]{32}$"},
     "intent": {"enum": ["plan", "resume", "execute", "review", "repair",
-                        "close", "status", "remember", "forget", "why", "undo"]},
+                        "close", "status", "remember", "forget", "why", "undo", "cancel"]},
     "status": {"enum": ["completed", "blocked", "interrupted"]},
     "code": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,127}$"},
     "repeated": {"type": "boolean"},

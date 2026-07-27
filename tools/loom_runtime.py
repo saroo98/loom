@@ -11,6 +11,7 @@ import json
 import math
 import os
 import re
+import sqlite3
 import stat
 import uuid
 from dataclasses import dataclass, replace
@@ -55,7 +56,7 @@ RUNTIME_SECRET_PATTERNS = (
 
 INTENTS = {
     "plan", "resume", "execute", "review", "repair", "close", "status",
-    "remember", "forget", "why", "undo",
+    "remember", "forget", "why", "undo", "cancel",
 }
 CONFIG_SOURCES = {"explicit", "repository", "owner", "builtin-safe-default"}
 EFFECT_COUNT_FIELDS = {
@@ -73,7 +74,7 @@ LEGACY_ROUTE_FIELDS = ROUTE_FIELDS - {"block_reason"}
 WORLD_COMPONENT_FIELDS = {
     "target_survey_hash", "pack_hash", "config_hash", "lifecycle_hash",
     "capsule_version", "profile_version", "prior_session_hash",
-    "staleness_bucket", "project_inspection_hash",
+    "forgetting_version", "staleness_bucket", "project_inspection_hash",
 }
 OPERATION_COMPONENT_FIELDS = WORLD_COMPONENT_FIELDS - {
     "capsule_version", "profile_version", "prior_session_hash",
@@ -513,7 +514,8 @@ _EMBEDDED_MEMORY_REMEMBER_RE = re.compile(
     r"correct\s+(?:what you learned|my preference|that preference|the preference)|"
     r"retain\s+(?:this|that)\s+preference|(?:i|we)\s+prefer\b|from now on\b)")
 _MEMORY_FORGET_RE = re.compile(
-    r"^(?:please\s+)?(?:forget\b|stop remembering\b)")
+    r"^(?:please\s+)?(?:(?:permanently|completely)\s+)?"
+    r"(?:forget\b|stop remembering\b)")
 _EMBEDDED_MEMORY_FORGET_RE = re.compile(
     r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?"
     r"(?:forget\b|stop remembering\b)")
@@ -522,9 +524,17 @@ _POSITIVE_SOFTWARE_CLAUSE_RE = re.compile(
     r"add|generate|plan|fix|update|change|modify|refactor|migrate|upgrade|replace|"
     r"remove|correct\s+(?!(?:what you learned|my preference|that preference|"
     r"the preference)\b))\b")
+_PLAN_DELIVERABLE_RE = re.compile(
+    r"\b(?:produce|create|draft|write|generate|prepare|return|give\s+me)\s+"
+    r"(?:(?:exactly|only)\s+)?"
+    r"(?:(?:one|a|an|the)\s+)?"
+    r"(?:(?:reviewable|detailed|small|release-ready|implementation|coding|"
+    r"project|research|writing|research-and-writing)\s+|and\s+){0,6}plan\b")
 _CLAUSE_SEPARATOR_RE = re.compile(
-    r"(?P<hard>\r?\n+|[.;!?]+|,\s*(?:(?:and|but|then)\b\s*)?|\b(?:but|then)\b)"
-    r"|(?P<and>\band\b)|(?P<or>\bor\b)")
+    r"(?P<hard>\r?\n+|[.;!?]+)"
+    r"|(?P<comma>,\s*(?:(?:and|but|then)\b\s*)?)"
+    r"|(?P<and>\b(?:and|but|then)\b)"
+    r"|(?P<or>\bor\b)")
 _NEGATED_CONTROL_PREFIX_RE = re.compile(
     r"^(?:please\s+)?(?:"
     r"(?:i|we)\s+(?:do not|don't|never)\s+want\s+you\s+to|"
@@ -570,18 +580,36 @@ def _has_positive_software_clause(text):
 def _split_control_clauses(request):
     """Return bounded clauses and the coordination immediately before each clause."""
     normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
+    separators = list(_CLAUSE_SEPARATOR_RE.finditer(normalized))
     clauses = []
     start = 0
     pending = None
     overflow = False
-    for match in _CLAUSE_SEPARATOR_RE.finditer(normalized):
+    for position, match in enumerate(separators):
+        if match.lastgroup != "hard":
+            next_start = (
+                separators[position + 1].start()
+                if position + 1 < len(separators)
+                else len(normalized)
+            )
+            candidate = normalized[match.end():next_start].strip()
+            # Lists such as "frame time, draw calls, and triangle budgets" are
+            # one descriptive clause. A soft separator consumes the bounded
+            # control-clause budget only when its right-hand side starts a real
+            # Loom control or planning action.
+            if not candidate or _classify_control_clause(candidate) is None:
+                continue
         value = " ".join(normalized[start:match.start()].split())
         if value:
             clauses.append((pending, value))
             if len(clauses) > MAX_ROUTE_CLAUSES:
                 overflow = True
                 break
-        pending = "hard" if match.lastgroup == "hard" else match.lastgroup
+        pending = (
+            "hard" if match.lastgroup == "hard"
+            else "and" if match.lastgroup == "comma"
+            else match.lastgroup
+        )
         start = match.end()
     if not overflow:
         value = " ".join(normalized[start:].split())
@@ -593,7 +621,10 @@ def _split_control_clauses(request):
 
 def _classify_control_clause(clause):
     """Classify one bounded clause as a positive or explicitly negated control."""
-    clause = re.sub(r"^(?:either|instead)\s+", "", clause.strip())
+    clause = re.sub(
+        r"^(?:explicit\s+)?(?:prohibitions?|constraints?|limitations?)\s*:\s*",
+        "", clause.strip())
+    clause = re.sub(r"^(?:either|instead)\s+", "", clause)
     negated = _NEGATED_CONTROL_PREFIX_RE.match(clause)
     body = negated.group("body").strip() if negated else clause
     body = re.sub(r"^(?:either|instead)\s+", "", body)
@@ -604,8 +635,14 @@ def _classify_control_clause(clause):
             r"the preference)\b|(?:i|we)\s+prefer\b|from now on\b|"
             r"be (?:more careful|less autonomous)\b)", body):
         intent = "remember"
-    elif re.match(r"^(?:forget\b|stop remembering\b)", body):
+    elif re.match(
+            r"^(?:(?:permanently|completely)\s+)?"
+            r"(?:forget\b|stop remembering\b)", body):
         intent = "forget"
+    elif re.match(
+            r"^(?:cancel|abandon)\b(?:\s+(?:the\s+)?(?:current|pending|active))?"
+            r"(?:\s+loom)?(?:\s+(?:action|request|operation|plan))?\b", body):
+        intent = "cancel"
     elif _LIFECYCLE_REPAIR_RE.search(body) or re.match(
             r"^(?:repair|fix)\s+(?:the\s+)?(?:stale|broken|invalid|drifted)\s+"
             r"(?:loom\s+)?(?:plan|planning pack|lifecycle)\b", body):
@@ -616,7 +653,14 @@ def _classify_control_clause(clause):
         intent = "continue"
     elif re.match(r"^(?:undo|take back|reverse (?:the )?last)\b", body):
         intent = "undo"
-    elif re.match(r"^(?:review|inspect|audit)\b", body):
+    elif re.match(
+            r"^(?:report|show|display|give)\b[^.!?;]{0,120}\bstatus\b",
+            body):
+        intent = "status"
+    elif re.match(r"^(?:why\b|explain\b|show (?:me )?why\b)", body):
+        intent = "why"
+    elif re.match(r"^(?:review|inspect|audit)\b", body) and not re.match(
+            r"^audit\s+(?:trails?|logs?)\b", body):
         intent = "review"
     elif re.match(r"^(?:close this|finish the project|we are done|project is over)\b", body):
         intent = "close"
@@ -641,7 +685,8 @@ def _continue_route_intent(state):
         return "repair"
     if state.get("terminal"):
         return "close"
-    if state.get("pack_exists") and state.get("authorized") \
+    if state.get("pack_exists") and (
+            state.get("plan_ready") or state.get("authorized")) \
             and state.get("active_frontier"):
         return "execute"
     if state.get("pack_exists"):
@@ -663,18 +708,71 @@ def _resolve_clause_roles(request, state):
         if role is not None:
             classified.append({
                 **role, "separator": separator, "index": index,
+                "clause": clause,
+            })
+    # "Review X and produce a plan" asks for a plan. The review is a method,
+    # not a competing lifecycle review operation. Preserve separate negated
+    # implementation clauses as planning constraints.
+    plan_deliverable = _PLAN_DELIVERABLE_RE.search(request.casefold())
+    if plan_deliverable:
+        for item in classified:
+            if not item["negated"] and item["intent"] == "review":
+                item["intent"] = "plan"
+                item["control"] = "planning"
+            elif not item["negated"] and item["intent"] == "plan" \
+                    and item["index"] == 0 and plan_deliverable.start() == 0:
+                # Clause splitting may divide a compound deliverable such as
+                # "create a research and writing plan" at "and". The leading
+                # create fragment still belongs to the matched plan deliverable.
+                item["control"] = "planning"
+            elif not item["negated"] and item["intent"] == "plan" \
+                    and _PLAN_DELIVERABLE_RE.search(item["clause"]):
+                item["control"] = "planning"
+            elif not item["negated"] and item["intent"] == "plan" \
+                    and item["control"] == "implementation" \
+                    and re.search(
+                        r"\b(?:outside|anything|anyone|nothing|none)\b",
+                        item["clause"]):
+                # Preserve the scope of a preceding "do not" list such as
+                # "do not implement, publish anything, or modify files outside".
+                item["negated"] = True
+        if not any(not item["negated"] and item["intent"] == "plan"
+                   for item in classified):
+            classified.append({
+                "intent": "plan", "negated": False, "control": "planning",
+                "separator": "hard", "index": len(clauses),
             })
     if not classified:
         return None
+    # A shared negation governs coordinated verbs until a hard clause boundary.
+    # This keeps "do not create or modify a plan" as one prohibition without
+    # treating the second verb as a contradictory positive outcome.
+    negated_controls = set()
+    for item in classified:
+        if item["separator"] == "hard":
+            negated_controls.clear()
+        original_clause = item.get("clause", "")
+        if item["negated"]:
+            negated_controls.add((item["intent"], item["control"]))
+        elif item["separator"] in {"and", "or"} \
+                and not re.match(r"^(?:instead|but)\b", original_clause) \
+                and (item["intent"], item["control"]) in negated_controls:
+            item["negated"] = True
     positives = [item for item in classified if not item["negated"]]
     negatives = [item for item in classified if item["negated"]]
     positive_intents = {item["intent"] for item in positives}
     negative_intents = {item["intent"] for item in negatives}
     positive_controls = {(item["intent"], item["control"]) for item in positives}
     negative_controls = {(item["intent"], item["control"]) for item in negatives}
-    has_or = any(item["separator"] == "or" for item in classified[1:])
+    # A list of prohibitions joined with "or" narrows authority; it does not
+    # offer alternative positive outcomes. Only positive alternatives are
+    # ambiguous here. Positive-versus-negative conflicts are handled below.
+    has_or = any(
+        item["separator"] == "or" and not item["negated"]
+        for item in classified[1:])
     conflicting_polarity = bool(positive_controls & negative_controls)
-    multiple_positive_outcomes = len(positive_intents) > 1
+    status_with_why = positive_intents == {"status", "why"}
+    multiple_positive_outcomes = len(positive_intents) > 1 and not status_with_why
     opposed_lifecycle = (
         ("close" in negative_intents and "continue" in positive_intents)
         or ("continue" in negative_intents and "close" in positive_intents))
@@ -696,7 +794,7 @@ def _resolve_clause_roles(request, state):
             recommendation="Keep state unchanged; state the positive outcome you want Loom to pursue.")
     if not negatives and not multiple_positive_outcomes and not has_or:
         return None
-    intent = next(iter(positive_intents))
+    intent = "status" if status_with_why else next(iter(positive_intents))
     if intent == "continue":
         intent = _continue_route_intent(state)
     return _decision(
@@ -718,12 +816,25 @@ def _high_consequence_match(text):
                 r"(?:engineering|plan(?:ning)?|pipeline|workflow|tool|system|feature|"
                 r"automation|process|documentation|docs|tests?|contract)\b", tail):
         return None
-    # A product noun such as "deploy tool" is a plan request, not an effect.
-    if _is_build_request(text) and not re.search(
+    product_description = _is_build_request(text) or bool(
+        re.search(r"(?i)^\s*(?:please\s+)?plan\b", text))
+    if product_description:
+        explicit_effect = re.search(
             r"\b(?:and|then)\s+(?:deploy|publish|release|ship|delete|drop|destroy|"
             r"erase|overwrite|spend|pay|purchase|transfer|refund|charge|send|email|"
-            r"message|notify|post|rotate|revoke|reset|flash|wipe)\b", text):
-        return None
+            r"message|notify|post|rotate|revoke|reset|flash|wipe)\b", text)
+        if explicit_effect is None:
+            # A product noun such as "deploy tool" is a plan request, not an effect.
+            return None
+        product_tail = text[explicit_effect.end():].lstrip()
+        if re.match(
+                r"(?:commands?|subcommands?|flags?|buttons?|endpoints?|apis?|handlers?|"
+                r"methods?|operations?|previews?|modes?|checks?|criteria|validation|"
+                r"verification|tests?)\b",
+                product_tail):
+            # "Build create and delete commands" describes the product surface.
+            # The narrow noun allowlist must not exempt "then delete production data".
+            return None
     return match
 
 
@@ -805,7 +916,7 @@ def resolve_intent(request, state=None):
     if memory_direct is not None:
         signals = {name: name == memory_direct for name in (
             "remember", "forget", "why", "undo", "status", "review", "repair",
-            "close", "continue")}
+            "close", "continue", "cancel")}
         memory_match = re.search(
             r"\b(?:remember|forget|stop remembering|retain|correct)\b|\bbe more careful\b|"
             r"\bfrom now on\b|\bprefer\b|\bshow (?:me )?what you remember\b", text)
@@ -815,7 +926,8 @@ def resolve_intent(request, state=None):
             "remember": False,
             "forget": False,
             "why": bool(re.search(
-                r"\bwhy (?:did|do|does|is|are|was|were|has|have)\b|\bexplain why\b",
+                r"\bwhy (?:did|do|does|is|are|was|were|has|have)\b|\bexplain why\b|"
+                r"\bstatus\s+and\s+why\b",
                 task_text)),
             "undo": bool(re.search(
                 r"\bundo\b|\btake back\b|\breverse (?:the )?last", task_text)),
@@ -835,6 +947,11 @@ def resolve_intent(request, state=None):
             "continue": bool(re.search(
                 r"\bcontinue\b|\bkeep going\b|\bresume\b|\bpick up\b|\bcarry on\b|"
                 r"\bbuild the next\b|\bnext part\b", task_text)),
+            "cancel": bool(re.search(
+                r"^(?:please\s+)?(?:cancel|abandon)\b"
+                r"(?:\s+(?:the\s+)?(?:current|pending|active))?"
+                r"(?:\s+loom)?(?:\s+(?:action|request|operation|plan))?\b",
+                task_text)),
         }
     if build_request:
         # Product nouns such as review, status, audit, repair, undo, and forget
@@ -842,9 +959,11 @@ def resolve_intent(request, state=None):
         decision = _route(text, "plan", _BUILD_REQUEST_RE.search(text))
     else:
         direct = [name for name in (
-            "remember", "forget", "why", "undo", "status", "review", "repair", "close")
+            "remember", "forget", "why", "undo", "status", "review", "repair",
+            "close", "cancel")
                   if signals[name]]
-        ambiguous = len(direct) > 1 \
+        status_with_why = set(direct) == {"status", "why"}
+        ambiguous = (len(direct) > 1 and not status_with_why) \
             or (signals["close"] and signals["continue"])
         if ambiguous:
             return _decision(
@@ -853,10 +972,14 @@ def resolve_intent(request, state=None):
                 evidence=("conflicting-language", _request_span(text)),
                 recommendation="Choose the recommended safe branch: inspect current state first.")
         if direct:
-            intent = direct[0]
+            # "Status and why" is one read-only transparency request. Route it
+            # through status so the answer leads with current state and adds the
+            # sealed reason, rather than replaying an earlier explanation alone.
+            intent = "status" if status_with_why else direct[0]
             match = re.search(
                 r"\b(?:why|undo|take back|reverse|show me where|where are we|status|"
-                r"review|inspect|audit|repair|fix|close|done|over)\b", text)
+                r"review|inspect|audit|repair|fix|close|done|over|cancel|abandon)\b",
+                text)
             decision = _route(text, intent, match)
         elif signals["continue"]:
             match = re.search(
@@ -866,7 +989,8 @@ def resolve_intent(request, state=None):
                 intent = "repair"
             elif state.get("terminal"):
                 intent = "close"
-            elif state.get("pack_exists") and state.get("authorized") \
+            elif state.get("pack_exists") and (
+                    state.get("plan_ready") or state.get("authorized")) \
                     and state.get("active_frontier"):
                 intent = "execute"
             elif state.get("pack_exists"):
@@ -1354,9 +1478,9 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
     except (OSError, UnicodeError, KeyError, TypeError, ValueError,
             json.JSONDecodeError):
         return invalid
-    authorized = names == ["small-planning-started", "small-authorized"]
-    terminal = names == [
-        "small-planning-started", "small-authorized", "small-completed"]
+    plan_ready = names == loom_gate.SMALL_EVENT_ORDER[:2]
+    authorized = names == loom_gate.SMALL_EVENT_ORDER[:3]
+    terminal = names == loom_gate.SMALL_EVENT_ORDER
     if checkpoint.get("repo_state_hash") != lifecycle_repo_hash:
         return {
             "pack_exists": True, "authorized": False,
@@ -1371,17 +1495,20 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
         }
     result = {
         "pack_exists": True,
+        "plan_ready": plan_ready,
         "authorized": authorized,
-        "active_frontier": authorized and status in {"ready", "in-progress"},
+        "active_frontier": (
+            plan_ready or authorized) and status in {"ready", "in-progress"},
         "terminal": terminal and status == "done",
         "drift": False,
         "failed": False,
     }
     if verified > current:
         return invalid
-    if authorized and (current - verified).days > route["freshness_window_days"]:
+    if (plan_ready or authorized) \
+            and (current - verified).days > route["freshness_window_days"]:
         result.update({
-            "authorized": False, "active_frontier": False,
+            "plan_ready": False, "authorized": False, "active_frontier": False,
             "drift": True, "state_error": "STALE_TIME",
             "state_detail": "compact planning evidence exceeded its freshness window",
             "state_path": "plans/.loom-small-lifecycle.json",
@@ -1487,7 +1614,9 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
             value = json.loads(_bounded_read(
                 lifecycle, MAX_CONFIG_BYTES, "lifecycle state").decode("utf-8"))
             events = value["events"]
-            authorized = [item["event"] for item in events] == loom_gate.EVENT_ORDER
+            event_names = [item["event"] for item in events]
+            plan_ready = event_names == loom_gate.EVENT_ORDER[:2]
+            authorized = event_names == loom_gate.EVENT_ORDER
             completions = value["work_order_completions"]
             checkpoint = completions[-1] if completions else events[-1]
             if checkpoint.get("repo_state_hash") != lifecycle_repo_hash:
@@ -1495,7 +1624,8 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                     pack, lifecycle_repo_hash, checkpoint.get("repo_state_hash"))
                 if receipt is not None:
                     return {
-                        "pack_exists": True, "authorized": authorized,
+                        "pack_exists": True, "plan_ready": plan_ready,
+                        "authorized": authorized,
                         "active_frontier": any(
                             item in {"ready", "in-progress"} for item in statuses),
                         "terminal": bool(statuses) and all(
@@ -1538,6 +1668,7 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
             }
     result = {
         "pack_exists": exists,
+        "plan_ready": locals().get("plan_ready", False),
         "authorized": authorized,
         "active_frontier": any(item in {"ready", "in-progress"} for item in statuses),
         "terminal": bool(statuses) and all(item == "done" for item in statuses),
@@ -1552,7 +1683,7 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
         result["state_finding_codes"] = ["INVALID_WORK_ORDER"]
         result["state_finding_count"] = min(
             sum(item == "invalid" for item in statuses), 4096)
-    if authorized and not result["failed"]:
+    if (result["plan_ready"] or authorized) and not result["failed"]:
         manifest = pack / "MANIFEST.md"
         try:
             frontmatter, _ = loom_lint.parse_frontmatter(
@@ -1566,6 +1697,7 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                 raise ValueError("manifest last_verified is in the future")
             if (current - verified).days > window:
                 result.update({
+                    "plan_ready": False,
                     "authorized": False,
                     "active_frontier": False,
                     "terminal": False,
@@ -1735,9 +1867,45 @@ def _owner_state_versions(owner_root, instance_id, project_id, use_profile):
                 "profile state", "home-not-supplied"),
             "prior_session_hash": _state_version(
                 "prior session state", "home-not-supplied"),
+            "forgetting_version": _state_version(
+                "forgetting state", "home-not-supplied"),
         }
     instance_root = owner_root / "instances" / instance_id
     project_runtime = instance_root / "runtime" / "projects" / project_id
+    legacy_forgetting = _state_file_version(
+        instance_root / "tombstones.json", "legacy forgetting state", MAX_CONFIG_BYTES)
+    vault_path = owner_root / "vault" / "owner.sqlite3"
+    if not vault_path.exists():
+        vault_forgetting = _state_version("vault forgetting state", "absent")
+    else:
+        if not vault_path.is_file() or _path_has_link_or_junction(vault_path):
+            raise RuntimeError("owner vault forgetting state is redirected or invalid")
+        before = vault_path.stat()
+        connection = None
+        try:
+            uri = f"{vault_path.resolve().as_uri()}?mode=ro"
+            connection = sqlite3.connect(uri, uri=True, timeout=1.0)
+            try:
+                connection.execute("PRAGMA query_only=ON")
+                row = connection.execute(
+                    "SELECT value FROM metadata WHERE key='deletion_epoch'").fetchone()
+            finally:
+                connection.close()
+        except sqlite3.Error as exc:
+            raise RuntimeError(
+                f"owner vault forgetting state cannot be read: {exc}") from exc
+        after = vault_path.stat()
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise RuntimeError("owner vault forgetting state changed during observation")
+        try:
+            deletion_epoch = 0 if row is None else int(row[0])
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("owner vault deletion epoch is invalid") from exc
+        if deletion_epoch < 0:
+            raise RuntimeError("owner vault deletion epoch is invalid")
+        vault_forgetting = _state_version(
+            "vault forgetting state", f"deletion-epoch:{deletion_epoch}")
     return {
         "capsule_version": _state_file_version(
             project_runtime / "capsule.json", "context capsule state", MAX_CONFIG_BYTES),
@@ -1747,6 +1915,12 @@ def _owner_state_versions(owner_root, instance_id, project_id, use_profile):
             if use_profile else _state_version("profile state", "disabled")),
         "prior_session_hash": _state_file_version(
             project_runtime / "runtime.json", "prior session state", MAX_CONFIG_BYTES),
+        "forgetting_version": _state_version(
+            "forgetting state", "present",
+            _canonical_json({
+                "legacy": legacy_forgetting,
+                "vault": vault_forgetting,
+            })),
     }
 
 
