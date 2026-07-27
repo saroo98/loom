@@ -32,7 +32,7 @@ import loom_operation_envelope
 
 ROOT_FILES = {
     ".gitignore", ".mcp.json", "CHANGELOG.md", "CONTRIBUTING.md", "LICENSE", "PRIVACY.md",
-    "README.md", "START-HERE.md", "TERMS.md", "VERSION",
+    "README.md", "START-HERE.md", "TERMS.md", "VERSION", "rust-toolchain.toml",
 }
 ROOT_DIRECTORIES = {
     ".codex-plugin", ".github", "benchmarks", "contracts", "docs", "hooks", "loom", "schemas", "scripts",

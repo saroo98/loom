@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.8.17
+
+- Keep the repository-pinned Rust toolchain declaration in the public cut so
+  detached clean-room verification selects the same compiler as source and
+  native compatibility CI.
+- Add a regression assertion that release construction cannot silently omit
+  the toolchain authority required by the shipped Rust helper.
+
 ## 1.8.16
 
 - Publish the Phase 1–2 control-plane remediation merged through PR #32, including stricter
