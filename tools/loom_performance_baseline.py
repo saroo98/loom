@@ -220,8 +220,8 @@ def collect(root, *, source_commit, runs, warmups, tolerance):
         median = statistics.median(elapsed)
         spread = ((max(elapsed) - min(elapsed)) / median) if median else 0.0
         results.append({
-            "id": name,
-            "measurement_class": "request-preparation",
+            "id": "request-shape:" + name,
+            "measurement_class": "request-shape-preparation",
             "samples": elapsed,
             "p50_runtime_ns": int(_percentile(elapsed, 0.50)),
             "p95_runtime_ns": int(_percentile(elapsed, 0.95)),
@@ -230,7 +230,7 @@ def collect(root, *, source_commit, runs, warmups, tolerance):
             "non_time_metrics": {
                 key: values[0][key] for key in sorted(values[0])
                 if key != "elapsed_ns"
-            },
+            } | {"scenario_semantics": "request-shape-only"},
             "non_time_metrics_stable": all(
                 {key: item[key] for key in item if key != "elapsed_ns"}
                 == {key: values[0][key] for key in values[0]
@@ -242,11 +242,20 @@ def collect(root, *, source_commit, runs, warmups, tolerance):
         "required_cases": sorted(required),
         "corpus_sha256": hashlib.sha256(corpus_raw).hexdigest(),
     }
+    definition_id = str(uuid.uuid5(
+        uuid.NAMESPACE_URL,
+        f"loom:performance:{source_commit}:{preregistration['corpus_sha256']}"))
+    wrapper_median = statistics.median(wrapper_samples)
+    wrapper_spread = (
+        (max(wrapper_samples) - min(wrapper_samples)) / wrapper_median
+        if wrapper_median else 0.0)
+    tiny_fixtures = [item["operations"]["tiny_task"] for item in observations]
+    if any(item != tiny_fixtures[0] for item in tiny_fixtures):
+        raise BaselineError("synthetic policy fixture changed between runs")
     body = {
         "schema_version": 2,
-        "baseline_id": str(uuid.uuid5(
-            uuid.NAMESPACE_URL,
-            f"loom:performance:{source_commit}:{preregistration['corpus_sha256']}")),
+        "baseline_id": definition_id,
+        "measurement_id": str(uuid.uuid4()),
         "source_commit": source_commit,
         "environment": _subject_environment(),
         "preregistration": preregistration,
@@ -261,18 +270,26 @@ def collect(root, *, source_commit, runs, warmups, tolerance):
             "samples": wrapper_samples,
             "p50_elapsed_ns": int(_percentile(wrapper_samples, 0.50)),
             "p95_elapsed_ns": int(_percentile(wrapper_samples, 0.95)),
+            "relative_spread": wrapper_spread,
+            "within_preregistered_tolerance": wrapper_spread <= tolerance,
             "includes": [
                 "python-process-startup", "fixture-construction",
                 "git-fixture-operations", "all-request-preparations",
                 "local-runtime-operations",
             ],
         },
+        "policy_fixtures": [{
+            "id": "tiny-task-overhead-policy",
+            "measurement_class": "synthetic-policy-fixture",
+            "result": tiny_fixtures[0],
+        }],
         "measurement_boundaries": {
             "local_runtime": "observed",
             "wrapper_process": "observed",
             "provider_response": "unavailable",
             "provider_queue": "unavailable",
-            "complete_wall_time": "unavailable",
+            "local_collection_wall_time": "observed",
+            "agent_end_to_end_wall_time": "unavailable",
         },
         "provider_native": {
             "status": "unavailable",
@@ -280,7 +297,8 @@ def collect(root, *, source_commit, runs, warmups, tolerance):
         },
         "all_local_metrics_stable": all(
             item["within_preregistered_tolerance"]
-            and item["non_time_metrics_stable"] for item in results),
+            and item["non_time_metrics_stable"] for item in results)
+            and wrapper_spread <= tolerance,
     }
     body["receipt_sha256"] = _hash(body)
     return body
@@ -288,9 +306,9 @@ def collect(root, *, source_commit, runs, warmups, tolerance):
 
 def validate(value):
     fields = {
-        "schema_version", "baseline_id", "source_commit", "environment",
+        "schema_version", "baseline_id", "measurement_id", "source_commit", "environment",
         "preregistration", "corpus", "results", "wrapper_process",
-        "measurement_boundaries", "provider_native",
+        "policy_fixtures", "measurement_boundaries", "provider_native",
         "all_local_metrics_stable", "receipt_sha256",
     }
     if not isinstance(value, dict) or set(value) != fields \
