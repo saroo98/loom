@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Invoke Loom immediately with no preamble or request classification; Loom 1.8.15 turns the exact request into a safe, evidence-backed execution plan.
+description: Invoke Loom immediately with no preamble or request classification; Loom 1.8.16 turns the exact request into a safe, evidence-backed execution plan.
 ---
 
 # Loom

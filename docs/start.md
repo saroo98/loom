@@ -6,8 +6,8 @@ Loom’s owner-facing request surface is:
 /loom <request>
 ```
 
-The current published release is 1.8.15. Later `main` and remediation commits are not part of that
-artifact. Check [release readiness](./release-readiness.md) and
+The current source candidate is 1.8.16. Until its signed release is published, the latest immutable
+artifact remains 1.8.15. Check [release readiness](./release-readiness.md) and
 [current limitations](./limitations.md) before treating a host or platform as supported.
 
 ## Requirements

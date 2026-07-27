@@ -73,9 +73,10 @@ Status at this documentation cut, 2026-07-27:
 | Surface | Status | Evidence boundary |
 |---|---|---|
 | Published release | `v1.8.15`, published 2026-07-25 | Signed tag and release assets exist; the plugin ZIP digest is `1a252a9ce02a6a86235bb1831617af7f1a83680852326b1399d1b9455132b49a` |
-| Default branch | `main` at `17be7f58ff43c56339a39f90f03e2bacf2c00896` | PR #32 merged the Phase 1–2 remediation; its 9 required quality checks and 21 native-compatibility checks passed |
+| Release candidate | `1.8.16` | This source version includes the merged remediation and public documentation updates; it is not a published artifact until signed release verification completes |
+| Default branch | `main` at `7b10cf18a8e539cd32097d256c9d9dd130082555` | PR #33 merged the documentation update after PR #32; release promotion remains a separate signed process |
 | Remediation | Merged through [PR #32](https://github.com/saroo98/loom/pull/32) | No known Critical or High blocker was reported at merge; the merged code is not thereby released, installed, deployed, or independently certified |
-| Website work | `codex/loom-website-documentation` rebased onto the PR #32 merge | Public-facing branch only; it does not alter the installed Loom artifact and is not deployed |
+| Website work | Merged through [PR #33](https://github.com/saroo98/loom/pull/33) | Public-facing files are on `main`; GitHub Pages deployment is separate from Loom software release promotion |
 | Generated readiness | `not-ready` | No current supported host or native platform claims in the generated readiness record |
 
 The PR checks establish the recorded merge checks for that exact change, not release promotion,
