@@ -153,6 +153,10 @@ class ReleaseStandardTests(unittest.TestCase):
         (source / "START-HERE.md").write_text(
             "Loom 1.0.0 /loom <request>\n", encoding="utf-8")
         (source / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+        (source / "rust-toolchain.toml").write_text(
+            '[toolchain]\nchannel = "1.97.1"\nprofile = "minimal"\n',
+            encoding="utf-8",
+        )
         (source / ".gitignore").write_text("__pycache__/\n*.py[cod]\n", encoding="utf-8")
         (source / ".mcp.json").write_text(
             json.dumps({"mcpServers": {}}) + "\n", encoding="utf-8")
