@@ -5,13 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Loom reads the current project and creates a reviewable, evidence-backed plan before an AI coding agent changes files."
+      content="Loom is a local-first control layer for AI coding agents. It binds plans to the current project, separates planning from implementation authority, and keeps completion tied to evidence."
     />
-    <meta name="theme-color" content="#050505" />
-    <meta property="og:title" content="Loom | Project-aware planning for AI coding agents" />
+    <meta name="theme-color" content="#080808" />
+    <meta property="og:title" content="Loom | The plan is not the permission" />
     <meta
       property="og:description"
-      content="Give your coding agent the project state, constraints, unknowns, and completion checks it needs before implementation."
+      content="Bind plans to the current project, authorize implementation separately, and require real evidence before completion."
     />
     <meta property="og:image" content="https://saroo98.github.io/loom/social-card.svg" />
     <meta property="og:type" content="website" />
@@ -19,8 +19,8 @@
     <meta name="twitter:card" content="summary_large_image" />
     <link rel="canonical" href="https://saroo98.github.io/loom/" />
     <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
-    <link rel="stylesheet" href="./site.css" />
-    <title>Loom | Project-aware planning for AI coding agents</title>
+    <link rel="stylesheet" href="./site.css?v=20260727-2" />
+    <title>Loom | The plan is not the permission</title>
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -31,12 +31,28 @@
         "url": "https://saroo98.github.io/loom/",
         "downloadUrl": "https://github.com/saroo98/loom/releases/tag/v1.8.15",
         "license": "https://www.apache.org/licenses/LICENSE-2.0",
-        "description": "A local-first planning intelligence layer for AI coding agents."
+        "description": "A local-first planning and verification control layer for AI coding agents, with one visible /loom <request> surface."
       }
     </script>
   </head>
   <body>
     <a class="skip-link" href="#main">Skip to content</a>
+
+    <div class="source-visual-shell" data-source-visual-shell aria-hidden="true">
+      <iframe
+        class="source-visual-frame"
+        data-source-visual
+        src="./assets/paper-flow-loom-scroll-story.html?embed=1&amp;v=20260727-2"
+        title="Decorative Loom particle and flowing paper field"
+        aria-hidden="true"
+        tabindex="-1"
+      ></iframe>
+      <div class="source-visual-fallback">
+        <span class="fallback-letter">L</span>
+        <span class="fallback-rings"><i></i><i></i></span>
+        <span class="fallback-letter">M</span>
+      </div>
+    </div>
 
     <header class="site-header" data-header>
       <a class="brand" href="#top" aria-label="Loom home">
@@ -44,331 +60,374 @@
         <span>Loom</span>
       </a>
       <nav class="site-nav" aria-label="Primary navigation">
-        <a href="#how-it-works">How it works</a>
-        <a href="#what-you-get">What you get</a>
-        <a href="#install">Install</a>
+        <a href="#story">How it works</a>
+        <a href="#outputs">Outputs</a>
+        <a href="#evidence">Evidence</a>
+        <a href="#start">Start</a>
         <a href="https://github.com/saroo98/loom">GitHub</a>
       </nav>
-      <a class="header-action" href="#install">Add Loom</a>
     </header>
 
     <main id="main">
       <section class="hero" id="top" aria-labelledby="hero-title">
-        <canvas class="signal-field" data-signal-field aria-hidden="true"></canvas>
-        <div class="hero-grain" aria-hidden="true"></div>
         <div class="hero-copy">
-          <p class="eyebrow">Planning intelligence for AI coding agents</p>
-          <h1 id="hero-title">Your coding agent should not guess what your project needs.</h1>
+          <p class="hero-eyebrow">A control layer for AI coding agents</p>
+          <h1 id="hero-title">The plan is not the permission.</h1>
           <p class="hero-summary">
-            Loom reads the repository, local instructions, constraints, and relevant owner
-            preferences. It returns a plan you can review before the agent changes files.
+            Loom binds a plan to the current project, grants implementation authority separately,
+            and requires real evidence before completion.
           </p>
           <div class="hero-actions">
-            <a class="button button-light" href="#install">Install Loom</a>
-            <a class="text-link" href="#plan-preview">See the plan output <span>↓</span></a>
+            <a class="button button-light" href="#control-loop">See the control loop</a>
           </div>
         </div>
 
-        <div class="loom-monument" aria-hidden="true">
-          <span>L</span><span>O</span><span>O</span><span>M</span>
-        </div>
+        <a class="scroll-cue" href="#control-loop">
+          <span>Scroll to unfold</span>
+          <i aria-hidden="true"></i>
+        </a>
+      </section>
 
-        <div class="hero-status" aria-label="Product status">
-          <span>Current release</span>
-          <strong>1.8.15</strong>
+      <section class="control-strip" id="control-loop" aria-labelledby="control-loop-title">
+        <div class="control-intro">
+          <p class="eyebrow">What makes Loom different</p>
+          <h2 id="control-loop-title">A specification describes work. Loom governs what happens next.</h2>
+          <p>
+            One optimistic status cannot stand in for the whole chain. Loom keeps the observed
+            project, exact plan, implementation authority, and qualifying evidence distinct.
+          </p>
+        </div>
+        <ol class="control-loop" aria-label="Loom control loop">
+          <li>
+            <span>01</span>
+            <strong>Observe</strong>
+            <small>Bind the current project</small>
+          </li>
+          <li>
+            <span>02</span>
+            <strong>Seal</strong>
+            <small>Fix the exact plan</small>
+          </li>
+          <li class="control-gate">
+            <span>03</span>
+            <strong>Authorize</strong>
+            <small>Grant permission separately</small>
+          </li>
+          <li>
+            <span>04</span>
+            <strong>Verify</strong>
+            <small>Require real evidence</small>
+          </li>
+        </ol>
+        <div class="control-notes" aria-label="Loom operating boundaries">
           <span>Local-first</span>
-          <strong>No telemetry</strong>
+          <span>One <code>/loom &lt;request&gt;</code> surface</span>
+          <span>No Loom telemetry</span>
         </div>
       </section>
 
-      <section class="problem-section" aria-labelledby="problem-title">
+      <section class="problem-section" id="problem" aria-labelledby="problem-title">
         <div class="section-index" aria-hidden="true">01</div>
         <div class="section-copy">
-          <p class="eyebrow dark">The missing layer</p>
-          <h2 id="problem-title">A strong model can still start with the wrong picture.</h2>
+          <p class="eyebrow dark">Why Loom exists</p>
+          <h2 id="problem-title">The request is rarely the whole working world.</h2>
           <p>
-            A prompt rarely contains the whole project. The repository may have uncommitted work,
-            local rules, architectural boundaries, unresolved assumptions, and checks that only
+            A coding request arrives beside repository history, uncommitted files, local
+            instructions, architectural boundaries, domain rules, unknowns, and checks that only
             make sense in the real runtime.
           </p>
           <p>
-            Loom brings that information into one planning decision before implementation begins.
+            Loom represents that world before implementation. It can keep small work small, expand
+            consequential work, or block when the evidence needed to plan safely is missing.
           </p>
         </div>
         <aside class="margin-note">
-          <span>Without Loom</span>
-          <p>Request → generic plan → files change → missing context appears late</p>
+          <span>The failure Loom targets</span>
+          <p>Request → confident plan → authority assumed → changed work outruns its evidence</p>
         </aside>
       </section>
 
-      <section class="flow-section" id="how-it-works" aria-labelledby="flow-title">
+      <section class="story-section" id="story" aria-labelledby="story-title" data-story>
+        <div class="story-heading">
+          <p class="eyebrow">One request, six represented states</p>
+          <h2 id="story-title">The plan is not the permission.</h2>
+          <p>
+            Planning can be reviewed without permission to execute it. If the exact plan or
+            observed project changes, the earlier authority no longer describes the same work.
+          </p>
+        </div>
+
+        <div class="story-layout">
+          <div class="story-visual" aria-hidden="true">
+            <div class="story-progress">
+              <span data-story-progress></span>
+            </div>
+          </div>
+
+          <ol class="story-steps">
+            <li class="story-step" data-story-step data-word="REQUEST">
+              <article>
+                <span class="story-number">01 / 06</span>
+                <p class="story-kicker">A complex request</p>
+                <h3>Start with the owner’s actual request and the current project.</h3>
+                <p>
+                  Loom records the request, resolves the target, and inspects committed, staged,
+                  unstaged, and untracked state. A changing or unsafe world is a reason to stop,
+                  not a detail to smooth over.
+                </p>
+                <span class="story-output">Represented output: project inspection and request scope</span>
+              </article>
+            </li>
+            <li class="story-step paper-step" data-story-step data-word="PLAN">
+              <article>
+                <span class="story-number">02 / 06</span>
+                <p class="story-kicker">Planning</p>
+                <h3>Turn the request into bounded, reviewable work.</h3>
+                <p>
+                  Facts, assumptions, open decisions, likely touch paths, work orders, and required
+                  proof are made explicit. Artifacts are produced for a named consumer and
+                  decision, or skipped with a reason.
+                </p>
+                <span class="story-output">Represented output: plan contract and work orders</span>
+              </article>
+            </li>
+            <li class="story-step" data-story-step data-word="REVIEW">
+              <article>
+                <span class="story-number">03 / 06</span>
+                <p class="story-kicker">Execution authority</p>
+                <h3>Keep authorship separate from permission to implement.</h3>
+                <p>
+                  A plan can be reviewed without granting implementation authority. Authorization
+                  is bound to exact plan content and the observed baseline. If either changes, the
+                  earlier authority no longer describes the same work.
+                </p>
+                <span class="story-output">Represented output: sealed action and authority state</span>
+              </article>
+            </li>
+            <li class="story-step" data-story-step data-word="PROVE">
+              <article>
+                <span class="story-number">04 / 06</span>
+                <p class="story-kicker">Validation</p>
+                <h3>Ask the real medium to prove the requested outcome.</h3>
+                <p>
+                  Tests, builds, runtime checks, screenshots, or another declared medium provide
+                  evidence. A written status flag or a pre-existing deliverable does not establish
+                  that the authorized work caused the result.
+                </p>
+                <span class="story-output">Represented output: verification evidence and receipt</span>
+              </article>
+            </li>
+            <li class="story-step paper-step" data-story-step data-word="REPAIR">
+              <article>
+                <span class="story-number">05 / 06</span>
+                <p class="story-kicker">Issue recovery</p>
+                <h3>Preserve the failure and return to an explicit safe route.</h3>
+                <p>
+                  A failed gate does not silently authorize repair. Loom can represent the blocking
+                  condition, preserved state, recovery action, and the smallest route back through
+                  planning, authorization, or validation.
+                </p>
+                <span class="story-output">Represented output: block reason and recovery receipt</span>
+              </article>
+            </li>
+            <li class="story-step" data-story-step data-word="COMPLETE">
+              <article>
+                <span class="story-number">06 / 06</span>
+                <p class="story-kicker">Completion</p>
+                <h3>Close only when the required evidence and authority still match.</h3>
+                <p>
+                  Completion stays distinct from “the agent stopped.” Loom records the outcome,
+                  verification state, reversibility, and the next action the owner can review.
+                </p>
+                <span class="story-output">Represented output: owner message and completion state</span>
+              </article>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="authority-section" aria-labelledby="authority-title">
+        <div class="authority-copy">
+          <p class="eyebrow dark">The governing boundary</p>
+          <h2 id="authority-title">Changed plan. Changed project. Changed authority.</h2>
+          <p>
+            Authorization describes exact work against an observed baseline. If the plan drifts or
+            the project changes, the earlier permission cannot silently carry forward. Loom returns
+            the work to the smallest required planning, authorization, or validation boundary.
+          </p>
+        </div>
+        <div class="authority-map" aria-label="Planning and authorization lifecycle">
+          <div>
+            <span>1</span>
+            <strong>Observe</strong>
+            <small>Bind the current world</small>
+          </div>
+          <i aria-hidden="true"></i>
+          <div>
+            <span>2</span>
+            <strong>Author</strong>
+            <small>Produce the exact plan</small>
+          </div>
+          <i aria-hidden="true"></i>
+          <div class="authority-gate">
+            <span>3</span>
+            <strong>Authorize</strong>
+            <small>Seal content and baseline</small>
+          </div>
+          <i aria-hidden="true"></i>
+          <div>
+            <span>4</span>
+            <strong>Verify</strong>
+            <small>Collect real evidence</small>
+          </div>
+        </div>
+      </section>
+
+      <section class="outputs-section" id="outputs" aria-labelledby="outputs-title">
         <div class="section-heading">
-          <p class="eyebrow">What happens before coding</p>
-          <h2 id="flow-title">One request enters. A project-specific plan comes back.</h2>
-        </div>
-        <ol class="flow-list">
-          <li>
-            <span class="flow-number">01</span>
-            <div>
-              <h3>Read the current project</h3>
-              <p>
-                Loom examines committed, staged, unstaged, and untracked state together with the
-                project instructions that apply.
-              </p>
-            </div>
-          </li>
-          <li>
-            <span class="flow-number">02</span>
-            <div>
-              <h3>Separate facts from unknowns</h3>
-              <p>
-                Known information stays distinct from assumptions. Every important assumption
-                receives a way to verify it.
-              </p>
-            </div>
-          </li>
-          <li>
-            <span class="flow-number">03</span>
-            <div>
-              <h3>Shape the work to the real risk</h3>
-              <p>
-                Small work stays compact. Consequential or unfamiliar work receives the additional
-                planning and domain checks it needs.
-              </p>
-            </div>
-          </li>
-          <li>
-            <span class="flow-number">04</span>
-            <div>
-              <h3>Stop for your review</h3>
-              <p>
-                You see the proposed work, affected files, assumptions, and completion checks
-                before implementation is authorized.
-              </p>
-            </div>
-          </li>
-        </ol>
-      </section>
-
-      <section class="plan-section" id="plan-preview" aria-labelledby="plan-title">
-        <div class="plan-intro">
-          <p class="eyebrow dark">The result</p>
-          <h2 id="plan-title">Review the work before the work begins.</h2>
+          <p class="eyebrow">What users can review</p>
+          <h2 id="outputs-title">The useful output is inspectable, not mystical.</h2>
           <p>
-            Loom does not return a generic checklist. It returns a plan tied to the project state
-            it observed.
+            Exact contents vary with task consequence, uncertainty, domain coverage, and the
+            consumer who needs to make the decision.
           </p>
         </div>
-
-        <article class="plan-sheet" aria-label="Example Loom plan">
-          <header class="plan-sheet-header">
-            <div>
-              <span class="plan-kicker">Loom plan</span>
-              <h3>Add a health-check endpoint</h3>
-            </div>
-            <span class="plan-state">Ready for review</span>
-          </header>
-          <div class="plan-command">
-            <span aria-hidden="true">›</span>
-            <code>/loom Add a health-check endpoint to this service.</code>
-          </div>
-          <div class="plan-grid">
-            <section>
-              <span class="plan-label">Proposed work</span>
-              <ol>
-                <li>Confirm the service routing convention.</li>
-                <li>Add the endpoint in the existing route module.</li>
-                <li>Cover the success and dependency-failure paths.</li>
-                <li>Document the response contract.</li>
-              </ol>
-            </section>
-            <section>
-              <span class="plan-label">Files likely to change</span>
-              <code>src/routes/health.py</code>
-              <code>tests/test_health.py</code>
-              <code>README.md</code>
-            </section>
-            <section>
-              <span class="plan-label">Assumption to verify</span>
-              <p>The current readiness probe may depend on the database connection.</p>
-              <span class="verification">Check the deployment configuration before coding.</span>
-            </section>
-            <section>
-              <span class="plan-label">Completion check</span>
-              <p>Run the route tests and exercise the endpoint in the service runtime.</p>
-            </section>
-          </div>
-          <footer class="plan-sheet-footer">
-            <span>Current project state recorded</span>
-            <span>Implementation has not started</span>
-          </footer>
-        </article>
-      </section>
-
-      <section class="contents-section" id="what-you-get" aria-labelledby="contents-title">
-        <div class="section-heading">
-          <p class="eyebrow">What every useful plan answers</p>
-          <h2 id="contents-title">The questions an agent should answer before touching code.</h2>
-        </div>
-        <div class="disclosure-list">
-          <details open>
-            <summary>
-              <span>01</span>
-              <strong>What exactly will change?</strong>
-              <span class="summary-mark" aria-hidden="true"></span>
-            </summary>
-            <p>
-              Concrete steps and a bounded work order replace open-ended implementation intent.
-            </p>
-          </details>
-          <details>
-            <summary>
-              <span>02</span>
-              <strong>Which files may be affected?</strong>
-              <span class="summary-mark" aria-hidden="true"></span>
-            </summary>
-            <p>
-              Likely touch paths are named so unrelated changes are visible before and during
-              implementation.
-            </p>
-          </details>
-          <details>
-            <summary>
-              <span>03</span>
-              <strong>What is known, assumed, or still unknown?</strong>
-              <span class="summary-mark" aria-hidden="true"></span>
-            </summary>
-            <p>
-              Evidence, assumptions, and unresolved decisions remain distinct instead of being
-              flattened into confident prose.
-            </p>
-          </details>
-          <details>
-            <summary>
-              <span>04</span>
-              <strong>How will completion be checked?</strong>
-              <span class="summary-mark" aria-hidden="true"></span>
-            </summary>
-            <p>
-              The plan names the tests, runtime checks, or other real medium required to demonstrate
-              the result.
-            </p>
-          </details>
+        <div class="output-list">
+          <article>
+            <span>01</span>
+            <h3>Observed project state</h3>
+            <p>The target, applicable instructions, change census, lifecycle, and unresolved gaps.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>Plan contract</h3>
+            <p>Scope, artifacts, dependencies, assumptions, decisions, and required proof.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>Bounded work orders</h3>
+            <p>Exact work, likely touch paths, acceptance evidence, and stopping conditions.</p>
+          </article>
+          <article>
+            <span>04</span>
+            <h3>Authority state</h3>
+            <p>Whether implementation is permitted, blocked, expired, or invalidated by drift.</p>
+          </article>
+          <article>
+            <span>05</span>
+            <h3>Verification and recovery</h3>
+            <p>What ran, what failed, what was preserved, and the bounded route back.</p>
+          </article>
+          <article>
+            <span>06</span>
+            <h3>Owner-facing result</h3>
+            <p>Outcome, consequence, freshness, reversibility, verification, and one next action.</p>
+          </article>
         </div>
       </section>
 
-      <section class="learning-section" aria-labelledby="learning-title">
-        <div class="learning-copy">
-          <p class="eyebrow">One Loom, shaped for its owner</p>
-          <h2 id="learning-title">Keep the judgment that helps. Leave the rest behind.</h2>
+      <section class="evidence-section" id="evidence" aria-labelledby="evidence-title">
+        <div class="evidence-intro">
+          <p class="eyebrow dark">Status without theatre</p>
+          <h2 id="evidence-title">Repository evidence and release evidence are not interchangeable.</h2>
           <p>
-            Loom can retain bounded local preferences and measured outcomes. General judgment,
-            domain knowledge, and project memory remain separately scoped so one project does not
-            become a rule for every project.
-          </p>
-          <p>
-            Learning stays on your device. Loom sends no telemetry and excludes owner state from
-            the public package.
+            The current published release is Loom 1.8.15. Phase 1–2 remediation is merged into
+            <code>main</code> through PR #32, but it has not been published as a new release,
+            installed, deployed, or independently certified.
           </p>
         </div>
-        <div class="scope-map" aria-label="How Loom scopes local learning">
-          <div class="scope-node scope-owner">Owner judgment</div>
-          <div class="scope-line" aria-hidden="true"></div>
-          <div class="scope-branches">
-            <div>
-              <span>General</span>
-              <small>Transferable working preferences</small>
-            </div>
-            <div>
-              <span>Domain</span>
-              <small>Relevant only when that domain returns</small>
-            </div>
-            <div>
-              <span>Project</span>
-              <small>Bound to one project lineage</small>
-            </div>
-          </div>
+        <div class="evidence-grid">
+          <article>
+            <span class="status-mark status-released">Released</span>
+            <h3>Public 1.8.15 artifact</h3>
+            <p>
+              The repository links a signed release and documents its verification route. Release
+              claims still depend on evidence bound to the exact artifact.
+            </p>
+          </article>
+          <article>
+            <span class="status-mark status-merged">Merged</span>
+            <h3>Phase 1–2 remediation</h3>
+            <p>
+              PR #32 merged strengthened containment, planning/execution separation, recoverable
+              bootstrap, scoped routing, and evidence binding. Its required quality and native
+              compatibility checks passed.
+            </p>
+          </article>
+          <article>
+            <span class="status-mark status-missing">Not established</span>
+            <h3>Independent assurance</h3>
+            <p>
+              Loom does not claim independent hostile certification, universal host coverage,
+              universal platform support, or guaranteed recovery and reliability.
+            </p>
+          </article>
+        </div>
+        <div class="evidence-links">
+          <a href="./roadmap-v3.md">
+            <span>Roadmap v3</span>
+            <strong>See completed, candidate, blocked, and planned work</strong>
+          </a>
+          <a href="https://github.com/saroo98/loom/blob/main/docs/release-readiness.md">
+            <span>Generated release readiness</span>
+            <strong>See what is verified, experimental, unsupported, or missing</strong>
+          </a>
+          <a href="https://github.com/saroo98/loom/blob/main/docs/limitations.md">
+            <span>Current limitations</span>
+            <strong>Read the assurance gaps and capability boundaries</strong>
+          </a>
+          <a href="https://github.com/saroo98/loom/blob/main/docs/architecture.md">
+            <span>Architecture</span>
+            <strong>Trace runtime, state, authority, verification, and recovery</strong>
+          </a>
         </div>
       </section>
 
-      <section class="install-section" id="install" aria-labelledby="install-title">
-        <div class="install-copy">
-          <p class="eyebrow">Start with Codex</p>
-          <h2 id="install-title">Add Loom once. Use it in any project.</h2>
+      <section class="limitations-section" aria-labelledby="limitations-title">
+        <div>
+          <p class="eyebrow">What Loom is not</p>
+          <h2 id="limitations-title">A control layer cannot make uncertain evidence certain.</h2>
+        </div>
+        <ul>
+          <li>Loom is not a coding model and does not replace the implementing agent.</li>
+          <li>It does not turn a simulated host test into proof about a released host integration.</li>
+          <li>Local tests are not independent certification or a reliability guarantee.</li>
+          <li>Learning records are scoped inputs, not proof that future work will improve.</li>
+          <li>Unsupported verification media remain unsupported and must not be relabeled as passed.</li>
+        </ul>
+      </section>
+
+      <section class="start-section" id="start" aria-labelledby="start-title">
+        <div class="start-copy">
+          <p class="eyebrow">Try the published release</p>
+          <h2 id="start-title">Begin with the artifact and the evidence you can inspect.</h2>
           <p>
-            The Codex command adds the Loom marketplace. Install Loom from the Plugins screen,
-            restart Codex once, then use the same request surface everywhere.
+            Loom’s current public surface is one request. Use the signed release instructions or
+            evaluate the source directly. A public marketplace listing is not claimed here.
           </p>
         </div>
 
-        <div class="install-terminal">
+        <div class="start-terminal">
           <div class="terminal-topline">
-            <span>Step 1 · Add the marketplace</span>
-            <span>Codex CLI</span>
+            <span>Request surface</span>
+            <span>Loom 1.8.15</span>
           </div>
           <div class="terminal-command">
             <span aria-hidden="true">›</span>
-            <code data-copy-value>codex plugin marketplace add saroo98/loom</code>
+            <code data-copy-value>/loom &lt;request&gt;</code>
             <button class="copy-button" type="button" data-copy-button>
               <span data-copy-label>Copy</span>
             </button>
           </div>
-          <div class="terminal-steps">
-            <div>
-              <span>2</span>
-              <p>Open <strong>Codex → Plugins</strong> and install <strong>Loom</strong>.</p>
-            </div>
-            <div>
-              <span>3</span>
-              <p>Restart Codex once, open a project, and write:</p>
-            </div>
-          </div>
-          <div class="invoke-command">
-            <!-- Public command contract: /loom <request> -->
-            <code>/loom &lt;request&gt;</code>
-          </div>
-          <p class="install-note">
-            Requires the current Codex plugin interface and Python 3.10 or newer. If marketplace
-            installation is unavailable, use the signed release instructions instead.
+          <p class="start-note">
+            Requirements and host capability vary. Check the start guide and current readiness
+            evidence before treating an integration or platform as supported.
           </p>
-          <div class="install-links">
-            <a href="https://github.com/saroo98/loom/blob/main/docs/start.md">Open the start guide</a>
-            <a href="https://github.com/saroo98/loom/releases/tag/v1.8.15">Signed release 1.8.15</a>
+          <div class="start-links">
+            <a href="https://github.com/saroo98/loom/releases/tag/v1.8.15">Open signed release 1.8.15</a>
+            <a href="https://github.com/saroo98/loom/blob/main/docs/start.md">Read the start guide</a>
+            <a href="https://github.com/saroo98/loom">Inspect the repository</a>
           </div>
-        </div>
-      </section>
-
-      <section class="trust-section" aria-labelledby="trust-title">
-        <div class="section-heading">
-          <p class="eyebrow">Inspect the boundaries</p>
-          <h2 id="trust-title">The important claims are documented, including the limits.</h2>
-        </div>
-        <div class="trust-links">
-          <a href="https://github.com/saroo98/loom/blob/main/PRIVACY.md">
-            <span>Privacy</span>
-            <strong>What stays local and what can ship</strong>
-          </a>
-          <a href="https://github.com/saroo98/loom/blob/main/docs/architecture.md">
-            <span>Architecture</span>
-            <strong>How planning, state, and verification connect</strong>
-          </a>
-          <a href="https://github.com/saroo98/loom/blob/main/docs/limitations.md">
-            <span>Known limits</span>
-            <strong>What is experimental, unsupported, or unverified</strong>
-          </a>
-          <a href="https://github.com/saroo98/loom/issues">
-            <span>Support</span>
-            <strong>Report a problem or request an improvement</strong>
-          </a>
-        </div>
-      </section>
-
-      <section class="closing-section" aria-labelledby="closing-title">
-        <canvas class="closing-field" data-closing-field aria-hidden="true"></canvas>
-        <div>
-          <p class="eyebrow">Before the first file changes</p>
-          <h2 id="closing-title">Give the agent a plan you have actually seen.</h2>
-          <a class="button button-light" href="#install">Add Loom to Codex</a>
         </div>
       </section>
     </main>
@@ -379,12 +438,13 @@
           <span class="brand-mark" aria-hidden="true">⎎</span>
           <span>Loom</span>
         </a>
-        <p>Local-first planning intelligence for AI coding agents.</p>
+        <p>Plan from the current world. Verify in the real one.</p>
       </div>
       <nav aria-label="Footer navigation">
         <a href="https://github.com/saroo98/loom">Repository</a>
         <a href="https://github.com/saroo98/loom/blob/main/LICENSE">Apache-2.0</a>
         <a href="https://github.com/saroo98/loom/blob/main/PRIVACY.md">Privacy</a>
+        <a href="./roadmap-v3.md">Roadmap</a>
         <a href="https://github.com/saroo98/loom/releases">Releases</a>
       </nav>
       <span class="footer-version">Loom 1.8.15</span>
