@@ -91,6 +91,16 @@ def _loom_home_root(path):
     return root
 
 
+def _owner_vault_path(owner_module, home):
+    """Resolve owner state through the active trust anchor, including pre-activation runtimes."""
+    resolver = getattr(owner_module, "owner_vault_path", None)
+    if resolver is not None:
+        if not callable(resolver):
+            raise BootstrapError("trusted owner-vault resolver is invalid")
+        return Path(resolver(home))
+    return Path(home) / "vault" / "owner.sqlite3"
+
+
 def _install_active_launcher(home, active_runtime):
     """Install the stable launcher using only the newly verified runtime."""
     active_runtime = Path(active_runtime).resolve()
@@ -768,7 +778,7 @@ def reconcile(plugin_root, home):
     if manager.current_path.is_file():
         current = manager.current()
         current_runtime = manager.versions / current["path"]
-    vault_path = loom_owner.owner_vault_path(home)
+    vault_path = _owner_vault_path(loom_owner, home)
     if vault_path.is_file():
         vault, _crypto = loom_owner.open_owner_vault(home, helper)
         before_hash = vault.semantic_inventory()["sha256"]
