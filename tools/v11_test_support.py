@@ -149,10 +149,14 @@ def _windows_toolchain_roots(environment):
     return installations, sdk
 
 
+def _is_windows_host():
+    return os.name == "nt"
+
+
 def _native_build_environment(environment=None):
     """Return a build environment that is hermetic but can find native tools."""
     environment = dict(os.environ if environment is None else environment)
-    if os.name != "nt":
+    if not _is_windows_host():
         return environment
     installations, sdk = _windows_toolchain_roots(environment)
     for installation in installations:

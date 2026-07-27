@@ -45,7 +45,9 @@ BOOTSTRAP_SPEC.loader.exec_module(loom_bootstrap)
 class NativeBuildEnvironmentTests(unittest.TestCase):
     def test_native_helper_replaces_non_msvc_linker_on_windows(self):
         selected = {"PATH": "verified-msvc"}
-        with mock.patch.object(v11_test_support.os, "name", "nt"), \
+        with mock.patch.object(
+                    v11_test_support, "_is_windows_host",
+                    return_value=True), \
                 mock.patch.object(
                     v11_test_support, "_windows_toolchain_roots",
                     return_value=([Path("C:/BuildTools")], Path("C:/SDK"))), \

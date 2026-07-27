@@ -91,7 +91,8 @@ class ExecutionChainTests(unittest.TestCase):
             "import json,sys\n"
             "print(json.dumps({'isolated':bool(sys.flags.isolated),"
             "'no_user_site':bool(sys.flags.no_user_site),"
-            "'safe_path':bool(getattr(sys.flags,'safe_path',False))}))\n",
+            "'safe_path':bool(getattr("
+            "sys.flags,'safe_path',sys.flags.isolated))}))\n",
             encoding="utf-8")
         environment = dict(os.environ)
         environment.update({
