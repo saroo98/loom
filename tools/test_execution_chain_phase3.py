@@ -107,6 +107,12 @@ class ExecutionChainTests(unittest.TestCase):
             {"isolated": True, "no_user_site": True, "safe_path": True}, flags)
         self.assertFalse(marker.exists())
 
+    def test_python310_isolated_flag_proves_safe_path_without_newer_flag(self):
+        flags = types.SimpleNamespace(isolated=1)
+        self.assertTrue(loom_execution_chain._safe_path_proven(flags))
+        flags = types.SimpleNamespace(isolated=0)
+        self.assertFalse(loom_execution_chain._safe_path_proven(flags))
+
 
 if __name__ == "__main__":
     unittest.main()
