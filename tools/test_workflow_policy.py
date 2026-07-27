@@ -112,9 +112,21 @@ class WorkflowPolicyTests(unittest.TestCase):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         self.assertNotIn("__ci_public_scan_sentinel_9f4c2d__", quality)
         self.assertIn(
-            'loom-ci-${{ github.run_id }}-${{ matrix.os }}-py${{ matrix.python }}',
+            'loom-ci-${{ github.sha }}',
             quality,
         )
+
+    def test_capability_matrix_uses_one_exact_publication_subject(self):
+        quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
+        invocation = re.search(
+            r"loom_exact_cut_ci\.py[\s\S]+?--output exact-cut-ci\.json",
+            quality,
+        )
+        self.assertIsNotNone(invocation)
+        command = invocation.group(0)
+        self.assertIn('--forbidden-token "loom-ci-${{ github.sha }}"', command)
+        self.assertNotIn("${{ matrix.os }}", command)
+        self.assertNotIn("${{ matrix.python }}", command)
 
     def test_fast_gate_preserves_primary_failure_without_missing_artifact_noise(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
