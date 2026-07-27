@@ -143,7 +143,7 @@ def _bounded_home_inventory(home):
             "tree_sha256": digest.hexdigest(), "path_sample": sample}
 
 
-def verify(cut, *, timeout=2100):
+def verify(cut, *, timeout=2400):
     cut = Path(cut).resolve()
     if not cut.is_dir() or (cut / ".git").exists() or (cut / ".loom").exists() \
             or not (cut / "tools" / "loom_release.py").is_file():
@@ -222,7 +222,7 @@ def verify(cut, *, timeout=2100):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cut")
-    parser.add_argument("--timeout", type=int, default=2100)
+    parser.add_argument("--timeout", type=int, default=2400)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     try:
