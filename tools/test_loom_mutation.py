@@ -37,8 +37,8 @@ class MutationGateTests(unittest.TestCase):
 
         events = []
 
-        def scheduled_run(_root, scheduled_mutation, _timeout):
-            events.append(scheduled_mutation[0])
+        def scheduled_run(_root, scheduled_mutation, scheduled_timeout):
+            events.append((scheduled_mutation[0], scheduled_timeout))
             return {"id": scheduled_mutation[0], "test": scheduled_mutation[4],
                     "killed": True, "returncode": 1}
 
@@ -47,7 +47,11 @@ class MutationGateTests(unittest.TestCase):
             result = loom_mutation.run(ROOT, minimum_score=100, timeout=1)
 
         self.assertEqual("passed", result["status"])
-        self.assertEqual("pair-sender-pin", events[0])
+        self.assertEqual(
+            ("pair-sender-pin",
+             loom_mutation.NATIVE_MUTATION_TIMEOUT_SECONDS),
+            events[0])
+        self.assertTrue(all(timeout == 1 for _, timeout in events[1:]))
         self.assertEqual(
             [item[0] for item in loom_mutation.MUTATIONS],
             [receipt["id"] for receipt in result["receipts"]])

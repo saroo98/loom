@@ -127,6 +127,17 @@ class BootstrapIntegrationTests(unittest.TestCase):
                 (sdk / relative).mkdir(parents=True)
             environment = _msvc_environment_from_roots(
                 {"PATH": "fixture-path"}, installation, sdk)
+            discovered_installation = (
+                root / "Program Files" / "Microsoft Visual Studio" /
+                "18" / "Enterprise")
+            discovered_installation.mkdir(parents=True)
+            discovered, discovered_sdk = (
+                v11_test_support._windows_toolchain_roots({
+                    "ProgramFiles": str(root / "Program Files"),
+                    "ProgramFiles(x86)": str(root),
+                }))
+            self.assertIn(discovered_installation, discovered)
+            self.assertEqual(sdk, discovered_sdk)
 
         self.assertIsNotNone(environment)
         self.assertTrue(environment["PATH"].endswith("fixture-path"))

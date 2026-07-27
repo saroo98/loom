@@ -139,6 +139,7 @@ MUTATIONS = (
 # mutants so the per-mutant timeout measures the probe itself, not scheduler
 # starvation.
 SERIAL_MUTATION_IDS = frozenset({"pair-sender-pin"})
+NATIVE_MUTATION_TIMEOUT_SECONDS = 240
 
 
 class MutationError(RuntimeError):
@@ -185,7 +186,8 @@ def run(root, *, minimum_score=100, timeout=120):
     parallel = [item for item in MUTATIONS if item[0] not in SERIAL_MUTATION_IDS]
     by_id = {
         item["id"]: item
-        for item in (_run_mutation(root, mutation, timeout)
+        for item in (_run_mutation(
+            root, mutation, max(timeout, NATIVE_MUTATION_TIMEOUT_SECONDS))
                      for mutation in serial)
     }
     # Every remaining mutant owns a complete disposable tree and process.
