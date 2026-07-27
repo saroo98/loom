@@ -27,7 +27,7 @@ upgrade an item to released or supported.
 |---|---|---|
 | Published release | `v1.8.15` at `ac3906a1450c6a625ee77f945eaa90169ee037ef` | Published 2026-07-25 with a signed tag and release assets |
 | Plugin ZIP | `loom-plugin-v1.8.15.zip` | SHA-256 `1a252a9ce02a6a86235bb1831617af7f1a83680852326b1399d1b9455132b49a` |
-| Release candidate | `1.8.17` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
+| Release candidate | `1.8.18` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
 | Current `main` | `7b10cf18a8e539cd32097d256c9d9dd130082555` | Merge commit for [PR #33](https://github.com/saroo98/loom/pull/33), following the Phase 1–2 remediation in PR #32 |
 | Remediation checks | 9 required quality checks and 21 native-compatibility checks passed | Merge evidence for PR #32; not release, installation, deployment, support, or independent-assurance evidence |
 | Known blockers at merge | No known Critical or High blocker | Absence of a known blocker is not a guarantee of security, reliability, or recovery |
