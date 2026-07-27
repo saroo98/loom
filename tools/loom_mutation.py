@@ -157,6 +157,7 @@ def _run_mutation(root, mutation, timeout):
         environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1",
                            HOME=str(sandbox / ".test-home"),
                            USERPROFILE=str(sandbox / ".test-home"),
+                           LOOM_TEST_CACHE_ROOT=str(sandbox / ".test-cache"),
                            PYTHONPATH=str(sandbox / "tools"))
         try:
             result = subprocess.run(
