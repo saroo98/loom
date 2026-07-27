@@ -1,6 +1,6 @@
 <p align="center">
   <a href="https://saroo98.github.io/loom/">
-    <img src="./docs/readme-hero.png" alt="Loom keeps planning separate from implementation authority across request, plan, proof, recovery, and completion." width="100%">
+    <img src="./docs/readme-hero.svg" alt="Loom keeps planning separate from implementation authority across request, plan, proof, recovery, and completion." width="100%">
   </a>
 </p>
 

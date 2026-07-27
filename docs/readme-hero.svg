@@ -1,6 +1,36 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
   <title id="title">Loom keeps planning separate from implementation authority</title>
-  <desc id="desc">The supplied monochrome paper-flow field surrounds an illuminated particle LOOM mark.</desc>
+  <desc id="desc">A monochrome flowing field surrounds the Loom mark and the words Planning before implementation authority.</desc>
   <metadata>Loom 1.8.15</metadata>
-  <image href="readme-hero.png" width="1200" height="440" preserveAspectRatio="xMidYMid slice"/>
+  <defs>
+    <linearGradient id="field" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#242424"/>
+      <stop offset=".42" stop-color="#696969"/>
+      <stop offset=".68" stop-color="#202020"/>
+      <stop offset="1" stop-color="#0d0d0d"/>
+    </linearGradient>
+    <radialGradient id="light" cx=".14" cy=".08" r=".7">
+      <stop offset="0" stop-color="#fff" stop-opacity=".76"/>
+      <stop offset=".48" stop-color="#ddd" stop-opacity=".2"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+    <filter id="flow" x="-20%" y="-30%" width="150%" height="170%">
+      <feTurbulence type="fractalNoise" baseFrequency=".004 .012" numOctaves="2" seed="17" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="48" xChannelSelector="R" yChannelSelector="B"/>
+      <feGaussianBlur stdDeviation="18"/>
+    </filter>
+    <filter id="grain" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency=".7" numOctaves="2" seed="9" result="noise"/>
+      <feComposite in="noise" in2="SourceGraphic" operator="in" result="texture"/>
+      <feBlend in="SourceGraphic" in2="texture" mode="screen"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="440" fill="url(#field)"/>
+  <rect width="1200" height="440" fill="url(#light)"/>
+  <path d="M-90 92C180 46 234 474 503 290S765 80 1012 120s280 214 346 298" fill="none" stroke="#fff" stroke-opacity=".38" stroke-width="86" filter="url(#flow)"/>
+  <g fill="#fff" text-anchor="middle">
+    <text x="600" y="212" font-family="Arial, Helvetica, sans-serif" font-size="104" font-weight="900" letter-spacing="12" filter="url(#grain)">LOOM</text>
+    <text x="600" y="292" font-family="Georgia, 'Times New Roman', serif" font-size="49">Planning before implementation authority</text>
+    <text x="600" y="342" font-family="Arial, Helvetica, sans-serif" font-size="18" fill="#e9e9e9">Turn a complex request into a plan you can inspect before implementation begins.</text>
+  </g>
 </svg>
