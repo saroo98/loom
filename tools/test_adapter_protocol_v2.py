@@ -311,6 +311,97 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertEqual(message, run_request.call_args.args[2])
         self.assertEqual("author-stdio", run_request.call_args.kwargs["command"])
 
+    def test_bridge_author_finalize_completes_only_after_authoring_proves_ready(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {"id": "codex", "version": "2.1.0"},
+            "capabilities": capabilities(), "protocol_version": 2,
+        }
+        draft = {
+            "schema_version": 1, "title": "Tiny CLI", "summary": "One outcome.",
+            "assumptions": [], "decisions": [], "current_facts": [],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [], "domain_evidence": None,
+        }
+        message = {
+            "schema_version": 2, "message_type": "author",
+            "request_id": "req-author-finalize",
+            "action": "C:/disposable/home/.loom/orchestration/action.json",
+            "draft": draft, "finalize": True,
+        }
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(0, {
+                    "status": "authored", "ready_for_completion": True,
+                })) as run_request, mock.patch.object(
+                    loom_adapter_bridge, "_run",
+                    return_value=(0, {"status": "completed"})) as run:
+            result = loom_adapter_bridge.dispatch(
+                message, home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+        self.assertEqual(0, result["returncode"])
+        self.assertEqual("completed", result["payload"]["status"])
+        self.assertEqual(message, run_request.call_args.args[2])
+        self.assertEqual([
+            "--home", str(Path("C:/disposable/home/.loom")), "complete", "--action",
+            message["action"],
+        ], run.call_args.args[1])
+
+    def test_bridge_author_finalize_never_completes_after_failed_authoring(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {"id": "codex", "version": "2.1.0"},
+            "capabilities": capabilities(), "protocol_version": 2,
+        }
+        message = {
+            "schema_version": 2, "message_type": "author",
+            "request_id": "req-author-failed",
+            "action": "C:/disposable/home/.loom/orchestration/action.json",
+            "draft": {
+                "schema_version": 1, "title": "Tiny CLI", "summary": "One outcome.",
+                "assumptions": [], "decisions": [], "current_facts": [],
+                "release_exposure": {
+                    "external_users": 0, "irreversible": False,
+                    "data_migration": False, "regulated": False,
+                },
+                "work_orders": [], "domain_evidence": None,
+            },
+            "finalize": True,
+        }
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(1, {"status": "action-required"})), mock.patch.object(
+                    loom_adapter_bridge, "_run") as run:
+            result = loom_adapter_bridge.dispatch(
+                message, home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+        self.assertEqual(1, result["returncode"])
+        run.assert_not_called()
+
+    def test_author_finalize_field_is_boolean_when_present(self):
+        message = {
+            "schema_version": 2, "message_type": "author",
+            "request_id": "req-author-invalid-finalize",
+            "action": "C:/disposable/home/.loom/orchestration/action.json",
+            "draft": {
+                "schema_version": 1, "title": "Tiny CLI", "summary": "One outcome.",
+                "assumptions": [], "decisions": [], "current_facts": [],
+                "release_exposure": {
+                    "external_users": 0, "irreversible": False,
+                    "data_migration": False, "regulated": False,
+                },
+                "work_orders": [], "domain_evidence": None,
+            },
+            "finalize": "yes",
+        }
+        with self.assertRaises(loom_adapter_protocol.ProtocolError):
+            loom_adapter_protocol.validate_message(message)
+
     def test_adapter_template_is_stateless_and_names_protocol_v2(self):
         import loom_adapters
         text = loom_adapters._adapter("codex").decode("utf-8")

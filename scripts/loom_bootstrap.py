@@ -63,6 +63,34 @@ def _source_root(path):
     return root
 
 
+def _loom_home_root(path):
+    """Return a bounded Loom state root without accepting a protected host root."""
+    try:
+        root = Path(os.path.abspath(os.path.expanduser(os.fspath(path))))
+    except (TypeError, ValueError, OSError) as exc:
+        raise BootstrapError(f"Loom home is invalid: {exc}") from exc
+    protected = {Path(root.anchor)} if root.anchor else set()
+    for candidate in (Path.home(), *(Path(value) for value in (
+            os.environ.get("HOME"), os.environ.get("USERPROFILE"))
+            if value)):
+        try:
+            protected.add(Path(os.path.abspath(os.path.expanduser(
+                os.fspath(candidate)))))
+        except (TypeError, ValueError, OSError):
+            continue
+    root_key = os.path.normcase(str(root))
+    if any(root_key == os.path.normcase(str(candidate))
+           for candidate in protected):
+        raise BootstrapError(
+            "Loom home cannot be a filesystem or user-profile root")
+    for component in [*reversed(root.parents), root]:
+        if _redirect(component) and not _trusted_os_alias(component):
+            raise BootstrapError(f"Loom home traverses a redirect: {component}")
+    if root.exists() and not root.is_dir():
+        raise BootstrapError("Loom home is not a directory")
+    return root
+
+
 def _install_active_launcher(home, active_runtime):
     """Install the stable launcher using only the newly verified runtime."""
     active_runtime = Path(active_runtime).resolve()
@@ -231,27 +259,44 @@ def _stage_direct_runtime(plugin_root, manager, *, version, platform_id,
                 raise BootstrapError(
                     "direct source bootstrap requires an installer-owned platform helper "
                     "or a local Rust toolchain")
-            build_root = staging / ".direct-cargo-build"
             build_environment = {**os.environ}
             build_environment.setdefault("RUST_MIN_STACK", str(16 * 1024 * 1024))
-            result = subprocess.run([
-                cargo, "build", "--release", "--locked", "--offline",
-                "--manifest-path", str(manifest), "--target-dir", str(build_root),
-            ], cwd=plugin_root, env=build_environment, capture_output=True,
-                timeout=300, check=False)
-            helper = build_root / "release" / binary_name
-            if result.returncode != 0 or not helper.is_file():
-                raise BootstrapError(
-                    "direct source crypto helper build failed; Cargo must have all "
-                    "locked dependencies available offline")
+            # Keep compiler outputs under the short OS temporary root. Building below a
+            # deeply nested plugin/runtime path can exceed Windows toolchain path limits
+            # even when every source path and dependency is valid.
+            with tempfile.TemporaryDirectory(prefix="loom-cargo-build-") as temporary:
+                build_root = Path(temporary).resolve()
+                result = subprocess.run([
+                    cargo, "build", "--release", "--locked", "--offline",
+                    "--manifest-path", str(manifest), "--target-dir", str(build_root),
+                ], cwd=plugin_root, env=build_environment, capture_output=True,
+                    timeout=300, check=False)
+                built_helper = build_root / "release" / binary_name
+                if result.returncode != 0 or not built_helper.is_file():
+                    stderr = result.stderr.decode(
+                        "utf-8", errors="replace") if isinstance(
+                            result.stderr, bytes) else str(result.stderr or "")
+                    tail = " ".join(stderr.split())[-384:]
+                    reason = (
+                        "locked dependencies are unavailable in the local Cargo cache"
+                        if any(marker in stderr.lower() for marker in (
+                            "no matching package named", "attempting to make an http "
+                            "request", "failed to download"))
+                        else "the local Rust build failed")
+                    raise BootstrapError(
+                        f"direct source crypto helper build failed: {reason}; "
+                        f"cargo exit={result.returncode}; stderr tail={tail!r}")
+                helper = staging / ".direct-built-helper" / binary_name
+                helper.parent.mkdir(parents=True)
+                shutil.copyfile(built_helper, helper)
             helper_origin = "locally-built-from-receipt-owned-source"
         package_module._verify_helper_platform(platform_id, helper)
         binary = staging / "bin" / binary_name
         binary.parent.mkdir(parents=True, exist_ok=True)
         package_module._copy_helper_executable(helper, binary)
-        build_root = staging / ".direct-cargo-build"
-        if build_root.exists():
-            shutil.rmtree(build_root)
+        temporary_helper = staging / ".direct-built-helper"
+        if temporary_helper.exists():
+            shutil.rmtree(temporary_helper)
 
         direct_body = {
             "schema_version": 1,
@@ -398,8 +443,126 @@ def _verify_recoverable_direct_runtime(final, *, version, platform_id, binary_na
     return binary, payload
 
 
+def _activate_staged_direct_runtime(
+        manager, staging, final, pointer, *, version, platform_id, binary_name,
+        source_receipt, expected_payload_sha256, reliability_module):
+    """Publish and activate one direct runtime under the runtime transaction lock.
+
+    Concurrent first-use bootstraps may independently prepare the same immutable
+    version. Only the final no-replace rename and pointer activation are serialized.
+    A process that loses the race accepts the winner only after complete receipt and
+    byte verification proves it is the same source payload.
+    """
+    try:
+        with manager._locked("direct bootstrap activation"):
+            if final.exists():
+                _helper, observed_payload_sha256 = \
+                    _verify_recoverable_direct_runtime(
+                        final, version=version, platform_id=platform_id,
+                        binary_name=binary_name, source_receipt=source_receipt)
+                # A locally built helper is allowed for direct-source installs and
+                # compiler output is not guaranteed to be reproducible byte-for-byte.
+                # The winner is nevertheless acceptable only after the complete
+                # source-receipt, ownership, manifest, health, and byte verification
+                # above proves it came from the same installed source. Converge the
+                # losing process on that verified immutable winner instead of
+                # rejecting an equivalent concurrent cold start.
+                if observed_payload_sha256 != expected_payload_sha256:
+                    pointer = {
+                        **pointer, "payload_sha256": observed_payload_sha256}
+            else:
+                source_identity = reliability_module.observe_root_identity(staging)
+                reliability_module.atomic_rename_noreplace(
+                    staging, final, expected_source_identity=source_identity,
+                    source_role="direct-runtime-stage",
+                    destination_role="immutable-runtime")
+            return manager._activate_direct_baseline_locked(pointer)
+    finally:
+        # This process owns only its UUID-named staging directory. Never remove or
+        # alter the shared immutable destination, including on verification failure.
+        if staging is not None and staging.exists():
+            shutil.rmtree(staging)
+
+
 def _empty_inventory():
     return hashlib.sha256(b"loom-empty-owner-vault-v1").hexdigest()
+
+
+_RUNTIME_POINTER_BASE_FIELDS = {
+    "version", "path", "payload_sha256", "release_sequence", "previous",
+}
+_RUNTIME_POINTER_V1_FIELDS = _RUNTIME_POINTER_BASE_FIELDS | {
+    "activation_set_id", "activation_receipt_sha256", "state",
+    "previous_activation_set_id",
+}
+
+
+def _validate_runtime_pointer_identity(pointer):
+    """Validate the closed runtime identity shared by legacy and activation pointers."""
+    fields = frozenset(pointer) if isinstance(pointer, dict) else frozenset()
+    if not isinstance(pointer, dict) \
+            or fields not in {
+                frozenset(_RUNTIME_POINTER_BASE_FIELDS),
+                frozenset(_RUNTIME_POINTER_V1_FIELDS),
+            } \
+            or pointer.get("path") != pointer.get("version") \
+            or not re.fullmatch(
+                r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",
+                str(pointer.get("version", ""))) \
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(pointer.get("payload_sha256", ""))) \
+            or type(pointer.get("release_sequence")) is not int \
+            or pointer["release_sequence"] < 1:
+        raise BootstrapError("runtime pointer is unsafe")
+    previous = pointer["previous"]
+    previous_fields = {
+        "version", "path", "payload_sha256", "release_sequence",
+    }
+    if previous is not None and (
+            not isinstance(previous, dict)
+            or set(previous) != previous_fields
+            or previous.get("path") != previous.get("version")
+            or not re.fullmatch(
+                r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",
+                str(previous.get("version", "")))
+            or not re.fullmatch(
+                r"[0-9a-f]{64}", str(previous.get("payload_sha256", "")))
+            or type(previous.get("release_sequence")) is not int
+            or previous["release_sequence"] < 1):
+        raise BootstrapError("runtime pointer previous identity is unsafe")
+    return set(pointer) == _RUNTIME_POINTER_V1_FIELDS
+
+
+def _validate_activation_pointer(home, runtime):
+    """Use only the hash-verified active runtime to validate its activation pointer."""
+    tools = runtime / "tools"
+    activation = tools / "loom_activation.py"
+    reliability = tools / "loom_reliability.py"
+    if not activation.is_file() or activation.is_symlink() \
+            or not reliability.is_file() or reliability.is_symlink():
+        raise BootstrapError(
+            "activation pointer requires unavailable verified runtime validation")
+    script = (
+        "import json,sys;"
+        "sys.path.insert(0,sys.argv[1]);"
+        "import loom_activation;"
+        "p=json.loads(open(sys.argv[2],encoding='utf-8').read());"
+        "loom_activation.ActivationStore(sys.argv[3]).validate_pointer(p);"
+        "print('{\"status\":\"valid\"}')"
+    )
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-I", "-B", "-c", script, str(tools),
+             str(home / "runtime" / "current.json"), str(home)],
+            capture_output=True, text=True, timeout=15, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise BootstrapError(
+            f"activation pointer validation could not complete: {exc}") from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or
+                  "verified activation validator rejected the pointer")
+        detail = detail.replace("\r", " ").replace("\n", " ").strip()[:512]
+        raise BootstrapError(f"activation pointer is unsafe: {detail}")
 
 
 def _verified_current_runtime(home):
@@ -409,13 +572,7 @@ def _verified_current_runtime(home):
     if not pointer_path.is_file():
         return None
     pointer = _load(pointer_path, "runtime pointer")
-    if set(pointer) != {
-            "version", "path", "payload_sha256", "release_sequence", "previous"} \
-            or pointer.get("path") != pointer.get("version") \
-            or not re.fullmatch(
-                r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?",
-                str(pointer.get("version", ""))):
-        raise BootstrapError("runtime pointer is unsafe")
+    activation_pointer = _validate_runtime_pointer_identity(pointer)
     versions = (home / "runtime" / "versions").resolve()
     runtime = (versions / pointer["path"]).resolve()
     if not runtime.is_dir() or not runtime.is_relative_to(versions):
@@ -452,6 +609,8 @@ def _verified_current_runtime(home):
     }
     if observed != expected:
         raise BootstrapError("active runtime contains unlisted or missing files")
+    if activation_pointer:
+        _validate_activation_pointer(home, runtime)
     return runtime
 
 
@@ -530,7 +689,7 @@ def _migrate_legacy_staged(home, helper, current_runtime, expected_instance_id, 
 
 def reconcile(plugin_root, home):
     plugin_root = _source_root(plugin_root)
-    home = Path(home).resolve()
+    home = _loom_home_root(home)
     manifest = _load(plugin_root / ".codex-plugin" / "plugin.json", "plugin manifest")
     version = manifest.get("version")
     if not isinstance(version, str) or not re.fullmatch(
@@ -710,13 +869,20 @@ def reconcile(plugin_root, home):
                     "source_receipt_hash": direct_receipt["receipt_hash"],
                     **health,
                 })
-            os.replace(direct_staging, direct_final)
         pointer = {
             "version": version, "path": version,
             "payload_sha256": direct_payload_hash,
             "release_sequence": 1, "previous": None,
         }
-        manager.activate_direct_baseline(pointer)
+        if direct_staging is not None:
+            _activate_staged_direct_runtime(
+                manager, direct_staging, direct_final, pointer,
+                version=version, platform_id=platform_id,
+                binary_name=binary_name, source_receipt=direct_receipt,
+                expected_payload_sha256=direct_payload_hash,
+                reliability_module=loom_reliability)
+        else:
+            manager.activate_direct_baseline(pointer)
         active_runtime = _verified_current_runtime(home)
         launcher = _install_active_launcher(home, active_runtime)
         return {

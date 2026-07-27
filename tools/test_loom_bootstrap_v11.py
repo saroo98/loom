@@ -16,6 +16,7 @@ from unittest import mock
 from pathlib import Path
 
 import loom_plugin_package
+import loom_activation
 import loom_adapter_protocol
 import loom_install
 import loom_orchestrator
@@ -230,6 +231,294 @@ class BootstrapIntegrationTests(unittest.TestCase):
                 json.loads((home / "runtime" / "versions" / value["version"] /
                             ".loom-direct-source-receipt.json").read_text(
                                 encoding="utf-8"))["delivery_authority"])
+
+    def test_bootstrap_rejects_user_profile_root_before_writing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            profile = root / "profile"
+            profile.mkdir()
+            sentinel = profile / "unrelated.txt"
+            sentinel.write_text("preserve", encoding="utf-8")
+
+            environment = {
+                **os.environ, "HOME": str(profile), "USERPROFILE": str(profile)}
+            result = subprocess.run([
+                sys.executable, "-B", str(direct / "scripts" / "loom_bootstrap.py"),
+                "--ensure", "--plugin-root", str(direct), "--home", str(profile)],
+                capture_output=True, text=True, timeout=30, check=False,
+                env=environment)
+
+            self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+            self.assertIn("user-profile root", json.loads(result.stdout)["error"])
+            self.assertEqual("preserve", sentinel.read_text(encoding="utf-8"))
+            self.assertEqual(["unrelated.txt"], sorted(
+                path.name for path in profile.iterdir()))
+
+    def test_bootstrap_rejects_filesystem_root(self):
+        filesystem_root = Path(Path.cwd().anchor)
+        with self.assertRaisesRegex(
+                loom_bootstrap.BootstrapError, "filesystem or user-profile root"):
+            loom_bootstrap._loom_home_root(filesystem_root)
+
+    def test_concurrent_cold_direct_bootstraps_converge_on_one_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            home = root / "home" / ".loom"
+            command = [
+                sys.executable, "-B", str(direct / "scripts" / "loom_bootstrap.py"),
+                "--ensure", "--plugin-root", str(direct), "--home", str(home)]
+
+            processes = [
+                subprocess.Popen(
+                    command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                for _ in range(4)
+            ]
+            completed = [process.communicate(timeout=180) for process in processes]
+
+            for process, (stdout, stderr) in zip(processes, completed):
+                self.assertEqual(0, process.returncode, stdout + stderr)
+                self.assertIn(
+                    json.loads(stdout)["status"], {"activated", "current"})
+            current = json.loads(
+                (home / "runtime" / "current.json").read_text(encoding="utf-8"))
+            runtime = home / "runtime" / "versions" / current["path"]
+            helper, payload_sha256 = loom_bootstrap._verify_recoverable_direct_runtime(
+                runtime, version=current["version"],
+                platform_id=loom_update.platform_id(),
+                binary_name="loom-vault.exe" if os.name == "nt" else "loom-vault",
+                source_receipt=loom_bootstrap._direct_install_receipt(direct))
+            self.assertTrue(helper.is_file())
+            self.assertEqual(current["payload_sha256"], payload_sha256)
+            self.assertEqual(
+                [], list((home / "runtime" / "versions").glob(".*.direct-staged-*")))
+
+    def test_concurrent_direct_activation_rejects_mismatched_existing_destination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            home = root / "home" / ".loom"
+            manager = loom_update.SharedRuntime(home, plugin_roots=[direct])
+            source_receipt = loom_bootstrap._direct_install_receipt(direct)
+            platform_id = loom_update.platform_id()
+            binary_name = "loom-vault.exe" if os.name == "nt" else "loom-vault"
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            staging, final, _helper, payload_sha256 = \
+                loom_bootstrap._stage_direct_runtime(
+                    direct, manager, version=version, platform_id=platform_id,
+                    binary_name=binary_name, source_receipt=source_receipt,
+                    reliability_module=loom_reliability,
+                    package_module=loom_plugin_package)
+            (staging / ".loom-health-receipt.json").write_text(
+                json.dumps({
+                    "schema_version": 1, "version": version,
+                    "delivery_authority": "direct-source-install-unattested",
+                    "source_receipt_hash": source_receipt["receipt_hash"],
+                    "healthy": True, "migration_complete": True,
+                    "disposable_request_passed": True,
+                    "before_inventory_sha256": "0" * 64,
+                    "after_inventory_sha256": "0" * 64,
+                }), encoding="utf-8")
+            final.mkdir(parents=True)
+            marker = final / "unowned-marker.txt"
+            marker.write_text("preserve me", encoding="utf-8")
+            pointer = {
+                "version": version, "path": version,
+                "payload_sha256": payload_sha256,
+                "release_sequence": 1, "previous": None}
+
+            with self.assertRaises(loom_bootstrap.BootstrapError):
+                loom_bootstrap._activate_staged_direct_runtime(
+                    manager, staging, final, pointer,
+                    version=version, platform_id=platform_id,
+                    binary_name=binary_name, source_receipt=source_receipt,
+                    expected_payload_sha256=payload_sha256,
+                    reliability_module=loom_reliability)
+
+            self.assertEqual("preserve me", marker.read_text(encoding="utf-8"))
+            self.assertFalse(staging.exists())
+            self.assertFalse((home / "runtime" / "current.json").exists())
+
+    def test_concurrent_direct_activation_converges_on_verified_same_source_winner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            home = root / "home" / ".loom"
+            manager = loom_update.SharedRuntime(home, plugin_roots=[direct])
+            source_receipt = loom_bootstrap._direct_install_receipt(direct)
+            platform_id = loom_update.platform_id()
+            binary_name = "loom-vault.exe" if os.name == "nt" else "loom-vault"
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+            staged = [
+                loom_bootstrap._stage_direct_runtime(
+                    direct, manager, version=version, platform_id=platform_id,
+                    binary_name=binary_name, source_receipt=source_receipt,
+                    reliability_module=loom_reliability,
+                    package_module=loom_plugin_package)
+                for _ in range(2)
+            ]
+            for staging, _final, _helper, _payload in staged:
+                (staging / ".loom-health-receipt.json").write_text(
+                    json.dumps({
+                        "schema_version": 1, "version": version,
+                        "delivery_authority": "direct-source-install-unattested",
+                        "source_receipt_hash": source_receipt["receipt_hash"],
+                        "healthy": True, "migration_complete": True,
+                        "disposable_request_passed": True,
+                        "before_inventory_sha256": "0" * 64,
+                        "after_inventory_sha256": "0" * 64,
+                    }), encoding="utf-8")
+            first_staging, final, _helper, first_payload = staged[0]
+            pointer = {
+                "version": version, "path": version,
+                "payload_sha256": first_payload,
+                "release_sequence": 1, "previous": None}
+            loom_bootstrap._activate_staged_direct_runtime(
+                manager, first_staging, final, pointer,
+                version=version, platform_id=platform_id,
+                binary_name=binary_name, source_receipt=source_receipt,
+                expected_payload_sha256=first_payload,
+                reliability_module=loom_reliability)
+
+            second_staging, _final, _helper, _second_payload = staged[1]
+            result = loom_bootstrap._activate_staged_direct_runtime(
+                manager, second_staging, final,
+                {**pointer, "payload_sha256": "f" * 64},
+                version=version, platform_id=platform_id,
+                binary_name=binary_name, source_receipt=source_receipt,
+                expected_payload_sha256="f" * 64,
+                reliability_module=loom_reliability)
+
+            self.assertIn(result["status"], {"activated", "current"})
+            self.assertEqual(first_payload, manager.current()["payload_sha256"])
+            self.assertFalse(second_staging.exists())
+
+    def test_bootstrap_accepts_and_fails_closed_on_runtime_activation_pointer(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            home = root / "home" / ".loom"
+            bootstrap_command = [
+                sys.executable, "-B", str(direct / "scripts" / "loom_bootstrap.py"),
+                "--ensure", "--plugin-root", str(direct), "--home", str(home)]
+            first = subprocess.run(
+                bootstrap_command, capture_output=True, text=True,
+                timeout=120, check=False)
+            self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+
+            project = root / "project"
+            project.mkdir()
+            (project / "tool.py").write_text("print('tool')\n", encoding="utf-8")
+            (home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
+                loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
+            environment = {**os.environ, "LOOM_TEST_ALLOW_LEGACY_BACKEND": "1"}
+            message = {
+                "schema_version": 2, "message_type": "invoke",
+                "request_id": "req-activation-pointer",
+                "request": "Plan a small Python command-line tool.",
+                "cwd": str(project),
+            }
+            frame = loom_adapter_protocol.canonical_bytes(
+                loom_adapter_protocol.request_envelope(
+                    message, {"id": "codex", "version": "test"})) + b"\n"
+            invoked = subprocess.run([
+                sys.executable, "-B", str(home / "bin" / "loom.py"),
+                "--home", str(home), "invoke-stdio"],
+                input=frame, capture_output=True, timeout=120, check=False,
+                env=environment)
+            self.assertEqual(
+                0, invoked.returncode,
+                (invoked.stdout + invoked.stderr).decode("utf-8", errors="replace"))
+            self.assertEqual(
+                "action-required",
+                json.loads(invoked.stdout.decode("utf-8"))["status"])
+
+            pointer_path = home / "runtime" / "current.json"
+            pointer = json.loads(pointer_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                loom_activation.POINTER_V1_FIELDS, set(pointer))
+            second = subprocess.run(
+                bootstrap_command, capture_output=True, text=True,
+                timeout=120, check=False)
+            self.assertEqual(0, second.returncode, second.stdout + second.stderr)
+            self.assertEqual("current", json.loads(second.stdout)["status"])
+
+            receipt_path = (
+                home / "runtime" / "activation-sets" /
+                f"{pointer['activation_set_id']}.json")
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            mutations = {
+                "unknown pointer field": {
+                    **pointer, "unexpected": "must fail closed"},
+                "mismatched receipt digest": {
+                    **pointer, "activation_receipt_sha256": "0" * 64},
+            }
+            for label, mutation in mutations.items():
+                with self.subTest(label=label):
+                    loom_reliability.atomic_write_json(pointer_path, mutation)
+                    with self.assertRaisesRegex(
+                            loom_bootstrap.BootstrapError,
+                            "runtime pointer|activation pointer"):
+                        loom_bootstrap._verified_current_runtime(home)
+            loom_reliability.atomic_write_json(pointer_path, pointer)
+            altered_receipt = {**receipt, "purpose": "reactivation"}
+            loom_reliability.atomic_write_json(receipt_path, altered_receipt)
+            with self.assertRaisesRegex(
+                    loom_bootstrap.BootstrapError, "activation pointer"):
+                loom_bootstrap._verified_current_runtime(home)
+            loom_reliability.atomic_write_json(receipt_path, receipt)
+            self.assertEqual(
+                home / "runtime" / "versions" / pointer["version"],
+                loom_bootstrap._verified_current_runtime(home))
+
+    def test_direct_helper_build_uses_short_temporary_target_not_deep_runtime_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plugin = root.joinpath(*(["deep candidate directory"] * 12))
+            crate = plugin / "vault-helper"
+            crate.mkdir(parents=True)
+            (crate / "Cargo.toml").write_text("[package]\nname='fixture'\n", encoding="utf-8")
+            (crate / "Cargo.lock").write_text("# locked\n", encoding="utf-8")
+            versions = root.joinpath(*(["deep owner home"] * 12), "versions")
+            versions.mkdir(parents=True)
+            manager = mock.Mock(versions=versions)
+            receipt = {
+                "install_id": "00000000-0000-4000-8000-000000000001",
+                "receipt_hash": "a" * 64,
+                "files": [
+                    {"path": "vault-helper/Cargo.toml"},
+                    {"path": "vault-helper/Cargo.lock"},
+                ],
+            }
+            targets = []
+
+            def cargo_run(command, **_kwargs):
+                target = Path(command[command.index("--target-dir") + 1])
+                targets.append(target)
+                helper = target / "release" / "loom-vault.exe"
+                helper.parent.mkdir(parents=True)
+                helper.write_bytes(b"fixture")
+                return subprocess.CompletedProcess(command, 0, b"", b"")
+
+            package = mock.Mock()
+            package._copy_helper_executable.side_effect = \
+                lambda source, destination: shutil.copyfile(source, destination)
+            with mock.patch.object(loom_bootstrap.shutil, "which", return_value="cargo"), \
+                    mock.patch.object(
+                        loom_bootstrap.subprocess, "run", side_effect=cargo_run):
+                staging, _final, helper, _digest = loom_bootstrap._stage_direct_runtime(
+                    plugin, manager, version="9.9.9", platform_id="windows-x64",
+                    binary_name="loom-vault.exe", source_receipt=receipt,
+                    reliability_module=loom_reliability, package_module=package)
+            try:
+                self.assertEqual(1, len(targets))
+                self.assertFalse(targets[0].is_relative_to(plugin))
+                self.assertFalse(targets[0].is_relative_to(versions))
+                self.assertLess(len(str(targets[0])), len(str(plugin)))
+                self.assertTrue(helper.is_file())
+            finally:
+                shutil.rmtree(staging, ignore_errors=True)
 
     def test_clean_host_plugin_mcp_bootstraps_lists_and_calls_status(self):
         with tempfile.TemporaryDirectory() as temporary:

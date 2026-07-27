@@ -2,6 +2,7 @@
 """Receipt-proven, fail-closed Loom install/check/uninstall lifecycle."""
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -14,6 +15,10 @@ import loom_reliability
 
 RECEIPT = ".loom-install-receipt.json"
 INSTANCE_MARKER = ".loom-instance-id"
+GENERATED_DIRECTORY_PREFIXES = {
+    ("vault-helper", "target"),
+    ("vault-helper", "fuzz", "target"),
+}
 
 
 class InstallError(RuntimeError):
@@ -37,50 +42,105 @@ def _read_receipt(target):
     return value
 
 
+def _is_install_payload(relative):
+    parts = relative.parts
+    if relative.as_posix() in {RECEIPT, INSTANCE_MARKER} \
+            or "__pycache__" in parts \
+            or relative.suffix.lower() in {".pyc", ".pyo"}:
+        return False
+    return not any(
+        parts[:len(prefix)] == prefix
+        for prefix in GENERATED_DIRECTORY_PREFIXES
+    )
+
+
+def _lock_path(target):
+    digest = hashlib.sha256(
+        str(Path(target)).casefold().encode("utf-8")).hexdigest()[:24]
+    return Path(target).parent / f".loom-install-lock-{digest}"
+
+
+def _source_payload(source):
+    files = {}
+    for path in loom_reliability._regular_files(source):
+        relative = path.relative_to(source)
+        if _is_install_payload(relative):
+            files[relative.as_posix()] = loom_reliability.file_sha256(path)
+    skill_source = source / "skill" / "loom" / "SKILL.md"
+    if skill_source.is_file() and "SKILL.md" not in files:
+        files["SKILL.md"] = loom_reliability.file_sha256(skill_source)
+    return files
+
+
+def _reuse_completed_install(source, target):
+    checked = check(target)
+    receipt = _read_receipt(target)
+    installed = {
+        item["path"]: item["sha256"] for item in receipt["files"]
+        if item["path"] != INSTANCE_MARKER
+    }
+    expected = _source_payload(source)
+    if installed != expected:
+        raise InstallError(
+            "installation target was created concurrently from different bytes")
+    return {**checked, "files_installed": 0, "reused_existing": True}
+
+
 def install(source, target):
     source = _root(source, "installation source", exists=True)
     target = _root(target, "installation target")
-    if not source.is_dir() or target.exists():
-        raise InstallError("installation source must be a directory and target must not exist")
+    if not source.is_dir():
+        raise InstallError("installation source must be a directory")
     if target == source or target.is_relative_to(source) or source.is_relative_to(target):
         raise InstallError("installation source and target must be separate trees")
     target.parent.mkdir(parents=True, exist_ok=True)
     parent = _root(target.parent, "installation target parent", exists=True)
-    staging = Path(tempfile.mkdtemp(prefix=".loom-install-", dir=parent))
-    owned = []
     try:
-        for path in loom_reliability._regular_files(source):
-            relative = path.relative_to(source)
-            if relative.as_posix() in {RECEIPT, INSTANCE_MARKER} \
-                    or "__pycache__" in relative.parts \
-                    or path.suffix.lower() in {".pyc", ".pyo"}:
-                continue
-            destination = staging / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, destination)
-            owned.append(relative.as_posix())
-        skill_source = source / "skill" / "loom" / "SKILL.md"
-        if skill_source.is_file() and "SKILL.md" not in owned:
-            shutil.copyfile(skill_source, staging / "SKILL.md")
-            owned.append("SKILL.md")
-        # Installation identity is owned from the first receipt. Runtime initialization must
-        # never mutate a verified installation or leave an unowned marker that blocks uninstall.
-        marker = staging / INSTANCE_MARKER
-        marker.write_text(str(uuid.uuid4()) + "\n", encoding="utf-8")
-        owned.append(INSTANCE_MARKER)
-        if not owned:
-            raise InstallError("installation source has no regular payload files")
-        install_id = str(uuid.uuid4())
-        receipt = loom_reliability.installation_receipt(
-            staging, owned, install_id=install_id)
-        loom_reliability.atomic_write_json(staging / RECEIPT, receipt)
-        os.replace(staging, target)
-    except BaseException:
-        if staging.exists():
-            shutil.rmtree(staging)
-        raise
-    checked = check(target)
-    return {**checked, "files_installed": len(owned)}
+        lock = loom_reliability.exclusive_file_lock(
+            _lock_path(target), timeout=10.0)
+        with lock:
+            if target.exists():
+                return _reuse_completed_install(source, target)
+            staging = Path(tempfile.mkdtemp(prefix=".loom-install-", dir=parent))
+            owned = []
+            try:
+                for path in loom_reliability._regular_files(source):
+                    relative = path.relative_to(source)
+                    if not _is_install_payload(relative):
+                        continue
+                    destination = staging / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(path, destination)
+                    owned.append(relative.as_posix())
+                skill_source = source / "skill" / "loom" / "SKILL.md"
+                if skill_source.is_file() and "SKILL.md" not in owned:
+                    shutil.copyfile(skill_source, staging / "SKILL.md")
+                    owned.append("SKILL.md")
+                # Installation identity is owned from the first receipt. Runtime initialization
+                # must never mutate a verified installation or leave an unowned marker.
+                marker = staging / INSTANCE_MARKER
+                marker.write_text(str(uuid.uuid4()) + "\n", encoding="utf-8")
+                owned.append(INSTANCE_MARKER)
+                if not owned:
+                    raise InstallError("installation source has no regular payload files")
+                install_id = str(uuid.uuid4())
+                receipt = loom_reliability.installation_receipt(
+                    staging, owned, install_id=install_id)
+                loom_reliability.atomic_write_json(staging / RECEIPT, receipt)
+                identity = loom_reliability.observe_root_identity(staging)
+                loom_reliability.atomic_rename_noreplace(
+                    staging, target, expected_source_identity=identity,
+                    source_role="install-staging",
+                    destination_role="install-target")
+            except BaseException:
+                if staging.exists():
+                    shutil.rmtree(staging)
+                raise
+            checked = check(target)
+            return {**checked, "files_installed": len(owned),
+                    "reused_existing": False}
+    except loom_reliability.ReliabilityError as exc:
+        raise InstallError(str(exc)) from exc
 
 
 def check(target):
