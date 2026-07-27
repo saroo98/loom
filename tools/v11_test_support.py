@@ -119,6 +119,7 @@ def _msvc_environment_from_roots(environment, installation, windows_sdk):
             result["VCToolsInstallDir"] = str(msvc) + os.sep
             result["WindowsSdkDir"] = str(windows_sdk) + os.sep
             result["WindowsSDKVersion"] = sdk_version + os.sep
+            result["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"] = str(linker)
             return result
     return None
 

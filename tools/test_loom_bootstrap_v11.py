@@ -134,6 +134,9 @@ class BootstrapIntegrationTests(unittest.TestCase):
                       environment["PATH"])
         self.assertIn(str(msvc / "lib" / "x64"), environment["LIB"])
         self.assertEqual(version + os.sep, environment["WindowsSDKVersion"])
+        self.assertEqual(
+            str(msvc / "bin" / "Hostx64" / "x64" / "link.exe"),
+            environment["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"])
         with mock.patch.object(loom_update, "platform_id",
                                return_value="windows-x64"):
             self.assertEqual("windows-x64", _host_platform())
