@@ -3,8 +3,11 @@ import copy
 import datetime as dt
 import hashlib
 import json
+import shutil
 import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -495,6 +498,104 @@ class ReleaseStandardTests(unittest.TestCase):
             target, confirmation=installed["install_id"])
         self.assertEqual("uninstalled", removed["status"])
         self.assertFalse(target.exists())
+
+    def test_concurrent_identical_install_reuses_only_verified_matching_bytes(self):
+        source = self._source()
+        target = self.root / "concurrent-installed"
+        first = loom_install.install(source, target)
+        second = loom_install.install(source, target)
+
+        self.assertFalse(first["reused_existing"])
+        self.assertTrue(second["reused_existing"])
+        self.assertEqual(0, second["files_installed"])
+        self.assertEqual(first["install_id"], second["install_id"])
+
+        changed = self.root / "changed-source"
+        shutil.copytree(source, changed)
+        (changed / "README.md").write_text("different bytes\n", encoding="utf-8")
+        with self.assertRaisesRegex(
+                loom_install.InstallError, "different bytes"):
+            loom_install.install(changed, target)
+
+    def test_installer_waits_for_os_released_lock_after_process_termination(self):
+        source = self._source()
+        target = self.root / "post-termination-install"
+        marker = self.root / "lock-held"
+        lock_path = loom_install._lock_path(target)
+        child_script = (
+            "import pathlib,sys,time;"
+            "sys.path.insert(0,sys.argv[1]);"
+            "import loom_reliability;"
+            "lock=loom_reliability.exclusive_file_lock(sys.argv[2],timeout=5);"
+            "lock.__enter__();"
+            "pathlib.Path(sys.argv[3]).write_text('ready',encoding='utf-8');"
+            "time.sleep(60)"
+        )
+        holder = subprocess.Popen(
+            [sys.executable, "-B", "-c", child_script,
+             str(Path(loom_install.__file__).parent), str(lock_path), str(marker)],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        installer = None
+        try:
+            deadline = time.monotonic() + 10
+            while not marker.is_file():
+                if holder.poll() is not None:
+                    stdout, stderr = holder.communicate()
+                    self.fail(
+                        f"lock holder exited early: {stdout!r} {stderr!r}")
+                if time.monotonic() >= deadline:
+                    self.fail("lock holder did not acquire the install lock")
+                time.sleep(0.02)
+            installer = subprocess.Popen(
+                [sys.executable, "-B", str(Path(loom_install.__file__)),
+                 "install", str(source), str(target)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            time.sleep(0.1)
+            self.assertIsNone(installer.poll())
+            holder.terminate()
+            holder.wait(timeout=10)
+            holder.communicate()
+            stdout, stderr = installer.communicate(timeout=20)
+            self.assertEqual(
+                0, installer.returncode,
+                f"stdout={stdout!r}; stderr={stderr!r}")
+            self.assertEqual("installed", loom_install.check(target)["status"])
+        finally:
+            if holder.poll() is None:
+                holder.kill()
+                holder.wait(timeout=10)
+            holder.communicate()
+            if installer is not None and installer.poll() is None:
+                installer.kill()
+                installer.wait(timeout=10)
+
+    def test_source_installer_excludes_only_known_generated_rust_build_trees(self):
+        source = self._source()
+        (source / "vault-helper" / "target" / "debug").mkdir(parents=True)
+        (source / "vault-helper" / "target" / "debug" / "loom-vault.exe").write_bytes(
+            b"generated-root-target")
+        (source / "vault-helper" / "fuzz" / "target" / "debug").mkdir(parents=True)
+        (source / "vault-helper" / "fuzz" / "target" / "debug" / "fuzzer.exe").write_bytes(
+            b"generated-fuzz-target")
+        (source / "docs" / "target").mkdir(parents=True)
+        (source / "docs" / "target" / "legitimate.txt").write_text(
+            "install this\n", encoding="utf-8")
+
+        target = self.root / "installed-source"
+        installed = loom_install.install(source, target)
+        receipt = json.loads(
+            (target / loom_install.RECEIPT).read_text(encoding="utf-8"))
+        installed_paths = {item["path"] for item in receipt["files"]}
+
+        self.assertEqual("installed", installed["status"])
+        self.assertFalse((target / "vault-helper" / "target").exists())
+        self.assertFalse((target / "vault-helper" / "fuzz" / "target").exists())
+        self.assertTrue((target / "docs" / "target" / "legitimate.txt").is_file())
+        self.assertIn("docs/target/legitimate.txt", installed_paths)
+        self.assertFalse(any(
+            path.startswith("vault-helper/target/")
+            or path.startswith("vault-helper/fuzz/target/")
+            for path in installed_paths))
 
     def test_uninstaller_fails_closed_before_deleting_any_file_when_one_changed(self):
         source = self._source()

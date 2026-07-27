@@ -90,45 +90,104 @@ def _observed_type(path):
     raise PathAuthorityError("authorized path has an unsupported type")
 
 
-def create_ownership_receipt(*, path, root, operation_id, expected_type):
+def _created_ownership_receipt(*, path, root, operation_id, expected_type,
+                               absent_authority_sha256):
     path, root, chain = _parent_chain(path, root)
-    try:
-        canonical_operation = str(uuid.UUID(str(operation_id)))
-    except (ValueError, TypeError, AttributeError) as exc:
-        raise PathAuthorityError("ownership operation identity is invalid") from exc
-    if canonical_operation != str(operation_id) or expected_type not in {"file", "directory"} \
-            or _observed_type(path) != expected_type:
+    if expected_type not in {"file", "directory"} \
+            or _observed_type(path) != expected_type \
+            or not isinstance(absent_authority_sha256, str) \
+            or DIGEST.fullmatch(absent_authority_sha256) is None:
         raise PathAuthorityError("ownership receipt subject is invalid")
     body = {
-        "schema_version": 1,
-        "operation_id": canonical_operation,
+        "schema_version": 2,
+        "operation_id": operation_id,
         "path": str(path),
         "root": str(root),
         "expected_type": expected_type,
         "volume": int(path.stat().st_dev),
         "object_identity": int(getattr(path.stat(), "st_ino", 0)),
         "parent_chain_sha256": _hash(chain),
+        "creation_method": "exclusive-create",
+        "path_precondition": "absent",
+        "absent_authority_sha256": absent_authority_sha256,
     }
     body["receipt_sha256"] = _hash(body)
     return body
 
 
+def create_owned_directory(*, path, root):
+    """Exclusively create a directory and return its operation-bound ownership."""
+    path, root, _chain = _parent_chain(path, root)
+    authority = authorize(
+        operation_class="staging", path=path, root=root,
+        expected_type="absent", replacement_policy="atomic-no-replace",
+        cleanup_disposition="preserve")
+    operation_id = str(uuid.uuid4())
+    try:
+        path.mkdir()
+    except FileExistsError as exc:
+        raise PathAuthorityError(
+            "owned directory destination changed after authorization") from exc
+    return _created_ownership_receipt(
+        path=path, root=root, operation_id=operation_id,
+        expected_type="directory",
+        absent_authority_sha256=authority["authority_sha256"])
+
+
+def create_owned_file(*, path, root):
+    """Exclusively create an empty file and return its operation-bound ownership."""
+    path, root, _chain = _parent_chain(path, root)
+    authority = authorize(
+        operation_class="staging", path=path, root=root,
+        expected_type="absent", replacement_policy="atomic-no-replace",
+        cleanup_disposition="preserve")
+    operation_id = str(uuid.uuid4())
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError as exc:
+        raise PathAuthorityError(
+            "owned file destination changed after authorization") from exc
+    else:
+        os.close(descriptor)
+    return _created_ownership_receipt(
+        path=path, root=root, operation_id=operation_id,
+        expected_type="file",
+        absent_authority_sha256=authority["authority_sha256"])
+
+
+def create_ownership_receipt(**_kwargs):
+    """Reject the retired claim-existing-path API."""
+    raise PathAuthorityError(
+        "ownership cannot be asserted for an existing path; create it through "
+        "a path-authority operation")
+
+
 def validate_ownership_receipt(value, *, path, root):
     fields = {
         "schema_version", "operation_id", "path", "root", "expected_type",
-        "volume", "object_identity", "parent_chain_sha256", "receipt_sha256",
+        "volume", "object_identity", "parent_chain_sha256", "creation_method",
+        "path_precondition", "absent_authority_sha256", "receipt_sha256",
     }
     path, root, chain = _parent_chain(path, root)
     if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != 1 \
+            or value.get("schema_version") != 2 \
             or value.get("receipt_sha256") != _hash({
                 key: item for key, item in value.items() if key != "receipt_sha256"}) \
             or value.get("path") != str(path) or value.get("root") != str(root) \
             or value.get("expected_type") != _observed_type(path) \
             or value.get("volume") != int(path.stat().st_dev) \
             or value.get("object_identity") != int(getattr(path.stat(), "st_ino", 0)) \
-            or value.get("parent_chain_sha256") != _hash(chain):
+            or value.get("parent_chain_sha256") != _hash(chain) \
+            or value.get("creation_method") != "exclusive-create" \
+            or value.get("path_precondition") != "absent" \
+            or not isinstance(value.get("absent_authority_sha256"), str) \
+            or DIGEST.fullmatch(value["absent_authority_sha256"]) is None:
         raise PathAuthorityError("ownership receipt does not match the current path")
+    try:
+        if str(uuid.UUID(value["operation_id"])) != value["operation_id"]:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise PathAuthorityError("ownership operation identity is invalid") from exc
     return value
 
 

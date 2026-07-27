@@ -260,7 +260,10 @@ class RecoveryContractSchemaTests(unittest.TestCase):
         schema = json.loads((SCHEMAS / "orchestration-action.schema.json").read_text(
             encoding="utf-8"))
         self.assertEqual("https://json-schema.org/draft/2020-12/schema", schema["$schema"])
-        self.assertEqual("Decrypted Loom orchestration action v9", schema["title"])
+        self.assertEqual(
+            f"Decrypted Loom orchestration action "
+            f"v{loom_orchestrator.ACTION_SCHEMA_VERSION}",
+            schema["title"])
         self.assertIn("authenticated plaintext", schema["description"])
         self.assertIn("does not describe the persisted encrypted file",
                       schema["description"])
@@ -268,7 +271,9 @@ class RecoveryContractSchemaTests(unittest.TestCase):
         self.assertIs(schema["additionalProperties"], False)
         self.assertEqual(self.ACTION_FIELDS, set(schema["required"]))
         self.assertEqual(self.ACTION_FIELDS, set(schema["properties"]))
-        self.assertEqual(9, schema["properties"]["schema_version"]["const"])
+        self.assertEqual(
+            loom_orchestrator.ACTION_SCHEMA_VERSION,
+            schema["properties"]["schema_version"]["const"])
 
     def test_seed_manifest_v1_and_v2_are_both_strict(self):
         legacy = {

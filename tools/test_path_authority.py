@@ -12,10 +12,8 @@ class PathAuthorityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             staging = root / "staging"
-            staging.mkdir()
-            receipt = loom_path_authority.create_ownership_receipt(
-                path=staging, root=root, operation_id=str(uuid.uuid4()),
-                expected_type="directory")
+            receipt = loom_path_authority.create_owned_directory(
+                path=staging, root=root)
             authority = loom_path_authority.authorize(
                 operation_class="staging", path=staging, root=root,
                 expected_type="directory", replacement_policy="owned-exact",
@@ -49,10 +47,8 @@ class PathAuthorityTests(unittest.TestCase):
                     expected_type="absent", replacement_policy="forbid",
                     cleanup_disposition="preserve")
             target = root / "owned"
-            target.mkdir()
-            receipt = loom_path_authority.create_ownership_receipt(
-                path=target, root=root, operation_id=str(uuid.uuid4()),
-                expected_type="directory")
+            receipt = loom_path_authority.create_owned_directory(
+                path=target, root=root)
             other = root / "other"
             other.mkdir()
             with self.assertRaises(loom_path_authority.PathAuthorityError):
@@ -76,15 +72,29 @@ class PathAuthorityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             target = root / "owned"
-            target.mkdir()
-            receipt = loom_path_authority.create_ownership_receipt(
-                path=target, root=root, operation_id=str(uuid.uuid4()),
-                expected_type="directory")
+            receipt = loom_path_authority.create_owned_directory(
+                path=target, root=root)
             target.rmdir()
             target.mkdir()
             with self.assertRaises(loom_path_authority.PathAuthorityError):
                 loom_path_authority.validate_ownership_receipt(
                     receipt, path=target, root=root)
+
+    def test_preexisting_path_cannot_be_claimed_or_removed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            target = root / "preexisting"
+            target.mkdir()
+            sentinel = target / "sentinel.txt"
+            sentinel.write_text("preserve", encoding="utf-8")
+            with self.assertRaises(loom_path_authority.PathAuthorityError):
+                loom_path_authority.create_owned_directory(
+                    path=target, root=root)
+            with self.assertRaises(loom_path_authority.PathAuthorityError):
+                loom_path_authority.create_ownership_receipt(
+                    path=target, root=root, operation_id="0" * 36,
+                    expected_type="directory")
+            self.assertEqual("preserve", sentinel.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

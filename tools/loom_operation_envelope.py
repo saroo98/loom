@@ -4,7 +4,9 @@
 import datetime as dt
 import hashlib
 import json
+import os
 import re
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -103,10 +105,11 @@ def _validate_event(event, *, sequence, previous):
 def validate(value):
     fields = {
         "schema_version", "operation_id", "operation_class", "subject_digest",
-        "typed_sidecar", "created_at", "events", "envelope_sha256",
+        "typed_sidecar", "created_at", "durability_scope", "events",
+        "envelope_sha256",
     }
     if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != 1 \
+            or value.get("schema_version") != 2 \
             or not isinstance(value.get("operation_class"), str) \
             or SAFE_NAME.fullmatch(value["operation_class"]) is None \
             or not DIGEST.fullmatch(str(value.get("subject_digest", ""))) \
@@ -121,13 +124,20 @@ def validate(value):
     except (ValueError, TypeError, AttributeError) as exc:
         raise EnvelopeError("operation identity is invalid") from exc
     sidecar = value.get("typed_sidecar")
-    if not isinstance(sidecar, dict) or set(sidecar) != {"type", "id", "digest"} \
+    if not isinstance(sidecar, dict) or set(sidecar) != {
+            "type", "id", "contract_digest", "final_digest"} \
             or not isinstance(sidecar["type"], str) \
             or SAFE_NAME.fullmatch(sidecar["type"]) is None \
             or not isinstance(sidecar["id"], str) or not sidecar["id"] \
             or len(sidecar["id"]) > 128 \
-            or not DIGEST.fullmatch(sidecar["digest"]):
+            or not DIGEST.fullmatch(sidecar["contract_digest"]) \
+            or (sidecar["final_digest"] is not None
+                and not DIGEST.fullmatch(str(sidecar["final_digest"]))):
         raise EnvelopeError("operation sidecar identity is invalid")
+    if value.get("durability_scope") not in {
+            "process-crash-confirmed", "power-loss-confirmed",
+            "power-loss-unverified"}:
+        raise EnvelopeError("operation durability scope is invalid")
     previous = "0" * 64
     for sequence, event in enumerate(value["events"]):
         previous = _validate_event(event, sequence=sequence, previous=previous)
@@ -166,14 +176,18 @@ def begin(directory, *, operation_class, subject_digest, sidecar_type,
         raise EnvelopeError("operation identity already exists")
     created = _stamp(now)
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "operation_id": identifier,
         "operation_class": operation_class,
         "subject_digest": subject_digest,
         "typed_sidecar": {
-            "type": sidecar_type, "id": sidecar_id, "digest": sidecar_digest,
+            "type": sidecar_type, "id": sidecar_id,
+            "contract_digest": sidecar_digest, "final_digest": None,
         },
         "created_at": created,
+        "durability_scope": (
+            "process-crash-confirmed" if os.name == "nt"
+            else "power-loss-confirmed"),
         "events": [_event(
             sequence=0, phase="created", previous_digest="0" * 64,
             side_effect_boundary="before-first-effect",
@@ -205,7 +219,8 @@ def begin_or_reuse(directory, *, operation_class, subject_digest, sidecar_type,
             "operation_class": operation_class,
             "subject_digest": subject_digest,
             "typed_sidecar": {
-                "type": sidecar_type, "id": sidecar_id, "digest": sidecar_digest,
+                "type": sidecar_type, "id": sidecar_id,
+                "contract_digest": sidecar_digest, "final_digest": None,
             },
         }
         if any(value[key] != item for key, item in expected.items()):
@@ -248,7 +263,8 @@ def read(path):
 
 def transition(path, *, phase, side_effect_boundary, state_may_have_changed,
                primary_failure=None, secondary_failures=(),
-               cleanup_disposition="not-needed", now=None):
+               cleanup_disposition="not-needed", final_sidecar_digest=None,
+               now=None):
     value = read(path)
     if phase not in PHASES or value["events"][-1]["phase"] in TERMINAL:
         raise EnvelopeError("operation transition is not allowed")
@@ -273,6 +289,11 @@ def transition(path, *, phase, side_effect_boundary, state_may_have_changed,
     if len(value["events"]) >= MAX_EVENTS:
         raise EnvelopeError("operation envelope exceeds its event bound")
     value["events"].append(candidate)
+    if final_sidecar_digest is not None:
+        if phase not in TERMINAL or not isinstance(final_sidecar_digest, str) \
+                or DIGEST.fullmatch(final_sidecar_digest) is None:
+            raise EnvelopeError("operation final sidecar digest is invalid")
+        value["typed_sidecar"]["final_digest"] = final_sidecar_digest
     return _write(path, value)
 
 
@@ -295,3 +316,80 @@ def reconcile_incomplete(path, *, subject_digest, reconciler, now=None):
         state_may_have_changed=outcome["state_may_have_changed"],
         secondary_failures=outcome["secondary_failures"],
         cleanup_disposition=outcome["cleanup_disposition"], now=now)
+
+
+def run_supervised(*, operation_class, command, cwd, timeout, environment=None,
+                   allowed_roots=(), protected_roots=(), capabilities=(),
+                   cancel_requested=None, max_transcript_bytes=256 * 1024,
+                   capture_output=False, journal_root=None):
+    """Run a contained subprocess with a durable envelope before process start."""
+    import loom_operation_supervisor
+
+    cwd = Path(cwd).resolve()
+    if journal_root is None:
+        identity = hashlib.sha256(str(cwd).encode("utf-8")).hexdigest()[:24]
+        journal_root = Path(tempfile.gettempdir()).resolve() / \
+            "loom-operation-journal" / identity
+    journal_root = Path(journal_root).resolve()
+    operation_id = str(uuid.uuid4())
+    contract = {
+        "operation_class": operation_class,
+        "command": list(command),
+        "cwd": str(cwd),
+        "timeout": float(timeout),
+        "environment_keys": sorted((environment or {}).keys()),
+        "allowed_roots": sorted(str(Path(item).resolve()) for item in allowed_roots),
+        "protected_roots": sorted(
+            str(Path(item).resolve()) for item in protected_roots),
+        "capabilities": sorted(set(capabilities)),
+    }
+    contract_digest = _hash(contract)
+    path, _value = begin(
+        journal_root, operation_class=operation_class,
+        subject_digest=contract_digest,
+        sidecar_type="operation-supervisor-receipt",
+        sidecar_id=f"{operation_id}.json",
+        sidecar_digest=contract_digest,
+        operation_id=operation_id)
+    transition(
+        path, phase="started", side_effect_boundary="before-process-start",
+        state_may_have_changed=False)
+    transition(
+        path, phase="effect", side_effect_boundary="process-start-authorized",
+        state_may_have_changed=True)
+    try:
+        result = loom_operation_supervisor.run(
+            operation_class=operation_class, command=command, cwd=cwd,
+            timeout=timeout, environment=environment, allowed_roots=allowed_roots,
+            protected_roots=protected_roots, capabilities=capabilities,
+            cancel_requested=cancel_requested,
+            max_transcript_bytes=max_transcript_bytes,
+            capture_output=capture_output, operation_id=operation_id)
+        receipt = result[0] if capture_output else result
+        failure = receipt.get("primary_failure")
+        phase = {
+            "cancelled": "cancelled",
+            "timed-out": "timed-out",
+        }.get(failure, "passed" if receipt.get("status") == "passed" else "failed")
+        transition(
+            path, phase=phase,
+            side_effect_boundary="supervisor-receipt-committed",
+            state_may_have_changed=True, primary_failure=failure,
+            secondary_failures=receipt.get("secondary_failures", ()),
+            cleanup_disposition=(
+                "completed" if receipt.get("survivors_confirmed_zero")
+                else "failed"),
+            final_sidecar_digest=receipt["receipt_sha256"])
+        return result
+    except BaseException as exc:
+        try:
+            current = read(path)
+            if current["events"][-1]["phase"] not in TERMINAL:
+                transition(
+                    path, phase="failed",
+                    side_effect_boundary="supervisor-failed-without-receipt",
+                    state_may_have_changed=True,
+                    primary_failure=type(exc).__name__[:120],
+                    cleanup_disposition="preserved")
+        finally:
+            raise

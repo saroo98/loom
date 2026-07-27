@@ -1,3 +1,4 @@
+import ast
 import tempfile
 import subprocess
 import sys
@@ -125,6 +126,47 @@ class OperationEnvelopeTests(unittest.TestCase):
             pending = loom_operation_envelope.incomplete(root)
             self.assertEqual(1, len(pending))
             self.assertEqual("started", pending[0][1]["events"][-1]["phase"])
+
+    def test_supervised_operation_writes_envelope_before_process_and_binds_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            journal = root / "journal"
+            receipt, stdout, stderr = loom_operation_envelope.run_supervised(
+                operation_class="fixture",
+                command=[sys.executable, "-c", "print('ok')"],
+                cwd=root, timeout=10, allowed_roots=[root],
+                journal_root=journal, capture_output=True)
+            self.assertEqual([b"ok"], stdout.splitlines())
+            self.assertEqual(b"", stderr)
+            entries = sorted(journal.glob("*.json"))
+            self.assertEqual(1, len(entries))
+            envelope = loom_operation_envelope.read(entries[0])
+            self.assertEqual(
+                ["created", "started", "effect", "passed"],
+                [event["phase"] for event in envelope["events"]])
+            self.assertEqual(
+                receipt["operation_id"], envelope["operation_id"])
+            self.assertEqual(
+                receipt["receipt_sha256"],
+                envelope["typed_sidecar"]["final_digest"])
+            expected = (
+                "process-crash-confirmed" if __import__("os").name == "nt"
+                else "power-loss-confirmed")
+            self.assertEqual(expected, envelope["durability_scope"])
+
+    def test_sensitive_production_modules_cannot_bypass_write_ahead_envelope(self):
+        root = Path(__file__).resolve().parent
+        for name in ("loom_clean_room.py", "loom_lifecycle.py", "loom_release.py"):
+            tree = ast.parse((root / name).read_text(encoding="utf-8"), filename=name)
+            bypasses = [
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "run"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "loom_operation_supervisor"
+            ]
+            self.assertEqual([], bypasses, f"{name} bypasses operation envelope")
 
 
 if __name__ == "__main__":

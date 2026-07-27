@@ -13,6 +13,7 @@ from pathlib import Path
 import loom_reliability
 import loom_release_subject
 import loom_operation_supervisor
+import loom_operation_envelope
 
 
 class CleanRoomError(RuntimeError):
@@ -37,7 +38,7 @@ def _prepare_rust_environment(cut, home, environment):
     if not rustc or not cargo:
         raise CleanRoomError("clean-room Rust verification requires rustc and cargo")
     def run_tool(command, *, cwd=cut, child_environment=environment, timeout=30):
-        receipt, stdout, stderr = loom_operation_supervisor.run(
+        receipt, stdout, stderr = loom_operation_envelope.run_supervised(
             operation_class="clean-room-toolchain",
             command=command, cwd=Path(cwd).resolve(), environment=child_environment,
             timeout=timeout, allowed_roots=[cut, home],
@@ -171,7 +172,7 @@ def verify(cut, *, timeout=2100):
             ) if path.exists()
         ]
         try:
-            operation, stdout, stderr = loom_operation_supervisor.run(
+            operation, stdout, stderr = loom_operation_envelope.run_supervised(
                 operation_class="clean-room-verification",
                 command=[
                     sys.executable, "-B", str(cut / "tools" / "loom_release.py"),

@@ -372,7 +372,7 @@ def _terminate(process, containment):
 def run(*, operation_class, command, cwd, timeout, environment=None,
         allowed_roots=(), protected_roots=(), capabilities=(),
         cancel_requested=None, max_transcript_bytes=MAX_TRANSCRIPT_BYTES,
-        capture_output=False):
+        capture_output=False, operation_id=None):
     """Run one command and return a closed content-bound containment receipt."""
     if not isinstance(operation_class, str) \
             or SAFE_CAPABILITY.fullmatch(operation_class) is None \
@@ -390,6 +390,13 @@ def run(*, operation_class, command, cwd, timeout, environment=None,
                    or SAFE_CAPABILITY.fullmatch(item) is None for item in capabilities) \
             or (cancel_requested is not None and not callable(cancel_requested)):
         raise SupervisorError("operation specification is invalid")
+    if operation_id is None:
+        operation_id = str(uuid.uuid4())
+    try:
+        if str(uuid.UUID(str(operation_id))) != str(operation_id):
+            raise ValueError
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise SupervisorError("operation identity is invalid") from exc
     cwd = _safe_path(cwd, "operation cwd", directory=True)
     allowed = [_safe_path(item, "allowed root") for item in allowed_roots]
     if allowed and not any(cwd == root or root in cwd.parents for root in allowed):
@@ -399,7 +406,7 @@ def run(*, operation_class, command, cwd, timeout, environment=None,
     env = minimal_environment(environment)
     body = {
         "schema_version": 1,
-        "operation_id": str(uuid.uuid4()),
+        "operation_id": operation_id,
         "operation_class": operation_class,
         "command_sha256": hashlib.sha256(_canonical(list(command))).hexdigest(),
         "executable": str(command[0]),

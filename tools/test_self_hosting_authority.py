@@ -22,6 +22,10 @@ def verifier(message, signature, public_key):
 
 
 def authorize(value, **kwargs):
+    kwargs.setdefault("candidate_subject", value["candidate_subject"])
+    kwargs.setdefault("candidate_source_digest", value["candidate_source_digest"])
+    kwargs.setdefault("dirty_diff_digest", value["dirty_diff_digest"])
+    kwargs.setdefault("candidate_build_digest", value["candidate_build_digest"])
     return loom_self_hosting.authorize(
         value, trusted_controller_keys=TRUSTED,
         signature_verifier=verifier, **kwargs)
@@ -63,7 +67,7 @@ class SelfHostingAuthorityTests(unittest.TestCase):
         for action, role in loom_self_hosting.ACTION_ROLE.items():
             result = authorize(
                 value, action=action, actor=value["roles"][role],
-                candidate_subject=DIGESTS[1], now=NOW)
+                now=NOW)
             self.assertEqual(role, result["role"])
             self.assertEqual(
                 action in {"verify", "certify"}, result["independent"])
@@ -75,7 +79,7 @@ class SelfHostingAuthorityTests(unittest.TestCase):
                     loom_self_hosting.SelfHostingError):
                 authorize(
                     value, action=action, actor="candidate-runtime",
-                    candidate_subject=DIGESTS[1], now=NOW)
+                    now=NOW)
 
     def test_role_collapse_wrong_subject_stale_and_tampered_receipts_fail_closed(self):
         collapsed = dict(receipt())
@@ -91,7 +95,6 @@ class SelfHostingAuthorityTests(unittest.TestCase):
         with self.assertRaises(loom_self_hosting.SelfHostingError):
             authorize(
                 receipt(), action="verify", actor="external-verifier",
-                candidate_subject=DIGESTS[1],
                 now=NOW + dt.timedelta(days=3))
         tampered = dict(receipt())
         tampered["candidate_build_digest"] = DIGESTS[6]
@@ -105,18 +108,18 @@ class SelfHostingAuthorityTests(unittest.TestCase):
         for action in ("verify", "certify"):
             authorize(
                 value, action=action, actor="external-verifier",
-                candidate_subject=DIGESTS[1], now=NOW)
+                now=NOW)
         with self.assertRaises(loom_self_hosting.SelfHostingError):
             authorize(
                 value, action="repair", actor="controller-1.8.15",
-                candidate_subject=DIGESTS[1], now=NOW)
+                now=NOW)
 
     def test_signing_requires_external_verification_bound_to_same_subject(self):
         value = receipt(external_verification_digest=None)
         with self.assertRaises(loom_self_hosting.SelfHostingError):
             authorize(
                 value, action="sign", actor="release-authority",
-                candidate_subject=DIGESTS[1], now=NOW)
+                now=NOW)
 
     def test_forged_or_untrusted_controller_signature_fails_closed(self):
         value = receipt()
@@ -126,13 +129,33 @@ class SelfHostingAuthorityTests(unittest.TestCase):
         with self.assertRaises(loom_self_hosting.SelfHostingError):
             authorize(
                 forged, action="verify", actor="external-verifier",
-                candidate_subject=DIGESTS[1], now=NOW)
+                now=NOW)
         with self.assertRaises(loom_self_hosting.SelfHostingError):
             loom_self_hosting.authorize(
                 value, action="verify", actor="external-verifier",
                 candidate_subject=DIGESTS[1], now=NOW,
+                candidate_source_digest=DIGESTS[2],
+                dirty_diff_digest=DIGESTS[3],
+                candidate_build_digest=DIGESTS[4],
                 trusted_controller_keys={"other": PUBLIC},
                 signature_verifier=verifier)
+
+    def test_exact_retry_is_idempotent_but_changed_world_fails_closed(self):
+        value = receipt()
+        first = authorize(
+            value, action="verify", actor="external-verifier", now=NOW)
+        second = authorize(
+            value, action="verify", actor="external-verifier", now=NOW)
+        self.assertEqual(first, second)
+        for field in (
+                "candidate_source_digest", "dirty_diff_digest",
+                "candidate_build_digest"):
+            with self.subTest(field=field), self.assertRaisesRegex(
+                    loom_self_hosting.SelfHostingError,
+                    "candidate world changed"):
+                authorize(
+                    value, action="verify", actor="external-verifier", now=NOW,
+                    **{field: DIGESTS[6]})
 
 
 if __name__ == "__main__":

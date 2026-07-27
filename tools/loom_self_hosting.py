@@ -171,7 +171,23 @@ def validate(value, *, now=None):
     return value
 
 
-def authorize(value, *, action, actor, candidate_subject, now,
+def candidate_observation(*, candidate_subject, candidate_source_digest,
+                          dirty_diff_digest, candidate_build_digest):
+    observation = {
+        "candidate_subject": candidate_subject,
+        "candidate_source_digest": candidate_source_digest,
+        "dirty_diff_digest": dirty_diff_digest,
+        "candidate_build_digest": candidate_build_digest,
+    }
+    if any(not isinstance(item, str) or DIGEST.fullmatch(item) is None
+           for item in observation.values()):
+        raise SelfHostingError("self-hosting candidate observation is invalid")
+    return observation
+
+
+def authorize(value, *, action, actor, candidate_subject,
+              candidate_source_digest, dirty_diff_digest,
+              candidate_build_digest, now,
               trusted_controller_keys, signature_verifier):
     validate(value, now=now)
     authority = value["authority"]
@@ -190,8 +206,16 @@ def authorize(value, *, action, actor, candidate_subject, now,
         raise SelfHostingError("self-hosting stable-controller signature is invalid")
     if action not in ACTIONS or action not in value["allowed_actions"]:
         raise SelfHostingError("self-hosting action is not authorized")
-    if candidate_subject != value["candidate_subject"]:
-        raise SelfHostingError("self-hosting candidate subject changed")
+    observed = candidate_observation(
+        candidate_subject=candidate_subject,
+        candidate_source_digest=candidate_source_digest,
+        dirty_diff_digest=dirty_diff_digest,
+        candidate_build_digest=candidate_build_digest)
+    expected = {key: value[key] for key in observed}
+    if observed != expected:
+        changed = sorted(key for key in observed if observed[key] != expected[key])
+        raise SelfHostingError(
+            "self-hosting candidate world changed: " + ", ".join(changed))
     required_role = ACTION_ROLE[action]
     if actor != value["roles"][required_role]:
         raise SelfHostingError("self-hosting actor substituted the required role")
@@ -202,11 +226,16 @@ def authorize(value, *, action, actor, candidate_subject, now,
         raise SelfHostingError("verification-only work cannot receive implementation causality")
     if action == "sign" and value["external_verification_digest"] is None:
         raise SelfHostingError("release signing requires external verification of this subject")
-    return {
+    authorization = {
         "action": action,
         "role": required_role,
         "candidate_subject": candidate_subject,
+        "candidate_source_digest": candidate_source_digest,
+        "dirty_diff_digest": dirty_diff_digest,
+        "candidate_build_digest": candidate_build_digest,
         "independent": action in {"verify", "certify"},
         "causal_scope": value["causal_scope"],
         "receipt_id": value["receipt_id"],
     }
+    authorization["authorization_id"] = _hash(authorization)
+    return authorization
