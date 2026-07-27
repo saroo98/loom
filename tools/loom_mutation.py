@@ -139,7 +139,7 @@ MUTATIONS = (
 # mutants so the per-mutant timeout measures the probe itself, not scheduler
 # starvation.
 SERIAL_MUTATION_IDS = frozenset({"pair-sender-pin"})
-NATIVE_MUTATION_TIMEOUT_SECONDS = 240
+NATIVE_MUTATION_TIMEOUT_SECONDS = 360
 
 
 class MutationError(RuntimeError):

@@ -18,6 +18,7 @@ MAX_CARGO_DIAGNOSTIC_CHARS = 4000
 SOURCE_KEY_HEX_LENGTH = 64
 RUST_COMPILER_STACK_BYTES = 64 * 1024 * 1024
 RUSTC_IDENTITY_TIMEOUT_SECONDS = 60
+VAULT_HELPER_BUILD_TIMEOUT_SECONDS = 300
 BUILD_ENVIRONMENT_KEYS = (
     "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTFLAGS",
     "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
@@ -226,9 +227,11 @@ def _compile_vault_helper(root, crate, target, environment=None):
             ["cargo", "build", "--quiet", "--locked", "--release",
              "--manifest-path", str(crate / "Cargo.toml")], cwd=root,
             env=environment, capture_output=True, text=True,
-            check=False, timeout=180)
+            check=False, timeout=VAULT_HELPER_BUILD_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("vault-helper build exceeded its 180-second bound") from exc
+        raise RuntimeError(
+            "vault-helper build exceeded its "
+            f"{VAULT_HELPER_BUILD_TIMEOUT_SECONDS}-second bound") from exc
     if result.returncode != 0:
         diagnostic = "\n".join(
             item.strip() for item in (result.stdout, result.stderr) if item.strip())

@@ -28,7 +28,7 @@ import v11_test_support
 from v11_test_support import (
     RUSTC_IDENTITY_TIMEOUT_SECONDS, _build_environment_identity,
     _host_platform, _msvc_environment_from_roots, _native_build_environment,
-    _rustc_identity,
+    _rustc_identity, VAULT_HELPER_BUILD_TIMEOUT_SECONDS,
     build_vault_helper, package_evidence, package_source_commit,
 )
 
@@ -148,6 +148,7 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertEqual(
             str(msvc / "bin" / "Hostx64" / "x64" / "link.exe"),
             environment["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"])
+        self.assertEqual(300, VAULT_HELPER_BUILD_TIMEOUT_SECONDS)
         with mock.patch.object(loom_update, "platform_id",
                                return_value="windows-x64"):
             self.assertEqual("windows-x64", _host_platform())
