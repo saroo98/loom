@@ -75,7 +75,15 @@ class PathAuthorityTests(unittest.TestCase):
             receipt = loom_path_authority.create_owned_directory(
                 path=target, root=root)
             target.rmdir()
+            fillers = []
+            for index in range(64):
+                filler = root / f"identity-filler-{index}"
+                filler.mkdir()
+                fillers.append(filler)
             target.mkdir()
+            self.assertNotEqual(
+                receipt["object_identity"], target.stat().st_ino,
+                "fixture did not produce a different observable object identity")
             with self.assertRaises(loom_path_authority.PathAuthorityError):
                 loom_path_authority.validate_ownership_receipt(
                     receipt, path=target, root=root)
