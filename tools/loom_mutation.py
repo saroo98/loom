@@ -134,6 +134,12 @@ MUTATIONS = (
      "test_self_asserted_external_evidence_cannot_inflate_a_score"),
 )
 
+# This mutant invokes a test class whose class setup compiles the real Rust
+# helper. Run it without CPU and linker contention from the parallel Python-only
+# mutants so the per-mutant timeout measures the probe itself, not scheduler
+# starvation.
+SERIAL_MUTATION_IDS = frozenset({"pair-sender-pin"})
+
 
 class MutationError(RuntimeError):
     pass
@@ -175,12 +181,24 @@ def run(root, *, minimum_score=100, timeout=120):
     root = Path(root).resolve()
     if not (root / "tools").is_dir() or not 1 <= minimum_score <= 100:
         raise MutationError("mutation root or score is invalid")
-    # Every mutant owns a complete disposable tree and process, so bounded parallel
-    # execution changes no test semantics while avoiding serial copy/startup tax.
-    workers = min(4, len(MUTATIONS))
+    serial = [item for item in MUTATIONS if item[0] in SERIAL_MUTATION_IDS]
+    parallel = [item for item in MUTATIONS if item[0] not in SERIAL_MUTATION_IDS]
+    by_id = {
+        item["id"]: item
+        for item in (_run_mutation(root, mutation, timeout)
+                     for mutation in serial)
+    }
+    # Every remaining mutant owns a complete disposable tree and process.
+    # They are Python-only, so bounded parallel execution avoids copy/startup
+    # tax without making a native compiler compete for the same CPU budget.
+    workers = min(4, len(parallel))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
-        receipts = list(executor.map(
-            lambda mutation: _run_mutation(root, mutation, timeout), MUTATIONS))
+        by_id.update({
+            item["id"]: item
+            for item in executor.map(
+                lambda mutation: _run_mutation(root, mutation, timeout), parallel)
+        })
+    receipts = [by_id[mutation[0]] for mutation in MUTATIONS]
     killed = sum(item["killed"] for item in receipts)
     score = round(killed * 100 / len(receipts), 2)
     return {"schema_version": 1,

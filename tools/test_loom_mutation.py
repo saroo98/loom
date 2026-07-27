@@ -35,6 +35,23 @@ class MutationGateTests(unittest.TestCase):
         self.assertEqual(".test-cache", cache.name)
         self.assertEqual("loom", cache.parent.name)
 
+        events = []
+
+        def scheduled_run(_root, scheduled_mutation, _timeout):
+            events.append(scheduled_mutation[0])
+            return {"id": scheduled_mutation[0], "test": scheduled_mutation[4],
+                    "killed": True, "returncode": 1}
+
+        with mock.patch.object(
+                loom_mutation, "_run_mutation", side_effect=scheduled_run):
+            result = loom_mutation.run(ROOT, minimum_score=100, timeout=1)
+
+        self.assertEqual("passed", result["status"])
+        self.assertEqual("pair-sender-pin", events[0])
+        self.assertEqual(
+            [item[0] for item in loom_mutation.MUTATIONS],
+            [receipt["id"] for receipt in result["receipts"]])
+
     def test_every_named_trust_guard_mutation_is_killed(self):
         result = loom_mutation.run(ROOT, minimum_score=90, timeout=120)
         self.assertEqual("passed", result["status"])
