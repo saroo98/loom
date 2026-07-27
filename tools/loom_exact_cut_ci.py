@@ -57,8 +57,12 @@ def run(source, cut, output, *, suite_output=None, forbidden_tokens=()):
                 b"loom-empty-release-subject-v1").hexdigest()
         sidecar_contract = hashlib.sha256(
             ("exact-cut-receipt:" + output.name).encode("utf-8")).hexdigest()
+        # The exact-cut verifier must never add its own mutable sidecars to the
+        # source tree before the public bytes are selected. The cut is already
+        # required to live outside the source, so its parent is the durable,
+        # source-independent authority root for this operation.
         envelope_path, envelope = loom_operation_envelope.begin(
-            (output.parent / ".loom-operations").resolve(),
+            (cut.parent / ".loom-operations").resolve(),
             operation_class="exact-cut",
             subject_digest=source_subject,
             sidecar_type="exact-cut-receipt",
