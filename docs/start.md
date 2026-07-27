@@ -1,73 +1,111 @@
 # Start with Loom
 
-Loom runs inside Codex and keeps its evolving owner state on your device. You use one surface:
+Loom’s owner-facing request surface is:
 
 ```text
 /loom <request>
 ```
 
-## Install from the Loom marketplace
+The current published release is 1.8.15. Later `main` and remediation commits are not part of that
+artifact. Check [release readiness](./release-readiness.md) and
+[current limitations](./limitations.md) before treating a host or platform as supported.
 
-Requirements:
+## Requirements
 
-- A current Codex installation with plugin support
 - Python 3.10 or newer
+- A clean installation target
+- A host integration whose current capability evidence is sufficient for your use
 
-Add the public Loom marketplace from a terminal:
+This repository does not claim that a public Codex marketplace listing has been approved.
 
-```powershell
-codex plugin marketplace add saroo98/loom
+## Use the published artifact
+
+Download the immutable
+[Loom 1.8.15 release](https://github.com/saroo98/loom/releases/tag/v1.8.15).
+
+The expected SHA-256 for `loom-plugin-v1.8.15.zip` is:
+
+```text
+1a252a9ce02a6a86235bb1831617af7f1a83680852326b1399d1b9455132b49a
 ```
 
-Then:
+Verify the downloaded file:
 
-1. Open **Codex → Plugins**.
-2. Find **Loom** and select **Install**.
-3. Review and trust only the Loom integration shown by Codex.
-4. Restart Codex once.
-5. Open a project and write:
+```powershell
+(Get-FileHash .\loom-plugin-v1.8.15.zip -Algorithm SHA256).Hash.ToLower()
+```
+
+The release also contains `SHA256SUMS` and `RELEASE-SUBJECT.json`. Treat a digest mismatch, missing
+release subject, or changed archive as a hard stop.
+
+## Evaluate from public source
+
+For a direct-source evaluation:
+
+```powershell
+git clone https://github.com/saroo98/loom.git
+cd loom
+python -B tools/loom_release.py verify . --source-classification public-release
+python tools/loom_install.py install . "$HOME/.codex/skills/loom"
+python "$HOME/.codex/skills/loom/scripts/loom_bootstrap.py" --ensure --plugin-root "$HOME/.codex/skills/loom" --home "$HOME/.loom"
+```
+
+A direct-source install is labeled `direct-source-install-unattested`. Its ownership receipt proves
+local byte consistency, not publisher identity. It does not become a signed-release install.
+
+## Make the first request
+
+Open a project and write:
 
 ```text
 /loom Plan a safe health-check endpoint for this project.
 ```
 
-Loom should inspect the current project and return the plan or one concrete condition that must be
-resolved first. It does not need repository-local Loom files.
+Loom should return a reviewable plan or one bounded condition that must be resolved first. Review:
 
-## What the plan contains
-
-A Loom plan identifies:
-
-- the proposed implementation steps;
-- files that may change;
+- the exact project and observed state;
+- proposed steps and likely touch paths;
 - facts, assumptions, and unresolved decisions;
-- how important assumptions will be checked; and
-- the tests or runtime evidence required for completion.
+- whether implementation authority exists; and
+- the evidence required before completion.
 
-Review and correct the plan before implementation starts.
+A blocking result authorizes no fallback implementation. Resolve the condition and begin a fresh
+request so the plan and authority describe the current world.
 
-## If marketplace installation is unavailable
+## What the plan can contain
 
-Use the immutable
-[Loom 1.8.15 release](https://github.com/saroo98/loom/releases/tag/v1.8.15) and follow its
-signed-artifact instructions. Do not install an unverified archive over an active signed runtime.
+Depending on consequence, uncertainty, domain coverage, and consumer need:
+
+- a project-inspection receipt;
+- plan contract and dependencies;
+- bounded work orders;
+- assumptions, decisions, and planning obligations;
+- implementation-authority state;
+- verification and recovery evidence; and
+- an owner-facing result with consequence, freshness, reversibility, verification, and one next
+  action.
+
+Small work does not require every artifact. Produced artifacts have a consumer and decision;
+skipped artifacts have a reason.
 
 ## Check the installation
 
-Ask through the same Loom surface:
+Ask through the same request surface:
 
 ```text
 /loom Check Loom's health.
 ```
 
-Loom reports its runtime, integration, vault, and relevant blocking condition without exposing
-owner-memory bodies.
+Loom should report the runtime, integration, vault, and relevant blocking condition without
+exposing owner-memory bodies.
 
 ## Local data and support
 
-Loom sends no telemetry. Owner learning and preferences remain in the local owner vault and are
-excluded from the public package. Read the [privacy policy](../PRIVACY.md) for the exact boundary.
+Loom sends no Loom telemetry. Owner learning and preferences remain in the local owner vault and
+are excluded from the public package. Read the [privacy policy](../PRIVACY.md) for the exact
+boundary.
 
 If installation or invocation fails, open a
-[GitHub issue](https://github.com/saroo98/loom/issues) with the Loom version, Codex version,
-operating system, and the exact bounded error message. Do not attach your private vault.
+[GitHub issue](https://github.com/saroo98/loom/issues) with the Loom version, host version,
+operating system, and exact bounded error message. Do not attach the private vault, credentials,
+owner-memory bodies, or unrelated repository content.

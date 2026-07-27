@@ -1,200 +1,332 @@
 <p align="center">
   <a href="https://saroo98.github.io/loom/">
-    <img src="./docs/readme-hero.svg" alt="Loom maps one request through the current world, domain rules, an exact plan, real verification, and scoped learning." width="100%">
+    <img src="./docs/readme-hero.svg" alt="Loom keeps planning separate from implementation authority across request, plan, proof, recovery, and completion." width="100%">
   </a>
 </p>
 
 <p align="center">
-  <strong>Planning intelligence for AI coding agents.</strong><br>
-  One request becomes a current, domain-aware plan that must earn execution.
+  <strong>Planning and verification control for AI coding agents.</strong><br>
+  One request becomes bounded work that must remain tied to the world it was planned against.
 </p>
 
 <p align="center">
-  <a href="https://saroo98.github.io/loom/">Explore Loom</a> ·
-  <a href="https://github.com/saroo98/loom/releases/tag/v1.8.15">Signed 1.8.15 release</a> ·
-  <a href="#install">Install</a> ·
-  <a href="#proof-not-promises">Evidence</a> ·
-  <a href="./PRIVACY.md">Privacy</a>
+  <a href="https://saroo98.github.io/loom/">Website</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="./docs/roadmap-v3.md">Roadmap v3</a> ·
+  <a href="./docs/limitations.md">Limitations</a>
 </p>
 
 ---
 
-## One surface
+## What Loom is
+
+Loom is a local-first planning and verification control layer for AI coding agents. It inspects the
+current project, makes uncertainty explicit, produces a bounded plan and work orders, separates
+planning from implementation authority, and represents the evidence required before completion.
+
+Loom is not a coding model, a general autonomous executor, or a guarantee that an implementation is
+correct. The coding host still performs the work. Loom defines and checks the lifecycle around that
+work.
+
+The owner-facing request surface is:
 
 ```text
 /loom <request>
 ```
 
-That is the interface. Loom keeps project inspection, tiering, domain discovery, artifact
-selection, work orders, gates, verification, learning, and cleanup behind it.
+## Why Loom exists
 
-Loom is not another coding agent and it is not a template library. It is the control plane between
-what a person asks for and what an agent may safely build.
+A prompt rarely contains the complete working world. The repository may have uncommitted changes,
+local instructions, architectural constraints, domain rules, unresolved decisions, and validation
+that only makes sense in the real runtime.
 
-## One request, six decisions
+Without an explicit control layer, an agent can produce a plausible plan for stale state, treat the
+plan as permission to act, and call a green status “complete” without proving the requested
+outcome. Loom is designed to keep those states separate and reviewable.
 
-| Route | Loom has to establish | Why it matters |
+## Principal capabilities
+
+Where the repository contains an implementation and tests, Loom can:
+
+- inspect committed, staged, unstaged, and untracked project state as one bounded world;
+- distinguish facts, assumptions, unknowns, contradictions, and human decisions;
+- scale planning depth with consequence, uncertainty, scope, and domain coverage;
+- produce consumer-driven planning artifacts and bounded work orders;
+- bind authorization to exact plan content and a pre-implementation baseline;
+- require declared real-medium evidence before completion;
+- represent blocking conditions, recovery, retries, cancellation, and reversibility;
+- keep general, domain, project, component, temporary, device, and installation state separate;
+- build a public release from an allowlist and scan the resulting files for private material; and
+- verify installation ownership, updates, rollback, and removal through explicit receipts.
+
+These are implementation capabilities, not universal support or reliability claims. Exact status
+and missing evidence are recorded in
+[`docs/capabilities.json`](./docs/capabilities.json),
+[`docs/release-readiness.md`](./docs/release-readiness.md), and
+[`docs/limitations.md`](./docs/limitations.md).
+
+## Current project status
+
+Status at this documentation cut, 2026-07-27:
+
+| Surface | Status | Evidence boundary |
 |---|---|---|
-| **Current world** | The real project, committed state, staged and unstaged changes, untracked files, lifecycle, and time drift | A plan for yesterday's repository is not a safe plan |
-| **Domain** | The governing invariants, current facts, uncertainty, and real proof medium | Generic software advice cannot replace accounting, 3D, firmware, research, or an unfamiliar field |
-| **Plan** | Only the artifacts a named consumer needs for a named decision | Small work stays small; ceremony has to justify its cost |
-| **Authorize** | Exact work orders, touched paths, acceptance evidence, and a sealed pre-build baseline | Approval belongs to exact content, not a filename |
-| **Verify** | Evidence from the real medium before completion | A written “passed” flag is not proof |
-| **Learn** | What helped, what hurt, where it belongs, and when it should expire | Useful judgment transfers; project and domain residue does not become a permanent prompt tax |
+| Published release | `v1.8.15`, published 2026-07-25 | Signed tag and release assets exist; the plugin ZIP digest is `1a252a9ce02a6a86235bb1831617af7f1a83680852326b1399d1b9455132b49a` |
+| Default branch | `main` at `17be7f58ff43c56339a39f90f03e2bacf2c00896` | PR #32 merged the Phase 1–2 remediation; its 9 required quality checks and 21 native-compatibility checks passed |
+| Remediation | Merged through [PR #32](https://github.com/saroo98/loom/pull/32) | No known Critical or High blocker was reported at merge; the merged code is not thereby released, installed, deployed, or independently certified |
+| Website work | `codex/loom-website-documentation` rebased onto the PR #32 merge | Public-facing branch only; it does not alter the installed Loom artifact and is not deployed |
+| Generated readiness | `not-ready` | No current supported host or native platform claims in the generated readiness record |
 
-```text
-request
-   │
-   ├── current world ── uncertain? ── block or resolve
-   ├── domain rules  ── unknown?   ── discover and re-gate
-   ├── exact plan    ── changed?   ── invalidate authorization
-   ├── real proof    ── missing?   ── refuse completion
-   └── scoped outcome evidence    ── admit, demote, archive, or forget
+The PR checks establish the recorded merge checks for that exact change, not release promotion,
+installation, deployment, general availability, universal support, or independent assurance. See
+[Roadmap v3](./docs/roadmap-v3.md) for the remaining evidence and promotion gates.
+
+## How a request moves through Loom
+
+```mermaid
+flowchart LR
+    A["Owner request"] --> B["Current project observation"]
+    B --> C["Plan contract and work orders"]
+    C --> D{"Exact authorization gate"}
+    D -->|blocked or changed| E["Resolve, re-plan, or recover"]
+    E --> B
+    D -->|authorized| F["Host implementation"]
+    F --> G["Real-medium validation"]
+    G -->|insufficient or failed| E
+    G -->|qualifying evidence| H["Owner-facing completion state"]
 ```
 
-## Small work stays small
+The important boundary is between authoring a plan and authorizing implementation. A plan can be
+reviewed without permission to execute it. Authorization is tied to exact content and observed
+state, so plan drift or world drift invalidates the earlier authority.
 
-A low-consequence fix receives one compact contract, one bounded work order, and one targeted real
-check. Loom promotes it only when consequence, uncertainty, scope, or missing domain coverage makes
-the small path unsafe.
+### Planning and authorization lifecycle
 
-| Request shape | Result |
-|---|---|
-| Fix a CSV header typo | Current file state, one work order, one targeted check |
-| Replace local authentication with passkeys | Architecture, security, migration, rollback, testing, rollout, and recovery decisions |
-| Plan a laboratory calibration procedure | Domain discovery first; execution remains blocked until authority and proof are applicable |
+1. **Observe** the exact project and classify unsafe, changing, partial, or unknown state.
+2. **Plan** only the artifacts needed by a named consumer making a named decision.
+3. **Review and authorize** exact work orders against a sealed pre-build baseline.
+4. **Implement** through the host under the granted scope.
+5. **Validate** in the declared real medium.
+6. **Recover or complete** with a bounded receipt and an owner-facing next action.
 
-Every candidate artifact is accounted for. It is produced for a named consumer making a named
-decision, or skipped with a reason.
+## What users can review
 
-## The useful part is what Loom refuses
+Depending on the request, Loom can expose:
 
-Loom fails closed when trust-critical state is unknown.
+- the project-inspection receipt and world fingerprint;
+- the plan contract, dependencies, assumptions, decisions, and planning obligations;
+- bounded work orders, likely touch paths, and acceptance evidence;
+- the action and continuation-authority state;
+- verification evidence, failure reasons, and recovery receipts;
+- the final owner message, including consequence, freshness, reversibility, verification, and one
+  next action.
 
-- The repository changes during planning: the gate no longer describes the same world.
-- A domain authority or current fact is missing: discovery must resolve it before execution.
-- A work-order plan changes after approval: authorization no longer matches.
-- A deliverable existed before planning: the plan cannot take causal credit for it.
-- No declared target changed: a no-op cannot be called implementation.
-- Real-medium evidence is absent: completion remains unearned.
-- A local adapter conflicts with the shared runtime: Loom refuses split-brain execution.
+Small work does not need every possible artifact. A skipped artifact should have a reason; a
+produced artifact should have a consumer and decision.
 
-These refusals are the product, not edge-case decoration.
+## Validation and recovery model
 
-## Learning without one growing prompt
+Loom keeps a written claim separate from qualifying evidence:
 
-Loom keeps learning local, scoped, evidence-bound, and bounded.
+- a `passed` field is not proof by itself;
+- a deliverable that existed before planning cannot receive causal credit for the planned work;
+- a no-op cannot be called implementation;
+- a changed plan or target cannot reuse stale authorization;
+- a failed gate does not silently grant repair authority; and
+- unsupported verification media remain unsupported.
 
-| Scope | What belongs there | When it can load |
-|---|---|---|
-| General | Earned calibration, review preferences, and transferable judgment | Across projects when evidence supports transfer |
-| Domain | Rules specific to accounting, 3D, firmware, mobile, data, or another field | Only for matching domain work |
-| Project | Repository facts, local decisions, outcomes, and project preferences | Only for the exact project lineage |
-| Installation | Runtime, device, and adapter ownership state | Only inside that installation boundary |
+Recovery records what failed, what was preserved or quarantined, whether the action is reversible,
+and which boundary must be crossed again. It does not guarantee that every failure can be recovered
+automatically.
 
-Loom records provenance, confidence, utility, help, and harm. Active context is capped at 16 records
-and 8 KB. Unused domain learning becomes dormant. Project facts archive with the project. Forgetting
-removes content and retains only the bounded deletion commitment required to stop an old device or
-backup from resurrecting it.
+## Installation
 
-Counts are not called improvement. Loom reports benefit only when the evidence supports it.
+### Published release
 
-## Codex assurance modes
-
-The Codex plugin exposes one visible command with two mechanically labeled assurance levels:
-
-- **Standard** uses the local stdio integration and the same sealed Loom runtime without requiring
-  hook trust.
-- **Verified** is an explicit opt-in lifecycle-hook layer. It adds request sealing and lifecycle
-  observations, preserves unrelated hooks, records ownership receipts, and remains honest about
-  host paths that ordinary hooks cannot govern.
-
-Both modes use the same owner vault, memory selection, planning method, and sealed action format.
-Standard work is never relabeled as Verified work.
-
-## Install
-
-The verified installable artifact is
+The current public artifact is
 [`loom-plugin-v1.8.15.zip`](https://github.com/saroo98/loom/releases/download/v1.8.15/loom-plugin-v1.8.15.zip).
-Its SHA-256 is:
+
+Expected SHA-256:
 
 ```text
 1a252a9ce02a6a86235bb1831617af7f1a83680852326b1399d1b9455132b49a
 ```
 
-Verify the downloaded artifact:
+Verify the downloaded file before installation:
 
 ```powershell
-python -B tools/loom_release_verify.py loom-plugin-v1.8.15.zip
+(Get-FileHash .\loom-plugin-v1.8.15.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
-For a direct public-source install:
+The release also includes `SHA256SUMS` and `RELEASE-SUBJECT.json`. Follow the
+[start guide](./docs/start.md) and release instructions for the exact artifact. This repository
+does not claim that a public Codex marketplace listing has been approved.
+
+### Direct source evaluation
+
+For a public-source evaluation:
 
 ```powershell
 git clone https://github.com/saroo98/loom.git
 cd loom
+python -B tools/loom_release.py verify . --source-classification public-release
 python tools/loom_install.py install . "$HOME/.codex/skills/loom"
 python "$HOME/.codex/skills/loom/scripts/loom_bootstrap.py" --ensure --plugin-root "$HOME/.codex/skills/loom" --home "$HOME/.loom"
 ```
 
-Requirements are Python 3.10 or newer and a clean checkout. Direct source installation proves byte
-ownership, not publisher identity, and is labeled accordingly. A public Codex marketplace listing
-is not claimed until submission and approval actually happen.
+Requirements are Python 3.10 or newer and a clean checkout. A direct-source install proves local
+byte ownership, not publisher identity, and is labeled accordingly.
 
-Open a project and ask for the work:
+## Quick start
+
+Open a project and ask Loom for a plan:
 
 ```text
-/loom Migrate local authentication to passkeys without locking out existing users.
+/loom <request>
 ```
 
-The installer creates a new target, hashes every owned file, records an installation identity, and
-verifies the copy. Removal is all-or-nothing: if an owned file changed, Loom refuses to delete it.
+For example, the request can ask for a safe health-check endpoint for the current project.
 
-## Privacy is a build property
+Review:
 
-Loom is local-first and has no Loom telemetry.
+- the exact target and observed project state;
+- proposed steps and likely touch paths;
+- facts, assumptions, and unresolved decisions;
+- the implementation-authority state; and
+- the checks required before completion.
 
-The public builder starts from a positive allowlist, scans every filename and file byte, rejects
-redirected or dangerous paths, checks text and binary content for owner tokens and secret
-signatures, and emits a content-bound manifest. A claimed protection that would protect nothing
-fails loudly.
+If Loom returns a blocking condition, resolve that condition and start a fresh request. A terminal
+block does not authorize fallback implementation.
 
-Owner memory, private project content, credentials, transcripts, local paths, and executable private
-adaptations are not public-release material. The exact boundary is documented in
-[PRIVACY.md](./PRIVACY.md).
+## Architecture overview
 
-## Proof, not promises
+| Area | Responsibility |
+|---|---|
+| Stable launcher and bootstrap | Select and verify the active runtime without placing mutable owner state inside the runtime version |
+| Project inspection | Freeze the current target, instructions, changes, lifecycle, and relevant owner state |
+| Planning intelligence | Route consequence and domain coverage, select artifacts, and construct the plan contract |
+| Authority and orchestration | Seal exact work, enforce continuation rules, and keep planning distinct from execution |
+| Verification and recovery | Bind evidence, completion, failure, cleanup, quarantine, and recovery receipts |
+| Owner vault and scoped state | Preserve encrypted owner state, selection boundaries, transfer, merge, and forgetting |
+| Adapters | Translate supported host surfaces into one bounded protocol without upgrading the host’s real authority |
+| Release boundary | Build, scan, inventory, sign, verify, update, roll back, and uninstall exact artifacts |
 
-Loom separates source inventory, local tests, real-host evidence, provider receipts, longitudinal
-outcomes, independent review, and public adoption. One class cannot silently stand in for another.
+The detailed contract map is in [`docs/architecture.md`](./docs/architecture.md).
 
-- [Capability registry](./docs/capabilities.json): mechanical claims mapped to enforcement and tests.
-- [Release readiness](./docs/release-readiness.md): generated status with missing proof left visible.
-- [Current limitations](./docs/limitations.md): proof Loom does not yet have.
-- [Unknown-domain contract](./docs/unknown-domain-intelligence.md): what discovery can and cannot establish.
-- [Architecture](./docs/architecture.md): runtime, vault, learning, adapters, updates, and recovery.
-- [Operations](./docs/operations.md): update, rollback, uninstall, and conflict behavior.
-- [Generated inventory](./docs/generated-evidence.json): live repository counts, explicitly not a test-pass claim.
+## Repository structure
 
-Loom does not claim perfection or independent production certification. Those require continuing
-real-host, provider, longitudinal, unfamiliar-user, and hostile-review evidence against exact
-release artifacts.
+| Path | Contents |
+|---|---|
+| `loom/` | Shipped planning, verification, memory, and host-facing instructions |
+| `tools/` | Runtime, lifecycle, release, evaluation, and test modules |
+| `scripts/` | Stable bootstrap and installed entry points |
+| `schemas/` | Persisted and exchanged JSON contracts |
+| `contracts/` | Versioned policy and fact contracts |
+| `templates/` | Planning and lifecycle artifact templates |
+| `docs/` | GitHub Pages site, architecture, status, limitations, and generated evidence |
+| `vault-helper/` | Native encrypted-vault helper and its Rust tests |
+| `.github/workflows/` | Fast, full, hostile, compatibility, Pages, and release gates |
 
-## Verify this source
+## Development workflow
+
+1. Create an isolated branch and worktree from the intended base.
+2. Keep real owner state and the installed `~/.loom` out of tests. Use disposable homes, runtime
+   directories, vaults, and installation targets.
+3. Make the smallest change that satisfies the relevant contract.
+4. Run targeted tests for changed behavior before wider gates.
+5. Regenerate committed evidence only through the repository tools.
+6. Review the exact diff, privacy boundary, compatibility, and recovery path.
+7. Treat release promotion as a separate operation bound to exact-main evidence.
+
+Useful bounded checks include:
 
 ```powershell
-python -B tools/loom_release.py verify . --source-classification public-release
+python -B tools/loom_test.py fast --max-seconds 30 --output fast-test-timings.json
+python -B tools/loom_docs.py generate --root .
+python -B tools/loom_readiness.py . --check
+python -B tools/loom_version.py .
 ```
 
-That runs the release suite, adaptability scenarios, all-file privacy firewall, offline audit,
-reproducibility checks, installer cycle, performance contracts, documentation audit, and bounded
-longitudinal checks.
+Do not point tests at a developer’s real owner vault or active installation.
 
-Local verification is necessary. It is not independent certification.
+## Testing strategy
+
+The generated inventory on the PR #32 merge discovers 1,218 test methods in 109 test modules.
+That figure is a repository inventory, not a claim that the full suite passed in this website task.
+
+The repository separates:
+
+- targeted unit and contract tests for changed behavior;
+- a bounded cross-platform pull-request gate;
+- exact-public-cut release suites;
+- native helper builds and Python compatibility cells;
+- model, mutation, hostile, domain, and privacy checks;
+- real-host and provider receipts; and
+- independent evidence, which internal tests cannot replace.
+
+The merged remediation checks and remaining release or assurance gaps are tracked in
+[Roadmap v3](./docs/roadmap-v3.md). Do not infer a green release state from test count or merge
+status.
+
+## Platform and capability notes
+
+The repository contains adapters and native build jobs for several hosts and platforms. Presence of
+code, a simulated conformance test, or a successful helper build is not the same as current support.
+
+At this documentation cut, generated readiness records:
+
+- 0 supported claims;
+- 9 experimental host claims;
+- 1 stale host claim;
+- 2 unsupported host claims; and
+- 14 unverified release, platform, and external-assurance claims.
+
+Consult [`docs/release-readiness.md`](./docs/release-readiness.md) before relying on a host,
+platform, or release capability.
+
+## Current limitations
+
+Loom does not currently establish:
+
+- independent hostile certification of an exact release;
+- universal host or platform support;
+- guaranteed recovery, reliability, security, or performance;
+- persistent improvement from the existence of learning records;
+- authority over host behavior the adapter cannot observe or enforce; or
+- completed roadmap functionality that lacks bound implementation and verification evidence.
+
+The complete list is maintained in [`docs/limitations.md`](./docs/limitations.md).
+
+## Roadmap summary
+
+Roadmap v3 prioritizes the safety and self-hosting foundation before new product surfaces:
+
+1. close the remaining exact-cut and release-promotion evidence gaps;
+2. establish one truth authority, neutral identity, and measurement harness;
+3. build the Proofline semantic and owner-facing trust state;
+4. add scope-creep detection and reviewer-ready proof bundles;
+5. improve bounded speed and outcome-specific verification;
+6. strengthen living proof and measured memory;
+7. earn exact host, platform, release-passport, and independent evidence.
+
+Items are marked complete only at the evidence level they have earned. See
+[`docs/roadmap-v3.md`](./docs/roadmap-v3.md).
+
+## Contributing
+
+Read [`CONTRIBUTING.md`](./CONTRIBUTING.md). Contributions must preserve the local-first privacy
+boundary, least authority, explicit evidence classes, compatibility, and recoverable lifecycle.
+Do not include owner vault contents, local paths, credentials, private research, or generated
+artifacts that were not produced by the documented workflow.
+
+## Licence
+
+Loom is licensed under the [Apache License 2.0](./LICENSE).
 
 ---
 
 <p align="center">
   <strong>Plan from the current world. Verify in the real one.</strong><br>
-  Local-first · no telemetry · Python 3.10+ · Apache-2.0
+  Local-first · no Loom telemetry · Python 3.10+ · Apache-2.0
 </p>
