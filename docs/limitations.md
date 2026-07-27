@@ -2,6 +2,11 @@
 
 Loom fails closed around evidence it does not possess.
 
+- Phase 1–2 remediation merged through PR #32 at
+  `17be7f58ff43c56339a39f90f03e2bacf2c00896`. Its 9 required quality checks and 21
+  native-compatibility checks passed, with no known Critical or High blocker reported at merge.
+  This merge evidence does not make the remediation released, installed, deployed, generally
+  available, independently certified, or sufficient for generated support claims.
 - Actual improvement for a particular owner is **[UNVERIFIED]** until that owner's exact task,
   domain, tier, and risk partition accumulates valid evidence whose uncertainty clears the declared
   material threshold. Memory count, selection count, one outcome, and shadow-only comparison do not
@@ -52,15 +57,17 @@ Loom fails closed around evidence it does not possess.
   not provide a portable host-level filesystem/network sandbox. Loom protects the original target
   from relative-path mutation and detects target drift; command authority outside that snapshot is
   **[UNVERIFIED]** until an OS sandbox provider is configured and certified.
-- The exact six-platform marketplace package is **[UNVERIFIED]** until independent x64 and ARM64
+- The exact six-platform plugin package is **[UNVERIFIED]** until independent x64 and ARM64
   builds, their second reproducible builds, SBOMs, provenance statements, and the final signed
   package all pass the package builder. The builder opens and hashes every claimed evidence
   artifact; local source tests do not substitute for those release inputs.
 - The canonical deterministic ZIP builder, independent receipt verifier, semantic Cargo.lock SBOM
-  reconciliation, and provenance schema are implemented and locally tested. GitHub attestations,
-  native A/B helper rebuilds, a signed tag, and an immutable draft asset remain **[UNVERIFIED]**
-  until the release workflow runs against the exact candidate bytes.
-- Fresh marketplace installation trusts the Codex host as the initial delivery authority. Loom can
+  reconciliation, and provenance schema are implemented and locally tested. The published 1.8.15
+  tag and assets exist, but generated readiness still has no qualifying release subject. Later
+  candidate bytes remain **[UNVERIFIED]** until the release workflow and every required evidence
+  cell pass against that exact candidate.
+- If host-marketplace distribution becomes available, fresh installation trusts the Codex host as
+  the initial delivery authority. A public marketplace listing is not currently claimed. Loom can
   detect internal corruption on first install, but cannot prove independence from a malicious host
   using a verifier delivered by that same host. Subsequent updates use the existing verified
   launcher before executing new payload code.
@@ -69,14 +76,14 @@ Loom fails closed around evidence it does not possess.
   platform helper, first bootstrap also requires a local Rust toolchain with all locked dependencies
   available offline. Direct-source authority cannot replace an active runtime or satisfy a signed-
   release claim.
-- Automatic host delivery is **[UNVERIFIED]** because Codex marketplace refresh behavior is owned
-  by Codex. Once a newer plugin payload is present, Loom's verification, migration, activation,
-  and rollback are automatic and offline.
+- Automatic host delivery is **[UNVERIFIED]** because host distribution and refresh behavior are
+  outside Loom's authority. Once a newer plugin payload is present, Loom's verification, migration,
+  activation, and rollback are automatic and offline.
 - Device revocation rotates the data key locally and forces every other paired device to obtain a
   complete new checkpoint. Automatic re-wrapping and transport to every remaining device is not
   yet implemented; those devices remain dormant rather than receiving or contributing state.
 - The natural-language move and restore intents currently stop at the unavoidable authorization
-  or recovery-material checkpoint. A marketplace host UI for selecting the pairing payload or
+  or recovery-material checkpoint. A host UI for selecting the pairing payload or
   encrypted backup is not present in this source tree.
 - The bootstrap migrates the exact verified active Loom 1.0 instance. Discovery and creation of
   separate inactive candidate vaults for additional independent legacy installations is not yet
