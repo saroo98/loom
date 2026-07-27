@@ -44,6 +44,6 @@ installation.
 
 ## Copy constraints
 
-Every claim must be grounded in Loom 1.8.16 source, release evidence, or an explicit limitation.
+Every claim must be grounded in Loom 1.8.17 source, release evidence, or an explicit limitation.
 Use short declarative sentences. Avoid inflated quality claims, generic AI language, comparison
 copy, and fabricated outcomes.
