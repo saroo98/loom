@@ -2,14 +2,18 @@
 
 import datetime as dt
 import hashlib
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
+from contextlib import redirect_stdout
 
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_gate  # noqa: E402
@@ -20,6 +24,7 @@ import loom_lifecycle  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_adapter_protocol  # noqa: E402
 import loom_domain_discovery  # noqa: E402
+import loom_domain  # noqa: E402
 import loom_memory  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_plan_author  # noqa: E402
@@ -146,11 +151,13 @@ period-close behavior, and dated jurisdiction rules.
 | Domain | Invariant | Evidence target | Required real medium | Status |
 |---|---|---|---|---|
 | accounting | balanced postings | testing.md and WO-001 | double-entry property tests | verified |
-| accounting | currency precision | testing.md and WO-001 | dated jurisdiction edge cases | verified |
+| accounting | currency precision | testing.md and WO-001 | dated jurisdiction, tax-period, and filed-period cases | verified |
 | accounting | immutable audit trail | decisions.md and WO-001 | double-entry property tests | verified |
-| accounting | reconciliation | testing.md and WO-001 | dated jurisdiction edge cases | verified |
+| accounting | reconciliation | testing.md and WO-001 | double-entry property tests | verified |
+| accounting | reversal and adjusting-entry semantics | testing.md and WO-001 | double-entry property tests | verified |
 | accounting | period close | testing.md and WO-001 | double-entry property tests | verified |
-| accounting | jurisdiction/effective-date rules | testing.md and WO-001 | dated jurisdiction edge cases | verified |
+| accounting | tax-period calendar and filed-period lock/reopen authority | testing.md and WO-001 | dated jurisdiction, tax-period, and filed-period cases | verified |
+| accounting | jurisdiction/effective-date rules | testing.md and WO-001 | double-entry property tests | verified |
 
 ## Current facts to verify
 | Domain | Fact | Source | Status |
@@ -179,7 +186,7 @@ The work order names the real process evidence required for acceptance.
 | Domain | Medium | Target | Status |
 |---|---|---|---|
 | accounting | double-entry property tests | prove a release-relevant domain invariant | planned |
-| accounting | dated jurisdiction edge cases | prove a release-relevant domain invariant | planned |
+| accounting | dated jurisdiction, tax-period, and filed-period cases | prove a release-relevant domain invariant | planned |
 """)
     _write(pack / "work-orders" / "WO-001-accounting.md", f"""---
 id: WO-001
@@ -409,6 +416,59 @@ class ProductionOrchestratorTests(unittest.TestCase):
              *values], input=stdin, capture_output=True, text=True, encoding="utf-8",
             errors="replace", timeout=60)
 
+    def test_remember_does_not_claim_success_when_tombstone_blocks_reentry(self):
+        class RetiredMemoryAdapter:
+            @staticmethod
+            def remember(_context, _statement):
+                return {
+                    "id": "965289d2-e2f1-4128-bd2d-a458cf2bca81",
+                    "status": "forgotten",
+                }
+
+        handler = loom_orchestrator.default_handlers(
+            root=self.repo, owner_home=self.home,
+            memory_adapter=RetiredMemoryAdapter())["remember"]
+        context = types.SimpleNamespace(
+            intent="remember",
+            request_text="Remember that plans should stay concise.",
+            prepared=types.SimpleNamespace(
+                instance_id="instance", route_contract={"tier": "S"}),
+            project_id="p-" + "1" * 32)
+
+        result = handler(context)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("memory-remains-forgotten", result["code"])
+        self.assertFalse(result["success"])
+        self.assertIn("remains permanently forgotten", result["user_message"])
+
+    def test_planning_intelligence_failure_is_a_bounded_json_block(self):
+        envelope = loom_adapter_protocol.request_envelope({
+            "schema_version": 2,
+            "message_type": "invoke",
+            "request_id": "req-planning-intelligence-block",
+            "request": "Plan a project",
+            "cwd": str(self.repo),
+        }, {"id": "codex", "version": "test"})
+        output = io.StringIO()
+        with mock.patch.object(
+                loom_orchestrator.loom_adapter_protocol,
+                "read_single_frame", return_value=envelope), \
+                mock.patch.object(
+                    loom_orchestrator, "invoke",
+                    side_effect=loom_orchestrator.loom_planning_intelligence.
+                    PlanningIntelligenceError("active specialist modules exceed the tier bound")), \
+                redirect_stdout(output):
+            returncode = loom_orchestrator.main([
+                "invoke-stdio", "--home", str(self.home),
+                "--install-root", str(self.installed),
+            ])
+        self.assertEqual(2, returncode)
+        result = json.loads(output.getvalue())
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("RUNTIME_BLOCKED", result["code"])
+        self.assertIn("specialist modules", result["error"])
+
     def complete_machine_authored_plan(self):
         action = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
@@ -566,9 +626,19 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("plan", action["intent"])
         self.assertEqual("M", action["tier"])
         self.assertEqual(["accounting"], action["domains"])
-        self.assertEqual("automatic", action["continuation_authority"]["mode"])
-        self.assertFalse(action["continuation_authority"]["owner_authorized"])
+        self.assertEqual(
+            "explicit-authority", action["continuation_authority"]["mode"])
+        self.assertTrue(action["continuation_authority"]["owner_authorized"])
+        self.assertEqual(
+            "high", action["continuation_authority"]["facts"]["consequence"])
+        self.assertTrue(action["continuation_authority"]["facts"][
+            "legal_or_safety_judgment"])
         self.assertEqual("progress", action["owner_message"]["state"])
+        self.assertTrue(action["owner_message"]["changes_made"])
+        self.assertEqual("unavailable", action["owner_message"]["undo_status"])
+        self.assertIn(
+            "no project deliverable was changed",
+            action["owner_message"]["summary"].casefold())
         self.assertEqual(2, len(action["owner_message"]["human"].splitlines()))
         contract = action["plan_contract"]
         self.assertEqual(
@@ -592,9 +662,12 @@ class ProductionOrchestratorTests(unittest.TestCase):
         )
         self.assertEqual(
             {"balanced postings", "currency precision", "immutable audit trail",
-             "reconciliation", "period close", "jurisdiction/effective-date rules"},
+             "reconciliation", "reversal and adjusting-entry semantics", "period close",
+             "tax-period calendar and filed-period lock/reopen authority",
+             "jurisdiction/effective-date rules"},
             {item["invariant"] for item in contract["required_domain_invariants"]},
         )
+
         sealed_action = json.loads(
             Path(action["action_path"]).read_text(encoding="utf-8"))
         self.assertEqual(contract, sealed_action["plan_contract"])
@@ -622,7 +695,11 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(900, result["usage"]["legacy_declared_total_tokens"])
         self.assertIsNone(result["usage"]["processed_total_tokens"])
         self.assertEqual([], loom_gate.verify(
-            self.repo / "plans", self.repo, require_authorized=True))
+            self.repo / "plans", self.repo))
+        self.assertIn(
+            "implementation is not authorized",
+            loom_gate.verify(
+                self.repo / "plans", self.repo, require_authorized=True))
         self.assertTrue(result["outcome_ids"])
         self.assertTrue(result["improvement_evidence_ids"])
         instance_id = (self.installed / loom_install.INSTANCE_MARKER).read_text(
@@ -647,6 +724,88 @@ class ProductionOrchestratorTests(unittest.TestCase):
         removed = loom_install.uninstall(
             cycle_install, confirmation=receipt["install_id"])
         self.assertTrue(removed["target_removed"])
+
+    def test_firmware_invariants_receive_concern_specific_real_media(self):
+        request = (
+            "Plan sensor firmware with watchdog recovery, flash-wear limits, "
+            "brownout behavior, hardware-in-loop evidence, and safe rollback.")
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        media = {
+            item["invariant"]: item["required_real_medium"]
+            for item in action["plan_contract"]["required_domain_invariants"]}
+
+        self.assertEqual(
+            "watchdog reset and liveness-recovery test",
+            media["watchdog and liveness recovery"])
+        self.assertEqual(
+            "flash endurance and wear-budget stress test",
+            media["flash endurance and wear budget"])
+        self.assertEqual(
+            "brownout and power-loss fault injection",
+            media["brownout and power-loss behavior"])
+        self.assertEqual(
+            "physical rollback and flash-recovery rehearsal",
+            media["physical rollback and safety boundary"])
+        normalized = {
+            item["statement"]: item["verification"]["required_real_medium"]
+            for item in action["plan_contract"]["domain_invariants"]
+        }
+        self.assertEqual(media, normalized)
+
+    def test_firmware_safety_consequence_reaches_continuation_authority(self):
+        request = (
+            "Plan a fail-safe industrial controller with watchdog firmware, "
+            "hardware interlocks, power-loss recovery, and physical rollback tests.")
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(
+            "high",
+            action["plan_contract"]["domain_route"]["consequence"]["class"])
+        self.assertEqual("high", action["owner_message"]["consequence"])
+        authority = action["continuation_authority"]
+        self.assertEqual("explicit-authority", authority["mode"])
+        self.assertEqual("high", authority["facts"]["consequence"])
+        self.assertTrue(authority["facts"]["legal_or_safety_judgment"])
+        self.assertIn("consequential", authority["blockers"])
+        self.assertIn("legal-or-safety-judgment", authority["blockers"])
+
+    def test_status_and_why_reports_pending_plan_instead_of_no_prior_run(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        status = loom_orchestrator.invoke(
+            request=(
+                "Report the current Loom action status for this project and explain "
+                "why it is in that state. Do not create or modify a plan."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("completed", status["status"])
+        self.assertEqual("active-action-reason", status["code"])
+        self.assertEqual(["accounting"], status["domains"])
+        self.assertIn("project plan is waiting", status["user_message"].casefold())
+        self.assertIn("coding has not started", status["user_message"].casefold())
+        self.assertIn("only this action is currently authorized",
+                      status["user_message"].casefold())
+        self.assertNotIn("no prior loom run", status["user_message"].casefold())
+        replay = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual(opened["action_id"], replay["action_id"])
+
+    def test_focused_accounting_desktop_plan_is_medium_not_program_scale(self):
+        action = loom_orchestrator.invoke(
+            request=(
+                "Plan a focused desktop bookkeeping tool with double-entry "
+                "correctness and tax-period closing."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual(["accounting", "desktop"], action["domains"])
+        self.assertEqual("M", action["tier"])
 
     def test_machine_authoring_produces_a_lint_clean_authorized_medium_plan(self):
         action = loom_orchestrator.invoke(
@@ -707,6 +866,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
             item for item in authored["diagnostics"] if item["level"] == "ERROR"])
         self.assertFalse([
             item for item in authored["diagnostics"] if item["level"] == "WARN"])
+        intake = (self.repo / "plans" / "intake.md").read_text(encoding="utf-8")
+        self.assertIn("| required |", intake)
+        self.assertIn("| unverified |", intake)
+        review = (
+            self.repo / "plans" / "reviews" / "G1-plan-review.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("loom-deterministic-plan-validator-v2", review)
         report = loom_lint.lint(
             self.repo / "plans", repo_path=self.repo,
             enforce_lifecycle=False, check_repo_state=False)
@@ -730,7 +896,114 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "Implementation may proceed",
             completed["owner_message"]["human"])
         self.assertEqual([], loom_gate.verify(
-            self.repo / "plans", self.repo, require_authorized=True))
+            self.repo / "plans", self.repo))
+        self.assertIn(
+            "implementation is not authorized",
+            loom_gate.verify(
+                self.repo / "plans", self.repo, require_authorized=True))
+
+    def test_medium_plan_requires_explicit_continue_before_authorization(self):
+        _action, completed = self.complete_machine_authored_plan()
+        self.assertEqual("plan-complete", completed["code"])
+        manifest = loom_lint.parse_frontmatter(
+            (self.repo / "plans" / "MANIFEST.md").read_text(
+                encoding="utf-8"))[0]
+        self.assertEqual("gated", manifest["status"])
+        self.assertIn(
+            "implementation is not authorized",
+            loom_gate.verify(
+                self.repo / "plans", self.repo, require_authorized=True))
+
+        continued = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", continued["status"])
+        self.assertEqual("execute", continued["intent"])
+        self.assertEqual("WO-001", continued["work_order"])
+        manifest = loom_lint.parse_frontmatter(
+            (self.repo / "plans" / "MANIFEST.md").read_text(
+                encoding="utf-8"))[0]
+        self.assertEqual("active", manifest["status"])
+        self.assertEqual(
+            [], loom_gate.verify(
+                self.repo / "plans", self.repo, require_authorized=True))
+
+    def test_machine_authoring_produces_a_lint_clean_large_routing_snapshot(self):
+        action = loom_orchestrator.invoke(
+            request=(
+                "Plan an ETL and machine-learning pipeline with schema evolution, "
+                "backfills, lineage, reproducibility, monitoring, and recovery."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        self.assertEqual("L", action["tier"])
+        contract = action["plan_contract"]
+        draft = {
+            "schema_version": 1,
+            "title": "Replay-safe data and model pipeline",
+            "summary": (
+                "Plan two ordered outcomes for replay-safe data processing and "
+                "reproducible model delivery."),
+            "assumptions": [
+                "The current pipeline boundary remains the target.",
+                "No production deployment is authorized by this plan.",
+            ],
+            "decisions": [
+                "Separate ingestion correctness from model verification.",
+                "Require recovery evidence before release.",
+            ],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "Unknown at planning time; verify against the sealed target.",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Make ingestion replay safe",
+                "outcome": "Ingestion preserves schema, lineage, and idempotency.",
+                "tasks": [
+                    "Define schema evolution and lineage contracts.",
+                    "Add duplicate, late-data, and backfill probes.",
+                ],
+                "acceptance": [
+                    "`python -m unittest` exits 0 for replay and duplicate cases."],
+                "negative_acceptance": [
+                    "a rejected record never enters the accepted dataset"],
+                "out_of_scope": ["Model deployment."],
+                "escalation": ["Stop if lineage authority is unavailable."],
+                "touches": ["src/etl/**", "tests/etl/**"], "depends_on": [],
+                "routing": "strong-coding", "size": "M",
+            }, {
+                "title": "Prove reproducible model behavior",
+                "outcome": "Training and inference are reproducible and monitored.",
+                "tasks": [
+                    "Bind data, code, configuration, and artifact versions.",
+                    "Add leakage, drift, recovery, and train-serve parity checks.",
+                ],
+                "acceptance": [
+                    "Two sealed training runs produce the declared reproducibility result."],
+                "negative_acceptance": [
+                    "leakage or train-serve skew blocks release"],
+                "out_of_scope": ["Changing product policy."],
+                "escalation": ["Stop on an unexplained evaluation difference."],
+                "touches": ["src/ml/**", "tests/ml/**"],
+                "depends_on": ["WO-001"], "routing": "specialist", "size": "M",
+            }],
+            "domain_evidence": None,
+        }
+
+        authored = loom_orchestrator.author(
+            action["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        self.assertTrue(authored["ready_for_completion"])
+        manifest = (self.repo / "plans" / "MANIFEST.md").read_text(
+            encoding="utf-8")
+        self.assertIn("## Routing snapshot", manifest)
+        report = loom_lint.lint(
+            self.repo / "plans", repo_path=self.repo,
+            enforce_lifecycle=False, check_repo_state=False)
+        self.assertEqual([], report.findings)
 
     def test_completed_machine_authored_plan_is_exactly_reversible(self):
         action, completed = self.complete_machine_authored_plan()
@@ -763,6 +1036,192 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("undone", record["state"])
         self.assertEqual(
             archive.relative_to(self.repo).as_posix(), record["archive_path"])
+
+    def test_completed_plan_replays_only_in_the_exact_unchanged_world(self):
+        action, completed = self.complete_machine_authored_plan()
+        replayed = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(completed, {
+            key: value for key, value in replayed.items() if key != "assurance"})
+        self.assertEqual("standard", replayed["assurance"]["mode"])
+        action_directory = Path(action["action_path"]).parent
+        self.assertEqual(
+            1, len(list(action_directory.glob(
+                "????????-????-????-????-????????????.json"))))
+
+        (self.repo / "src" / "app.py").write_text(
+            "print('world changed')\n", encoding="utf-8")
+        changed = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertNotEqual(action["action_id"], changed["action_id"])
+        self.assertEqual("repair", changed["intent"])
+        self.assertEqual(
+            2, len(list(action_directory.glob(
+                "????????-????-????-????-????????????.json"))))
+
+    def test_medium_whole_accounting_plan_requires_architecture_and_security(self):
+        contract = loom_orchestrator._artifact_contract(
+            "M", ["accounting", "desktop"],
+            "Plan desktop bookkeeping software with tax-period closing.",
+            False)
+        actions = {
+            row["artifact"]: row["action"]
+            for row in contract
+        }
+
+        self.assertEqual("produce", actions["architecture.md"])
+        self.assertEqual("produce", actions["contracts.md"])
+        self.assertEqual("produce", actions["security.md"])
+
+    def test_medium_data_migration_produces_release_rollback_contract(self):
+        contract = loom_orchestrator._artifact_contract(
+            "M", ["accounting", "desktop"],
+            "Plan desktop bookkeeping software with a customer data migration.",
+            False)
+        actions = {
+            row["artifact"]: row["action"]
+            for row in contract
+        }
+
+        self.assertEqual("produce", actions["release-rollback.md"])
+
+    def test_medium_ledger_schema_migration_produces_release_rollback_contract(self):
+        contract = loom_orchestrator._artifact_contract(
+            "M", ["accounting", "desktop"],
+            "Plan the migration of a desktop bookkeeping application to a new "
+            "ledger schema.",
+            False)
+        actions = {row["artifact"]: row["action"] for row in contract}
+        self.assertEqual("produce", actions["release-rollback.md"])
+
+        ordinary = loom_orchestrator._artifact_contract(
+            "M", ["accounting", "desktop"],
+            "Plan a desktop bookkeeping application with a ledger report.",
+            False)
+        ordinary_actions = {
+            row["artifact"]: row["action"] for row in ordinary}
+        self.assertEqual("skip", ordinary_actions["release-rollback.md"])
+
+    def test_explicit_encrypted_storage_selects_security_artifact_at_tier_m(self):
+        request = (
+            "Plan a small mobile offline notes app with conflict handling, "
+            "accessibility, lifecycle restoration, encrypted local storage, "
+            "and release checks.")
+        route = loom_domain.select_domains(request)["domain_contract"]
+        intelligence = loom_orchestrator.loom_planning_intelligence.compile_intelligence(
+            request, tier="M", route=route)
+        contract = loom_orchestrator._artifact_contract(
+            "M", ["mobile"], request, False,
+            intelligence["active_modules"])
+        rows = {row["artifact"]: row for row in contract}
+
+        self.assertEqual("produce", rows["security.md"]["action"])
+        self.assertEqual("security reviewer", rows["security.md"]["consumer"])
+
+    def test_research_report_uses_research_artifacts_not_software_artifacts(self):
+        contract = loom_orchestrator._artifact_contract(
+            "M", ["research"],
+            "Plan a research comparison of embedded databases and produce a "
+            "Markdown report; do not build software.",
+            False)
+        rows = {row["artifact"]: row for row in contract}
+
+        self.assertEqual("produce", rows["intake.md"]["action"])
+        self.assertEqual("skip", rows["testing.md"]["action"])
+        self.assertEqual("produce", rows["work orders"]["action"])
+        self.assertEqual("researcher", rows["work orders"]["consumer"])
+        self.assertEqual(
+            "research tasks and report acceptance",
+            rows["work orders"]["decision"])
+        self.assertNotIn(
+            "executable", rows["work orders"]["reason"].casefold())
+        self.assertNotIn(
+            "software test", rows["testing.md"]["reason"].casefold())
+
+        memo = loom_orchestrator._artifact_contract(
+            "M", ["research"],
+            "Research and write a cited comparison of SQLite, DuckDB, and "
+            "RocksDB. Deliver only a decision memo.",
+            False)
+        memo_rows = {row["artifact"]: row for row in memo}
+        self.assertEqual("researcher", memo_rows["work orders"]["consumer"])
+        self.assertEqual("skip", memo_rows["testing.md"]["action"])
+
+    def test_authored_research_pack_matches_produced_artifact_files_exactly(self):
+        action = loom_orchestrator.invoke(
+            request=(
+                "Plan a research comparison of embedded databases and produce a "
+                "Markdown report; do not build software."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        contract = action["plan_contract"]
+        rows = {
+            item["artifact"]: item["action"]
+            for item in contract["artifact_matrix"]}
+        self.assertEqual("skip", rows["testing.md"])
+        draft = {
+            "schema_version": 1,
+            "title": "Compare embedded databases",
+            "summary": (
+                "Produce a cited Markdown comparison of embedded databases."),
+            "assumptions": [
+                "The comparison is limited to the databases named by the owner."],
+            "decisions": [
+                "Separate sourced findings from recommendations."],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "Verify against the cited primary source before writing.",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Write the cited comparison",
+                "outcome": (
+                    "A Markdown report separates sourced findings, limitations, "
+                    "and the final recommendation."),
+                "tasks": [
+                    "Collect current primary sources for each database.",
+                    "Compare the declared criteria with source citations.",
+                    "Write the report and record unresolved limitations.",
+                ],
+                "acceptance": [
+                    "Every factual comparison claim cites a collected source.",
+                    "The report distinguishes findings from recommendations.",
+                ],
+                "negative_acceptance": [
+                    "an unsupported factual claim blocks report completion"],
+                "out_of_scope": [
+                    "Building software or benchmarking undeclared workloads."],
+                "escalation": [
+                    "Stop if a required current primary source is unavailable."],
+                "touches": ["report.md"], "depends_on": [],
+                "routing": "specialist", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+
+        authored = loom_orchestrator.author(
+            action["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertTrue(authored["ready_for_completion"])
+        pack = self.repo / "plans"
+        self.assertFalse((pack / "testing.md").exists())
+        for artifact, action_name in rows.items():
+            if action_name != "produce" or artifact in {
+                    "work orders", "routing"}:
+                continue
+            self.assertTrue(
+                (pack / artifact).is_file(),
+                f"produced artifact is missing: {artifact}")
+        self.assertEqual(
+            [], loom_lint.lint(
+                pack, repo_path=self.repo,
+                enforce_lifecycle=False, check_repo_state=False).findings)
 
     def test_plan_undo_refuses_changed_pack_without_moving_it(self):
         _action, _completed = self.complete_machine_authored_plan()
@@ -936,7 +1395,11 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         self.assertEqual("completed", completed["status"])
         self.assertEqual([], loom_gate.verify(
-            self.repo / "plans", self.repo, require_authorized=True))
+            self.repo / "plans", self.repo))
+        self.assertIn(
+            "implementation is not authorized",
+            loom_gate.verify(
+                self.repo / "plans", self.repo, require_authorized=True))
 
     def test_unknown_domain_semantics_cannot_mint_missing_authority(self):
         request = (
@@ -1562,6 +2025,24 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(first["plan_contract"], second["plan_contract"])
         self.assertNotIn("prior_recovery", second)
 
+    def test_same_pending_plan_reuses_frontier_across_new_transport_request_ids(self):
+        target = self.root / "duplicate-standard-target"
+        target.mkdir()
+        request = "Plan a tiny Python command-line greeting tool."
+        first = loom_orchestrator.invoke(
+            request=request, cwd=target, home=self.home,
+            install_root=self.installed,
+            transport_invocation_id="90a28883-6a01-5ffd-a9d9-4da1f69f1e70")
+        second = loom_orchestrator.invoke(
+            request=request, cwd=target, home=self.home,
+            install_root=self.installed,
+            transport_invocation_id="90a28883-6a01-5ffd-a9d9-4da1f69f1e71")
+
+        self.assertEqual(first["action_id"], second["action_id"])
+        self.assertEqual(first["action_path"], second["action_path"])
+        self.assertEqual(first["plan_contract"], second["plan_contract"])
+        self.assertNotIn("prior_recovery", second)
+
     def test_verified_hook_action_resolves_once_without_creating_another_action(self):
         target = self.root / "verified-resolve-target"
         target.mkdir()
@@ -1834,11 +2315,11 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 path, owner_home=self.home, install_root=self.installed)
             self.assertEqual(self.request, restored["request"])
             self.assertIsNotNone(security)
-            with self.assertRaisesRegex(
-                    loom_orchestrator.OrchestratorError, "home and runtime"):
+            with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
                 loom_orchestrator._read_action(
                     path, owner_home=self.root / "wrong-home",
                     install_root=self.installed)
+            self.assertEqual("ACTION_PATH_MISMATCH", raised.exception.code)
 
     def test_unknown_domain_is_promoted_out_of_the_small_lifecycle(self):
         opened = self.cli(
@@ -2029,6 +2510,37 @@ class ProductionOrchestratorTests(unittest.TestCase):
             action["prepared"]["route_contract"]["evidence"])
         self.assertTrue((target / "plans" / "MANIFEST.md").is_file())
         self.assertFalse((target / "plans" / ".loom-small-lifecycle.json").exists())
+
+    def test_research_plan_owner_message_uses_domain_consequence_and_plain_action(self):
+        action = loom_orchestrator.invoke(
+            request=(
+                "Create a research and writing plan for a cited comparison of "
+                "embedded databases, including source checks and review checkpoints. "
+                "Do not build software."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual(["research"], action["domains"])
+        self.assertEqual("M", action["tier"])
+        self.assertEqual("ordinary", action["owner_message"]["consequence"])
+        self.assertEqual(
+            "Have the agent finish the plan, then review it before any project work starts.",
+            action["owner_message"]["next_action"])
+        self.assertNotIn("frontier", action["owner_message"]["human"].casefold())
+        self.assertNotIn("coding", action["owner_message"]["human"].casefold())
+
+    def test_explicit_etl_reconciliation_and_quarantine_are_sealed_obligations(self):
+        action = loom_orchestrator.invoke(
+            request=(
+                "Plan a daily ETL pipeline that quarantines bad records and verifies "
+                "row-count and reconciliation invariants. Do not implement."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        required = {
+            item["invariant"] for item in
+            action["plan_contract"]["required_domain_invariants"]
+        }
+        self.assertIn("quarantine and rejected-record disposition", required)
+        self.assertIn("row-count and reconciliation controls", required)
 
     def test_plan_contract_preflight_failure_leaves_no_visible_pack(self):
         target = self.root / "preflight-failure-target"
@@ -2286,13 +2798,33 @@ planning_obligations: [{obligations}]
                 loom_orchestrator.OrchestratorError, "static context manifest"):
             loom_orchestrator._read_action(path)
 
+    def test_external_action_path_is_rejected_before_content_is_read(self):
+        outside = self.repo / "outside-action.json"
+        outside.write_text("not json", encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as malformed:
+            loom_orchestrator.cancel(
+                outside, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_PATH_MISMATCH", malformed.exception.code)
+
+        outside.write_text("{}", encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as valid_json:
+            loom_orchestrator.cancel(
+                outside, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_PATH_MISMATCH", valid_json.exception.code)
+        self.assertEqual(malformed.exception.message, valid_json.exception.message)
+
     def test_rehashed_action_cannot_forge_continuation_authority(self):
         opened = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
             install_root=self.installed)
         path = Path(opened["action_path"])
         action = json.loads(path.read_text(encoding="utf-8"))
-        action["continuation_authority"]["mode"] = "explicit-authority"
+        original_mode = action["continuation_authority"]["mode"]
+        action["continuation_authority"]["mode"] = (
+            "automatic" if original_mode != "automatic" else "decision-needed")
+        self.assertNotEqual(
+            original_mode, action["continuation_authority"]["mode"],
+            "the adversarial fixture must actually change the authority mode")
         action["action_hash"] = loom_orchestrator._action_hash(action)
         path.write_text(json.dumps(action), encoding="utf-8")
         with self.assertRaisesRegex(
@@ -2515,10 +3047,25 @@ planning_obligations: [{obligations}]
         result = json.loads(completed.stdout)
         self.assertEqual("completed", result["status"])
         self.assertEqual("plan-complete", result["code"])
+        self.assertEqual("plans/WO-001.md", result["owner_message"]["result_path"])
+        self.assertIn("Open: plans/WO-001.md.", result["owner_message"]["human"])
+        self.assertNotIn("MANIFEST.md", result["owner_message"]["human"])
         self.assertEqual("unavailable", result["usage"]["measurement_status"])
         self.assertEqual([], loom_gate.verify_small(
             self.repo / "plans" / ".loom-small-lifecycle.json"))
         self.assertFalse((self.repo / "plans" / "MANIFEST.md").exists())
+        replayed = self.cli(
+            "invoke", "--request", request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed)
+        self.assertEqual(0, replayed.returncode, replayed.stderr + replayed.stdout)
+        replay = json.loads(replayed.stdout)
+        self.assertEqual(result["receipt_hash"], replay["receipt_hash"])
+        self.assertEqual(result["invocation_id"], replay["invocation_id"])
+        self.assertEqual("plans/WO-001.md", replay["owner_message"]["result_path"])
+        action_directory = Path(action["action_path"]).parent
+        self.assertEqual(
+            1, len(list(action_directory.glob(
+                "????????-????-????-????-????????????.json"))))
 
     def test_tier_s_continue_preserves_cli_route_and_seals_real_change(self):
         request = "Plan a single-file CLI flag in src/app.py"
@@ -2534,6 +3081,13 @@ planning_obligations: [{obligations}]
         }), encoding="utf-8")
         self.assertEqual(0, self.cli(
             "complete", "--action", opened["action_path"], "--usage", usage).returncode)
+        record = self.repo / "plans" / ".loom-small-lifecycle.json"
+        lifecycle = json.loads(record.read_text(encoding="utf-8"))
+        self.assertEqual(loom_gate.SMALL_EVENT_ORDER[:2], [
+            event["event"] for event in lifecycle["events"]])
+        self.assertIn(
+            "small lifecycle is not authorized",
+            loom_gate.verify_small(record, require_authorized=True))
 
         continued = self.cli(
             "invoke", "--request", "Continue", "--cwd", self.repo,
@@ -2544,6 +3098,11 @@ planning_obligations: [{obligations}]
         self.assertEqual("S", execute["tier"])
         self.assertEqual(["cli"], execute["domains"])
         self.assertEqual("WO-001", execute["work_order"])
+        lifecycle = json.loads(record.read_text(encoding="utf-8"))
+        self.assertEqual(loom_gate.SMALL_EVENT_ORDER[:3], [
+            event["event"] for event in lifecycle["events"]])
+        self.assertEqual(
+            [], loom_gate.verify_small(record, require_authorized=True))
         (self.repo / "src" / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
         _mark_small_wo_done(self.repo / "plans")
         loom_lifecycle.capture_acceptance(
@@ -2930,6 +3489,42 @@ planning_obligations: [{obligations}]
         self.assertEqual(2, unsupported.returncode)
         self.assertEqual(
             "ACTION_VERSION_UNSUPPORTED", json.loads(unsupported.stdout)["code"])
+
+    def test_natural_language_cancel_targets_only_the_pending_project_action(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        cancelled = loom_orchestrator.invoke(
+            request=(
+                "Cancel the current pending Loom action for this project. "
+                "Do not implement anything."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertEqual(opened["action_id"], cancelled["action_id"])
+        self.assertTrue(cancelled["success"])
+        self.assertIn("No project implementation", cancelled["user_message"])
+
+        replacement = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual("action-required", replacement["status"])
+        self.assertNotEqual(opened["action_id"], replacement["action_id"])
+
+    def test_natural_language_cancel_rejects_a_different_action_id(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        wrong = str(uuid.uuid4())
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError,
+                "not the pending action"):
+            loom_orchestrator.invoke(
+                request=f"Cancel Loom action {wrong}.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+        replay = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual(opened["action_id"], replay["action_id"])
 
     def test_timeout_and_retry_ceiling_close_the_action(self):
         opened = self.cli(

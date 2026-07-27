@@ -42,6 +42,17 @@ class ContinuationAuthorityTests(unittest.TestCase):
         self.assertIn("external-effect", result["blockers"])
         self.assertIsNone(result["undo"])
 
+    def test_high_consequence_safety_plan_preserves_subject_risk(self):
+        facts = loom_authority.facts_for_intent(
+            "plan", consequence="high", legal_or_safety_judgment=True)
+        result = loom_authority.decide(facts, owner_authorized=True)
+
+        self.assertEqual("explicit-authority", result["mode"])
+        self.assertEqual("high", result["facts"]["consequence"])
+        self.assertTrue(result["facts"]["legal_or_safety_judgment"])
+        self.assertIn("consequential", result["blockers"])
+        self.assertIn("legal-or-safety-judgment", result["blockers"])
+
 
 if __name__ == "__main__":
     unittest.main()

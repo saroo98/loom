@@ -17,6 +17,7 @@ import copy
 sys.path.insert(0, str(Path(__file__).parent))
 import loom_install  # noqa: E402
 import loom_fault_harness  # noqa: E402
+import loom_message  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_release  # noqa: E402
 import loom_reliability  # noqa: E402
@@ -90,6 +91,11 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
             request=self.request, cwd=self.repo, home=self.home,
             install_root=self.installed)
 
+    def supersede(self):
+        return loom_orchestrator.invoke(
+            request=self.request + " Include one revised acceptance requirement.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
     def make_case(self):
         temporary = tempfile.TemporaryDirectory()
         root = Path(temporary.name)
@@ -115,7 +121,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         first = self.invoke()
         first_action = self.action(first)
 
-        second = self.invoke()
+        second = self.supersede()
 
         receipt = second["prior_recovery"]
         self.assertEqual(3, receipt["schema_version"])
@@ -133,7 +139,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
     def test_historical_v2_recovery_receipt_remains_readable(self):
         first = self.invoke()
-        self.invoke()
+        self.supersede()
         action_path = Path(first["action_path"])
         action = self.action(first)
         current = action["recovery_receipt"]
@@ -169,7 +175,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
     def test_rehashed_v3_recovery_tampering_fails_before_project_mutation(self):
         first = self.invoke()
-        self.invoke()
+        self.supersede()
         action_path = Path(first["action_path"])
         original = self.action(first)
         before = loom_reliability.deterministic_manifest(self.repo / "plans")
@@ -221,7 +227,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         first = self.invoke()
         original = self.action(first)
 
-        retried = self.invoke()
+        retried = self.supersede()
 
         receipt = retried["prior_recovery"]
         quarantine = _receipt_quarantine(self.home, self.repo, receipt)
@@ -388,13 +394,13 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                 release.set()
                 results = [one.result(timeout=15), two.result(timeout=15)]
 
-        self.assertEqual(2, len({item["action_id"] for item in results}))
+        self.assertEqual(1, len({item["action_id"] for item in results}))
         recovered = [item for item in results if "prior_recovery" in item]
-        self.assertEqual(1, len(recovered))
-        pointer = json.loads((Path(recovered[0]["action_path"]).parent /
+        self.assertEqual([], recovered)
+        pointer = json.loads((Path(results[0]["action_path"]).parent /
                               loom_orchestrator.ACTIVE_POINTER_FILE).read_text(
                                   encoding="utf-8"))
-        self.assertEqual(recovered[0]["action_id"], pointer["action_id"])
+        self.assertEqual(results[0]["action_id"], pointer["action_id"])
 
     def test_unsealed_staging_bytes_block_until_explicit_safe_cancellation(self):
         original = loom_orchestrator._write_action
@@ -457,10 +463,10 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         with mock.patch.object(
                 loom_orchestrator, "_atomic_quarantine_tree", side_effect=interrupted):
             with self.assertRaisesRegex(OSError, "seeded quarantine interruption"):
-                self.invoke()
+                self.supersede()
         self.assertFalse((self.repo / "plans").exists())
 
-        resumed = self.invoke()
+        resumed = self.supersede()
 
         self.assertEqual("superseded", resumed["prior_recovery"]["reason"])
 
@@ -477,10 +483,10 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         with mock.patch.object(
                 loom_orchestrator, "_write_action", side_effect=interrupted):
             with self.assertRaisesRegex(OSError, "seeded receipt interruption"):
-                self.invoke()
+                self.supersede()
         self.assertFalse((self.repo / "plans").exists())
 
-        resumed = self.invoke()
+        resumed = self.supersede()
 
         self.assertEqual("superseded", resumed["prior_recovery"]["reason"])
         self.assertTrue(resumed["prior_recovery"]["changes_made"])
@@ -501,16 +507,16 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         with mock.patch.object(
                 loom_orchestrator, "_clear_active_pointer", side_effect=interrupted):
             with self.assertRaisesRegex(OSError, "pointer clear interruption"):
-                self.invoke()
+                self.supersede()
 
-        resumed = self.invoke()
+        resumed = self.supersede()
         self.assertNotEqual(first["action_id"], resumed["action_id"])
 
     def test_quarantine_receipt_is_bounded_authenticated_and_restorable(self):
         first = self.invoke()
         seed = self.action(first)["pack_seed"]["manifest"]
 
-        second = self.invoke()
+        second = self.supersede()
 
         receipt = second["prior_recovery"]
         body = dict(receipt)
@@ -525,7 +531,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
     def test_tampered_recovery_receipt_blocks_without_project_mutation(self):
         first = self.invoke()
-        second = self.invoke()
+        second = self.supersede()
         action_path = Path(first["action_path"])
         action = json.loads(action_path.read_text(encoding="utf-8"))
         action["recovery_receipt"]["receipt_hash"] = "0" * 64
@@ -626,7 +632,9 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
 
     def test_historical_cancelled_actions_remain_readable_after_upgrade(self):
-        for schema_version in (7, loom_orchestrator.ACTION_SCHEMA_VERSION):
+        for schema_version in (
+                7, loom_orchestrator.OWNER_MESSAGE_ACTION_SCHEMA_VERSION,
+                loom_orchestrator.ACTION_SCHEMA_VERSION):
             with self.subTest(schema_version=schema_version):
                 temporary, home, repo = self.make_case()
                 try:
@@ -639,6 +647,18 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                             key: value for key, value in action.items()
                             if key in loom_orchestrator.ACTION_FIELDS_V7}
                         action["schema_version"] = 7
+                    elif schema_version == \
+                            loom_orchestrator.OWNER_MESSAGE_ACTION_SCHEMA_VERSION:
+                        action["schema_version"] = schema_version
+                        action["owner_message"] = loom_message.build(
+                            state="progress",
+                            consequence={"S": "ordinary", "M": "material", "L": "high",
+                                         "XL": "critical"}[action["tier"]],
+                            verification="pending", freshness="current",
+                            changes_made=False, undo_status="not-applicable",
+                            summary="Loom prepared the next safe frontier.",
+                            next_action="Complete and verify the sealed frontier.",
+                            receipt_id="action-" + action["action_id"])
                     action["action_hash"] = loom_orchestrator._action_hash(action)
                     action_path.write_text(
                         json.dumps(action, sort_keys=True, separators=(",", ":")),

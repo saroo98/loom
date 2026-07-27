@@ -770,17 +770,52 @@ def _planning_assignments(contract, work_orders):
         item for item in contract["planning_intelligence"]["atoms"]
         if item["gate_effect"] != "none"]
     by_wo = {item["id"]: [] for item in work_orders}
-    for index, atom in enumerate(sorted(atoms, key=lambda item: item["atom_id"])):
-        by_wo[work_orders[index % len(work_orders)]["id"]].append(atom)
+    stop_words = {
+        "about", "after", "against", "before", "current", "declare", "each",
+        "every", "from", "into", "keep", "must", "only", "requested", "that",
+        "their", "them", "this", "through", "when", "where", "with",
+    }
+
+    def tokens(value):
+        return {
+            token for token in re.findall(r"[a-z0-9]+", value.casefold())
+            if len(token) >= 4 and token not in stop_words
+        }
+
+    work_order_tokens = {}
+    for item in work_orders:
+        text = " ".join([
+            item["title"], item["outcome"], *item["tasks"], *item["acceptance"],
+            *item["negative_acceptance"], *item["escalation"], *item["touches"],
+        ])
+        work_order_tokens[item["id"]] = tokens(text)
+    for atom in sorted(atoms, key=lambda item: item["atom_id"]):
+        atom_tokens = tokens(
+            atom["module_id"] + " " + atom["atom_id"] + " " + atom["statement"]
+            + " " + atom["required_real_medium"])
+        ranked = sorted(
+            work_orders,
+            key=lambda item: (
+                -len(atom_tokens & work_order_tokens[item["id"]]),
+                item["id"],
+            ),
+        )
+        by_wo[ranked[0]["id"]].append(atom)
+    program = contract["planning_intelligence"]["program"]
+    milestone_ids = (
+        ["delivery"] if program is None else
+        [item["id"] for item in program["milestone_graph"]["milestones"]])
     assignments = []
+    assignment_index = 0
     for work_order in work_orders:
         for atom in by_wo[work_order["id"]]:
             assignments.append({
                 "atom_id": atom["atom_id"], "work_order": work_order["id"],
-                "milestone": "delivery",
+                "milestone": milestone_ids[assignment_index % len(milestone_ids)],
                 "verification": loom_planning_intelligence.expanded_verification(
                     contract["planning_intelligence"], atom),
             })
+            assignment_index += 1
     assignments.sort(key=lambda item: item["atom_id"])
     body = {
         "schema_version": 1, "plan_contract_hash": contract["contract_hash"],
@@ -815,7 +850,12 @@ def _write_work_orders(stage, contract, draft, today, atoms_by_wo):
     written = []
     assumption_refs = ", ".join(
         f"A-{index:03d}" for index, _item in enumerate(draft["assumptions"], 1))
-    for work_order in draft["work_orders"]:
+    program = contract["planning_intelligence"]["program"]
+    milestone_ids = (
+        ["delivery"] if program is None else
+        [item["id"] for item in program["milestone_graph"]["milestones"]])
+    for work_order_index, work_order in enumerate(draft["work_orders"]):
+        milestone = milestone_ids[work_order_index % len(milestone_ids)]
         required_atoms = sorted(
             item["atom_id"] for item in atoms_by_wo[work_order["id"]])
         blocks = [
@@ -846,7 +886,7 @@ routing: {work_order['routing']}
 size: {work_order['size']}
 touches: {_yaml(work_order['touches'])}
 last_verified: {today}
-milestone: delivery
+milestone: {milestone}
 planning_obligations: {_yaml(required_atoms)}
 domain_invariants: {_yaml(invariant_bindings)}
 ---
@@ -883,7 +923,7 @@ routing: {work_order['routing']}
 size: {work_order['size']}
 touches: {_yaml(work_order['touches'])}
 last_verified: {today}
-milestone: delivery
+milestone: {milestone}
 planning_obligations: {_yaml(required_atoms)}
 domain_invariants: {_yaml(invariant_bindings)}
 ---
@@ -948,7 +988,7 @@ artifact: gate-review
 project: {_yaml(title)}
 gate: G1
 date: {today}
-reviewer: "loom-deterministic-plan-validator-v1"
+reviewer: "loom-deterministic-plan-validator-v2"
 reviewer_independence: mechanical-independent
 verdict: pass
 open_high_findings: 0
@@ -979,6 +1019,9 @@ def _render_known_or_bound_pack(stage, *, contract, draft, request, version, tod
     _write_json(stage / "planning-obligations.json", assignments)
     exposure = draft["release_exposure"]
     loom_lifecycle.seal_release_policy(stage, **exposure)
+    produced = {
+        item["artifact"] for item in contract["artifact_matrix"]
+        if item["action"] == "produce"}
     coverage = "verified" if contract["domain_discovery"]["required"] else "adapter"
     rows = []
     for item in contract["artifact_matrix"]:
@@ -990,13 +1033,26 @@ def _render_known_or_bound_pack(stage, *, contract, draft, request, version, tod
     frontier = "\n".join(
         f"| {item['id']} | ready | {item['routing']} | — | — | — |"
         for item in draft["work_orders"])
+    routing_snapshot = ""
+    if any(item["artifact"] == "routing" and item["action"] == "produce"
+           for item in contract["artifact_matrix"]):
+        routing_rows = "\n".join(
+            f"| {item['id']} | {', '.join(item['depends_on']) or 'none'} | "
+            f"{item['routing']} | {', '.join(item['touches'])} |"
+            for item in draft["work_orders"])
+        routing_snapshot = (
+            "\n## Routing snapshot\n"
+            "| Work order | Depends on | Routing | Future touches |\n"
+            "|---|---|---|---|\n"
+            f"{routing_rows}\n"
+        )
     quoted = "\n".join(
         "> " + line for line in request.replace("\r", "").split("\n"))
     _write(stage / "MANIFEST.md", f"""---
 artifact: manifest
 project: {_yaml(draft['title'])}
 tier: {contract['tier']}
-status: active
+status: draft
 execution_mode: planned
 last_verified: {today}
 loom_version: {_yaml(version)}
@@ -1015,6 +1071,7 @@ Original request (verbatim, do not paraphrase):
 | Artifact | Action | Consumer | Decision | Why (one line) | Status | last_verified |
 |---|---|---|---|---|---|---|
 {chr(10).join(rows)}
+{routing_snapshot}
 
 ## Work order frontier
 | WO | Status | Routing | Claimed by | Claimed at (UTC) | Heartbeat |
@@ -1052,16 +1109,17 @@ last_verified: {today}
 """)
     invariants = "\n".join(
         f"| {item['domain']} | {item['invariant']} | {item['evidence_target']} | "
-        f"{item['required_real_medium']} | verified |"
+        f"{item['required_real_medium']} | required |"
         for item in contract["required_domain_invariants"])
     facts = "\n".join(
-        f"| {item['domain']} | {item['fact']} | {item['source']} | verified |"
+        f"| {item['domain']} | {item['fact']} | {item['source']} | unverified |"
         for item in draft["current_facts"])
     atom_lines = "\n".join(
         f"- `{item['atom_id']}`"
         for item in contract["planning_intelligence"]["atoms"]
         if item["gate_effect"] != "none")
-    _write(stage / "intake.md", f"""---
+    if "intake.md" in produced:
+        _write(stage / "intake.md", f"""---
 artifact: intake
 status: gated
 last_verified: {today}
@@ -1096,7 +1154,8 @@ verification media. Unresolved matters appear only as explicit escalation trigge
     media = "\n".join(
         f"| {item['domain']} | {item['medium']} | {item['decision']} | planned |"
         for item in contract["verification_media"])
-    _write(stage / "testing.md", f"""---
+    if "testing.md" in produced:
+        _write(stage / "testing.md", f"""---
 artifact: testing-plan
 status: gated
 last_verified: {today}
@@ -1111,9 +1170,6 @@ cases in each work order.
 |---|---|---|---|
 {media or "| unclassified | executable acceptance check | sealed outcome | planned |"}
 """)
-    produced = {
-        item["artifact"] for item in contract["artifact_matrix"]
-        if item["action"] == "produce"}
     for name in sorted(produced - {
             "intake.md", "testing.md", "work orders", "routing",
             "domain-discovery.md"}):
@@ -1165,7 +1221,7 @@ last_verified: {today}
         stage, contract, draft, today, atoms_by_wo)
     evidence_path = (
         "WO-001.md" if contract["tier"] == "S" else
-        "work-orders/" + written_work_orders[0].name)
+        "MANIFEST.md; planning-obligations.json; work-orders/")
     if contract["tier"] != "S":
         _write(
             stage / "reviews" / "G1-plan-review.md",

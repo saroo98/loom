@@ -537,6 +537,8 @@ Stop if another component is required.
         self.assertEqual(loom_gate.small_start(
             self.record, self.repo, self.wo, ["cli"]), 0)
         self.write_wo("ready")
+        self.assertEqual(loom_gate.small_seal(
+            self.record, self.repo, self.wo), 0)
         self.assertEqual(loom_gate.small_authorize(
             self.record, self.repo, self.wo), 0)
 
@@ -580,6 +582,8 @@ Stop if another component is required.
         self.assertEqual(loom_gate.small_start(
             self.record, self.repo, self.wo, ["cli"]), 0)
         self.write_wo("ready")
+        self.assertEqual(loom_gate.small_seal(
+            self.record, self.repo, self.wo), 0)
         (self.repo / "base.txt").write_text("changed early\n", encoding="utf-8")
         self.assertEqual(loom_gate.small_authorize(
             self.record, self.repo, self.wo), 1)
@@ -591,7 +595,7 @@ Stop if another component is required.
         self.wo.write_text(
             self.wo.read_text(encoding="utf-8") + "\n" + "x" * 6000,
             encoding="utf-8")
-        self.assertEqual(loom_gate.small_authorize(
+        self.assertEqual(loom_gate.small_seal(
             self.record, self.repo, self.wo), 1)
 
     def test_small_route_contract_is_bounded_and_tamper_evident(self):
@@ -641,6 +645,11 @@ Stop if another component is required.
         self.assertEqual(1, unauthorized.returncode)
         self.assertIn("small lifecycle is not authorized", unauthorized.stdout)
         self.write_wo("ready")
+        self.assertEqual(0, loom_gate.small_seal(
+            self.record, self.repo, self.wo))
+        sealed = verify()
+        self.assertEqual(0, sealed.returncode, sealed.stderr)
+        self.assertIn("valid-plan-sealed", sealed.stdout)
         self.assertEqual(0, loom_gate.small_authorize(
             self.record, self.repo, self.wo))
         authorized = verify("--require-authorized")

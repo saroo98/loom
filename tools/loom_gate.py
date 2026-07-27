@@ -28,6 +28,10 @@ import loom_reliability  # noqa: E402
 SCHEMA_VERSION = 2
 LIFECYCLE_FILE = "lifecycle.json"
 EVENT_ORDER = ["planning-started", "g1-sealed", "implementation-authorized"]
+SMALL_EVENT_ORDER = [
+    "small-planning-started", "small-plan-sealed",
+    "small-authorized", "small-completed",
+]
 LIFECYCLE_FIELDS = {
     "schema_version", "mode", "baseline_files", "events", "work_order_completions",
 }
@@ -561,7 +565,9 @@ def _atomic_write_text(path, text):
         raise
 
 
-def _render_manifest(pack, state, mode, *, completed_wo=None, restamp_date=False):
+def _render_manifest(
+        pack, state, mode, *, completed_wo=None, restamp_date=False, status=None,
+        verified_at=None):
     path = Path(pack) / "MANIFEST.md"
     text = path.read_text(encoding="utf-8")
     if not text.startswith("---\n"):
@@ -571,8 +577,14 @@ def _render_manifest(pack, state, mode, *, completed_wo=None, restamp_date=False
         "repo_state_hash": f'"{state.state_hash}"',
         "repo_state_mode": f'"{state.mode}"',
     }
-    if restamp_date:
+    if verified_at is not None:
+        values["last_verified"] = dt.date.fromisoformat(str(verified_at)).isoformat()
+    elif restamp_date:
         values["last_verified"] = _utc_date()
+    if status is not None:
+        if status not in {"draft", "gated", "active", "stale", "maintenance", "archived"}:
+            raise ValueError("manifest status is invalid")
+        values["status"] = status
     if state.head:
         values["repo_head"] = f'"{state.head}"'
     for key, value in values.items():
@@ -1003,9 +1015,16 @@ def seal_g1(pack, repo, review):
     mechanical = (
         review_fm
         and review_fm.get("reviewer_independence") == "mechanical-independent"
-        and review_fm.get("reviewer") == "loom-deterministic-plan-validator-v1"
         and manifest_fm
-        and manifest_fm.get("tier") == "M"
+        and (
+            (manifest_fm.get("tier") == "M"
+             and review_fm.get("reviewer") == "loom-deterministic-plan-validator-v1")
+            or (
+                manifest_fm.get("tier") in {"M", "L", "XL"}
+                and review_fm.get("reviewer")
+                == "loom-deterministic-plan-validator-v2"
+            )
+        )
     )
     if not review_fm or review_fm.get("gate") != "G1" \
             or review_fm.get("verdict") not in {"pass", "pass-with-fixes"} \
@@ -1046,14 +1065,23 @@ def seal_g1(pack, repo, review):
         "g1-sealed", state, previous["event_hash"], review=review_rel,
         review_sha256=_sha256(review), work_order_plans=work_order_plans,
         work_order_plans_sha256=_mapping_hash(work_order_plans))
+    previous_data = {**data, "events": list(data["events"])}
     data["events"].append(event)
-    _atomic_write(pack / LIFECYCLE_FILE, data)
+    try:
+        manifest_path, manifest_text = _render_manifest(
+            pack, state, data["mode"], restamp_date=True, status="gated")
+        _write_lifecycle_and_manifest(
+            pack, data, manifest_path, manifest_text, previous_data)
+    except (OSError, ValueError) as exc:
+        print(f"loom_gate: INDETERMINATE — cannot record G1 checkpoint: {exc}",
+              file=sys.stderr)
+        return 2
     print(f"loom_gate: G1 sealed to {review_rel} ({event['review_sha256']})")
     return 0
 
 
 @_locked()
-def authorize(pack, repo):
+def authorize(pack, repo, event_at=None):
     pack = Path(pack).resolve()
     findings = verify(pack)
     if findings:
@@ -1078,16 +1106,20 @@ def authorize(pack, repo):
     previous = data["events"][-1]
     if state.state_hash != previous.get("repo_state_hash") \
             or current_files != data.get("baseline_files"):
-        print("loom_gate: BLOCKED — repository changed after G1; authorization refused",
-              file=sys.stderr)
-        return 1
+        receipt = loom_lifecycle.validate_regate_receipt(
+            pack, state.state_hash, previous.get("repo_state_hash"))
+        if receipt is None:
+            print("loom_gate: BLOCKED — repository changed after G1 without a "
+                  "current sealed regate; authorization refused", file=sys.stderr)
+            return 1
     event = make_event(
         "implementation-authorized", state, previous["event_hash"],
-        g1_event_hash=previous["event_hash"])
+        event_at=event_at, g1_event_hash=previous["event_hash"])
     data["events"].append(event)
     try:
         manifest_path, manifest_text = _render_manifest(
-            pack, state, data["mode"], restamp_date=True)
+            pack, state, data["mode"], status="active",
+            verified_at=event["at"][:10])
         _write_lifecycle_and_manifest(
             pack, data, manifest_path, manifest_text,
             {**data, "events": data["events"][:-1]})
@@ -1285,16 +1317,12 @@ def verify_small(record, *, require_authorized=False, require_completed=False):
     if not isinstance(events, list) or not events:
         return findings + ["small lifecycle events are missing"]
     names = [event.get("event") if isinstance(event, dict) else None for event in events]
-    if names not in (["small-planning-started"],
-                     ["small-planning-started", "small-authorized"],
-                     ["small-planning-started", "small-authorized", "small-completed"]):
+    if names != SMALL_EVENT_ORDER[:len(names)] or len(names) > len(SMALL_EVENT_ORDER):
         findings.append("small lifecycle event order is invalid")
-    if require_completed and names != [
-            "small-planning-started", "small-authorized", "small-completed"]:
+    if require_completed and names != SMALL_EVENT_ORDER:
         findings.append("small lifecycle is not completed")
-    elif require_authorized and names not in ([
-            "small-planning-started", "small-authorized"], [
-            "small-planning-started", "small-authorized", "small-completed"]):
+    elif require_authorized and names not in (
+            SMALL_EVENT_ORDER[:3], SMALL_EVENT_ORDER):
         findings.append("small lifecycle is not authorized")
     previous = None
     last_time = None
@@ -1370,8 +1398,8 @@ def verify_small(record, *, require_authorized=False, require_completed=False):
         if not isinstance(events[1], dict) or plan_hash is None \
                 or events[1].get("work_order_plan_sha256") != plan_hash:
             findings.append("authorized small work-order plan hash does not match")
-    if len(events) == 3:
-        final_event = events[2] if isinstance(events[2], dict) else {}
+    if len(events) == 4:
+        final_event = events[3] if isinstance(events[3], dict) else {}
         changed = final_event.get("changed_paths")
         after = final_event.get("after_hashes")
         if not isinstance(changed, list) or not changed \
@@ -1463,7 +1491,7 @@ def small_start(record, repo, wo, domains=None, event_at=None):
 
 
 @_locked(small=True)
-def small_authorize(record, repo, wo, event_at=None):
+def small_seal(record, repo, wo, event_at=None):
     record, wo = Path(record).resolve(), Path(wo).resolve()
     findings = verify_small(record)
     if findings:
@@ -1473,7 +1501,7 @@ def small_authorize(record, repo, wo, event_at=None):
     data = _load_small(record)
     if [event["event"] for event in data["events"]] != ["small-planning-started"] \
             or wo.parent != record.parent or wo.name != data.get("work_order_file"):
-        print("loom_gate: REFUSED — Tier-S authorization state/WO does not match",
+        print("loom_gate: REFUSED — Tier-S plan-seal state/WO does not match",
               file=sys.stderr)
         return 1
     try:
@@ -1493,13 +1521,57 @@ def small_authorize(record, repo, wo, event_at=None):
     first = data["events"][0]
     if state.state_hash != first.get("repo_state_hash") \
             or current_files != data["baseline_files"]:
-        print("loom_gate: BLOCKED — target changed before Tier-S authorization",
+        print("loom_gate: BLOCKED — target changed before Tier-S plan sealing",
               file=sys.stderr)
         return 1
     event = make_event(
-        "small-authorized", state, first["event_hash"],
+        "small-plan-sealed", state, first["event_hash"],
         event_at=event_at,
         work_order=str(fm["id"]), work_order_plan_sha256=_wo_plan_hash(wo))
+    data["events"].append(event)
+    _atomic_write(record, data)
+    print(f"loom_gate: Tier-S work order {fm['id']} plan sealed")
+    return 0
+
+
+@_locked(small=True)
+def small_authorize(record, repo, wo, event_at=None):
+    record, wo = Path(record).resolve(), Path(wo).resolve()
+    findings = verify_small(record)
+    if findings:
+        for finding in findings:
+            print(f"loom_gate: BLOCKED — {finding}", file=sys.stderr)
+        return 1
+    data = _load_small(record)
+    if [event["event"] for event in data["events"]] != SMALL_EVENT_ORDER[:2] \
+            or wo.parent != record.parent or wo.name != data.get("work_order_file"):
+        print("loom_gate: REFUSED — Tier-S authorization state/WO does not match",
+              file=sys.stderr)
+        return 1
+    try:
+        fm, _, errors = _standalone_wo_contract(wo, "ready")
+    except (OSError, UnicodeError) as exc:
+        print(f"loom_gate: INDETERMINATE — {exc}", file=sys.stderr)
+        return 2
+    if errors:
+        for error in errors:
+            print(f"loom_gate: WO — {error}", file=sys.stderr)
+        return 1
+    try:
+        state, current_files = _stable_snapshot(repo, record.parent)
+    except loom_survey.SurveyError as exc:
+        print(f"loom_gate: INDETERMINATE — {exc}", file=sys.stderr)
+        return 2
+    previous = data["events"][-1]
+    if state.state_hash != previous.get("repo_state_hash") \
+            or current_files != data["baseline_files"]:
+        print("loom_gate: BLOCKED — target changed after Tier-S plan sealing",
+              file=sys.stderr)
+        return 1
+    event = make_event(
+        "small-authorized", state, previous["event_hash"],
+        event_at=event_at, work_order=str(fm["id"]),
+        work_order_plan_sha256=previous["work_order_plan_sha256"])
     data["events"].append(event)
     _atomic_write(record, data)
     print(f"loom_gate: Tier-S work order {fm['id']} authorized")
@@ -1515,8 +1587,7 @@ def small_close(record, repo, wo, event_at=None):
             print(f"loom_gate: BLOCKED — {finding}", file=sys.stderr)
         return 1
     data = _load_small(record)
-    if [event["event"] for event in data["events"]] != [
-            "small-planning-started", "small-authorized"]:
+    if [event["event"] for event in data["events"]] != SMALL_EVENT_ORDER[:3]:
         print("loom_gate: REFUSED — Tier-S work is not in authorized state", file=sys.stderr)
         return 1
     try:
@@ -1594,9 +1665,9 @@ def small_rebaseline(record, repo, wo, *, reason, event_at=None):
         return 1
     data = _load_small(record)
     names = [event["event"] for event in data["events"]]
-    if names != ["small-planning-started", "small-authorized"] \
+    if names not in (SMALL_EVENT_ORDER[:2], SMALL_EVENT_ORDER[:3]) \
             or wo.parent != record.parent or wo.name != data.get("work_order_file"):
-        print("loom_gate: REFUSED — only authorized incomplete Tier-S work can rebaseline",
+        print("loom_gate: REFUSED — only sealed incomplete Tier-S work can rebaseline",
               file=sys.stderr)
         return 1
     try:
@@ -1670,8 +1741,13 @@ def main(argv=None):
     small_init.add_argument("record")
     small_init.add_argument("--repo", required=True)
     small_init.add_argument("--wo", required=True)
+    small_seal_parser = sub.add_parser(
+        "small-seal", help="seal a complete standalone Tier-S plan")
+    small_seal_parser.add_argument("record")
+    small_seal_parser.add_argument("--repo", required=True)
+    small_seal_parser.add_argument("--wo", required=True)
     small_auth = sub.add_parser(
-        "small-authorize", help="authorize a complete standalone Tier-S WO")
+        "small-authorize", help="authorize a sealed standalone Tier-S WO")
     small_auth.add_argument("record")
     small_auth.add_argument("--repo", required=True)
     small_auth.add_argument("--wo", required=True)
@@ -1692,7 +1768,7 @@ def main(argv=None):
     finish = lambda result, _signal: result
     mutating = {
         "init", "seal-g1", "authorize", "close-wo",
-        "small-init", "small-authorize", "small-close",
+        "small-init", "small-seal", "small-authorize", "small-close",
     }
     if args.command in mutating:
         import loom_runtime
@@ -1756,6 +1832,8 @@ def main(argv=None):
             small_start(args.record, args.repo, args.wo, [domain]),
             "gate-passed",
         )
+    if args.command == "small-seal":
+        return finish(small_seal(args.record, args.repo, args.wo), "plan-sealed")
     if args.command == "small-authorize":
         return finish(small_authorize(args.record, args.repo, args.wo), "gate-passed")
     if args.command == "small-close":
@@ -1771,8 +1849,8 @@ def main(argv=None):
         else:
             events = _load_small(args.record)["events"]
             state = {
-                1: "valid-planning-started", 2: "valid-authorized",
-                3: "valid-completed",
+                1: "valid-planning-started", 2: "valid-plan-sealed",
+                3: "valid-authorized", 4: "valid-completed",
             }[len(events)]
             label = "PASS" if args.require_authorized or args.require_completed else "VALID"
             print(f"loom_gate: {label} — {state}")

@@ -107,6 +107,14 @@ class ConsumerPlanningTests(unittest.TestCase):
         self.assertEqual(loom_tier.classify(
             "Write a research paper", domains=["research"])["tier"], "M")
         self.assertEqual(loom_tier.classify(
+            "Plan a research write-up comparing three local algorithms, including "
+            "source quality, reproducibility, and claim verification.",
+            domains=["research"])["tier"], "M")
+        self.assertEqual(loom_tier.classify(
+            "Plan a reproducible ETL pipeline with idempotent reruns, schema drift "
+            "handling, lineage, and backfill verification.",
+            domains=["data-etl"])["tier"], "M")
+        self.assertEqual(loom_tier.classify(
             "Build a real-time 3D room configurator",
             domains=["realtime-3d"])["tier"], "L")
         self.assertEqual(loom_tier.classify(
@@ -124,6 +132,16 @@ class ConsumerPlanningTests(unittest.TestCase):
         self.assertEqual(loom_tier.classify(
             "Coordinate a year-long multi-product program", days=90,
             new_components=9, new_boundaries=8, implementers=7)["tier"], "XL")
+        portfolio_site = loom_tier.classify(
+            "Review this empty project and produce a plan for a one-page static "
+            "portfolio website, but do not implement anything.",
+            domains=["website"])
+        self.assertNotEqual("XL", portfolio_site["tier"])
+        self.assertEqual([], portfolio_site["portfolio_terms"])
+        portfolio_program = loom_tier.classify(
+            "Plan an organization-wide product portfolio across many teams.")
+        self.assertEqual("XL", portfolio_program["tier"])
+        self.assertTrue(portfolio_program["portfolio_terms"])
 
     def test_store_is_bounded_and_invalid_usage_fails_without_write(self):
         with self.assertRaisesRegex(loom_planning.PlanningError, "usage requires"):
