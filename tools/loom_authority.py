@@ -95,15 +95,22 @@ def validate(value):
     return value
 
 
-def facts_for_intent(intent, *, stale=False):
+def facts_for_intent(intent, *, stale=False, consequence=None,
+                     legal_or_safety_judgment=False):
     """Fail-closed production defaults; host-specific effects may only add blockers."""
     if intent not in {
             "plan", "resume", "execute", "review", "repair", "close", "status",
             "remember", "forget", "why", "undo"}:
         raise AuthorityError("intent is invalid")
+    if consequence is not None and consequence not in CONSEQUENCES:
+        raise AuthorityError("consequence is invalid")
+    if type(legal_or_safety_judgment) is not bool:
+        raise AuthorityError("legal or safety judgment flag is invalid")
     automatic = intent in {"plan", "resume", "review", "repair", "status", "why"}
     destructive = intent == "forget"
     unknown_effect = intent in {"execute", "close", "remember", "forget", "undo"}
+    effective_consequence = consequence or (
+        "ordinary" if automatic else "material")
     return {
         "reversible": automatic,
         "destructive": destructive,
@@ -112,9 +119,9 @@ def facts_for_intent(intent, *, stale=False):
         "cost": False,
         "privileged": intent == "execute",
         "privacy_expanding": intent == "remember",
-        "legal_or_safety_judgment": False,
+        "legal_or_safety_judgment": legal_or_safety_judgment,
         "uncertain": unknown_effect,
         "currently_evidenced": not stale,
         "verifiable_before_harm": automatic,
-        "consequence": "ordinary" if automatic else "material",
+        "consequence": effective_consequence,
     }

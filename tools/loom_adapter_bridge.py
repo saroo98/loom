@@ -2,6 +2,7 @@
 """Local JSON-over-stdio bridge from thin host adapters to the stable launcher."""
 
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,19 @@ import loom_execution_chain
 
 class BridgeError(RuntimeError):
     pass
+
+
+def _runtime_block_message(payload):
+    detail = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(detail, str) or not detail.strip():
+        return (
+            "Loom could not start its verified local runtime. "
+            "No plan or project files were changed.")
+    detail = " ".join(detail.split())[:320]
+    detail = re.sub(r"(?:[A-Za-z]:[\\/]|/)[^\s\"']+", "[local path]", detail)
+    return (
+        f"Loom could not start its verified local runtime: {detail} "
+        "No plan or project files were changed.")
 
 
 def _payload(stdout):
@@ -68,7 +82,7 @@ def dispatch(message, *, home, launcher, session):
             "--protocol-min", str(selected), "--protocol-max", str(selected)])
         if code != 0 or payload.get("status") != "ready":
             raise loom_adapter_protocol.ProtocolError(
-                "RUNTIME_BLOCKED", "stable launcher failed its adapter probe")
+                "RUNTIME_BLOCKED", _runtime_block_message(payload))
         session.clear()
         session.update({
             "host": message["host"], "adapter": message["adapter"],
@@ -110,6 +124,13 @@ def dispatch(message, *, home, launcher, session):
     elif kind == "author":
         code, payload = _run_request(
             launcher, home, message, command="author-stdio")
+        if code == 0 and message.get("finalize", False):
+            if payload.get("ready_for_completion") is not True:
+                raise loom_adapter_protocol.ProtocolError(
+                    "MESSAGE_INVALID",
+                    "author result did not prove that the sealed plan is ready for completion")
+            code, payload = _run(launcher, [
+                "--home", str(home), "complete", "--action", message["action"]])
     elif kind == "complete":
         arguments = ["--home", str(home), "complete", "--action", message["action"]]
         if message["usage"] is not None:

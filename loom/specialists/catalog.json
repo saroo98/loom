@@ -39,10 +39,10 @@
       "id": "security-privacy-safety",
       "version": "1.0.0",
       "state": "active",
-      "activation": {"always": false, "tiers": [], "domains": ["accounting", "automation", "browser-extension", "firmware-hardware", "high-risk", "web-app"], "patterns": ["credential", "certificate", "key rotation", "personal data", "privacy", "security", "destructive", "physical safety", "public exposure"]},
+      "activation": {"always": false, "tiers": [], "domains": ["accounting", "automation", "browser-extension", "firmware-hardware", "high-risk", "web-app"], "patterns": ["credential", "certificate", "key rotation", "key storage", "encryption", "encrypted", "data at rest", "personal data", "privacy", "security", "destructive", "physical safety", "public exposure"]},
       "limitations": ["does not certify compliance or infer authority for irreversible action"],
       "atoms": [
-        {"id": "authority-boundary", "kind": "constraint", "statement": "Declare privilege, sensitive-data, external-effect, and destructive-action boundaries before authorization.", "gate_effect": "affected-branch", "real_medium": "authority and abuse-case verification"},
+        {"id": "authority-boundary", "kind": "constraint", "statement": "Declare privilege, sensitive-data, encryption and key-lifecycle, external-effect, and destructive-action boundaries before authorization.", "gate_effect": "affected-branch", "real_medium": "authority, encryption and key-lifecycle, and abuse-case verification"},
         {"id": "fail-closed-harm", "kind": "release-gate", "statement": "Block exposure when a high-consequence safety or privacy control lacks real-medium evidence.", "gate_effect": "release", "real_medium": "independent real-medium verification"}
       ]
     },

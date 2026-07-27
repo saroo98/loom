@@ -54,10 +54,11 @@ import loom_execution_chain
 
 
 SCHEMA_VERSION = 1
-ACTION_SCHEMA_VERSION = 9
+ACTION_SCHEMA_VERSION = 10
 LEGACY_ACTION_SCHEMA_VERSION = 6
 INTERMEDIATE_ACTION_SCHEMA_VERSION = 7
 PRIOR_ACTION_SCHEMA_VERSION = 8
+OWNER_MESSAGE_ACTION_SCHEMA_VERSION = 9
 ACTION_FIELDS_V7 = {
     "schema_version", "action_id", "status", "instance_id", "project_id",
     "request", "invocation_id", "owner_home", "install_root", "cwd",
@@ -76,7 +77,9 @@ ACTION_STATUSES = {
 }
 TERMINAL_ACTION_STATUSES = ACTION_STATUSES - {"initializing", "pending"}
 PACK_SEED_STATES = {"not-applicable", "recorded", "prepared", "installed", "recovered"}
-NONINTERFERING_ACTIVE_ACTION_INTENTS = {"status", "why", "remember", "forget", "undo"}
+NONINTERFERING_ACTIVE_ACTION_INTENTS = {
+    "status", "why", "remember", "forget", "undo",
+}
 MAX_ORCHESTRATION_ACTIONS = 256
 MAX_ORCHESTRATION_DIRECTORY_ENTRIES = 512
 ACTIVE_POINTER_FILE = "active-action.json"
@@ -122,6 +125,29 @@ def _canonical_bytes(value):
 
 def _hash(value):
     return hashlib.sha256(_canonical_bytes(value)).hexdigest()
+
+
+def _action_consequence(action, *, use_domain_contract):
+    if use_domain_contract:
+        value = action.get("domain_contract", {}).get("consequence", {}).get("class")
+        if value in {"ordinary", "material", "high", "critical"}:
+            return value
+    return {"S": "ordinary", "M": "material", "L": "high",
+            "XL": "critical"}[action["tier"]]
+
+
+def _domain_authority_facts(intent, domain_contract):
+    consequence = domain_contract.get("consequence", {})
+    categories = consequence.get("categories", [])
+    subject_consequence = consequence.get("class")
+    if subject_consequence not in {"ordinary", "material", "high", "critical"}:
+        raise OrchestratorError(
+            "DOMAIN_CONTRACT_INVALID", "domain consequence is unavailable")
+    legal_or_safety = bool(set(categories) & {
+        "human-safety", "physical-safety", "regulated-or-financial"})
+    return loom_authority.facts_for_intent(
+        intent, consequence=subject_consequence,
+        legal_or_safety_judgment=legal_or_safety)
 
 
 def _transport_invocation_id(envelope):
@@ -233,6 +259,32 @@ def _absolute(value, label, *, must_exist=True):
 def _action_path(owner_home, instance_id, project_id, action_id):
     return (Path(owner_home) / "instances" / instance_id / "runtime" /
             "projects" / project_id / "orchestrations" / f"{action_id}.json")
+
+
+def _validate_action_path_authority(path, owner_home):
+    """Reject non-owner action paths before any caller-selected file is accessed."""
+    path = _absolute(path, "action", must_exist=False)
+    owner_home = _absolute(owner_home, "owner home", must_exist=False)
+    try:
+        relative = path.relative_to(owner_home)
+    except ValueError as exc:
+        raise OrchestratorError(
+            "ACTION_PATH_MISMATCH", "action path is not owner-scoped") from exc
+    parts = relative.parts
+    if len(parts) != 7 or parts[0] != "instances" or parts[2] != "runtime" \
+            or parts[3] != "projects" or parts[5] != "orchestrations" \
+            or not loom_runtime.PROJECT_RE.fullmatch(parts[4]) \
+            or not re.fullmatch(r"[0-9a-f-]{36}\.json", parts[6]):
+        raise OrchestratorError(
+            "ACTION_PATH_MISMATCH", "action path is not owner-project scoped")
+    try:
+        if str(uuid.UUID(parts[1])) != parts[1] \
+                or str(uuid.UUID(parts[6][:-5])) != parts[6][:-5]:
+            raise ValueError
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise OrchestratorError(
+            "ACTION_PATH_MISMATCH", "action path identity is malformed") from exc
+    return path
 
 
 def _plan_author_transaction_path(action):
@@ -743,6 +795,7 @@ def _validate_legacy_plan_contract_v4(contract, *, action, prepared):
 def _validate_action(value, path):
     if not isinstance(value, dict):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
+    original_schema_version = value.get("schema_version")
     if value.get("schema_version") == LEGACY_ACTION_SCHEMA_VERSION:
         if set(value) != ACTION_FIELDS_V7 \
                 or value.get("action_hash") != _action_hash(value) \
@@ -800,6 +853,17 @@ def _validate_action(value, path):
             **value,
             "schema_version": ACTION_SCHEMA_VERSION,
             "assurance": _legacy_assurance(value.get("request", "")),
+        }
+        value["action_hash"] = _action_hash(value)
+    if value.get("schema_version") == OWNER_MESSAGE_ACTION_SCHEMA_VERSION:
+        if set(value) != ACTION_FIELDS \
+                or value.get("status") not in ACTION_STATUSES \
+                or value.get("action_hash") != _action_hash(value):
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "prior owner-message action fields or hash are invalid")
+        value = {
+            **value,
+            "schema_version": ACTION_SCHEMA_VERSION,
         }
         value["action_hash"] = _action_hash(value)
     if value.get("schema_version") != ACTION_SCHEMA_VERSION:
@@ -877,16 +941,28 @@ def _validate_action(value, path):
         loom_message.v3_build if message_version == 3 else
         loom_message.v4_build if message_version == 4 else
         loom_message.build)
+    current_owner_message_contract = (
+        original_schema_version == ACTION_SCHEMA_VERSION
+        and message_builder is loom_message.build)
+    planning_metadata_changed = (
+        current_owner_message_contract and value["intent"] == "plan")
     expected_owner_message = message_builder(
         state="progress",
-        consequence={"S": "ordinary", "M": "material", "L": "high",
-                     "XL": "critical"}[value["tier"]],
+        consequence=_action_consequence(
+            value, use_domain_contract=current_owner_message_contract),
         verification="pending", freshness="current",
-        changes_made=False,
-        undo_status=("not-needed" if message_builder is loom_message.v2_build
+        changes_made=planning_metadata_changed,
+        undo_status=("unavailable" if planning_metadata_changed else
+                     "not-needed" if message_builder is loom_message.v2_build
                      else "not-applicable"),
-        summary="Loom prepared the next safe frontier.",
-        next_action="Complete and verify the sealed frontier.",
+        summary=(
+            "Loom prepared the planning contract; no project deliverable was changed."
+            if planning_metadata_changed
+            else "Loom prepared the next safe frontier."),
+        next_action=(
+            "Have the agent finish the plan, then review it before any project work starts."
+            if planning_metadata_changed
+            else "Complete and verify the sealed frontier."),
         receipt_id="action-" + value["action_id"])
     if value["owner_message"] != expected_owner_message:
         raise OrchestratorError(
@@ -1014,7 +1090,8 @@ def _validate_action(value, path):
 
 
 def _read_action(path, *, owner_home=None, install_root=None):
-    path = _absolute(path, "action")
+    path = (_validate_action_path_authority(path, owner_home)
+            if owner_home is not None else _absolute(path, "action"))
     try:
         loom_memory._reject_link_ancestors(path, "orchestration action")
     except loom_memory.MemoryError as exc:
@@ -1130,6 +1207,51 @@ def _read_active_pointer(directory):
             or value.get("pointer_hash") != _pointer_hash(value):
         raise OrchestratorError("ACTION_POINTER_CORRUPT", "active action pointer is invalid")
     return value
+
+
+def _active_action_for_status(directory, *, owner_home, install_root):
+    pointer = _read_active_pointer(directory)
+    if pointer is None:
+        return None
+    path = Path(directory) / f"{pointer['action_id']}.json"
+    if not _path_present(path):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "the active pointer names a missing action; status is indeterminate")
+    _path, action, _security = _read_action(
+        path, owner_home=owner_home, install_root=install_root)
+    if action["project_id"] != pointer["project_id"] \
+            or action["action_id"] != pointer["action_id"]:
+        raise OrchestratorError(
+            "ACTION_POINTER_CONFLICT", "active action and pointer disagree")
+    return None if action["status"] in TERMINAL_ACTION_STATUSES else action
+
+
+def _active_action_transparency(action, *, explain):
+    labels = {
+        "plan": "A project plan is waiting to be finished and reviewed.",
+        "resume": "A paused project plan is waiting to continue.",
+        "execute": "The next approved work item is waiting to run.",
+        "review": "A project review is waiting to finish.",
+        "repair": "A plan repair is waiting to finish.",
+        "close": "Project closeout is waiting to finish.",
+    }
+    summary = labels.get(
+        action["intent"], "A Loom action is waiting to finish.")
+    if action["intent"] == "plan":
+        summary += " Coding has not started."
+    if explain:
+        summary += (
+            " Loom stopped at this step because only this action is currently authorized.")
+    return {
+        "status": "completed",
+        "code": "active-action-reason" if explain else "active-action-status",
+        "success": True,
+        "metrics": {},
+        "evidence_ids": [],
+        "reversible_action_ids": [],
+        "user_message": summary,
+    }
 
 
 def _clear_active_pointer(directory, action_id):
@@ -1645,6 +1767,78 @@ def _legacy_active_actions(directory, *, owner_home, install_root):
     return candidates
 
 
+def _completed_plan_replay(directory, prepared, target, *, request, cwd,
+                           owner_home, install_root):
+    """Return one completed plan only when its exact post-plan world still exists."""
+    pack = Path(target) / "plans"
+    if not pack.is_dir():
+        return None
+    try:
+        current_manifest = loom_reliability.exact_tree_manifest(pack)
+        loom_reliability.validate_exact_tree_manifest(current_manifest)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "TARGET_INDETERMINATE",
+            f"the existing planning pack cannot be proven unchanged: {exc}") from exc
+    try:
+        current_survey_hash = loom_survey.workspace_snapshot(
+            target, exclude_prefixes=("plans",)).state.state_hash
+    except loom_survey.SurveyError as exc:
+        raise OrchestratorError(
+            "TARGET_INDETERMINATE",
+            f"the current project world cannot be proven unchanged: {exc}") from exc
+    entries = []
+    inspected = 0
+    for entry in os.scandir(directory):
+        inspected += 1
+        if inspected > MAX_ORCHESTRATION_DIRECTORY_ENTRIES:
+            raise OrchestratorError(
+                "RECOVERY_CAPACITY",
+                "completed-action replay scan exceeds its directory-entry bound")
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+            continue
+        if not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                r"[0-9a-f]{12}\.json", entry.name):
+            continue
+        entries.append(Path(entry.path))
+        if len(entries) > MAX_ORCHESTRATION_ACTIONS:
+            raise OrchestratorError(
+                "RECOVERY_CAPACITY",
+                "completed-action replay scan exceeds its action bound")
+    matches = []
+    for path in sorted(entries, key=lambda item: item.name):
+        _path, action, _security = _read_action(
+            path, owner_home=owner_home, install_root=install_root)
+        plan_author = (action.get("host_result") or {}).get("plan_author")
+        result = action.get("result")
+        sealed = action.get("prepared") or {}
+        if action.get("status") != "completed" \
+                or action.get("intent") != "plan" \
+                or not isinstance(result, dict) \
+                or result.get("status") != "completed" \
+                or action.get("request") != request \
+                or action.get("cwd") != str(cwd) \
+                or action.get("explicit_target") != str(target) \
+                or action.get("project_id") != prepared.project_id \
+                or action.get("survey_hash") != current_survey_hash \
+                or sealed.get("request_hash") != prepared.request_hash \
+                or sealed.get("intent") != prepared.intent \
+                or sealed.get("domains") != list(prepared.domains) \
+                or not isinstance(plan_author, dict) \
+                or plan_author.get("state") != "active" \
+                or plan_author.get("manifest") != current_manifest:
+            continue
+        matches.append((
+            str(plan_author.get("completed_at", "")),
+            action["action_id"],
+            result,
+        ))
+    if not matches:
+        return None
+    return max(matches, key=lambda item: (item[0], item[1]))[2]
+
+
 def _action_matches_current_frontier(action, prepared, target, *, request, cwd):
     """Prove that one pending action still names the current target frontier."""
     sealed = action["prepared"]
@@ -1728,6 +1922,23 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         raise OrchestratorError(
             "TARGET_DRIFT",
             "a repeated transport operation no longer matches its sealed target state")
+    if incoming_intent == "plan" \
+            and action["intent"] == "plan" \
+            and action["status"] == "pending" \
+            and action["request"] == request \
+            and loom_runtime._parse_time(now) <= loom_runtime._parse_time(
+                action["expires_at"]):
+        try:
+            prepared = loom_runtime.prepare_invocation(
+                request, instance_id=instance_id, invocation_id=str(uuid.uuid4()),
+                cwd=cwd, explicit_target=target, owner_home=owner_home, now=now)
+        except loom_runtime.RuntimeBlocked as exc:
+            raise OrchestratorError(exc.code, exc.message) from exc
+        if _action_matches_current_frontier(
+                action, prepared, target, request=request, cwd=cwd):
+            # Host retries commonly carry a new transport request ID. Request,
+            # project, and exact world identity are the idempotency authority.
+            return None, action
     if action["intent"] != "plan" or not action["pack_seed"]["created_pack"]:
         raise OrchestratorError(
             "ACTION_IN_PROGRESS", "a non-planning action remains active for this project")
@@ -1738,6 +1949,48 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             "ACTION_IN_PROGRESS",
             "the current planning action must complete or be cancelled before this request")
     return _recover_plan_action(path, action, security, now=now), None
+
+
+def _cancel_active_request(*, directory, request, owner_home, install_root, now):
+    """Cancel only the uniquely active action named by an owner request."""
+    pointer = _read_active_pointer(directory)
+    if pointer is not None:
+        path = directory / f"{pointer['action_id']}.json"
+        if not _path_present(path):
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED",
+                "the active pointer names a missing action; nothing was cancelled")
+        candidates = [_read_action(
+            path, owner_home=owner_home, install_root=install_root)]
+    else:
+        candidates = _legacy_active_actions(
+            directory, owner_home=owner_home, install_root=install_root)
+    if not candidates:
+        raise OrchestratorError(
+            "NO_ACTIVE_ACTION", "No pending Loom action exists for this project.")
+    if len(candidates) != 1:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "multiple nonterminal actions require inspection; nothing was cancelled")
+    path, action, _security = candidates[0]
+    requested_ids = set(re.findall(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+        r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+        request, re.I))
+    if len(requested_ids) > 1 or (
+            requested_ids and action["action_id"] not in requested_ids):
+        raise OrchestratorError(
+            "ACTION_IDENTITY_CHANGED",
+            "The named action is not the pending action for this project; nothing was cancelled.")
+    result = _cancel_under_lock(
+        path, now=now, owner_home=owner_home, install_root=install_root)
+    return {
+        **result,
+        "success": True,
+        "user_message": (
+            "Cancelled the pending Loom action. "
+            "No project implementation was performed."),
+    }
 
 
 def _capture(function, *args, **kwargs):
@@ -1788,11 +2041,24 @@ Original request (verbatim, do not paraphrase):
     loom_gate._atomic_write_text(pack / "MANIFEST.md", text)
 
 
-def _artifact_contract(tier, domains, request, requires_discovery):
+def _artifact_contract(
+        tier, domains, request, requires_discovery, active_specialists=()):
     domains = set(domains)
+    task_text = loom_domain.task_language(request)
+    research_deliverable = domains == {"research"} and bool(re.search(
+        r"(?i)\b(?:do not (?:build|implement)|research (?:write[- ]?up|report|"
+        r"comparison|paper|memo)|research\s+and\s+(?:write|produce|deliver|"
+        r"synthesize)|write (?:a |the )?(?:report|paper|memo)|"
+        r"produce (?:a |the )?(?:markdown )?(?:report|paper|memo))\b",
+        task_text))
     whole = bool(re.search(
         r"(?i)\b(?:build|create|develop|design|implement|produce|write)\b",
-        loom_domain.task_language(request)))
+        task_text)) or bool(re.search(
+            r"(?i)\bplan\s+(?:(?:a|an|the|new|small|simple|minimal|desktop|mobile|"
+            r"offline[- ]first|cross[- ]platform|real[- ]time|3d|accounting|"
+            r"bookkeeping)\s+){0,7}(?:software|app(?:lication)?|system|product|"
+            r"service|platform|tool|pipeline|website|firmware|library|sdk)\b",
+            task_text))
     ui_domains = {
         "android", "desktop", "ios-macos", "mobile", "realtime-3d",
         "web-app", "website",
@@ -1808,9 +2074,17 @@ def _artifact_contract(tier, domains, request, requires_discovery):
         "firmware-hardware", "high-risk", "ios-macos", "llm-agent", "mobile",
         "web-app",
     }
+    controlled_exposure = bool(re.search(
+        r"(?i)\b(?:data|database|schema|storage|state)\b[^.!?;\n]{0,96}"
+        r"\bmigrat(?:e|es|ed|ing|ion)\b"
+        r"|\bmigrat(?:e|es|ed|ing|ion)\b[^.!?;\n]{0,96}"
+        r"\b(?:data|database|schema|storage|state)\b"
+        r"|\birreversible\b|\bregulated\b", task_text))
     produced = {"work orders"}
     if tier != "S":
-        produced.update({"intake.md", "testing.md"})
+        produced.add("intake.md")
+        if not research_deliverable:
+            produced.add("testing.md")
     if requires_discovery:
         produced.add("domain-discovery.md")
     if tier in {"L", "XL"} or (tier == "M" and whole):
@@ -1824,9 +2098,20 @@ def _artifact_contract(tier, domains, request, requires_discovery):
         produced.update({"release-rollback.md", "routing"})
         if "research" not in domains:
             produced.add("maintenance.md")
+    elif tier != "S" and controlled_exposure:
+        produced.add("release-rollback.md")
     if domains & ui_domains and tier != "S":
         produced.add("uiux.md")
-    if domains & sensitive_domains and tier in {"L", "XL"}:
+    security_consumer = any(
+        isinstance(item, dict)
+        and item.get("id") == "security-privacy-safety"
+        and any(str(evidence).startswith("request:")
+                for evidence in item.get("evidence", ()))
+        for item in active_specialists)
+    if tier != "S" and (
+            security_consumer or (
+                domains & sensitive_domains
+                and (tier in {"L", "XL"} or (tier == "M" and whole)))):
         produced.add("security.md")
 
     produced_cells = {
@@ -1869,6 +2154,14 @@ def _artifact_contract(tier, domains, request, requires_discovery):
         "routing": "one ordered implementer frontier is sufficient",
         "project instructions": "no new repository instruction consumer was observed",
     }
+    if research_deliverable:
+        produced_cells["work orders"] = (
+            "researcher", "research tasks and report acceptance",
+            "reviewable evidence and report frontier")
+        skip_cells["testing.md"] = (
+            "research verification belongs in source, method, citation, and report "
+            "acceptance tasks rather than a separate test artifact")
+        skip_cells["routing"] = "one ordered research frontier is sufficient"
     rows = []
     for artifact in ARTIFACT_ORDER:
         if artifact in produced:
@@ -1949,14 +2242,19 @@ def _make_plan_contract(action, prepared):
             ["domain-real-medium execution"],
         ))
         media = list(guidance[2])
-        normalized_invariants.extend(loom_domain_invariants.compile_shipped(
-            domain_id, adapter, guidance, now=instant))
+        compiled_invariants = loom_domain_invariants.compile_shipped(
+            domain_id, adapter, guidance, now=instant)
+        normalized_invariants.extend(compiled_invariants)
+        compiled_by_statement = {
+            item["statement"]: item for item in compiled_invariants
+        }
         for index, invariant in enumerate(adapter["invariants"]):
             required_invariants.append({
                 "domain": domain_id,
                 "invariant": invariant,
                 "evidence_target": "intake.md#domain-invariant-contract",
-                "required_real_medium": media[index % len(media)],
+                "required_real_medium": compiled_by_statement[invariant][
+                    "verification"]["required_real_medium"],
             })
         for fact in (
                 "current platform/tool versions and limits",
@@ -2012,7 +2310,8 @@ def _make_plan_contract(action, prepared):
         "allowed_host_write_paths": ["plans/**"],
         "artifact_matrix": _artifact_contract(
             tier, domains, action["request"],
-            prepared.route_contract["requires_domain_discovery"]),
+            prepared.route_contract["requires_domain_discovery"],
+            planning_intelligence["active_modules"]),
         "required_domain_invariants": required_invariants,
         "domain_invariants": normalized_invariants,
         "domain_discovery": {
@@ -2280,7 +2579,8 @@ def _validate_authored_plan(action, *, pack_override=None):
                     for row in rows
                     if row.get("evidence target", "").strip()
                     and row.get("required real medium", "").strip()
-                    and row.get("status", "").strip().lower() == "verified"}
+                    and row.get("status", "").strip().lower()
+                    in {"required", "verified"}}
         required = {(item["domain"], item["invariant"])
                     for item in contract["required_domain_invariants"]}
         if not required.issubset(observed):
@@ -2323,14 +2623,21 @@ def _validate_authored_plan(action, *, pack_override=None):
         rows = table(pack / "intake.md", "Current facts to verify")
         observed = {(row.get("domain", "").strip(), row.get("fact", "").strip())
                     for row in rows if row.get("source", "").strip()
-                    and row.get("status", "").strip().lower() == "verified"}
+                    and row.get("status", "").strip().lower()
+                    in {"unverified", "verified"}}
         required = {(item["domain"], item["fact"])
                     for item in contract["current_facts_to_verify"]}
         if not required.issubset(observed):
             raise OrchestratorError(
                 "PLAN_CONTRACT_MISMATCH", "required current facts are not verified")
 
-    if contract["verification_media"]:
+    testing_artifact = next(
+        (item for item in contract["artifact_matrix"]
+         if item["artifact"] == "testing.md"),
+        None)
+    if contract["verification_media"] \
+            and testing_artifact is not None \
+            and testing_artifact["action"] == "produce":
         rows = table(pack / "testing.md", "Verification media contract")
         observed = {(row.get("domain", "").strip(), row.get("medium", "").strip())
                     for row in rows if row.get("target", "").strip()
@@ -2793,11 +3100,11 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
             if not findings and [event.get("event") for event in data.get("events", [])] \
                     == ["small-planning-started"]:
                 code, output = _capture(
-                    loom_gate.small_authorize, record, root, work_order,
+                    loom_gate.small_seal, record, root, work_order,
                     context.prepared.prepared_at)
                 logs.append(output)
                 if code:
-                    findings = ["Tier-S authorization failed: " + output]
+                    findings = ["Tier-S plan sealing failed: " + output]
             findings = loom_gate.verify_small(record) if not findings else findings
         else:
             report = loom_lint.lint(
@@ -2812,13 +3119,10 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
                     review = pack / "reviews" / "G1-plan-review.md"
                     code, output = _capture(loom_gate.seal_g1, pack, root, review)
                     logs.append(output)
-                    if not code:
-                        code, output = _capture(loom_gate.authorize, pack, root)
-                        logs.append(output)
                     if code:
-                        findings = ["G1 sealing or authorization failed"]
+                        findings = ["G1 sealing failed"]
                 if not findings:
-                    findings = loom_gate.verify(pack, root, require_authorized=True)
+                    findings = loom_gate.verify(pack, root)
         if findings:
             failure_evidence = "gate-" + _hash(findings)[:24]
             return {
@@ -2837,7 +3141,8 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
             "metrics": {}, "evidence_ids": [evidence],
             "reversible_action_ids": reversible_action_ids, "usage": usage,
             "user_message": (
-                f"LOOM_RESULT {pack.relative_to(root).as_posix()}/MANIFEST.md"
+                "LOOM_RESULT "
+                f"{(pack / ('WO-001.md' if tier == 'S' else 'MANIFEST.md')).relative_to(root).as_posix()}"
                 " | The plan is validated and ready for review."),
         }
 
@@ -2888,9 +3193,14 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
                 raise OrchestratorError(
                     "REPAIR_EVIDENCE_REQUIRED", "sealed compact-plan evidence is missing")
             code, output = _capture(
-                loom_gate.small_authorize, record, root, compact_wo,
+                loom_gate.small_seal, record, root, compact_wo,
                 context.prepared.prepared_at)
-            findings = (["Tier-S reauthorization failed: " + output] if code else [])
+            findings = (["Tier-S repair plan sealing failed: " + output] if code else [])
+            if not findings:
+                code, output = _capture(
+                    loom_gate.small_authorize, record, root, compact_wo,
+                    context.prepared.prepared_at)
+                findings = (["Tier-S reauthorization failed: " + output] if code else [])
             if not findings:
                 findings = loom_gate.verify_small(record)
             if findings:
@@ -2941,6 +3251,20 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
             originals = _restamp_verified_pack(
                 pack, root, context.prepared.prepared_at,
                 full=repair_plan["force_full"])
+            lifecycle = json.loads(
+                (pack / loom_gate.LIFECYCLE_FILE).read_text(encoding="utf-8"))
+            event_names = [event["event"] for event in lifecycle["events"]]
+            if event_names == loom_gate.EVENT_ORDER[:2]:
+                code, output = _capture(
+                    loom_gate.authorize, pack, root,
+                    context.prepared.prepared_at)
+                if code:
+                    raise OrchestratorError(
+                        "REPAIR_REAUTHORIZATION_FAILED", output)
+            elif event_names != loom_gate.EVENT_ORDER:
+                raise OrchestratorError(
+                    "REPAIR_REAUTHORIZATION_FAILED",
+                    "repair produced an invalid lifecycle authorization state")
             report = loom_lint.lint(pack, repo_path=root, strict_staleness=True)
             findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
             findings.extend(loom_gate.verify(pack, root, require_authorized=True))
@@ -3011,6 +3335,15 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
                 category="process", statement=statement, provenance="stated",
                 evidence_count=1, domain=context.prepared.domains[0],
                 project_id=context.project_id, confidence=1.0)
+        if record.get("status") == "forgotten":
+            return {
+                "status": "blocked", "code": "memory-remains-forgotten",
+                "success": False, "metrics": {},
+                "evidence_ids": ["memory-tombstone-" + record["id"]],
+                "reversible_action_ids": [], "usage": usage,
+                "user_message": (
+                    "Not remembered. This information remains permanently forgotten."),
+            }
         return {
             "status": "completed", "code": "remember-complete", "success": True,
             "metrics": {}, "evidence_ids": ["memory-" + record["id"]],
@@ -3306,20 +3639,42 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         None if intent_decision["blocked"] else intent_decision["intent"])
     try:
         with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
-            recovery, reused_action = _reconcile_active_action(
-                owner_home=home, install_root=install_root, instance_id=instance_id,
-                project_id=project.project_id, now=instant,
-                incoming_intent=incoming_intent, request=request, cwd=cwd,
-                target=target, transport_invocation_id=transport_invocation_id)
-            if reused_action is not None:
-                result = _pending_action_result(reused_action)
+            recovery = None
+            if incoming_intent == "cancel":
+                result = _cancel_active_request(
+                    directory=directory, request=request, owner_home=home,
+                    install_root=install_root, now=instant)
             else:
-                result = _invoke_under_lock(
-                    request=request, cwd=cwd, home=home, install_root=install_root,
-                    target=target, timeout_seconds=timeout_seconds, now=instant,
-                    instance_id=instance_id, memory=memory,
-                    transport_invocation_id=transport_invocation_id,
-                    assurance=assurance)
+                recovery, reused_action = _reconcile_active_action(
+                    owner_home=home, install_root=install_root, instance_id=instance_id,
+                    project_id=project.project_id, now=instant,
+                    incoming_intent=incoming_intent, request=request, cwd=cwd,
+                    target=target, transport_invocation_id=transport_invocation_id)
+                if reused_action is not None:
+                    result = _pending_action_result(reused_action)
+                else:
+                    replay = None
+                    if incoming_intent == "plan":
+                        try:
+                            prepared = loom_runtime.prepare_invocation(
+                                request, instance_id=instance_id,
+                                invocation_id=str(uuid.uuid4()), cwd=cwd,
+                                explicit_target=target, owner_home=home, now=instant)
+                        except loom_runtime.RuntimeBlocked as exc:
+                            raise OrchestratorError(exc.code, exc.message) from exc
+                        replay = _completed_plan_replay(
+                            directory, prepared, target, request=request, cwd=cwd,
+                            owner_home=home, install_root=install_root)
+                    if replay is not None:
+                        result = replay
+                    else:
+                        result = _invoke_under_lock(
+                            request=request, cwd=cwd, home=home,
+                            install_root=install_root, target=target,
+                            timeout_seconds=timeout_seconds, now=instant,
+                            instance_id=instance_id, memory=memory,
+                            transport_invocation_id=transport_invocation_id,
+                            assurance=assurance)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
@@ -3722,17 +4077,27 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         "domain_contract": domain_contract,
         "context_manifest": loom_performance.production_context_manifest(install_root),
         "continuation_authority": loom_authority.decide(
-            loom_authority.facts_for_intent(prepared.intent),
+            _domain_authority_facts(prepared.intent, domain_contract),
             owner_authorized=prepared.intent in {
-                "execute", "close", "remember", "forget", "undo"}),
+                "plan", "execute", "close", "remember", "forget", "undo"}),
         "owner_message": loom_message.build(
             state="progress",
-            consequence={"S": "ordinary", "M": "material", "L": "high",
-                         "XL": "critical"}[prepared.route_contract["tier"]],
+            consequence=_action_consequence({
+                "tier": prepared.route_contract["tier"],
+                "domain_contract": domain_contract,
+            }, use_domain_contract=True),
             verification="pending", freshness="current",
-            changes_made=False, undo_status="not-applicable",
-            summary="Loom prepared the next safe frontier.",
-            next_action="Complete and verify the sealed frontier.",
+            changes_made=prepared.intent == "plan",
+            undo_status=("unavailable" if prepared.intent == "plan"
+                         else "not-applicable"),
+            summary=(
+                "Loom prepared the planning contract; no project deliverable was changed."
+                if prepared.intent == "plan"
+                else "Loom prepared the next safe frontier."),
+            next_action=(
+                "Have the agent finish the plan, then review it before any project work starts."
+                if prepared.intent == "plan"
+                else "Complete and verify the sealed frontier."),
             receipt_id="action-" + action_id),
         "result": None,
         "pack_seed": ({
@@ -3757,6 +4122,20 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         return receipt.to_dict()
     if prepared.intent in {"status", "why", "undo", "forget", "remember"}:
         immediate_controller = _controller(action)
+        if prepared.intent in {"status", "why"}:
+            active = _active_action_for_status(
+                path.parent, owner_home=home, install_root=install_root)
+            if active is not None:
+                explain = prepared.intent == "why" or bool(re.search(
+                    r"\bstatus\s+and\s+why\b|"
+                    r"\bstatus\b[^.!?]{0,80}\bwhy\b|"
+                    r"\bwhy\b[^.!?]{0,80}\bstatus\b",
+                    request, re.I))
+                immediate_controller.handlers[prepared.intent] = (
+                    lambda _context, subject=active, include_reason=explain:
+                    _active_action_transparency(
+                        subject, explain=include_reason)
+                )
         if prepared.intent == "undo":
             immediate_controller.handlers["undo"] = \
                 lambda _context: _safe_plan_undo_handler(
@@ -3806,17 +4185,38 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         action["status"] = "pending"
         action = _write_action(path, action, action_security)
     elif prepared.intent == "execute":
+        pack = target / "plans"
+        if action["tier"] == "S":
+            record = pack / ".loom-small-lifecycle.json"
+            lifecycle = json.loads(record.read_text(encoding="utf-8"))
+            if [event["event"] for event in lifecycle["events"]] \
+                    == loom_gate.SMALL_EVENT_ORDER[:2]:
+                code, output = _capture(
+                    loom_gate.small_authorize, record, target, pack / "WO-001.md",
+                    prepared.prepared_at)
+                if code:
+                    raise OrchestratorError("EXECUTION_NOT_READY", output)
+        else:
+            lifecycle = json.loads(
+                (pack / loom_gate.LIFECYCLE_FILE).read_text(encoding="utf-8"))
+            if [event["event"] for event in lifecycle["events"]] \
+                    == loom_gate.EVENT_ORDER[:2]:
+                code, output = _capture(
+                    loom_gate.authorize, pack, target,
+                    prepared.prepared_at)
+                if code:
+                    raise OrchestratorError("EXECUTION_NOT_READY", output)
         work_order_id, work_order_path = _active_work_order(
-            target / "plans", action["tier"])
+            pack, action["tier"])
         if action["tier"] == "S":
             findings = loom_gate.verify_small(
-                target / "plans" / ".loom-small-lifecycle.json")
+                pack / ".loom-small-lifecycle.json", require_authorized=True)
         else:
             report = loom_lint.lint(
-                target / "plans", repo_path=target, strict_staleness=True)
+                pack, repo_path=target, strict_staleness=True)
             findings = [f"{item['code']}: {item['msg']}" for item in report.errors]
             findings.extend(loom_gate.verify(
-                target / "plans", target, require_authorized=True))
+                pack, target, require_authorized=True))
         if findings:
             raise OrchestratorError(
                 "EXECUTION_NOT_READY", "; ".join(findings[:8]))
@@ -3884,7 +4284,8 @@ def _reopen(action, *, controller=None):
 
 def complete(action_path, usage_path=None, *, result_path=None, now=None,
              owner_home=None, install_root=None):
-    action_path = _absolute(action_path, "action")
+    action_path = (_validate_action_path_authority(action_path, owner_home)
+                   if owner_home is not None else _absolute(action_path, "action"))
     try:
         with loom_reliability.exclusive_file_lock(
                 _orchestration_lock(action_path.parent)):
@@ -3898,7 +4299,8 @@ def complete(action_path, usage_path=None, *, result_path=None, now=None,
 
 def author(action_path, draft, *, now=None, owner_home=None, install_root=None):
     """Machine-author one pending plan from a bounded semantic draft."""
-    action_path = _absolute(action_path, "action")
+    action_path = (_validate_action_path_authority(action_path, owner_home)
+                   if owner_home is not None else _absolute(action_path, "action"))
     try:
         with loom_reliability.exclusive_file_lock(
                 _orchestration_lock(action_path.parent)):
@@ -4115,6 +4517,18 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
         raise OrchestratorError(
             "HANDLER_INTERRUPTED", str(exc), status=action["status"]) from exc
     result = receipt.to_dict()
+    if result.get("status") == "completed" \
+            and action["intent"] == "plan" \
+            and action["pack_seed"]["created_pack"]:
+        pack = Path(action["explicit_target"] or action["cwd"]) / "plans"
+        try:
+            final_manifest = loom_reliability.exact_tree_manifest(pack)
+            loom_reliability.validate_exact_tree_manifest(final_manifest)
+        except loom_reliability.ReliabilityError as exc:
+            raise OrchestratorError(
+                "PLAN_UNDO_EVIDENCE_FAILED",
+                f"completed plan could not be rebound to its final tree: {exc}") from exc
+        action["host_result"]["plan_author"]["manifest"] = final_manifest
     if result.get("status") == "completed":
         stored_domain_records = _store_domain_bundle(
             controller.memory, validated_domain_bundle)
@@ -4133,7 +4547,8 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
 
 
 def cancel(action_path, *, now=None, owner_home=None, install_root=None):
-    action_path = _absolute(action_path, "action")
+    action_path = (_validate_action_path_authority(action_path, owner_home)
+                   if owner_home is not None else _absolute(action_path, "action"))
     try:
         with loom_reliability.exclusive_file_lock(
                 _orchestration_lock(action_path.parent)):
@@ -4309,6 +4724,7 @@ def main(argv=None):
     except (loom_memory.MemoryError, loom_crypto.CryptoError, loom_owner.OwnerError,
             loom_vault_adapter.VaultAdapterError, loom_runtime.RuntimeError,
             loom_session.SessionError, loom_install.InstallError,
+            loom_planning_intelligence.PlanningIntelligenceError,
             loom_execution_chain.ExecutionChainError) as exc:
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": "blocked",

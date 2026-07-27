@@ -5,14 +5,15 @@
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema_version", "baseline_id", "source_commit", "environment",
+    "schema_version", "baseline_id", "measurement_id", "source_commit", "environment",
     "preregistration", "corpus", "results", "wrapper_process",
-    "measurement_boundaries", "provider_native",
+    "policy_fixtures", "measurement_boundaries", "provider_native",
     "all_local_metrics_stable", "receipt_sha256"
   ],
   "properties": {
     "schema_version": {"const": 2},
     "baseline_id": {"type": "string", "format": "uuid"},
+    "measurement_id": {"type": "string", "format": "uuid"},
     "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "environment": {
       "type": "object",
@@ -71,7 +72,7 @@
         "properties": {
           "id": {"type": "string"},
           "measurement_class": {
-            "enum": ["local-runtime-operation", "request-preparation"]
+            "enum": ["local-runtime-operation", "request-shape-preparation"]
           },
           "samples": {
             "type": "array", "minItems": 3,
@@ -89,7 +90,10 @@
     "wrapper_process": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["samples", "p50_elapsed_ns", "p95_elapsed_ns", "includes"],
+      "required": [
+        "samples", "p50_elapsed_ns", "p95_elapsed_ns", "relative_spread",
+        "within_preregistered_tolerance", "includes"
+      ],
       "properties": {
         "samples": {
           "type": "array", "minItems": 3,
@@ -97,9 +101,23 @@
         },
         "p50_elapsed_ns": {"type": "integer", "minimum": 0},
         "p95_elapsed_ns": {"type": "integer", "minimum": 0},
+        "relative_spread": {"type": "number", "minimum": 0},
+        "within_preregistered_tolerance": {"type": "boolean"},
         "includes": {
           "type": "array", "minItems": 1, "uniqueItems": true,
           "items": {"type": "string", "minLength": 1, "maxLength": 80}
+        }
+      }
+    },
+    "policy_fixtures": {
+      "type": "array", "minItems": 1,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["id", "measurement_class", "result"],
+        "properties": {
+          "id": {"type": "string", "minLength": 1},
+          "measurement_class": {"const": "synthetic-policy-fixture"},
+          "result": {"type": "object"}
         }
       }
     },
@@ -108,14 +126,16 @@
       "additionalProperties": false,
       "required": [
         "local_runtime", "wrapper_process", "provider_response",
-        "provider_queue", "complete_wall_time"
+        "provider_queue", "local_collection_wall_time",
+        "agent_end_to_end_wall_time"
       ],
       "properties": {
         "local_runtime": {"const": "observed"},
         "wrapper_process": {"const": "observed"},
         "provider_response": {"const": "unavailable"},
         "provider_queue": {"const": "unavailable"},
-        "complete_wall_time": {"const": "unavailable"}
+        "local_collection_wall_time": {"const": "observed"},
+        "agent_end_to_end_wall_time": {"const": "unavailable"}
       }
     },
     "provider_native": {

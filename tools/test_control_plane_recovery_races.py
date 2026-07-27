@@ -90,6 +90,11 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
             request=self.request, cwd=self.repo, home=self.home,
             install_root=self.installed)
 
+    def supersede(self):
+        return loom_orchestrator.invoke(
+            request=self.request + " Include one revised acceptance requirement.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
     @staticmethod
     def read_action(action_path):
         return json.loads(Path(action_path).read_text(encoding="utf-8"))
@@ -157,7 +162,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def assert_unsealed_stage_blocks_then_cancel_preserves(self, action_path, stage,
                                                            artifact_assertion):
         self.assert_safety_refusal(
-            self.invoke, {"RECOVERY_DECISION_REQUIRED", "RECOVERY_RACE"})
+            self.supersede, {"RECOVERY_DECISION_REQUIRED", "RECOVERY_RACE"})
         self.assert_active_authority(action_path, statuses=("initializing",))
         artifact_assertion()
 
@@ -226,7 +231,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
                 loom_reliability, "_native_atomic_rename_noreplace",
                 side_effect=destination_race):
             refusal = self.assert_safety_refusal(
-                self.invoke,
+                self.supersede,
                 {"RECOVERY_QUARANTINE_CONFLICT", "RECOVERY_DECISION_REQUIRED",
                  "RECOVERY_DURABILITY"})
 
@@ -262,7 +267,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
                 loom_reliability, "_native_atomic_rename_noreplace",
                 side_effect=source_race):
             refusal = self.assert_safety_refusal(
-                self.invoke,
+                self.supersede,
                 {"RECOVERY_DECISION_REQUIRED", "RECOVERY_DURABILITY", "RECOVERY_RACE"})
 
         self.assertTrue(
@@ -283,7 +288,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
         _write(quarantine / "owner.txt", "unrelated replacement quarantine\n")
         quarantine_before = self.exact_tree(quarantine)
 
-        self.assert_safety_refusal(self.invoke, {"RECOVERY_DECISION_REQUIRED"})
+        self.assert_safety_refusal(self.supersede, {"RECOVERY_DECISION_REQUIRED"})
 
         self.assertEqual(pack_before, self.exact_tree(pack))
         self.assertEqual(quarantine_before, self.exact_tree(quarantine))
@@ -304,7 +309,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
         except OSError as exc:
             self.skipTest(f"hardlinks unavailable: {exc}")
 
-        self.assert_safety_refusal(self.invoke, {"RECOVERY_DECISION_REQUIRED"})
+        self.assert_safety_refusal(self.supersede, {"RECOVERY_DECISION_REQUIRED"})
 
         self.assertEqual(pack_before, self.exact_tree(pack))
         self.assertEqual(b"owner hardlink bytes", owner_file.read_bytes())
@@ -321,7 +326,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
                 loom_reliability, "_native_atomic_rename_noreplace",
                 side_effect=loom_reliability.ReliabilityError(message)):
             self.assert_safety_refusal(
-                self.invoke,
+                self.supersede,
                 {"RECOVERY_DECISION_REQUIRED", "RECOVERY_DURABILITY"})
         self.assertEqual(before, self.exact_tree(pack))
         self.assertFalse(self.recovery_quarantine(action_path).exists())
@@ -463,7 +468,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
             for path in (pack, project_stage, owner_stage, tombstone)
         }
 
-        self.assert_safety_refusal(self.invoke, {"RECOVERY_DECISION_REQUIRED"})
+        self.assert_safety_refusal(self.supersede, {"RECOVERY_DECISION_REQUIRED"})
 
         for path, before in snapshots.items():
             self.assertEqual(before, self.exact_tree(path))

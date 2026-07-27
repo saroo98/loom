@@ -16,6 +16,7 @@ import sys
 import loom_survey
 import loom_privacy
 import loom_operation_supervisor
+import loom_operation_envelope
 import loom_reliability
 
 
@@ -130,7 +131,7 @@ def _validate_command(command):
 
 def _run_bounded(command, cwd, timeout):
     try:
-        receipt, stdout, stderr = loom_operation_supervisor.run(
+        receipt, stdout, stderr = loom_operation_envelope.run_supervised(
             operation_class="verification",
             command=command, cwd=Path(cwd).resolve(), timeout=timeout,
             allowed_roots=[Path(cwd).resolve()],

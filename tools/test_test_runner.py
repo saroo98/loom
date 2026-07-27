@@ -98,6 +98,35 @@ class TestRunnerTests(unittest.TestCase):
             self.assertEqual(2, refreshed["discovered_test_methods"])
             self.assertEqual(2, observed["discovered_test_methods"])
 
+    def test_cli_binds_final_inventory_before_suite_and_certifies_it_after(self):
+        report = {
+            "schema_version": 1, "mode": "full", "tests_run": 2,
+            "failures": 0, "errors": 0, "skipped": 0,
+            "elapsed_seconds": 1.0, "suppressed_stdout_chars": 0,
+            "max_seconds": None, "within_budget": True,
+            "capability_complete": True, "status": "passed",
+            "successful": True, "skip_receipts": [], "timings": [],
+        }
+        refreshed = {
+            "status": "refreshed", "discovered_test_methods": 2,
+        }
+        order = []
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+                loom_test, "run",
+                side_effect=lambda *args, **kwargs: (
+                    order.append("suite") or dict(report))), mock.patch.object(
+                loom_test, "refresh_final_evidence",
+                side_effect=lambda *args, **kwargs: (
+                    order.append("certify") or dict(refreshed))), mock.patch.object(
+                loom_test.loom_docs, "refresh_evidence",
+                side_effect=lambda *args, **kwargs: order.append("bind")):
+            output = Path(temp) / "report.json"
+            code = loom_test.main([
+                "full", "--quiet", "--refresh-generated-evidence",
+                "--output", str(output)])
+        self.assertEqual(0, code)
+        self.assertEqual(["bind", "suite", "certify"], order)
+
     def test_failed_or_incomplete_suite_cannot_refresh_generated_evidence(self):
         with self.assertRaisesRegex(
                 loom_test.loom_docs.DocsError, "correctness-clean complete"):
@@ -108,6 +137,15 @@ class TestRunnerTests(unittest.TestCase):
             loom_test.refresh_final_evidence(Path.cwd(), {
                 "mode": "full", "successful": False, "tests_run": 1,
                 "failures": 1, "errors": 0, "within_budget": True})
+
+    def test_missing_output_parent_fails_before_running_any_tests(self):
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+                loom_test, "run") as run:
+            missing = Path(temp) / "missing" / "report.json"
+            with self.assertRaises(SystemExit) as caught:
+                loom_test.main(["fast", "--output", str(missing)])
+        self.assertEqual(2, caught.exception.code)
+        run.assert_not_called()
 
 
 if __name__ == "__main__":

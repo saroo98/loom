@@ -264,10 +264,15 @@ def validate_message(value):
             if value[field] is not None:
                 _text(value[field], f"{field} path", 1, 4096)
     elif message_type == "author":
-        _exact(value, common | {"action", "draft"}, "author")
+        allowed = common | {"action", "draft"}
+        if "finalize" in value:
+            allowed.add("finalize")
+        _exact(value, allowed, "author")
         _text(value["action"], "action path", 1, 4096)
         if not isinstance(value["draft"], dict):
             raise ProtocolError("MESSAGE_INVALID", "semantic plan draft is not an object")
+        if "finalize" in value and type(value["finalize"]) is not bool:
+            raise ProtocolError("MESSAGE_INVALID", "author finalize must be boolean")
     elif message_type == "cancel":
         _exact(value, common | {"action"}, "cancel")
         _text(value["action"], "action path", 1, 4096)

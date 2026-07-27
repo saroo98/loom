@@ -75,6 +75,20 @@ def _canonical(value):
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
 
+def memory_context_cost(record):
+    """Measure the bounded runtime projection, not encrypted storage metadata."""
+    fields = (
+        "id", "scope", "domain", "project_id", "category", "statement",
+        "provenance", "confidence", "preference_key", "preference_value",
+        "verify_by",
+    )
+    return len(_canonical({
+        field: record[field]
+        for field in fields
+        if field in record and record[field] is not None
+    })) + 1
+
+
 def _stamp():
     return dt.datetime.now(dt.timezone.utc).replace(microsecond=0).isoformat().replace(
         "+00:00", "Z")
@@ -906,9 +920,15 @@ class OwnerVault:
                 "WHERE status!='active'").fetchone()[0]
             if cold_bytes > MAX_LEARNING_ARCHIVE_BYTES:
                 raise VaultError("learning archive byte bound reached")
-            if receipt["deduplicated"] and connection.execute(
-                    "SELECT 1 FROM tombstones WHERE record_id=?", (record["id"],)).fetchone():
-                return {"id": record["id"], "status": "forgotten"}
+            if receipt["deduplicated"]:
+                tombstone = connection.execute(
+                    "SELECT 1 FROM tombstones WHERE record_id=? OR semantic_tag=?",
+                    (record["id"], self._semantic_tag(record))).fetchone()
+                persisted = connection.execute(
+                    "SELECT 1 FROM memory_records WHERE record_id=?",
+                    (record["id"],)).fetchone()
+                if tombstone and persisted is None:
+                    return {"id": record["id"], "status": "forgotten"}
             return json.loads(json.dumps(record))
 
         return self.run_transaction(write)
@@ -1978,7 +1998,7 @@ class OwnerVault:
         used = 0
         for row in rows:
             record = self._decrypt_record(row)
-            cost = len(_canonical(record)) + 1
+            cost = memory_context_cost(record)
             if len(selected) >= max_records or used + cost > max_chars:
                 continue
             selected.append(record)
@@ -1990,6 +2010,54 @@ class OwnerVault:
             def mark(connection):
                 connection.execute(
                     f"UPDATE memory_utility SET selection_count=selection_count+1," 
+                    f"last_selected=? WHERE record_id IN ({placeholders})",
+                    (_stamp(), *ids))
+                return len(ids)
+
+            self.run_transaction(mark)
+        return selected
+
+    def select_project_preferences(
+            self, *, project_id, max_records=4, max_chars=4096, exclude_ids=()):
+        """Select explicit preferences for one exact project, independent of active domain.
+
+        A project-scoped preference governs that project. Its recorded domain is provenance,
+        not a reason to hide it when the same project moves between domain routes.
+        """
+        if not isinstance(project_id, str) or not project_id.startswith("p-") \
+                or type(max_records) is not int or type(max_chars) is not int \
+                or not 1 <= max_records <= 4 or not 256 <= max_chars <= 4096 \
+                or not isinstance(exclude_ids, (tuple, list, set)) \
+                or any(not isinstance(item, str) for item in exclude_ids):
+            raise VaultError("project preference selection inputs are invalid")
+        excluded = set(exclude_ids)
+        project_tag = self.crypto.blind_index("project", project_id)
+        with self._connect() as connection:
+            rows = connection.execute(
+                "SELECT * FROM memory_records WHERE status='active' "
+                "AND scope='project' AND project_tag=? "
+                "ORDER BY updated_at DESC,record_id",
+                (project_tag,)).fetchall()
+        selected = []
+        used = 0
+        for row in rows:
+            record = self._decrypt_record(row)
+            if record.get("category") != "preference" \
+                    or record.get("provenance") != "stated" \
+                    or record["id"] in excluded:
+                continue
+            cost = memory_context_cost(record)
+            if len(selected) >= max_records or used + cost > max_chars:
+                continue
+            selected.append(record)
+            used += cost
+        if selected:
+            ids = [record["id"] for record in selected]
+            placeholders = ",".join("?" for _ in ids)
+
+            def mark(connection):
+                connection.execute(
+                    f"UPDATE memory_utility SET selection_count=selection_count+1,"
                     f"last_selected=? WHERE record_id IN ({placeholders})",
                     (_stamp(), *ids))
                 return len(ids)

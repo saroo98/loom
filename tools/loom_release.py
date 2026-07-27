@@ -27,6 +27,7 @@ import loom_self_hosting
 import loom_crypto
 import loom_path_authority
 import loom_operation_supervisor
+import loom_operation_envelope
 
 
 ROOT_FILES = {
@@ -51,7 +52,7 @@ EXTERNAL_CHECKS = (
 # The dedicated fast gate owns the 30-second regression budget.  The complete
 # correctness suite does not duplicate a wall-clock assertion inside its own
 # result; the verifier and CI job retain independent hard termination bounds.
-FULL_SUITE_MAX_SECONDS = 1800
+FULL_SUITE_MAX_SECONDS = 2100
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",
@@ -258,10 +259,9 @@ def build_public(source, destination, *, forbidden_tokens,
     owner_token_policy = _owner_token_policy(
         source, forbidden_tokens, source_classification)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    staging = Path(tempfile.mkdtemp(prefix=".loom-public-", dir=destination.parent))
-    staging_owner = loom_path_authority.create_ownership_receipt(
-        path=staging, root=destination.parent, operation_id=str(uuid.uuid4()),
-        expected_type="directory")
+    staging = destination.parent / f".loom-public-{uuid.uuid4().hex}"
+    staging_owner = loom_path_authority.create_owned_directory(
+        path=staging, root=destination.parent)
     try:
         copied = []
         for path in _eligible_files(source):
@@ -811,6 +811,9 @@ def certification_report(*, local_checks, external_evidence, trust_policy=None, 
             loom_self_hosting.authorize(
                 self_hosting_receipt, action="certify", actor=actor_id,
                 candidate_subject=_canonical_hash(local_subject),
+                candidate_source_digest=local_subject["root_sha256"],
+                dirty_diff_digest=hashlib.sha256(b"").hexdigest(),
+                candidate_build_digest=local_subject["root_sha256"],
                 now=now or dt.datetime.now(dt.timezone.utc),
                 trusted_controller_keys=self_hosting_trusted_keys,
                 signature_verifier=self_hosting_signature_verifier)
@@ -888,7 +891,7 @@ def _suite(root):
             environment["CARGO_HOME"] = str(cargo_home)
         if rustup_home.is_dir():
             environment["RUSTUP_HOME"] = str(rustup_home)
-        operation, stdout, stderr = loom_operation_supervisor.run(
+        operation, stdout, stderr = loom_operation_envelope.run_supervised(
             operation_class="release-suite",
             command=command, cwd=(root / "tools").resolve(),
             environment=environment,

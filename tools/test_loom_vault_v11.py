@@ -215,6 +215,14 @@ class OwnerVaultTests(unittest.TestCase):
         self.assertEqual("forgotten", replay["status"])
         self.assertEqual([], self.vault.select_memory(domain="accounting", project_id=None))
 
+    def test_semantically_identical_new_id_does_not_claim_active_after_forget(self):
+        record = self.vault.put_memory(self.record())
+        self.vault.forget_memory(record["id"], reason="owner-request")
+        replacement = self.vault.put_memory(self.record(record_id=str(uuid.uuid4())))
+
+        self.assertEqual("forgotten", replacement["status"])
+        self.assertIsNone(self.vault.get_memory(replacement["id"]))
+
     def test_online_backup_is_consistent_and_transaction_failure_preserves_old_generation(self):
         self.vault.put_memory(self.record())
         before = self.vault.identity()["generation"]

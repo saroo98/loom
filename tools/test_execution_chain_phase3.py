@@ -91,7 +91,8 @@ class ExecutionChainTests(unittest.TestCase):
             "import json,sys\n"
             "print(json.dumps({'isolated':bool(sys.flags.isolated),"
             "'no_user_site':bool(sys.flags.no_user_site),"
-            "'safe_path':bool(getattr(sys.flags,'safe_path',False))}))\n",
+            "'safe_path':bool(getattr("
+            "sys.flags,'safe_path',sys.flags.isolated))}))\n",
             encoding="utf-8")
         environment = dict(os.environ)
         environment.update({
@@ -106,6 +107,12 @@ class ExecutionChainTests(unittest.TestCase):
         self.assertEqual(
             {"isolated": True, "no_user_site": True, "safe_path": True}, flags)
         self.assertFalse(marker.exists())
+
+    def test_python310_isolated_flag_proves_safe_path_without_newer_flag(self):
+        flags = types.SimpleNamespace(isolated=1)
+        self.assertTrue(loom_execution_chain._safe_path_proven(flags))
+        flags = types.SimpleNamespace(isolated=0)
+        self.assertFalse(loom_execution_chain._safe_path_proven(flags))
 
 
 if __name__ == "__main__":

@@ -88,14 +88,15 @@ class RealProcessControlPlaneTests(unittest.TestCase):
         return temporary, root, home, repo
 
     def payload(self, home, repo, *, operation="invoke", boundary=None,
-                action_path=None, hold=None, marker=None, release=None):
+                action_path=None, hold=None, marker=None, release=None,
+                request=None):
         value = {
             "operation": operation,
             "home": str(home),
             "install_root": str(self.installed),
         }
         if operation == "invoke":
-            value.update({"cwd": str(repo), "request": self.request})
+            value.update({"cwd": str(repo), "request": request or self.request})
             if boundary is not None:
                 value["boundary"] = boundary
         else:
@@ -106,9 +107,11 @@ class RealProcessControlPlaneTests(unittest.TestCase):
             })
         return value
 
-    def run_invoke(self, home=None, repo=None, *, boundary=None):
+    def run_invoke(self, home=None, repo=None, *, boundary=None, request=None):
         return loom_fault_harness.run_orchestrator_process(
-            ROOT, self.payload(home or self.home, repo or self.repo, boundary=boundary))
+            ROOT, self.payload(
+                home or self.home, repo or self.repo,
+                boundary=boundary, request=request))
 
     @staticmethod
     def result(process):
@@ -295,14 +298,18 @@ class RealProcessControlPlaneTests(unittest.TestCase):
                     old_action_path = Path(opened_result["action_path"])
                     seed = json.loads(old_action_path.read_text(
                         encoding="utf-8"))["pack_seed"]["manifest"]
+                    revised_request = (
+                        self.request + " Include one revised acceptance requirement.")
 
-                    crashed = self.run_invoke(home, repo, boundary=boundary)
+                    crashed = self.run_invoke(
+                        home, repo, boundary=boundary, request=revised_request)
                     self.assertEqual(
                         loom_fault_harness.ORCHESTRATION_CRASH_CODES[boundary],
                         crashed.returncode,
                         crashed.stderr.decode("utf-8", errors="replace"))
 
-                    retried = self.run_invoke(home, repo)
+                    retried = self.run_invoke(
+                        home, repo, request=revised_request)
 
                     self.assertEqual(
                         0, retried.returncode,
@@ -387,9 +394,11 @@ class RealProcessControlPlaneTests(unittest.TestCase):
                 marker=marker, release=release)
             second_payload = self.payload(self.home, self.repo)
         else:
+            revised_request = (
+                self.request + " Include one revised acceptance requirement.")
             first_payload = self.payload(
                 self.home, self.repo, hold="invoke-after-lock",
-                marker=marker, release=release)
+                marker=marker, release=release, request=revised_request)
             second_payload = self.payload(
                 self.home, self.repo, operation="cancel", action_path=old_action_path)
         first = loom_fault_harness.start_orchestrator_process(ROOT, first_payload)

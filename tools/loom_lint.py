@@ -751,8 +751,7 @@ def _lint_small_pack(pack, repo_path=None, strict_staleness=False,
         event.get("event") if isinstance(event, dict) else None
         for event in (events if isinstance(events, list) else [])]
     required_status = (
-        "done" if names == [
-            "small-planning-started", "small-authorized", "small-completed"]
+        "done" if names == loom_gate.SMALL_EVENT_ORDER
         else "ready")
     wo = pack / "WO-001.md"
     try:
@@ -1642,8 +1641,15 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
             independence = rfm.get("reviewer_independence")
             mechanical = (
                 independence == "mechanical-independent"
-                and mfm.get("tier") == "M"
-                and rfm.get("reviewer") == "loom-deterministic-plan-validator-v1"
+                and (
+                    (mfm.get("tier") == "M"
+                     and rfm.get("reviewer") == "loom-deterministic-plan-validator-v1")
+                    or (
+                        mfm.get("tier") in {"M", "L", "XL"}
+                        and rfm.get("reviewer")
+                        == "loom-deterministic-plan-validator-v2"
+                    )
+                )
             )
             if independence != "independent" and not mechanical:
                 rep.add("ERROR", "E15", review, 1,

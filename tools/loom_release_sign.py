@@ -118,10 +118,14 @@ def sign_release(helper, root, manifest, authorities, *, expires, output=None,
     if self_hosting_receipt is not None:
         if not isinstance(actor_id, str):
             raise SigningError("self-hosted signing requires a release-authority actor")
+        manifest_digest = hashlib.sha256(_canonical(manifest)).hexdigest()
         try:
             loom_self_hosting.authorize(
                 self_hosting_receipt, action="sign", actor=actor_id,
-                candidate_subject=hashlib.sha256(_canonical(manifest)).hexdigest(),
+                candidate_subject=manifest_digest,
+                candidate_source_digest=manifest_digest,
+                dirty_diff_digest=hashlib.sha256(b"").hexdigest(),
+                candidate_build_digest=manifest_digest,
                 now=now or dt.datetime.now(dt.timezone.utc),
                 trusted_controller_keys=self_hosting_trusted_keys,
                 signature_verifier=lambda message, signature, public_key:

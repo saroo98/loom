@@ -25,7 +25,10 @@ CATALOG = {
         "keywords": [r"\baccount(?:ing|ant)\b", r"\bbookkeep", r"\bdouble[- ]entry\b",
                      r"\bledger\b", r"\btax\b"],
         "invariants": ["balanced postings", "currency precision", "immutable audit trail",
-                       "reconciliation", "period close", "jurisdiction/effective-date rules"],
+                       "reconciliation", "reversal and adjusting-entry semantics",
+                       "period close",
+                       "tax-period calendar and filed-period lock/reopen authority",
+                       "jurisdiction/effective-date rules"],
     },
     "realtime-3d": {
         "keywords": [r"\breal[- ]time 3d\b", r"\broom configurator\b", r"\bwebgl\b",
@@ -34,14 +37,21 @@ CATALOG = {
                        "GPU/device budget", "spatial interaction", "real-device profiling"],
     },
     "firmware-hardware": {
-        "keywords": [r"\bfirmware\b", r"\bmicrocontroller\b", r"\bembedded\b",
+        "keywords": [r"\bfirmware\b", r"\bmicrocontroller\b",
+                     r"\bembedded (?:system|device|firmware|controller|hardware|linux)\b",
                      r"\bhardware\b", r"\bpcb\b", r"\bfpga\b"],
         "invariants": ["board/revision identity", "timing/power/memory budgets",
                        "fail-safe state", "hardware-in-loop evidence", "flash/recovery path",
-                       "physical rollback and safety boundary"],
+                       "physical rollback and safety boundary",
+                       "watchdog and liveness recovery",
+                       "flash endurance and wear budget",
+                       "brownout and power-loss behavior"],
     },
     "research": {
-        "keywords": [r"\bliterature review\b", r"\bresearch (?:paper|write[- ]?up|project|study)\b",
+        "keywords": [r"\bliterature review\b",
+                     r"\bresearch (?:paper|write[- ]?up|project|study|comparison|analysis|survey)\b",
+                     r"\bresearch[- ]and[- ]writing\s+plan\b",
+                     r"\bresearch\s+and\s+(?:write|produce|deliver|synthesize)\b",
                      r"\b(?:conduct|perform|produce|write|synthesize)\s+(?:a\s+)?research\b",
                      r"\bpaper\b", r"\bstudy methodology\b"],
         "invariants": ["research question", "source provenance", "claims/evidence matrix",
@@ -51,7 +61,10 @@ CATALOG = {
         "keywords": [r"\betl\b", r"\bdata pipeline\b", r"\bwarehouse\b",
                      r"\bbackfill\b", r"\bdata ingest"],
         "invariants": ["schema and lineage", "idempotency", "replay/backfill",
-                       "late/duplicate data", "schema evolution", "retention and recovery"],
+                       "late/duplicate data",
+                       "quarantine and rejected-record disposition",
+                       "row-count and reconciliation controls",
+                       "schema evolution", "retention and recovery"],
     },
     "ml": {
         "keywords": [r"\bmachine[- ]learning\b", r"\bml[- ]pipeline\b", r"\bmodel training\b",
@@ -62,19 +75,30 @@ CATALOG = {
     "android": {
         "keywords": [r"\bandroid\b", r"\bapk\b", r"\baab\b", r"\bplay store\b"],
         "invariants": ["device/OS floor", "lifecycle/process death", "permissions",
-                       "offline/sync", "real-device evidence", "signed staged release"],
+                       "offline/sync", "real-device evidence",
+                       "package integrity and installability"],
     },
     "ios-macos": {
         "keywords": [r"\bios\b", r"\biphone\b", r"\bipad\b", r"\bmacos\b",
                      r"\bapp store\b", r"\btestflight\b"],
         "invariants": ["device/OS floor", "lifecycle and entitlements", "permissions/privacy",
-                       "real-device evidence", "signing/provisioning", "staged release"],
+                       "real-device evidence", "package integrity and installability"],
     },
     "mobile": {
-        "keywords": [r"\bmobile app\b", r"\bcross[- ]platform mobile\b", r"\bflutter\b",
-                     r"\breact native\b"],
+        "keywords": [
+            r"\bmobile app\b", r"\bcross[- ]platform mobile\b",
+            r"\boffline[- ]first mobile\b",
+            r"\bmobile (?:application|client|product|experience|habit tracker)\b",
+            r"\bmobile(?:\s+[a-z0-9][a-z0-9-]*){0,4}\s+app(?:lication)?\b",
+            r"\bflutter\b", r"\breact native\b",
+        ],
         "invariants": ["target OS/device matrix", "native bridge/lifecycle", "offline/sync",
-                       "permissions", "real-device evidence", "packaging/release channel"],
+                       "sync conflict resolution and data integrity", "permissions",
+                       "notification denial and recovery behavior",
+                       "time-zone and daylight-saving scheduling",
+                       "missed-delivery and delayed-reminder behavior",
+                       "local private-data lifecycle",
+                       "real-device evidence", "packaging/release channel"],
     },
     "cli": {
         "keywords": [r"\bcli\b", r"\bcommand[- ]line\b", r"\bterminal tool\b",
@@ -177,7 +201,8 @@ STRUCTURAL_SIGNALS = {
 # ``unclassified``; G1 remains blocked until a discovered invariant bundle is sealed.
 DISCOVERY_CATALOG = {
     "medical-clinical": [
-        r"\bmedical\b", r"\bclinical\b", r"\bpatient\b", r"\bdiagnos",
+        r"\bmedical\b", r"\bclinical\b", r"\bpatient\b",
+        r"\bdiagnos(?:is|es|ed|ing)\b",
         r"\btherapy\b", r"\bhealthcare\b",
     ],
     "legal-regulatory": [
@@ -227,24 +252,36 @@ GUIDANCE = {
     "cli": (["ambiguous exit semantics", "shell and encoding variance"],
             ["clean install succeeds", "help and failure contracts are stable"],
             ["real process invocation", "stdout/stderr and exit-code assertions"]),
-    "mobile": (["device and lifecycle fragmentation", "permission/offline failure"],
+    "mobile": (["device and lifecycle fragmentation", "permission/offline failure",
+                "concurrent-edit sync conflict or silent data loss"],
                ["signed staged build", "supported-device smoke pass"],
-               ["real-device lifecycle test", "offline and permission transitions"]),
+               ["real-device lifecycle test", "offline and permission transitions",
+                "concurrent-edit conflict transition"]),
     "data-etl": (["duplicate or late data", "partial replay corruption"],
                  ["idempotent replay", "lineage and backfill evidence"],
                  ["production-shaped dataset", "duplicate/late/backfill probes"]),
     "ml": (["training-serving skew", "evaluation leakage and drift"],
            ["versioned model and dataset", "predeclared thresholds pass"],
            ["held-out evaluation", "reproducible train/inference run"]),
-    "accounting": (["unbalanced postings", "rounding, period, or tax-rule error"],
-                   ["balanced ledger and reconciliation", "immutable audit evidence"],
-                   ["double-entry property tests", "dated jurisdiction edge cases"]),
+    "accounting": (["unbalanced postings", "rounding, period, or tax-rule error",
+                    "posting into a filed period or unauthorized reopen"],
+                   ["balanced ledger and reconciliation", "immutable audit evidence",
+                    "filed-period lock and authorized reopen proof"],
+                   ["double-entry property tests",
+                    "dated jurisdiction, tax-period, and filed-period cases"]),
     "realtime-3d": (["frame-budget regression", "unit/coordinate or asset mismatch"],
                     ["target-device frame budget", "asset pipeline reproducibility"],
                     ["real GPU/device profile", "spatial interaction and asset probes"]),
-    "firmware-hardware": (["unsafe state", "brick, timing, power, or revision mismatch"],
-                          ["recoverable flash", "hardware revision and safe-state proof"],
-                          ["hardware-in-loop run", "power-cycle and recovery test"]),
+    "firmware-hardware": (
+        ["unsafe state", "brick, timing, power, or revision mismatch",
+         "watchdog lockup, flash wear, or brownout corruption"],
+        ["recoverable flash", "hardware revision and safe-state proof",
+         "watchdog recovery, endurance budget, and brownout proof"],
+        ["hardware-in-loop run", "power-cycle and recovery test",
+         "physical rollback and flash-recovery rehearsal",
+         "watchdog reset and liveness-recovery test",
+         "flash endurance and wear-budget stress test",
+         "brownout and power-loss fault injection"]),
     "research": (["unsupported claim", "source or method irreproducibility"],
                  ["claim/evidence review", "limitations and correction route"],
                  ["source audit", "independent method reproduction"]),
@@ -433,6 +470,10 @@ def _domain_match_is_negated(text, match):
     clause_start = max(text.rfind(mark, 0, match.start())
                        for mark in (".", "!", "?", ";", ",", ":", "\n")) + 1
     prefix = text[clause_start:match.start()][-120:]
+    if re.search(
+            r"\bno(?:\s+(?:unrelated|extra|additional))?\s+$",
+            prefix, re.IGNORECASE):
+        return True
     if re.search(
             r"(?:\b(?:do|does|did|must|should|can|could|will|would)\s+not\b|"
             r"\b(?:never|without|exclud(?:e|es|ed|ing)|omit(?:s|ted|ting)?|"

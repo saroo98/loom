@@ -2,6 +2,7 @@
 
 import datetime as dt
 import json
+import sqlite3
 import os
 import subprocess
 import sys
@@ -419,6 +420,7 @@ class WorldFingerprintTests(RuntimeFixture):
             "capsule_version": "capsule-1",
             "profile_version": "profile-1",
             "prior_session_hash": "5" * 64,
+            "forgetting_version": "forgetting-1",
             "project_inspection_hash": "sha256:" + "6" * 64,
             "staleness_bucket": 100,
         }
@@ -531,6 +533,46 @@ class WorldFingerprintTests(RuntimeFixture):
             dt.time(12), tzinfo=dt.timezone.utc)
         self.assertNotEqual(
             self.prepare(now=future).world_fingerprint, baseline.world_fingerprint)
+
+    def test_vault_deletion_epoch_changes_world_and_operation_identity_only(self):
+        vault = self.owner_home / "vault" / "owner.sqlite3"
+        vault.parent.mkdir(parents=True)
+        connection = sqlite3.connect(vault)
+        try:
+            connection.execute(
+                "CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('deletion_epoch', '0')")
+            connection.commit()
+        finally:
+            connection.close()
+
+        baseline = self.prepare(invocation_id=str(uuid.uuid4()))
+        connection = sqlite3.connect(vault)
+        try:
+            connection.execute(
+                "INSERT INTO metadata(key, value) VALUES('unrelated', 'changed')")
+            connection.commit()
+        finally:
+            connection.close()
+        unrelated = self.prepare(invocation_id=str(uuid.uuid4()))
+        self.assertEqual(
+            baseline.world_fingerprint, unrelated.world_fingerprint)
+        self.assertEqual(
+            baseline.operation_fingerprint, unrelated.operation_fingerprint)
+
+        connection = sqlite3.connect(vault)
+        try:
+            connection.execute(
+                "UPDATE metadata SET value='1' WHERE key='deletion_epoch'")
+            connection.commit()
+        finally:
+            connection.close()
+        forgotten = self.prepare(invocation_id=str(uuid.uuid4()))
+        self.assertNotEqual(
+            baseline.world_fingerprint, forgotten.world_fingerprint)
+        self.assertNotEqual(
+            baseline.operation_fingerprint, forgotten.operation_fingerprint)
 
     def test_world_state_versions_cannot_be_supplied_by_a_caller(self):
         for field in (
@@ -679,6 +721,22 @@ class NoConfigDefaultTests(RuntimeFixture):
         self.assertTrue(route["recommendation"])
         self.assertEqual(route["target_mutation_count"], 0)
 
+    def test_planning_release_checks_are_not_treated_as_release_authority(self):
+        prepared = self.prepare(
+            "Plan a small mobile offline notes app with conflict handling, "
+            "accessibility, lifecycle restoration, encrypted local storage, "
+            "and release checks.")
+        route = prepared.route_contract
+        self.assertFalse(route["blocked"])
+        self.assertEqual("plan", route["intent"])
+
+    def test_planning_request_with_explicit_destructive_effect_still_blocks(self):
+        prepared = self.prepare(
+            "Plan the release and then delete the old production data")
+        route = prepared.route_contract
+        self.assertTrue(route["blocked"])
+        self.assertEqual("HIGH_CONSEQUENCE_UNCERTAIN", route["code"])
+
     def test_invalid_config_blocks_instead_of_falling_through(self):
         self.owner_home.mkdir()
         owner_config = json.loads(json.dumps(loom_runtime.DEFAULT_CONFIG))
@@ -795,6 +853,34 @@ class UncertainRouteTests(unittest.TestCase):
                 self.assertTrue(decision["blocked"])
                 self.assertEqual(decision["code"], "INTENT_NEGATED")
                 self.assertNotEqual(decision["intent"], "forget")
+
+    def test_exact_id_forget_and_cancel_phrases_keep_their_positive_control(self):
+        memory_id = "e5057578-a89a-4c02-b649-2a40a34a75ab"
+        action_id = "735a998e-de5d-5b88-95f2-c0753e58f39b"
+        cases = (
+            (f"Permanently forget memory {memory_id}.", "forget"),
+            (
+                "Cancel the current pending Loom action for this project. "
+                "Do not implement anything.",
+                "cancel",
+            ),
+            (
+                f"Cancel Loom action {action_id}, then leave the project unchanged "
+                "so the next invocation can pursue a new plan.",
+                "cancel",
+            ),
+        )
+        for request, intent in cases:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request, {})
+                self.assertEqual(intent, decision["intent"])
+                self.assertFalse(decision["blocked"])
+
+    def test_product_language_does_not_trigger_owner_cancellation(self):
+        decision = loom_runtime.resolve_intent(
+            "Build a cancellation dashboard but do not cancel anything.", {})
+        self.assertEqual("plan", decision["intent"])
+        self.assertFalse(decision["blocked"])
 
 
 class InvalidWorldStateTests(RuntimeFixture):

@@ -1124,11 +1124,22 @@ class LocalMemoryAdapter:
     def undo_latest(self):
         return self.actions.undo_latest(self.preferences)
 
-    def profile_summary(self):
-        return loom_transparency.profile_summary(
-            self.owner_home, self.instance_id, max_chars=1200)
+    def profile_summary(self, context):
+        visible = []
+        for item in context.selected_memory:
+            if not (isinstance(item, dict) or hasattr(item, "get")) \
+                    or item.get("provenance") != "stated" \
+                    or item.get("status") not in {None, "active", "dormant"}:
+                continue
+            statement = item["statement"]
+            matched = re.fullmatch(r"([A-Za-z][A-Za-z0-9_.-]*)=(.+)", statement)
+            if matched is not None:
+                statement = f"{matched.group(1)}: {matched.group(2)}"
+            visible.append(
+                f"- {statement} [scope: {item.get('scope', 'legacy-unscoped')}]")
+        return "\n".join(visible) if visible else "No selected stated memory."
 
-    def performance_summary(self):
+    def performance_summary(self, _context=None):
         report = loom_performance.usage_report(self.owner_home, self.instance_id)
         summary = {key: report[key] for key in (
             "measurement_source", "total_count", "retained_sample_count",
@@ -1693,14 +1704,22 @@ class SessionController:
                     return {**base, "status": "blocked", "code": "profile-disabled",
                             "success": False,
                             "user_message": "Performance history is disabled."}
-                return {**base, "user_message": selector()}
+                return {**base, "user_message": selector(context)}
             if re.search(r"remember about me|remembered preferences", context.request_text, re.I):
                 selector = getattr(self.memory, "profile_summary", None)
                 if selector is None:
                     return {**base, "status": "blocked", "code": "profile-disabled",
                             "success": False, "user_message": "Owner memory is disabled."}
-                return {**base, "user_message": selector()}
+                return {**base, "user_message": selector(context)}
             prior = _latest_sealed_receipt(journal, self._open_payload)
+            if prior is not None and re.search(
+                    r"\bstatus\s+and\s+why\b|\bstatus\b[^.!?]{0,80}\bwhy\b|"
+                    r"\bwhy\b[^.!?]{0,80}\bstatus\b",
+                    context.request_text, re.I):
+                return {
+                    **base,
+                    "user_message": loom_transparency.status_with_reason(prior),
+                }
             message = ("No prior Loom run exists for this project." if prior is None
                        else loom_transparency.render_compact_receipt(
                            loom_transparency.compact_receipt(prior)))

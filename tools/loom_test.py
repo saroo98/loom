@@ -168,6 +168,17 @@ def refresh_final_evidence(root, report):
     }
 
 
+def _validated_output_path(value):
+    """Reject an unusable report destination before the test suite starts."""
+    path = Path(value)
+    parent = path.parent
+    if not parent.is_dir():
+        raise ValueError("output parent directory does not exist")
+    if path.is_symlink() or (path.exists() and not path.is_file()):
+        raise ValueError("output must be a regular file path, not a redirected path")
+    return path
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Run Loom's bounded fast gate or complete release suite.")
@@ -180,8 +191,17 @@ def main(argv=None):
     evidence_root = Path(__file__).resolve().parents[1]
     if args.refresh_generated_evidence and args.mode != "full":
         parser.error("generated evidence refresh requires full mode")
+    output_path = None
+    if args.output:
+        try:
+            output_path = _validated_output_path(args.output)
+        except ValueError as exc:
+            parser.error(str(exc))
     if args.refresh_generated_evidence:
         try:
+            # Bind the checked-in inventory to the final source tree before that
+            # same tree audits documentation coherence. A second refresh below
+            # occurs only after the complete correctness suite passes.
             loom_docs.refresh_evidence(evidence_root)
         except loom_docs.DocsError as exc:
             parser.error(str(exc))
@@ -198,8 +218,8 @@ def main(argv=None):
             report["successful"] = False
             report["status"] = "failed"
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
-    if args.output:
-        Path(args.output).write_text(text, encoding="utf-8")
+    if output_path is not None:
+        output_path.write_text(text, encoding="utf-8")
     print(text, end="")
     return 0 if report["successful"] else 1
 

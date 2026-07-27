@@ -43,6 +43,27 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
             self.assertEqual(0, decision[field], f"{request}: {field}")
         return decision
 
+    def test_explanation_with_no_write_constraint_routes_to_why(self):
+        self.assertRoute(
+            "Explain why Loom chose this plan route and what it authorized. "
+            "Do not change project files.",
+            intent="why", blocked=False, code="ROUTE_WHY",
+            state=AUTHORIZED_STATE)
+
+    def test_status_and_why_is_one_read_only_transparency_request(self):
+        for request in (
+                "Show me the current status and explain why.",
+                "What is the status and why did Loom choose it?",
+                "Status and why, please.",
+                (
+                    "Report the current Loom action status for this project and explain "
+                    "why it is in that state. Do not create or modify a plan."
+                )):
+            with self.subTest(request=request):
+                self.assertRoute(
+                    request, intent="status", blocked=False, code="ROUTE_STATUS",
+                    state=AUTHORIZED_STATE)
+
     def test_each_true_negation_blocks_without_authorizing_its_opposite(self):
         cases = [
             ("Do not remember this preference.", {}),
@@ -112,6 +133,82 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
             with self.subTest(request=request):
                 self.assertRoute(
                     request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_review_as_method_for_a_plan_is_not_a_review_lifecycle_operation(self):
+        requests = [
+            (
+                "Review this small research write-up project and produce a "
+                "reviewable plan for developing the evidence-based briefing. "
+                "Use the notes and identify evidence gaps. Do not implement the "
+                "plan, publish anything, or modify files outside this project."
+            ),
+            (
+                "Review the current README and create an implementation plan for "
+                "a clearer usage section. Do not change the README."
+            ),
+        ]
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertRoute(
+                    request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_long_domain_checklists_do_not_exhaust_the_control_clause_budget(self):
+        request = (
+            "Create exactly one implementation plan, and no other outcome, for a "
+            "browser-based real-time 3D room configurator in this repository. "
+            "The plan must cover spatial selection, placement, dragging, rotation, "
+            "snapping, collision and room-boundary behavior; explicit world, model, "
+            "room, camera, screen, and raycast coordinate conversions with units and "
+            "axis conventions; frame-time, draw-call, triangle, texture-memory, "
+            "load-time, and bundle budgets by device class; a glTF/GLB asset pipeline "
+            "with validation, compression, LODs, materials, pivots, bounds, metadata, "
+            "and CDN/cache policy; deterministic visual verification using reference "
+            "scenes, screenshots, interaction checks, performance traces, and tolerance "
+            "rules; and graceful fallbacks including quality tiers and a usable non-3D "
+            "product-selection path. Define sequencing, ownership boundaries, acceptance "
+            "evidence, risks, and failure handling. Preserve the existing metric "
+            "room-dimension contract and Y-up convention. Prohibitions: do not implement, "
+            "add dependencies, change repository files, deploy, publish, or introduce "
+            "rules unrelated to this configurator."
+        )
+
+        self.assertRoute(
+            request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_detailed_plan_with_semicolon_prohibitions_remains_planning(self):
+        request = (
+            "Create one detailed implementation plan, and only a plan, for a "
+            "real-time 3D room configurator. The plan must cover spatial selection, "
+            "placement, dragging, rotation, snapping, collision and room-boundary "
+            "behavior; explicit world, model, room, camera, screen, and raycast "
+            "coordinate conversions; frame-time, draw-call, triangle, texture-memory, "
+            "load-time, and bundle budgets; a glTF/GLB asset pipeline; deterministic "
+            "visual verification; and graceful fallbacks. Explicit prohibitions: do "
+            "not implement code; do not modify files; do not install dependencies; "
+            "do not run builds, tests, benchmarks, profilers, or external research; "
+            "do not commit, push, deploy, publish, or delete anything. These "
+            "prohibitions are constraints, not contradictory outcomes."
+        )
+
+        self.assertRoute(
+            request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_plan_deliverable_modifiers_do_not_create_implementation_authority(self):
+        requests = [
+            "Create one detailed implementation plan. Do not implement code.",
+            "Create a detailed coding plan. Explicit prohibition: do not modify files.",
+            "Draft only one release-ready implementation plan; do not implement it.",
+            "Write the implementation plan. Explicit constraints: do not run tests.",
+        ]
+        for request in requests:
+            with self.subTest(request=request):
+                self.assertRoute(
+                    request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_explicit_prohibition_without_positive_outcome_still_blocks(self):
+        self.assertRoute(
+            "Explicit prohibitions: do not implement code; do not modify files.",
+            intent="status", blocked=True, code="INTENT_NEGATED")
 
     def test_implementation_request_and_implementation_prohibition_conflict(self):
         requests = [

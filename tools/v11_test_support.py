@@ -18,12 +18,13 @@ MAX_CARGO_DIAGNOSTIC_CHARS = 4000
 SOURCE_KEY_HEX_LENGTH = 64
 RUST_COMPILER_STACK_BYTES = 64 * 1024 * 1024
 RUSTC_IDENTITY_TIMEOUT_SECONDS = 60
+VAULT_HELPER_BUILD_TIMEOUT_SECONDS = 300
 BUILD_ENVIRONMENT_KEYS = (
     "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTFLAGS",
     "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
     "PATH", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir",
     "WindowsSdkDir", "WindowsSDKVersion", "LOOM_TEST_CACHE_ROOT",
-    "CARGO_BUILD_JOBS",
+    "CARGO_BUILD_JOBS", "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER",
 )
 
 
@@ -119,6 +120,7 @@ def _msvc_environment_from_roots(environment, installation, windows_sdk):
             result["VCToolsInstallDir"] = str(msvc) + os.sep
             result["WindowsSdkDir"] = str(windows_sdk) + os.sep
             result["WindowsSDKVersion"] = sdk_version + os.sep
+            result["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"] = str(linker)
             return result
     return None
 
@@ -126,13 +128,19 @@ def _msvc_environment_from_roots(environment, installation, windows_sdk):
 def _windows_toolchain_roots(environment):
     program_files_x86 = Path(environment.get(
         "ProgramFiles(x86)", r"C:\Program Files (x86)"))
-    vswhere = (program_files_x86 / "Microsoft Visual Studio" / "Installer" /
-               "vswhere.exe")
+    program_files = Path(environment.get("ProgramFiles", r"C:\Program Files"))
+    visual_studio_roots = tuple(dict.fromkeys(
+        root / "Microsoft Visual Studio"
+        for root in (program_files_x86, program_files)))
+    vswhere_candidates = (
+        root / "Installer" / "vswhere.exe" for root in visual_studio_roots)
     installations = []
-    if vswhere.is_file():
+    for vswhere in vswhere_candidates:
+        if not vswhere.is_file():
+            continue
         try:
             result = subprocess.run([
-                str(vswhere), "-latest", "-products", "*", "-requires",
+                str(vswhere), "-latest", "-prerelease", "-products", "*", "-requires",
                 "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
                 "-property", "installationPath",
             ], capture_output=True, text=True, timeout=30, check=False)
@@ -140,19 +148,29 @@ def _windows_toolchain_roots(environment):
                 installations.append(Path(result.stdout.strip()))
         except (OSError, subprocess.TimeoutExpired):
             pass
-    visual_studio = program_files_x86 / "Microsoft Visual Studio"
-    if visual_studio.is_dir():
-        installations.extend(
-            product for year in visual_studio.iterdir() if year.is_dir()
-            for product in year.iterdir() if product.is_dir())
-    sdk = program_files_x86 / "Windows Kits" / "10"
-    return installations, sdk
+    for visual_studio in visual_studio_roots:
+        if visual_studio.is_dir():
+            installations.extend(
+                product for year in visual_studio.iterdir() if year.is_dir()
+                for product in year.iterdir() if product.is_dir())
+    unique = list(dict.fromkeys(
+        Path(os.path.abspath(os.fspath(item))) for item in installations))
+    sdk_candidates = (
+        root / "Windows Kits" / "10"
+        for root in (program_files_x86, program_files))
+    sdk = next((item for item in sdk_candidates if item.is_dir()),
+               program_files_x86 / "Windows Kits" / "10")
+    return unique, sdk
+
+
+def _is_windows_host():
+    return os.name == "nt"
 
 
 def _native_build_environment(environment=None):
     """Return a build environment that is hermetic but can find native tools."""
     environment = dict(os.environ if environment is None else environment)
-    if os.name != "nt" or shutil.which("link.exe", path=environment.get("PATH")):
+    if not _is_windows_host():
         return environment
     installations, sdk = _windows_toolchain_roots(environment)
     for installation in installations:
@@ -209,9 +227,11 @@ def _compile_vault_helper(root, crate, target, environment=None):
             ["cargo", "build", "--quiet", "--locked", "--release",
              "--manifest-path", str(crate / "Cargo.toml")], cwd=root,
             env=environment, capture_output=True, text=True,
-            check=False, timeout=180)
+            check=False, timeout=VAULT_HELPER_BUILD_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError("vault-helper build exceeded its 180-second bound") from exc
+        raise RuntimeError(
+            "vault-helper build exceeded its "
+            f"{VAULT_HELPER_BUILD_TIMEOUT_SECONDS}-second bound") from exc
     if result.returncode != 0:
         diagnostic = "\n".join(
             item.strip() for item in (result.stdout, result.stderr) if item.strip())

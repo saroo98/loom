@@ -66,6 +66,37 @@ class SessionRuntimeTests(unittest.TestCase):
             "plan", receipt.project_id, receipt.session_id))
         self.assertEqual(5, receipt.owner_message["schema_version"])
 
+    def test_status_and_why_reports_one_prior_receipt_without_ambiguity(self):
+        controller = loom_session.SessionController(
+            owner_home=self.owner_home,
+            instance_id=self.instance_id,
+            handlers={"plan": lambda _context: {
+                "status": "completed", "code": "plan-ready", "success": True,
+                "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                "user_message": "The small plan is ready.",
+            }},
+            memory=loom_session.NoopMemoryAdapter(),
+        )
+        prior = controller.run(
+            "Build a command-line greeting tool",
+            invocation_id="00000000-0000-4000-8000-000000000111",
+            cwd=self.project,
+            now="2026-07-14T12:00:00Z",
+        )
+        status = controller.run(
+            "Show me the current status and explain why.",
+            invocation_id="00000000-0000-4000-8000-000000000112",
+            cwd=self.project,
+            now="2026-07-14T12:01:00Z",
+        )
+
+        self.assertEqual("status", status.intent)
+        self.assertEqual("completed", status.status)
+        self.assertIn("Status: completed (plan-ready)", status.user_message)
+        self.assertIn(
+            f"Receipt: {prior.receipt_hash}.", status.user_message)
+        self.assertNotIn("malformed", status.user_message.casefold())
+
     def test_current_v3_receipt_remains_readable_after_owner_message_v4(self):
         controller = loom_session.SessionController(
             owner_home=self.owner_home,

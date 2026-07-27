@@ -14,13 +14,14 @@ CONSEQUENCE_PATTERNS = (
         r"\b(?:death|fatal|life[- ]critical|life[- ]support|patient harm|collision avoidance|explosive)\b",
     )),
     ("high", "physical-safety", (
-        r"\b(?:medical|clinical|firmware|hardware|industrial|robot|vehicle|vessel|power system)\b",
+        r"\b(?:medical|clinical|medication|firmware|hardware|industrial|robot|vehicle|vessel|power system)\b",
     )),
     ("high", "regulated-or-financial", (
         r"\b(?:tax|accounting|bookkeep|regulated|legal|compliance|credential|security[- ]critical)\b",
     )),
     ("material", "durable-data-or-contract", (
-        r"\b(?:migration|database|ledger|public api|payment|backfill|release|production)\b",
+        r"\bmigration\b", r"\bdatabase\b", r"\bledger\b", r"\bpublic api\b",
+        r"\bpayment\b", r"\bbackfill\b", r"\brelease\b", r"\bproduction\b",
     )),
 )
 
@@ -34,13 +35,28 @@ class DomainCompositionError(ValueError):
     pass
 
 
-def classify_consequence(description):
+def _research_only_output(text, domains):
+    return set(domains or ()) == {"research"} and bool(re.search(
+        r"\b(?:do not (?:build|implement)|research (?:write[- ]?up|report|"
+        r"comparison|paper|memo)|research\s+and\s+(?:write|produce|deliver|"
+        r"synthesize)|write (?:a |the )?(?:report|paper|memo)|"
+        r"produce (?:a |the )?(?:markdown )?(?:report|paper|memo))\b",
+        text, re.I))
+
+
+def classify_consequence(description, domains=None):
     text = str(description or "").casefold()
     rank = {"ordinary": 0, "material": 1, "high": 2, "critical": 3}
     selected = "ordinary"
     categories, evidence = [], []
     for consequence, category, patterns in CONSEQUENCE_PATTERNS:
-        hits = [pattern for pattern in patterns if re.search(pattern, text, re.I)]
+        hits = [
+            pattern for pattern in patterns
+            if re.search(pattern, text, re.I)
+            and not (
+                pattern == r"\bdatabase\b"
+                and _research_only_output(text, domains))
+        ]
         if hits:
             categories.append(category)
             evidence.extend(hits)
@@ -90,7 +106,7 @@ def build_graph(description, domains, coverage_by_domain, *, subsystems=None, ed
             or any(value not in loom_domain_contract.COVERAGE_STATES
                    for value in coverage_by_domain.values()):
         raise DomainCompositionError("coverage map must exactly match active domains")
-    consequence = classify_consequence(description)
+    consequence = classify_consequence(description, domains)
     nodes = _normalize_subsystems(domains, coverage_by_domain, consequence, subsystems)
     ids = {item["id"] for item in nodes}
     if edges is None:

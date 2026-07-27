@@ -18,6 +18,37 @@ class VaultAdapterError(RuntimeError):
     pass
 
 
+_GENERAL_SCOPE_RE = re.compile(
+    r"\b(?:in general|across (?:all|every) projects?|"
+    r"for (?:all|every|future) projects?)\b", re.I)
+
+
+def _domain_scope(statement, domains):
+    matches = []
+    for domain in domains:
+        aliases = {
+            domain.replace("-", " "),
+            domain,
+        }
+        if domain == "data-etl":
+            aliases.update({"data etl", "etl"})
+        elif domain == "realtime-3d":
+            aliases.update({"real time 3d", "real-time 3d", "3d"})
+        for alias in aliases:
+            words = [re.escape(item) for item in re.split(r"[-\s]+", alias) if item]
+            if not words:
+                continue
+            phrase = r"[-\s]+".join(words)
+            if re.search(
+                    rf"\b(?:for|across)\s+(?:all\s+)?{phrase}\s+(?:projects?|work)\b"
+                    rf"|\bin\s+{phrase}\s+(?:projects?|work)\b"
+                    rf"|\bfor\s+(?:the\s+)?{phrase}\s+domain\b",
+                    statement, re.I):
+                matches.append(domain)
+                break
+    return sorted(set(matches))
+
+
 class VaultMemoryAdapter:
     """Bounded runtime view over encrypted owner-vault records and events."""
 
@@ -103,11 +134,20 @@ class VaultMemoryAdapter:
             for record in records:
                 if record["id"] not in {item["id"] for item in selected}:
                     selected.append(record)
-                    remaining -= len(json.dumps(record, ensure_ascii=False)) + 1
+                    remaining -= loom_vault.memory_context_cost(record)
                 if len(selected) >= policy["max_records"] or remaining < 256:
                     break
             if len(selected) >= policy["max_records"] or remaining < 256:
                 break
+        if project_id and len(selected) < policy["max_records"] and remaining >= 256:
+            records = self.vault.select_project_preferences(
+                project_id=project_id,
+                max_records=min(4, policy["max_records"] - len(selected)),
+                max_chars=max(256, remaining),
+                exclude_ids={item["id"] for item in selected})
+            for record in records:
+                selected.append(record)
+                remaining -= loom_vault.memory_context_cost(record)
         return selected
 
     def select_preferences(self, context):
@@ -446,13 +486,27 @@ class VaultMemoryAdapter:
         preference_key = preference_value = None
         if re.search(r"\b(?:less autonomous|careful review|ask me before|review first)\b", lowered):
             preference_key, preference_value = "autonomy_default", "careful-review"
-        elif re.search(r"\b(?:prefer|use)\s+(?:a\s+)?concise\b", lowered):
+        elif re.search(
+                r"\b(?:prefer|use|favor|favour|want)\s+(?:a\s+)?concise\b|"
+                r"\bplans?\s+should\s+(?:be|stay)\s+concise\b",
+                lowered):
             preference_key, preference_value = "report_style", "concise"
         elif re.search(r"\b(?:prefer|use)\s+(?:a\s+)?detailed\b", lowered):
             preference_key, preference_value = "report_style", "detailed"
+        general_scope = _GENERAL_SCOPE_RE.search(statement) is not None
+        domain_scopes = _domain_scope(statement, context.prepared.domains)
+        if general_scope and domain_scopes or len(domain_scopes) > 1:
+            raise VaultAdapterError(
+                "Memory scope is ambiguous; name exactly one of general, domain, or project.")
+        if general_scope:
+            scope, memory_domain, project_id = "general", None, None
+        elif domain_scopes:
+            scope, memory_domain, project_id = "domain", domain_scopes[0], None
+        else:
+            scope, memory_domain, project_id = "project", domain, context.project_id
         record = {
-            "id": str(uuid.uuid4()), "scope": "project", "domain": domain,
-            "project_id": context.project_id,
+            "id": str(uuid.uuid4()), "scope": scope, "domain": memory_domain,
+            "project_id": project_id,
             "category": "preference" if preference_key else "process",
             "statement": statement, "provenance": "stated", "status": "active",
             "confidence": 1.0, "evidence_count": 1,
@@ -466,6 +520,11 @@ class VaultMemoryAdapter:
         identifiers = re.findall(
             r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
             text, re.I)
+        if len(identifiers) == 1 \
+                and identifiers[0] not in {item.get("id") for item in candidates}:
+            record = self.vault.get_memory(identifiers[0])
+            if record is not None and record.get("status") == "active":
+                candidates.append(record)
         matching = [item for item in candidates if item.get("id") in identifiers]
         if not matching and len(candidates) == 1:
             matching = candidates
@@ -480,11 +539,15 @@ class VaultMemoryAdapter:
                        f"{forgotten['status']}.")
         return {"message": message, "receipt": forgotten}
 
-    def profile_summary(self):
-        records = self.vault.list_memory(statuses={"active", "dormant"}, limit=32)
+    def profile_summary(self, context):
+        records = [
+            item for item in context.selected_memory
+            if isinstance(item, dict) or hasattr(item, "get")]
         visible = [{"id": item["id"], "scope": item["scope"],
                     "domain": item.get("domain"), "statement": item["statement"]}
-                   for item in records if item.get("provenance") == "stated"]
+                   for item in records
+                   if item.get("provenance") == "stated"
+                   and item.get("status") in {None, "active", "dormant"}]
         return json.dumps({"stated_memory": visible}, sort_keys=True, separators=(",", ":"))
 
     def special_status(self, context):
@@ -515,7 +578,7 @@ class VaultMemoryAdapter:
                                      "recovery phrase. The phrase alone cannot restore data.")}
         return None
 
-    def performance_summary(self):
+    def performance_summary(self, _context=None):
         observations = self.vault.list_entities("performance-observation", limit=256)
         states = {}
         complete_totals = []

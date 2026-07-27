@@ -87,6 +87,19 @@ class PlanningIntelligenceTests(unittest.TestCase):
                        if item["module_id"] == "interaction-accessibility"]
         self.assertTrue(all(item["required_real_medium"] for item in interaction))
 
+    def test_encrypted_mobile_storage_activates_security_and_key_lifecycle(self):
+        result = self.compile(
+            "Plan a mobile notes app with encrypted local storage.", tier="M")
+        active = {item["id"] for item in result["active_modules"]}
+        self.assertIn("security-privacy-safety", active)
+        security = [
+            item for item in result["atoms"]
+            if item["module_id"] == "security-privacy-safety"]
+        self.assertTrue(any(
+            "encryption and key-lifecycle" in item["statement"]
+            and "encryption and key-lifecycle" in item["required_real_medium"]
+            for item in security))
+
     def test_large_phase_program_activates_bounded_decision_modules(self):
         request = (
             "Phase 8 and 9 and 10 research is done. Make three plans separately "

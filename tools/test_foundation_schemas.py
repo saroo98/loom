@@ -1,6 +1,5 @@
 import tempfile
 import unittest
-import uuid
 from pathlib import Path
 
 import loom_lint
@@ -40,10 +39,8 @@ class FoundationSchemaTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
             owned = root / "owned"
-            owned.mkdir()
-            ownership = loom_path_authority.create_ownership_receipt(
-                path=owned, root=root, operation_id=str(uuid.uuid4()),
-                expected_type="directory")
+            ownership = loom_path_authority.create_owned_directory(
+                path=owned, root=root)
             authority = loom_path_authority.authorize(
                 operation_class="staging", path=owned, root=root,
                 expected_type="directory", replacement_policy="owned-exact",

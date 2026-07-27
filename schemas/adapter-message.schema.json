@@ -186,7 +186,11 @@
         "schema_version": {"const": 2}, "message_type": {"const": "author"},
         "request_id": {"$ref": "#/$defs/id"},
         "action": {"type": "string", "minLength": 1, "maxLength": 4096},
-        "draft": {"$ref": "plan-draft.schema.json"}
+        "draft": {"$ref": "plan-draft.schema.json"},
+        "finalize": {
+          "type": "boolean",
+          "description": "When true, complete the successfully authored plan in the same bridge operation. Omitted and false preserve the two-step compatibility path."
+        }
       }
     },
     "cancel": {

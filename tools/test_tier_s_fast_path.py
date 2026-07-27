@@ -21,6 +21,36 @@ class TierSFastPathTests(unittest.TestCase):
         self.assertEqual("S", result["tier"])
         self.assertFalse(result["plan_and_implement"])
 
+    def test_very_small_command_line_noun_is_still_an_explicit_small_shape(self):
+        result = loom_tier.classify(
+            "Plan a very small Python command-line greeter that accepts --name, "
+            "prints a greeting, includes one test, and a short README.",
+            domains=["cli"])
+        self.assertEqual("S", result["tier"])
+        self.assertIn(
+            "description contains an explicit small-work shape",
+            result["reasons"])
+
+    def test_delete_command_name_does_not_promote_small_cli_but_real_delete_does(self):
+        for verb in ("Build", "Plan"):
+            with self.subTest(verb=verb):
+                command_surface = loom_tier.classify(
+                    f"{verb} a small CLI with create, list, and delete commands",
+                    domains=["cli"])
+                self.assertEqual("S", command_surface["tier"])
+                self.assertNotIn("delete", command_surface["risk_terms"])
+        destructive = loom_tier.classify(
+            "Build a small cleanup CLI and then delete production data",
+            domains=["cli"])
+
+        self.assertEqual("M", destructive["tier"])
+        self.assertIn("delete", destructive["risk_terms"])
+        command_list = loom_tier.classify(
+            "Plan a small Python command-line task tracker with add, list, complete, "
+            "and delete commands, tests, and a concise README.",
+            domains=["cli"])
+        self.assertEqual("S", command_list["tier"])
+
     def test_deceptive_small_consequences_promote(self):
         fixtures = (
             "Make a one-line authentication bypass change",

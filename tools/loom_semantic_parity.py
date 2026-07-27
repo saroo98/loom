@@ -22,6 +22,11 @@ ENTITIES = {
         "writer": ("function-dict", "build", "value"),
         "writer_extras": (),
         "readable_versions": [1, 2, 3, 4, 5],
+        "reader": "validate",
+        "compatibility_tests": (
+            "tools/test_owner_message.py",
+            "tools/test_loom_session.py",
+        ),
         "documentation": "docs/simple-adaptive-experience.md",
     },
     "session-receipt": {
@@ -34,6 +39,8 @@ ENTITIES = {
         "writer": ("module-dict", "receipt_data"),
         "writer_extras": ("receipt_hash",),
         "readable_versions": [1, 2],
+        "reader": "_receipt_from_data",
+        "compatibility_tests": ("tools/test_loom_session.py",),
         "documentation": "docs/architecture.md",
     },
     "orchestration-action": {
@@ -44,7 +51,9 @@ ENTITIES = {
         "validator": ("module-set", "ACTION_FIELDS"),
         "writer": ("module-dict", "action"),
         "writer_extras": ("action_hash",),
-        "readable_versions": [6, 7, 8, 9],
+        "readable_versions": [6, 7, 8, 9, 10],
+        "reader": "_validate_action",
+        "compatibility_tests": ("tools/test_production_orchestrator.py",),
         "documentation": "docs/architecture.md",
     },
     "recovery-receipt": {
@@ -56,6 +65,11 @@ ENTITIES = {
         "writer": ("function-dict", "_recovery_receipt", "body"),
         "writer_extras": ("receipt_hash",),
         "readable_versions": [1, 2, 3],
+        "reader": "_validate_recovery_receipt",
+        "compatibility_tests": (
+            "tools/test_recovery_contract_schemas.py",
+            "tools/test_control_plane_recovery.py",
+        ),
         "documentation": "docs/architecture.md",
     },
     "activation-set": {
@@ -67,6 +81,8 @@ ENTITIES = {
         "writer": ("function-dict", "create", "value"),
         "writer_extras": ("receipt_sha256",),
         "readable_versions": [1],
+        "reader": "_validate_receipt",
+        "compatibility_tests": ("tools/test_activation_sets_phase3.py",),
         "documentation": "docs/architecture.md",
     },
     "execution-chain": {
@@ -78,6 +94,8 @@ ENTITIES = {
         "writer": ("function-dict", "create", "value"),
         "writer_extras": (),
         "readable_versions": [1],
+        "reader": "_validate",
+        "compatibility_tests": ("tools/test_execution_chain_phase3.py",),
         "documentation": "docs/architecture.md",
     },
 }
@@ -135,6 +153,58 @@ def _module_assignments(tree):
             if left is not None and right is not None:
                 values[name] = left | right
     return values
+
+
+def _module_integer_assignments(tree):
+    values = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign) or len(node.targets) != 1 \
+                or not isinstance(node.targets[0], ast.Name):
+            continue
+        try:
+            value = ast.literal_eval(node.value)
+        except (ValueError, TypeError):
+            continue
+        if type(value) is int:
+            values[node.targets[0].id] = value
+    return values
+
+
+def _integer_values(node, constants):
+    values = set()
+    for item in ast.walk(node):
+        if isinstance(item, ast.Constant) and type(item.value) is int:
+            values.add(item.value)
+        elif isinstance(item, ast.Name) and item.id in constants:
+            values.add(constants[item.id])
+    return values
+
+
+def _reader_versions(tree, function):
+    """Recover the closed version set that a reader actually branches on."""
+    constants = _module_integer_assignments(tree)
+    node = _function(tree, function)
+    versions = set()
+    for item in ast.walk(node):
+        if isinstance(item, ast.Compare) \
+                and "schema_version" in ast.dump(item, include_attributes=False):
+            versions.update(_integer_values(item, constants))
+    if not versions:
+        raise ParityError(
+            f"semantic reader {function} has no closed schema-version contract")
+    return versions
+
+
+def _semantic_hash(path):
+    suffix = path.suffix.casefold()
+    if suffix == ".json":
+        return _digest(json.loads(path.read_text(encoding="utf-8")))
+    if suffix == ".py":
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        payload = ast.dump(tree, annotate_fields=True, include_attributes=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    payload = " ".join(path.read_text(encoding="utf-8").split())
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def _function(tree, name):
@@ -266,18 +336,29 @@ def compile_report(root=ROOT):
         current = max(schema_version) if isinstance(schema_version, list) else schema_version
         if current != max(contract["readable_versions"]):
             raise ParityError(f"{name} current/readable version drift")
+        reader_versions = _reader_versions(tree, contract["reader"])
+        expected_versions = set(contract["readable_versions"])
+        if reader_versions != expected_versions:
+            raise ParityError(
+                f"{name} reader drift: missing={sorted(expected_versions-reader_versions)} "
+                f"extra={sorted(reader_versions-expected_versions)}")
         documentation = documentation_path.read_text(encoding="utf-8").lower()
         if name.replace("-", " ") not in documentation \
                 and name.replace("-", "_") not in documentation \
                 and name not in documentation:
             raise ParityError(f"{name} documentation projection is missing")
-        for path in (schema_path, module_path, documentation_path):
+        compatibility_paths = [
+            root / relative for relative in contract["compatibility_tests"]]
+        for path in (schema_path, module_path, documentation_path,
+                     *compatibility_paths):
             relative = path.relative_to(root).as_posix()
-            source_hashes[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+            source_hashes[relative] = _semantic_hash(path)
         rows.append({
             "entity": name,
             "current_version": current,
             "readable_versions": contract["readable_versions"],
+            "reader": contract["reader"],
+            "compatibility_tests": list(contract["compatibility_tests"]),
             "future_version_policy": "preserve-in-quarantine-never-activate",
             "required_fields": sorted(required),
             "schema": contract["schema"],
@@ -322,8 +403,14 @@ def main(argv=None):
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise ParityError(f"semantic parity report is unavailable: {exc}") from exc
         if existing != report:
+            old_hashes = existing.get("source_hashes", {}) \
+                if isinstance(existing, dict) else {}
+            changed = sorted(
+                path for path in set(old_hashes) | set(report["source_hashes"])
+                if old_hashes.get(path) != report["source_hashes"].get(path))
             raise ParityError(
-                "semantic parity report is stale; regenerate after final source inventory")
+                "semantic parity report is stale; changed="
+                + (",".join(changed[:12]) if changed else "entity-projection"))
     else:
         loom_reliability.atomic_write_json(output, report)
     print(json.dumps({

@@ -275,11 +275,19 @@ def isolated_python(script, *arguments):
     ]
 
 
+def _safe_path_proven(flags):
+    """Recognize the version-specific safe-path proof supplied by isolated mode."""
+    safe_path = getattr(flags, "safe_path", None)
+    if safe_path is not None:
+        return bool(safe_path)
+    return bool(flags.isolated)
+
+
 def startup_isolation():
     return {
         "isolated_flag": bool(sys.flags.isolated),
         "no_user_site": bool(sys.flags.no_user_site),
-        "safe_path": bool(getattr(sys.flags, "safe_path", False)),
+        "safe_path": _safe_path_proven(sys.flags),
         "pythonpath_ignored": bool(sys.flags.ignore_environment),
         "pythonstartup_ignored": bool(sys.flags.ignore_environment),
         "pid": os.getpid(),

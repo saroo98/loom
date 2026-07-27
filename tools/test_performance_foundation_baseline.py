@@ -9,6 +9,7 @@ class PerformanceFoundationBaselineTests(unittest.TestCase):
         body = {
             "schema_version": 2,
             "baseline_id": "00000000-0000-4000-8000-000000000001",
+            "measurement_id": "00000000-0000-4000-8000-000000000002",
             "source_commit": "1" * 40,
             "environment": {
                 "os": "windows", "architecture": "amd64", "python": "3.13.0",
@@ -38,14 +39,22 @@ class PerformanceFoundationBaselineTests(unittest.TestCase):
                 "samples": [10, 11, 12],
                 "p50_elapsed_ns": 11,
                 "p95_elapsed_ns": 12,
+                "relative_spread": 0.2,
+                "within_preregistered_tolerance": True,
                 "includes": ["python-process-startup"],
             },
+            "policy_fixtures": [{
+                "id": "tiny-task-overhead-policy",
+                "measurement_class": "synthetic-policy-fixture",
+                "result": {"measurement_kind": "synthetic-policy-fixture"},
+            }],
             "measurement_boundaries": {
                 "local_runtime": "observed",
                 "wrapper_process": "observed",
                 "provider_response": "unavailable",
                 "provider_queue": "unavailable",
-                "complete_wall_time": "unavailable",
+                "local_collection_wall_time": "observed",
+                "agent_end_to_end_wall_time": "unavailable",
             },
             "provider_native": {
                 "status": "unavailable",
