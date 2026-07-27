@@ -2,8 +2,14 @@
 
 ## Unreleased
 
-## 1.8.15
+## 1.8.16
 
+- Publish the Phase 1–2 control-plane remediation merged through PR #32, including stricter
+  routing, lifecycle authority, recovery, path authorization, semantic parity, and
+  generated-evidence enforcement.
+- Include the public documentation and GitHub Pages refresh merged through PR #33.
+- Bind the release to the exact protected `main` commit, six reproducible native helpers,
+  threshold-signed package metadata, an SSH-signed immutable tag, and release-subject checksums.
 - Keep the machine-authoring tool visible in Codex by advertising a compact, host-portable MCP
   schema. The semantic draft remains bounded strict JSON and is still validated against Loom's
   complete installed plan-draft schema before any planning file is written.
