@@ -24,9 +24,11 @@ import loom_release
 import loom_release_sign
 import loom_reliability
 import loom_update
+import v11_test_support
 from v11_test_support import (
     RUSTC_IDENTITY_TIMEOUT_SECONDS, _build_environment_identity,
-    _host_platform, _msvc_environment_from_roots, _rustc_identity,
+    _host_platform, _msvc_environment_from_roots, _native_build_environment,
+    _rustc_identity,
     build_vault_helper, package_evidence, package_source_commit,
 )
 
@@ -38,6 +40,22 @@ BOOTSTRAP_SPEC = importlib.util.spec_from_file_location(
     "loom_bootstrap_under_test", ROOT / "scripts" / "loom_bootstrap.py")
 loom_bootstrap = importlib.util.module_from_spec(BOOTSTRAP_SPEC)
 BOOTSTRAP_SPEC.loader.exec_module(loom_bootstrap)
+
+
+class NativeBuildEnvironmentTests(unittest.TestCase):
+    def test_native_helper_replaces_non_msvc_linker_on_windows(self):
+        selected = {"PATH": "verified-msvc"}
+        with mock.patch.object(v11_test_support.os, "name", "nt"), \
+                mock.patch.object(
+                    v11_test_support, "_windows_toolchain_roots",
+                    return_value=([Path("C:/BuildTools")], Path("C:/SDK"))), \
+                mock.patch.object(
+                    v11_test_support, "_msvc_environment_from_roots",
+                    return_value=selected) as construct:
+            observed = _native_build_environment({"PATH": "C:/UnixTools"})
+
+        self.assertIs(selected, observed)
+        construct.assert_called_once()
 
 
 class BootstrapIntegrationTests(unittest.TestCase):
