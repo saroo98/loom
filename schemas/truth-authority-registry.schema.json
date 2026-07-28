@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/truth-authority-registry.schema.json",
+  "title": "Closed Loom truth authority and derivation registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "policy_id", "fact_classes", "authorities",
+    "derivations", "generated_outputs", "structured_projections", "budgets"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-truth-authority-v1"},
+    "fact_classes": {
+      "const": [
+        "version", "inventory", "schema-protocol", "capability",
+        "release", "platform-host", "generated-freshness", "verification-subject"
+      ]
+    },
+    "authorities": {
+      "type": "array",
+      "minItems": 8,
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "fact_class", "locator", "reader", "subject_kinds"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,95}$"},
+          "fact_class": {"enum": ["version", "inventory", "schema-protocol", "capability", "release", "platform-host", "generated-freshness", "verification-subject"]},
+          "locator": {"type": "string", "minLength": 1, "maxLength": 256},
+          "reader": {"enum": ["semver-file", "git-tree", "json-contract", "typed-subject-set", "generated-manifest"]},
+          "subject_kinds": {
+            "type": "array",
+            "maxItems": 6,
+            "uniqueItems": true,
+            "items": {"enum": ["main-source", "candidate-source", "release-tag", "plugin-zip", "native-helper", "installed-runtime"]}
+          }
+        }
+      }
+    },
+    "derivations": {
+      "type": "array",
+      "maxItems": 1024,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "inputs", "evaluator"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"},
+          "inputs": {
+            "type": "array",
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"}
+          },
+          "evaluator": {"enum": ["identity", "evidence-predicate", "capability-status", "readiness-status", "projection-freshness"]}
+        }
+      }
+    },
+    "generated_outputs": {
+      "type": "array",
+      "maxItems": 256,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "generator", "inputs"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._/-]+$"},
+          "generator": {"type": "string", "pattern": "^tools/loom_[a-z0-9_]+\\.py$"},
+          "inputs": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 256}
+          }
+        }
+      }
+    },
+    "structured_projections": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "path", "selector_kind", "selector", "authority_id"],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,95}$"},
+          "path": {"type": "string", "minLength": 1, "maxLength": 256},
+          "selector_kind": {"enum": ["json-pointer", "html-data-attribute", "markdown-marker", "full-file"]},
+          "selector": {"type": "string", "minLength": 1, "maxLength": 256},
+          "authority_id": {"type": "string", "minLength": 1, "maxLength": 96}
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git_entries", "git_blob_bytes", "git_total_bytes", "overlay_entries", "overlay_total_bytes", "generated_outputs", "generated_file_bytes", "generated_total_bytes"],
+      "properties": {
+        "git_entries": {"const": 8192},
+        "git_blob_bytes": {"const": 536870912},
+        "git_total_bytes": {"const": 4294967296},
+        "overlay_entries": {"const": 1024},
+        "overlay_total_bytes": {"const": 1073741824},
+        "generated_outputs": {"const": 256},
+        "generated_file_bytes": {"const": 67108864},
+        "generated_total_bytes": {"const": 268435456}
+      }
+    }
+  }
+}

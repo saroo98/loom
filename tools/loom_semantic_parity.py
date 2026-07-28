@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 import loom_reliability
+import loom_truth
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -395,8 +396,27 @@ def main(argv=None):
     parser.add_argument("--output", required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args(argv)
-    report = compile_report(args.root)
-    output = Path(args.output)
+    root = Path(args.root).resolve()
+    report = compile_report(root)
+    output = Path(args.output).resolve()
+    registry_path = root / "contracts" / "truth-authorities-v1.json"
+    if registry_path.is_file() \
+            and output == (root / "docs" / "generated-semantic-parity.json"):
+        try:
+            registry = loom_truth.validate_registry(json.loads(
+                registry_path.read_text(encoding="utf-8")))
+        except (
+                OSError, UnicodeError, json.JSONDecodeError,
+                loom_truth.TruthError) as exc:
+            raise ParityError(
+                f"truth authority registry is unavailable: {exc}") from exc
+        declarations = [
+            item for item in registry["generated_outputs"]
+            if item["path"] == "docs/generated-semantic-parity.json"
+            and item["generator"] == "tools/loom_semantic_parity.py"]
+        if len(declarations) != 1:
+            raise ParityError(
+                "semantic parity projection lacks one registered generator")
     if args.check:
         try:
             existing = json.loads(output.read_text(encoding="utf-8"))

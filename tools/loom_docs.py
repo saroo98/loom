@@ -7,9 +7,14 @@ import json
 import os
 import re
 import tempfile
-from pathlib import Path
+import subprocess
+from pathlib import Path, PurePosixPath
 
+import loom_capability_registry
 import loom_reliability
+import loom_subject_identity
+import loom_truth
+import loom_version
 
 
 PUBLIC_SURFACE = ("README.md", "START-HERE.md", "skill/loom/SKILL.md", "docs/index.html")
@@ -88,19 +93,42 @@ def load_capabilities(root):
     v1_fields = {"schema_version", "version", "capabilities"}
     v2_fields = v1_fields | {"generated_by", "evidence_policy", "subject_digest",
                              "evaluated_at"}
-    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
-            or set(value) != (v1_fields if value.get("schema_version") == 1 else v2_fields) \
+    v3_fields = v1_fields | {
+        "generated_by", "evidence_policy", "declarations_policy",
+        "subject_bindings", "expected_subjects_sha256",
+        "evaluated_at", "next_invalidation_at",
+    }
+    expected_fields = (
+        v1_fields if value.get("schema_version") == 1 else
+        v2_fields if value.get("schema_version") == 2 else v3_fields)
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2, 3} \
+            or set(value) != expected_fields \
             or not isinstance(value["capabilities"], list):
         raise DocsError("capability registry shape is invalid")
     if value["schema_version"] == 2 and (
             value.get("generated_by") != "tools/loom_capability_registry.py"
             or value.get("evidence_policy") != "loom-evidence-policy-v1"):
         raise DocsError("capability registry generator or policy is invalid")
+    if value["schema_version"] == 3 and (
+            value.get("generated_by") != "tools/loom_capability_registry.py"
+            or value.get("evidence_policy") != "loom-evidence-policy-v1"
+            or value.get("declarations_policy")
+            not in {"loom-capability-declarations-v1", "legacy-read-only"}
+            or not isinstance(value.get("subject_bindings"), list)
+            or value.get("expected_subjects_sha256") is not None
+            and not re.fullmatch(
+                r"[0-9a-f]{64}", value["expected_subjects_sha256"])):
+        raise DocsError("capability registry v3 authority metadata is invalid")
     seen = set()
     for item in value["capabilities"]:
         fields = {"id", "kind", "enforcement", "tests"}
         if value["schema_version"] == 2:
             fields |= {"status", "evidence_ids", "limitations", "proof_binding"}
+        elif value["schema_version"] == 3:
+            fields |= {
+                "status", "evidence_ids", "limitations", "proof_binding",
+                "required_predicates", "required_subject_kinds",
+            }
         if not isinstance(item, dict) or set(item) != fields \
                 or item["kind"] not in {"mechanical", "advisory"} \
                 or not isinstance(item["id"], str) or not item["id"] or item["id"] in seen \
@@ -116,11 +144,56 @@ def load_capabilities(root):
                         "subject_digest", "evidence_graph_sha256", "files"}
                     or not isinstance(item["proof_binding"]["files"], list)):
             raise DocsError("capability registry entry is invalid")
+        if value["schema_version"] == 3 and (
+                item["status"] not in {"supported", "experimental", "stale-proof",
+                                       "unsupported", "unverified"}
+                or not isinstance(item["evidence_ids"], list)
+                or not isinstance(item["limitations"], list)
+                or not isinstance(item["required_predicates"], list)
+                or not isinstance(item["required_subject_kinds"], list)
+                or not isinstance(item["proof_binding"], dict)
+                or set(item["proof_binding"]) != {
+                    "subject_bindings", "evidence_graph_sha256", "files"}
+                or not isinstance(item["proof_binding"]["subject_bindings"], list)
+                or not isinstance(item["proof_binding"]["files"], list)):
+            raise DocsError("capability registry v3 entry is invalid")
         seen.add(item["id"])
     return value
 
 
+def load_capability_declarations(root):
+    path = _safe_relative(root, "contracts/capability-declarations-v1.json")
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object)
+        _version, declarations, authoritative = \
+            loom_capability_registry._declarations(value)
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            loom_capability_registry.CapabilityRegistryError) as exc:
+        raise DocsError("capability declarations are unreadable") from exc
+    if not authoritative:
+        raise DocsError("capability declarations are not authoritative")
+    return value, declarations
+
+
 def check_version_coherence(root, version):
+    root = Path(root).resolve()
+    if (root / "contracts" / "truth-authorities-v1.json").is_file():
+        try:
+            observed = loom_version.verify(root)
+        except loom_version.VersionError as exc:
+            return [{
+                "code": "VERSION_DRIFT",
+                "path": "registered-version-projections",
+                "expected": version,
+                "detail": str(exc),
+            }]
+        return [] if observed["version"] == version else [{
+            "code": "VERSION_DRIFT",
+            "path": "VERSION",
+            "expected": version,
+        }]
     findings = []
     marker = re.compile(rf"(?<![0-9.]){re.escape(version)}(?![0-9.])")
     try:
@@ -178,15 +251,66 @@ def _link_findings(root, relative_paths):
     return findings
 
 
+def _bounded_repository_paths(root):
+    """Return Git-tree paths plus exact declared generated outputs."""
+    root = Path(root).resolve()
+    paths = set(PUBLIC_SURFACE + ("docs/architecture.md", "tools/loom_docs.py"))
+    has_git_metadata = (root / ".git").exists()
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True,
+            text=True, timeout=10, check=True).stdout.strip()
+        inventory = loom_subject_identity.git_tree_inventory(root, commit)
+        paths.update(item["path"] for item in inventory["entries"])
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+            cwd=root, capture_output=True, timeout=10, check=True).stdout
+        overlay = [
+            item.decode("utf-8", errors="strict")
+            for item in untracked.split(b"\0") if item]
+        if len(overlay) > 1024:
+            raise DocsError(
+                "bounded documentation overlay exceeds its path limit")
+        paths.update(overlay)
+    except (
+            OSError, subprocess.SubprocessError,
+            loom_subject_identity.SubjectIdentityError):
+        if has_git_metadata:
+            raise DocsError("bounded Git inventory is unavailable")
+        # Unit fixtures and historical extracted cuts have no Git object store.
+        # Keep their compatibility inspection explicitly shallow and bounded.
+        for item in sorted(root.iterdir(), key=lambda path: path.name.encode("utf-8")):
+            if item.is_file():
+                paths.add(item.name)
+        for directory in ("tools", "schemas", "docs", "contracts"):
+            base = root / directory
+            if not base.is_dir():
+                continue
+            for item in sorted(
+                    base.iterdir(), key=lambda path: path.name.encode("utf-8")):
+                if item.is_file():
+                    paths.add(item.relative_to(root).as_posix())
+    try:
+        registry = loom_truth.validate_registry(json.loads(
+            (root / "contracts" / "truth-authorities-v1.json").read_text(
+                encoding="utf-8"), object_pairs_hook=_strict_object))
+        paths.update(item["path"] for item in registry["generated_outputs"])
+    except (OSError, UnicodeError, json.JSONDecodeError, loom_truth.TruthError):
+        pass
+    if len(paths) > 8192 + 256:
+        raise DocsError("bounded documentation inventory exceeds its path limit")
+    return tuple(sorted(paths, key=lambda item: item.encode("utf-8")))
+
+
 def _repo_reference_findings(root):
     """Catch repository-document references that are prose/code literals, not links."""
     root = Path(root).resolve()
     findings = []
-    for path in sorted(root.rglob("*")):
-        if ".git" in path.parts or not path.is_file() \
+    for relative in _bounded_repository_paths(root):
+        path = root.joinpath(*PurePosixPath(relative).parts)
+        if not path.is_file() \
                 or path.suffix.lower() not in {".md", ".py", ".json", ".html"}:
             continue
-        relative = path.relative_to(root).as_posix()
         if relative == "tools/loom_docs.py" \
                 or (relative.startswith("tools/test_") and relative.endswith(".py")):
             continue
@@ -228,6 +352,46 @@ def audit_docs(root):
     findings.extend(_repo_reference_findings(root))
     try:
         registry = load_capabilities(root)
+        if registry["schema_version"] == 3:
+            declarations_value, declarations = load_capability_declarations(root)
+            expected_registry = loom_capability_registry.generate(
+                declarations_value, root=root)
+            expected_by_id = {
+                item["id"]: item for item in expected_registry["capabilities"]}
+            projection_static = {
+                item["id"]: {
+                    key: item[key] for key in (
+                        "id", "kind", "enforcement", "tests",
+                        "limitations", "required_predicates",
+                        "required_subject_kinds")
+                } | {"proof_files": item["proof_binding"]["files"]}
+                for item in registry["capabilities"]
+            }
+            expected_static = {
+                item_id: {
+                    key: item[key] for key in (
+                        "id", "kind", "enforcement", "tests",
+                        "limitations", "required_predicates",
+                        "required_subject_kinds")
+                } | {"proof_files": item["proof_binding"]["files"]}
+                for item_id, item in expected_by_id.items()
+            }
+            if registry["version"] != expected_registry["version"] \
+                    or registry["declarations_policy"] \
+                    != expected_registry["declarations_policy"] \
+                    or projection_static != expected_static:
+                findings.append({
+                    "code": "CAPABILITY_PROJECTION_STALE",
+                    "path": "docs/capabilities.json",
+                })
+            declared_ids = {item["id"] for item in declarations}
+            projected_ids = {item["id"] for item in registry["capabilities"]}
+            if declared_ids != projected_ids:
+                findings.append({
+                    "code": "CAPABILITY_DECLARATION_DRIFT",
+                    "missing": sorted(declared_ids - projected_ids),
+                    "extra": sorted(projected_ids - declared_ids),
+                })
         for item in registry["capabilities"]:
             if item["kind"] == "mechanical" and (not item["enforcement"] or not item["tests"]):
                 findings.append({"code": "CLAIM_WITHOUT_PROOF", "id": item["id"]})
@@ -260,7 +424,11 @@ def audit_docs(root):
 
 def generate_evidence(root):
     root = Path(root).resolve()
-    test_modules = sorted((root / "tools").glob("test_*.py"))
+    inventory = _bounded_repository_paths(root)
+    test_modules = [
+        root.joinpath(*PurePosixPath(relative).parts)
+        for relative in inventory
+        if re.fullmatch(r"tools/test_[^/]+\.py", relative)]
     test_methods = 0
     for path in test_modules:
         tree = ast.parse(path.read_text(encoding="utf-8", errors="strict"), filename=str(path))
@@ -269,8 +437,18 @@ def generate_evidence(root):
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name.startswith("test_"))
     production_modules = [
-        path for path in (root / "tools").glob("loom_*.py")
-        if not path.name.startswith("test_")]
+        relative for relative in inventory
+        if re.fullmatch(r"tools/loom_[^/]+\.py", relative)]
+    schema_documents = [
+        relative for relative in inventory
+        if re.fullmatch(r"schemas/[^/]+\.schema\.json", relative)]
+    try:
+        _declarations_value, declarations = load_capability_declarations(root)
+    except DocsError:
+        registry = load_capabilities(root)
+        if registry["schema_version"] == 3:
+            raise
+        declarations = registry["capabilities"]
     return {
         "schema_version": 1,
         "loom_version": (root / "VERSION").read_text(encoding="utf-8").strip(),
@@ -278,8 +456,8 @@ def generate_evidence(root):
         "discovered_test_modules": len(test_modules),
         "discovered_test_methods": test_methods,
         "production_tool_modules": len(production_modules),
-        "schema_documents": len(list((root / "schemas").glob("*.schema.json"))),
-        "capability_claims": len(load_capabilities(root)["capabilities"]),
+        "schema_documents": len(schema_documents),
+        "capability_claims": len(declarations),
     }
 
 

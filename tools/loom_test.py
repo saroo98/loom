@@ -74,6 +74,8 @@ FAST_TESTS = (
     "test_domain_evidence.DomainEvidenceTests.test_complete_bundle_is_gate_ready",
     "test_domain_evidence.DomainEvidenceTests.test_semantic_mutation_under_same_id_is_rejected",
     "test_domain_benchmark.DomainBenchmarkTests.test_locked_corpus_meets_release_thresholds",
+    "test_truth_shadow_corpus_phase4.TruthShadowCorpusPhase4Tests."
+    "test_locked_corpus_meets_every_promotion_threshold",
     "test_planning_evaluation.PlanningEvaluationTests."
     "test_release_corpus_has_zero_critical_failures",
     "test_unknown_domain_learning.UnknownDomainLearningTests."

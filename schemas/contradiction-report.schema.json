@@ -1,0 +1,81 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/contradiction-report.schema.json",
+  "title": "Deterministic Loom truth contradiction report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "policy_id", "mode", "evaluated_at",
+    "next_invalidation_at", "authority_registry_sha256",
+    "expected_subjects_sha256", "contradictions", "advisories",
+    "claim_states", "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-truth-authority-v1"},
+    "mode": {"enum": ["shadow", "enforced"]},
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "next_invalidation_at": {"type": ["string", "null"], "format": "date-time"},
+    "authority_registry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "expected_subjects_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "contradictions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/contradiction"}
+    },
+    "advisories": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/advisory"}
+    },
+    "claim_states": {
+      "type": "object",
+      "maxProperties": 4096,
+      "additionalProperties": {
+        "enum": ["supported", "failed", "expired", "revoked", "stale", "unverified", "unsupported"]
+      }
+    },
+    "report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "$defs": {
+    "contradiction": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "fact_class", "fact_key", "reason", "disposition",
+        "governing_source_id", "authority_sha256", "expected_subjects",
+        "observed_subjects", "observed_values", "source_locators",
+        "affected_claims", "dependency_paths", "smallest_repair",
+        "evaluated_at", "next_invalidation_at"
+      ],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "fact_class": {"enum": ["version", "inventory", "schema-protocol", "capability", "release", "platform-host", "generated-freshness", "verification-subject"]},
+        "fact_key": {"type": "string", "minLength": 1, "maxLength": 256},
+        "reason": {"enum": ["WRONG_SUBJECT", "EXPIRED", "REVOKED", "STALE", "EVIDENCE_INCOMPLETE", "AUTHORITY_AMBIGUOUS", "CONFLICTING_RECEIPTS", "EXPECTED_SUBJECT_UNAVAILABLE", "PROJECTION_STALE"]},
+        "disposition": {"enum": ["block", "downgrade"]},
+        "governing_source_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "authority_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "expected_subjects": {"type": "array", "maxItems": 64, "items": {"$ref": "subject-identity.schema.json"}},
+        "observed_subjects": {"type": "array", "maxItems": 64, "items": {"$ref": "subject-identity.schema.json"}},
+        "observed_values": {"type": "array", "maxItems": 64},
+        "source_locators": {"type": "array", "maxItems": 64, "items": {"type": "string"}},
+        "affected_claims": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string"}},
+        "dependency_paths": {"type": "array", "maxItems": 4096, "items": {"type": "array", "items": {"type": "string"}}},
+        "smallest_repair": {"enum": ["repair-governing-source", "replace-or-revoke-evidence", "register-unique-authority", "repair-projection-materializer", "downgrade-claim"]},
+        "evaluated_at": {"type": "string", "format": "date-time"},
+        "next_invalidation_at": {"type": ["string", "null"], "format": "date-time"}
+      }
+    },
+    "advisory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "path", "detail"],
+      "properties": {
+        "code": {"type": "string", "minLength": 1, "maxLength": 96},
+        "path": {"type": "string", "minLength": 1, "maxLength": 256},
+        "detail": {"type": "string", "minLength": 1, "maxLength": 512}
+      }
+    }
+  }
+}

@@ -196,19 +196,35 @@ imports with a retired ID or semantic tag remain inactive.
 
 ## Truth surfaces
 
-`docs/capabilities.json` is the claim registry. A mechanical claim binds the exact implementation
-and test bytes and their digests; changing either downgrades the claim until the registry is
-regenerated and verified. `tools/loom_docs.py` checks entry-point version agreement, links, command
-sprawl, legacy learning claims, and proof paths. `docs/generated-evidence.json` is regenerated from
-repository inventory so changing counts cannot leave hand-authored claims behind.
+`contracts/capability-declarations-v1.json` is the sole production authority for capability IDs,
+proof paths, predicates, subject kinds, and static limitations. `docs/capabilities.json` is a
+generated projection. It binds exact implementation and test bytes plus evaluated evidence, but it
+cannot declare or restore its own support state. `tools/loom_docs.py` checks entry-point version
+agreement, links, command sprawl, legacy learning claims, and proof paths using the expected Git
+tree and the declared generated-output inventory. `docs/generated-evidence.json` is regenerated
+from that bounded inventory.
 
-`RELEASE-SUBJECT.json` schema v2 binds the source tree, public cut, canonical plugin, helper
-artifacts, SBOMs, workflows, schemas, documentation, capability registry, provenance, and prior
-release subject. The verifier checks the internal subject digest, source commit/tag, and exact
-plugin bytes. `docs/release-readiness.json` and its Markdown projection are generated from the
-versioned host contract plus subject-bound evidence. Missing, stale, conflicting, or wrong-subject
-evidence cannot become a pass. Exact-cut CI always emits a bounded success or failure diagnostic,
-and successful timing receipts bind commit, public root, platform, architecture, and Python version.
+Release bundle schema v3 preserves current main, candidate source, annotated release tag, plugin
+ZIP, each native helper, and installed runtime as non-interchangeable typed subjects. Its aggregate
+digest records only their bundle relationship. Historical v2 bundles remain readable but cannot
+satisfy typed claims. Expected subjects are accepted only after stable-controller signature or CI
+attestation verification. Candidate observations never become their own expectations.
+
+`contracts/truth-authorities-v1.json` closes the governing source for each repository, evidence,
+subject, and projection fact. Its hardcoded evaluators reject cycles and propagate invalidation to
+dependent claims in deterministic topological order. Reports use the trusted evaluation epoch and
+persist `next_invalidation_at`; a separate live check applies wall-clock expiry without rewriting
+canonical output. Only registered JSON pointers, HTML metadata, Markdown projection markers, and
+fully generated files participate in enforcement. Historical and unregistered prose is advisory.
+
+`docs/truth-contradictions.json` and its Markdown projection record the governing authority,
+expected and observed typed subjects, affected claims, dependency paths, and the smallest honest
+repair. Regeneration is not a resolution. The contradiction disappears only after reevaluation no
+longer reproduces it. `docs/release-readiness.json` consumes evaluated typed predicates and remains
+not ready when exact subject, runner, evidence-class, freshness, or controller/CI expectation
+bindings are absent. Shadow mode relaxes only new non-safety CI failures. Wrong-subject, stale,
+expired, revoked, incomplete, malformed, ambiguous, and conflicting evidence never retain
+`supported`, and rollback never restores status from cached or legacy projections.
 
 `tools/loom_adaptation_eval.py` runs disposable, deterministic longitudinal scenarios for domain
 switches, aging, project alternation, preference drift, scale bounds, interruption, concurrency,

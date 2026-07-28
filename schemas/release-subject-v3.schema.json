@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-subject-v3.schema.json",
+  "title": "Loom typed release bundle relation v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "repository",
+    "release_sequence",
+    "previous_bundle_sha256",
+    "subjects",
+    "relations",
+    "bundle_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 3},
+    "repository": {"const": "https://github.com/saroo98/loom"},
+    "release_sequence": {"type": "integer", "minimum": 1},
+    "previous_bundle_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "subjects": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 64,
+      "items": {"$ref": "subject-identity.schema.json"}
+    },
+    "relations": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "relation",
+          "subject_kind",
+          "subject_id",
+          "subject_digest"
+        ],
+        "properties": {
+          "relation": {"const": "component"},
+          "subject_kind": {
+            "enum": [
+              "main-source",
+              "candidate-source",
+              "release-tag",
+              "plugin-zip",
+              "native-helper"
+            ]
+          },
+          "subject_id": {"type": "string", "minLength": 1},
+          "subject_digest": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          }
+        }
+      }
+    },
+    "bundle_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

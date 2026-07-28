@@ -1,0 +1,73 @@
+{
+  "schema_version": 1,
+  "policy_id": "loom-truth-authority-v1",
+  "fact_classes": [
+    "version",
+    "inventory",
+    "schema-protocol",
+    "capability",
+    "release",
+    "platform-host",
+    "generated-freshness",
+    "verification-subject"
+  ],
+  "authorities": [
+    {"id": "root-version", "fact_class": "version", "locator": "VERSION", "reader": "semver-file", "subject_kinds": ["candidate-source"]},
+    {"id": "git-source-tree", "fact_class": "inventory", "locator": "git:expected-commit", "reader": "git-tree", "subject_kinds": ["main-source", "candidate-source"]},
+    {"id": "schema-contracts", "fact_class": "schema-protocol", "locator": "schemas/*.schema.json;contracts/*.json", "reader": "json-contract", "subject_kinds": ["candidate-source"]},
+    {"id": "capability-declarations", "fact_class": "capability", "locator": "contracts/capability-declarations-v1.json", "reader": "json-contract", "subject_kinds": ["candidate-source"]},
+    {"id": "release-subjects", "fact_class": "release", "locator": "expected-subject-set:release", "reader": "typed-subject-set", "subject_kinds": ["main-source", "candidate-source", "release-tag", "plugin-zip", "native-helper"]},
+    {"id": "host-contracts", "fact_class": "platform-host", "locator": "contracts/host-contracts-v2.json", "reader": "json-contract", "subject_kinds": ["candidate-source", "native-helper", "installed-runtime"]},
+    {"id": "generated-output-manifest", "fact_class": "generated-freshness", "locator": "registry:generated_outputs", "reader": "generated-manifest", "subject_kinds": ["candidate-source"]},
+    {"id": "expected-subjects", "fact_class": "verification-subject", "locator": "stable-controller-or-ci", "reader": "typed-subject-set", "subject_kinds": ["main-source", "candidate-source", "release-tag", "plugin-zip", "native-helper", "installed-runtime"]}
+  ],
+  "derivations": [
+    {"id": "fact:version", "inputs": [], "evaluator": "identity"},
+    {"id": "fact:inventory", "inputs": [], "evaluator": "identity"},
+    {"id": "fact:schema-protocol", "inputs": ["fact:inventory"], "evaluator": "identity"},
+    {"id": "fact:capability", "inputs": ["fact:inventory", "fact:schema-protocol"], "evaluator": "identity"},
+    {"id": "fact:release", "inputs": ["fact:inventory", "fact:schema-protocol"], "evaluator": "evidence-predicate"},
+    {"id": "fact:platform-host", "inputs": ["fact:release"], "evaluator": "evidence-predicate"},
+    {"id": "fact:verification-subject", "inputs": [], "evaluator": "identity"},
+    {"id": "claim:capabilities", "inputs": ["fact:capability", "fact:verification-subject"], "evaluator": "capability-status"},
+    {"id": "claim:readiness", "inputs": ["fact:release", "fact:platform-host", "fact:verification-subject"], "evaluator": "readiness-status"},
+    {"id": "fact:generated-freshness", "inputs": ["claim:capabilities", "claim:readiness"], "evaluator": "projection-freshness"},
+    {"id": "projection:public-docs", "inputs": ["fact:version", "fact:generated-freshness"], "evaluator": "projection-freshness"}
+  ],
+  "generated_outputs": [
+    {"path": "docs/capabilities.json", "generator": "tools/loom_capability_registry.py", "inputs": ["VERSION", "contracts/capability-declarations-v1.json", "evidence-graph"]},
+    {"path": "docs/generated-evidence.json", "generator": "tools/loom_docs.py", "inputs": ["git-source-tree", "docs/capabilities.json"]},
+    {"path": "docs/generated-semantic-parity.json", "generator": "tools/loom_semantic_parity.py", "inputs": ["git-source-tree"]},
+    {"path": "docs/truth-contradictions.json", "generator": "tools/loom_truth.py", "inputs": ["contracts/truth-authorities-v1.json", "expected-subject-set", "observed-subject-set", "evidence-graph"]},
+    {"path": "docs/truth-contradictions.md", "generator": "tools/loom_truth.py", "inputs": ["docs/truth-contradictions.json"]},
+    {"path": "docs/release-readiness.json", "generator": "tools/loom_readiness.py", "inputs": ["VERSION", "evidence-graph", "docs/truth-contradictions.json"]},
+    {"path": "docs/release-readiness.md", "generator": "tools/loom_readiness.py", "inputs": ["docs/release-readiness.json"]},
+    {"path": "docs/hosts/claude-code.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
+    {"path": "docs/hosts/codex.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
+    {"path": "docs/hosts/copilot.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
+    {"path": "docs/hosts/cursor.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
+    {"path": "docs/hosts/factory-droid.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
+    {"path": "docs/hosts/gemini-cli.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
+    {"path": "docs/hosts/generic-agent-skills.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
+    {"path": "docs/hosts/opencode.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]}
+  ],
+  "structured_projections": [
+    {"id": "capability-registry", "path": "docs/capabilities.json", "selector_kind": "full-file", "selector": "/", "authority_id": "capability-declarations"},
+    {"id": "release-readiness", "path": "docs/release-readiness.json", "selector_kind": "full-file", "selector": "/", "authority_id": "release-subjects"},
+    {"id": "plugin-version", "path": ".codex-plugin/plugin.json", "selector_kind": "json-pointer", "selector": "/version", "authority_id": "root-version"},
+    {"id": "capability-version", "path": "docs/capabilities.json", "selector_kind": "json-pointer", "selector": "/version", "authority_id": "root-version"},
+    {"id": "evidence-version", "path": "docs/generated-evidence.json", "selector_kind": "json-pointer", "selector": "/loom_version", "authority_id": "root-version"},
+    {"id": "readiness-version", "path": "docs/release-readiness.json", "selector_kind": "json-pointer", "selector": "/version", "authority_id": "root-version"},
+    {"id": "current-web-version", "path": "docs/index.html", "selector_kind": "html-data-attribute", "selector": "data-loom-version", "authority_id": "root-version"}
+  ],
+  "budgets": {
+    "git_entries": 8192,
+    "git_blob_bytes": 536870912,
+    "git_total_bytes": 4294967296,
+    "overlay_entries": 1024,
+    "overlay_total_bytes": 1073741824,
+    "generated_outputs": 256,
+    "generated_file_bytes": 67108864,
+    "generated_total_bytes": 268435456
+  }
+}

@@ -8,6 +8,8 @@ import json
 import re
 import uuid
 
+import loom_subject_identity
+
 
 ROLES = {
     "owner", "stable_controller", "candidate_runtime", "candidate_self_test",
@@ -183,6 +185,41 @@ def candidate_observation(*, candidate_subject, candidate_source_digest,
            for item in observation.values()):
         raise SelfHostingError("self-hosting candidate observation is invalid")
     return observation
+
+
+def authorize_expected_subjects(
+        expectation, observed_subjects, *, required, now,
+        trusted_controller_keys=None, signature_verifier=None,
+        ci_attestation_verifier=None):
+    """Verify a controller/CI expectation before comparing candidate observations."""
+    try:
+        verified = loom_subject_identity.validate_expected_subjects(
+            expectation, now=now,
+            trusted_controller_keys=trusted_controller_keys,
+            signature_verifier=signature_verifier,
+            ci_attestation_verifier=ci_attestation_verifier)
+        findings = loom_subject_identity.match_expected(
+            verified["subjects"], observed_subjects, required=required)
+    except loom_subject_identity.SubjectIdentityError as exc:
+        raise SelfHostingError(str(exc)) from exc
+    if findings:
+        reasons = ",".join(sorted({
+            item["reason"] for item in findings}))
+        raise SelfHostingError(
+            "candidate subjects do not match trusted expectations: " + reasons)
+    body = {
+        "schema_version": 2,
+        "policy_id": "loom-self-hosting-subject-authority-v2",
+        "expectation_sha256": verified["expectation_sha256"],
+        "evaluation_epoch": verified["evaluation_epoch"],
+        "subject_bindings": [{
+            key: item[key] for key in (
+                "kind", "subject_id", "subject_digest")
+        } for item in sorted(
+            observed_subjects,
+            key=lambda item: (item["kind"], item["subject_id"]))],
+    }
+    return {**body, "authorization_sha256": _hash(body)}
 
 
 def authorize(value, *, action, actor, candidate_subject,

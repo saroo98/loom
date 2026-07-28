@@ -1,0 +1,1327 @@
+{
+  "schema_version": 1,
+  "policy_id": "loom-capability-declarations-v1",
+  "capabilities": [
+    {
+      "id": "one-request-routing",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_orchestrator.py",
+        "tools/loom_runtime.py",
+        "tools/loom_session.py"
+      ],
+      "tests": [
+        "tools/test_production_orchestrator.py",
+        "tools/test_loom_runtime.py",
+        "tools/test_loom_session.py"
+      ],
+      "required_predicates": [
+        "capability:one-request-routing"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "complete-world-fingerprint",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_runtime.py",
+        "tools/loom_survey.py"
+      ],
+      "tests": [
+        "tools/test_loom_runtime.py"
+      ],
+      "required_predicates": [
+        "capability:complete-world-fingerprint"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "plan-before-implementation",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_gate.py"
+      ],
+      "tests": [
+        "tools/test_loom_gate.py"
+      ],
+      "required_predicates": [
+        "capability:plan-before-implementation"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "sealed-plan-contract",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_orchestrator.py",
+        "schemas/plan-contract.schema.json"
+      ],
+      "tests": [
+        "tools/test_production_orchestrator.py"
+      ],
+      "required_predicates": [
+        "capability:sealed-plan-contract"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "loom-executed-repair-verification",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_orchestrator.py",
+        "tools/loom_lifecycle.py"
+      ],
+      "tests": [
+        "tools/test_production_orchestrator.py"
+      ],
+      "required_predicates": [
+        "capability:loom-executed-repair-verification"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "pack-integrity",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_lint.py"
+      ],
+      "tests": [
+        "tools/test_loom_lint.py"
+      ],
+      "required_predicates": [
+        "capability:pack-integrity"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "domain-routing-and-discovery-gate",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_domain.py",
+        "tools/loom_runtime.py",
+        "tools/loom_lint.py",
+        "tools/loom_gate.py"
+      ],
+      "tests": [
+        "tools/test_domain_universality.py",
+        "tools/test_production_orchestrator.py",
+        "tools/test_loom_lint.py",
+        "tools/test_loom_gate.py"
+      ],
+      "required_predicates": [
+        "capability:domain-routing-and-discovery-gate"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "content-bound-unknown-domain-authority",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_domain_bundle.py",
+        "tools/loom_domain_evidence.py",
+        "tools/loom_domain_invariants.py",
+        "schemas/domain-bundle.schema.json"
+      ],
+      "tests": [
+        "tools/test_domain_evidence.py",
+        "tools/test_domain_discovery.py"
+      ],
+      "required_predicates": [
+        "capability:content-bound-unknown-domain-authority"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "claim-specific-domain-regating",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_domain_freshness.py",
+        "tools/loom_lint.py",
+        "tools/loom_orchestrator.py"
+      ],
+      "tests": [
+        "tools/test_domain_freshness.py",
+        "tools/test_loom_lint.py"
+      ],
+      "required_predicates": [
+        "capability:claim-specific-domain-regating"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-unknown-domain-evaluation",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_domain_benchmark.py",
+        "benchmarks/domain-intelligence/corpus.json"
+      ],
+      "tests": [
+        "tools/test_domain_benchmark.py",
+        "tools/test_unknown_domain_learning.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-unknown-domain-evaluation"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "scoped-memory",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_domain.py",
+        "contracts/owner-learning-v3.json"
+      ],
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_domain_universality.py"
+      ],
+      "required_predicates": [
+        "capability:scoped-memory"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-learning",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_learning.py",
+        "tools/loom_learning_contract.py"
+      ],
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_memory_lifecycle.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-learning"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "preference-evolution",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_vault_adapter.py",
+        "tools/loom_learning.py"
+      ],
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_loom_vault_adapter_v11.py"
+      ],
+      "required_predicates": [
+        "capability:preference-evolution"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "content-bound-memory-attribution",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_vault_adapter.py",
+        "schemas/memory-effect.schema.json"
+      ],
+      "tests": [
+        "tools/test_owner_learning_phase2.py"
+      ],
+      "required_predicates": [
+        "capability:content-bound-memory-attribution"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "derived-forgetting-floor",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_vault.py",
+        "tools/loom_transfer.py"
+      ],
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_loom_transfer_v11.py"
+      ],
+      "required_predicates": [
+        "capability:derived-forgetting-floor"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "uncertainty-aware-learning-evidence",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_learning_stats.py",
+        "tools/loom_shadow_eval.py"
+      ],
+      "tests": [
+        "tools/test_owner_learning_phase2.py"
+      ],
+      "required_predicates": [
+        "capability:uncertainty-aware-learning-evidence"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "all-file-privacy-scan",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_privacy.py"
+      ],
+      "tests": [
+        "tools/test_privacy_excellence.py"
+      ],
+      "required_predicates": [
+        "capability:all-file-privacy-scan"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "offline-production-runtime",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_privacy.py"
+      ],
+      "tests": [
+        "tools/test_privacy_excellence.py"
+      ],
+      "required_predicates": [
+        "capability:offline-production-runtime"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "durable-reversible-state",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_reliability.py"
+      ],
+      "tests": [
+        "tools/test_reliability_excellence.py"
+      ],
+      "required_predicates": [
+        "capability:durable-reversible-state"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "honest-usage-accounting",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_usage.py",
+        "tools/loom_performance.py",
+        "contracts/performance-accounting-v3.json"
+      ],
+      "tests": [
+        "tools/test_token_accounting_v3.py",
+        "tools/test_performance_excellence.py"
+      ],
+      "required_predicates": [
+        "capability:honest-usage-accounting"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "proportional-tier-s-fast-path",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_tier.py",
+        "tools/loom_orchestrator.py",
+        "tools/loom_gate.py",
+        "contracts/tier-s-fast-path-v1.json"
+      ],
+      "tests": [
+        "tools/test_tier_s_fast_path.py",
+        "tools/test_production_orchestrator.py"
+      ],
+      "required_predicates": [
+        "capability:proportional-tier-s-fast-path"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-offline-performance-evidence",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_observe.py",
+        "tools/loom_benchmark.py",
+        "tools/loom_vault_adapter.py"
+      ],
+      "tests": [
+        "tools/test_performance_excellence.py",
+        "tools/test_token_accounting_v3.py",
+        "tools/test_performance_end_to_end.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-offline-performance-evidence"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "owner-transparency",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_transparency.py",
+        "tools/loom_session.py"
+      ],
+      "tests": [
+        "tools/test_transparency_surface.py"
+      ],
+      "required_predicates": [
+        "capability:owner-transparency"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "longitudinal-adaptation-evaluation",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_adaptation_eval.py"
+      ],
+      "tests": [
+        "tools/test_adaptation_evaluation.py"
+      ],
+      "required_predicates": [
+        "capability:longitudinal-adaptation-evaluation"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "comparative-improvement-proof",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_improvement.py",
+        "tools/loom_improvement_audit.py",
+        "tools/loom_orchestrator.py"
+      ],
+      "tests": [
+        "tools/test_improvement_proof.py",
+        "tools/test_production_orchestrator.py"
+      ],
+      "required_predicates": [
+        "capability:comparative-improvement-proof"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "receipt-proven-installer",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_install.py",
+        "tools/loom_reliability.py"
+      ],
+      "tests": [
+        "tools/test_release_standard.py"
+      ],
+      "required_predicates": [
+        "capability:receipt-proven-installer"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "installed-runtime"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "evidence-gated-release",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_release.py",
+        "tools/loom_privacy.py"
+      ],
+      "tests": [
+        "tools/test_release_standard.py"
+      ],
+      "required_predicates": [
+        "capability:evidence-gated-release"
+      ],
+      "required_subject_kinds": [
+        "main-source",
+        "candidate-source",
+        "release-tag",
+        "plugin-zip",
+        "native-helper"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "artifact-self-verification",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_release.py",
+        "tools/loom_docs.py",
+        "tools/loom_privacy.py"
+      ],
+      "tests": [
+        "tools/test_release_standard.py",
+        "tools/test_documentation_coherence.py"
+      ],
+      "required_predicates": [
+        "capability:artifact-self-verification"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "release-tag",
+        "plugin-zip"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "encrypted-owner-vault",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_owner.py",
+        "tools/loom_vault.py",
+        "tools/loom_crypto.py"
+      ],
+      "tests": [
+        "tools/test_loom_owner_v11.py",
+        "tools/test_loom_vault_v11.py",
+        "tools/test_loom_vault_adapter_v11.py"
+      ],
+      "required_predicates": [
+        "capability:encrypted-owner-vault"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "signed-atomic-runtime-updates",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_update.py",
+        "tools/loom_launcher.py",
+        "tools/loom_release_sign.py"
+      ],
+      "tests": [
+        "tools/test_loom_update_v11.py",
+        "tools/test_loom_bootstrap_v11.py",
+        "tools/test_loom_release_sign_v11.py"
+      ],
+      "required_predicates": [
+        "capability:signed-atomic-runtime-updates"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "installed-runtime"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "encrypted-transfer-and-recovery",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_transfer.py",
+        "tools/loom_crypto.py"
+      ],
+      "tests": [
+        "tools/test_loom_transfer_v11.py"
+      ],
+      "required_predicates": [
+        "capability:encrypted-transfer-and-recovery"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "deterministic-device-merge",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_vault.py"
+      ],
+      "tests": [
+        "tools/test_loom_merge_v11.py"
+      ],
+      "required_predicates": [
+        "capability:deterministic-device-merge"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "receipt-owned-shared-agent-adapters",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_adapters.py",
+        "tools/loom_launcher.py"
+      ],
+      "tests": [
+        "tools/test_loom_plugin_adapters_v11.py"
+      ],
+      "required_predicates": [
+        "capability:receipt-owned-shared-agent-adapters"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "closed-bounded-adapter-protocol-v2",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_adapter_protocol.py",
+        "tools/loom_adapter_bridge.py",
+        "schemas/adapter-message.schema.json",
+        "contracts/adapter-protocol-v2.json"
+      ],
+      "tests": [
+        "tools/test_adapter_protocol_v2.py",
+        "tools/test_loom_mutation.py"
+      ],
+      "required_predicates": [
+        "capability:closed-bounded-adapter-protocol-v2"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "simulated-shared-runtime-adapter-conformance",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_adapter_conformance.py",
+        "tools/loom_host_registry.py",
+        "schemas/adapter-conformance.schema.json"
+      ],
+      "tests": [
+        "tools/test_adapter_conformance_v2.py",
+        "tools/test_loom_plugin_adapters_v11.py"
+      ],
+      "required_predicates": [
+        "capability:simulated-shared-runtime-adapter-conformance"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "evidence-bound-cross-cutting-scorecard",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_scorecard.py",
+        "contracts/score-rubric-v1.json",
+        "schemas/score-evidence.schema.json",
+        "schemas/scorecard.schema.json",
+        "schemas/score-trust-policy.schema.json"
+      ],
+      "tests": [
+        "tools/test_scorecard_phase6.py",
+        "tools/test_loom_mutation.py"
+      ],
+      "required_predicates": [
+        "capability:evidence-bound-cross-cutting-scorecard"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "freshness-bound-competitive-comparison",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_scorecard.py",
+        "schemas/competitor-snapshot.schema.json",
+        "schemas/score-comparison.schema.json"
+      ],
+      "tests": [
+        "tools/test_scorecard_phase6.py"
+      ],
+      "required_predicates": [
+        "capability:freshness-bound-competitive-comparison"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "trust-critical-score-regression-gate",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_scorecard.py",
+        "schemas/score-regression.schema.json"
+      ],
+      "tests": [
+        "tools/test_scorecard_phase6.py",
+        "tools/test_loom_mutation.py"
+      ],
+      "required_predicates": [
+        "capability:trust-critical-score-regression-gate"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "semantic-native-helper-evidence",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_sbom.py",
+        "tools/loom_plugin_package.py"
+      ],
+      "tests": [
+        "tools/test_loom_plugin_package_v11.py"
+      ],
+      "required_predicates": [
+        "capability:semantic-native-helper-evidence"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "native-helper"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "deterministic-canonical-plugin-asset",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_plugin_package.py",
+        "tools/loom_release_verify.py"
+      ],
+      "tests": [
+        "tools/test_release_asset.py"
+      ],
+      "required_predicates": [
+        "capability:deterministic-canonical-plugin-asset"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "plugin-zip"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "sequential-threshold-root-rotation",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_release_sign.py",
+        "tools/loom_update.py"
+      ],
+      "tests": [
+        "tools/test_loom_release_sign_v11.py"
+      ],
+      "required_predicates": [
+        "capability:sequential-threshold-root-rotation"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "cross-platform-capability-aggregation",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_test.py",
+        "tools/loom_capability.py"
+      ],
+      "tests": [
+        "tools/test_test_runner.py",
+        "tools/test_loom_capability.py"
+      ],
+      "required_predicates": [
+        "capability:cross-platform-capability-aggregation"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "native-helper"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "maintenance-cli-contract-inventory",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_cli_contract.py",
+        "schemas/tool-contract.schema.json"
+      ],
+      "tests": [
+        "tools/test_tool_contracts.py"
+      ],
+      "required_predicates": [
+        "capability:maintenance-cli-contract-inventory"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "negated-domain-routing-isolation",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_domain.py",
+        "tools/loom_tier.py"
+      ],
+      "tests": [
+        "tools/test_unknown_domain_routing.py"
+      ],
+      "required_predicates": [
+        "capability:negated-domain-routing-isolation"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "expiring-revocable-evidence-graph",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_evidence_graph.py",
+        "contracts/evidence-policy-v1.json",
+        "schemas/evidence-envelope.schema.json",
+        "schemas/evidence-envelope-v2.schema.json",
+        "schemas/evidence-graph-v2.schema.json"
+      ],
+      "tests": [
+        "tools/test_evidence_graph_phase7.py"
+      ],
+      "required_predicates": [
+        "capability:expiring-revocable-evidence-graph"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "truth-authority-and-contradiction-radar",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_subject_identity.py",
+        "tools/loom_truth.py",
+        "tools/loom_truth_shadow.py",
+        "contracts/truth-authorities-v1.json",
+        "schemas/subject-identity.schema.json",
+        "schemas/expected-subject-set.schema.json",
+        "schemas/truth-authority-registry.schema.json",
+        "schemas/contradiction-report.schema.json",
+        "schemas/truth-shadow-corpus.schema.json",
+        "benchmarks/truth-authority/corpus.json",
+        ".github/workflows/quality.yml"
+      ],
+      "tests": [
+        "tools/test_subject_identity_phase4.py",
+        "tools/test_truth_authority_phase4.py",
+        "tools/test_truth_shadow_corpus_phase4.py",
+        "tools/test_evidence_graph_phase7.py"
+      ],
+      "required_predicates": [
+        "capability:truth-authority-and-contradiction-radar"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "generated-evidence-capability-status",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_capability_registry.py",
+        "contracts/capability-declarations-v1.json",
+        "schemas/capability-declarations.schema.json",
+        "schemas/capability-registry.schema.json"
+      ],
+      "tests": [
+        "tools/test_capability_registry_phase7.py"
+      ],
+      "required_predicates": [
+        "capability:generated-evidence-capability-status"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "unified-exact-release-subject",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_release_subject.py",
+        "tools/loom_release_subject_verify.py",
+        "schemas/release-subject.schema.json",
+        "schemas/release-subject-v3.schema.json",
+        "schemas/subject-identity.schema.json"
+      ],
+      "tests": [
+        "tools/test_release_subject_phase7.py",
+        "tools/test_release_subject_verify_phase10.py",
+        "tools/test_release_asset.py"
+      ],
+      "required_predicates": [
+        "capability:unified-exact-release-subject"
+      ],
+      "required_subject_kinds": [
+        "main-source",
+        "candidate-source",
+        "release-tag",
+        "plugin-zip",
+        "native-helper"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "native-platform-capability-receipts",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_platform_probe.py",
+        "tools/loom_activation.py",
+        "tools/loom_install.py",
+        ".github/workflows/compatibility.yml",
+        ".github/workflows/build-helper.yml"
+      ],
+      "tests": [
+        "tools/test_platform_probe_phase7.py",
+        "tools/test_runtime_subject_phase4.py"
+      ],
+      "required_predicates": [
+        "capability:native-platform-capability-receipts"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "native-helper"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "provider-native-evidence-boundary",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_provider_evidence.py",
+        "tools/loom_usage.py",
+        "schemas/provider-native-receipt.schema.json"
+      ],
+      "tests": [
+        "tools/test_provider_tier_clean_phase7.py",
+        "tools/test_token_accounting_v3.py"
+      ],
+      "required_predicates": [
+        "capability:provider-native-evidence-boundary"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "clean-room-and-external-validation-boundary",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_clean_room.py",
+        "tools/loom_current_facts.py",
+        "docs/phase-7-validation.md"
+      ],
+      "tests": [
+        "tools/test_phase7_protocols.py"
+      ],
+      "required_predicates": [
+        "capability:clean-room-and-external-validation-boundary"
+      ],
+      "required_subject_kinds": [
+        "main-source",
+        "candidate-source",
+        "release-tag",
+        "plugin-zip",
+        "native-helper"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-planning-intelligence",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_domain.py",
+        "tools/loom_planning_intelligence.py",
+        "tools/loom_program.py",
+        "tools/loom_orchestrator.py",
+        "tools/loom_lint.py",
+        "schemas/planning-intelligence.schema.json",
+        "schemas/planning-obligations.schema.json"
+      ],
+      "tests": [
+        "tools/test_planning_intelligence.py",
+        "tools/test_planning_program.py",
+        "tools/test_planning_evaluation.py",
+        "tools/test_production_orchestrator.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-planning-intelligence"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-owner-message",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_message.py",
+        "tools/loom_session.py",
+        "schemas/owner-message.schema.json"
+      ],
+      "tests": [
+        "tools/test_owner_message.py",
+        "tools/test_transparency_surface.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-owner-message"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "deterministic-continuation-authority",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_authority.py",
+        "tools/loom_orchestrator.py",
+        "schemas/continuation-authority.schema.json"
+      ],
+      "tests": [
+        "tools/test_continuation_authority.py",
+        "tools/test_production_orchestrator.py"
+      ],
+      "required_predicates": [
+        "capability:deterministic-continuation-authority"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "exact-cache-invalidation",
+      "kind": "mechanical",
+      "enforcement": [
+        "contracts/cache-classes-v1.json",
+        "tools/loom_cache_policy.py",
+        "tools/loom_performance.py"
+      ],
+      "tests": [
+        "tools/test_cache_policy.py",
+        "tools/test_performance_excellence.py"
+      ],
+      "required_predicates": [
+        "capability:exact-cache-invalidation"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-self-cleaning-learning",
+      "kind": "mechanical",
+      "enforcement": [
+        "contracts/owner-learning-v3.json",
+        "tools/loom_vault.py",
+        "tools/loom_owner.py"
+      ],
+      "tests": [
+        "tools/test_owner_learning_phase2.py",
+        "tools/test_loom_vault_v11.py",
+        "tools/test_loom_owner_v11.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-self-cleaning-learning"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "versioned-host-contracts-and-transactional-adapters",
+      "kind": "mechanical",
+      "enforcement": [
+        "contracts/host-contracts-v2.json",
+        "tools/loom_host_registry.py",
+        "tools/loom_adapters.py",
+        "tools/loom_reliability.py",
+        "tools/loom_launcher.py",
+        "tools/loom_adapter_protocol.py",
+        "tools/loom_adapter_bridge.py",
+        "tools/loom_orchestrator.py",
+        "schemas/adapter-message.schema.json"
+      ],
+      "tests": [
+        "tools/test_adapter_protocol_v2.py",
+        "tools/test_request_transport_v2.py",
+        "tools/test_loom_plugin_adapters_v11.py",
+        "tools/test_reliability_excellence.py"
+      ],
+      "required_predicates": [
+        "capability:versioned-host-contracts-and-transactional-adapters"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "runtime-and-owner-state-generation-pinning",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_update.py",
+        "schemas/runtime-session-lease.schema.json",
+        "schemas/update-state.schema.json"
+      ],
+      "tests": [
+        "tools/test_loom_update_v11.py",
+        "tools/test_loom_plugin_adapters_v11.py"
+      ],
+      "required_predicates": [
+        "capability:runtime-and-owner-state-generation-pinning"
+      ],
+      "required_subject_kinds": [
+        "candidate-source",
+        "installed-runtime"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "immutable-complete-release-subject-v2",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_release_subject.py",
+        "tools/loom_release_subject_verify.py",
+        "schemas/release-subject.schema.json",
+        "schemas/release-subject-v3.schema.json",
+        "schemas/subject-identity.schema.json"
+      ],
+      "tests": [
+        "tools/test_release_subject_phase7.py",
+        "tools/test_release_subject_verify_phase10.py"
+      ],
+      "required_predicates": [
+        "capability:immutable-complete-release-subject-v2"
+      ],
+      "required_subject_kinds": [
+        "main-source",
+        "candidate-source",
+        "release-tag",
+        "plugin-zip",
+        "native-helper"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "evidence-generated-readiness-and-private-diagnostics",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_readiness.py",
+        "tools/loom_truth.py",
+        "tools/loom_diagnostics.py",
+        "schemas/release-readiness.schema.json",
+        "schemas/contradiction-report.schema.json",
+        "schemas/diagnostic-receipt.schema.json"
+      ],
+      "tests": [
+        "tools/test_readiness_phase10.py",
+        "tools/test_diagnostics_phase10.py"
+      ],
+      "required_predicates": [
+        "capability:evidence-generated-readiness-and-private-diagnostics"
+      ],
+      "required_subject_kinds": [
+        "main-source",
+        "candidate-source",
+        "release-tag",
+        "plugin-zip",
+        "native-helper",
+        "installed-runtime"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-exact-cut-failure-receipts",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_exact_cut_ci.py",
+        ".github/workflows/quality.yml"
+      ],
+      "tests": [
+        "tools/test_exact_cut_ci_phase10.py",
+        "tools/test_workflow_policy.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-exact-cut-failure-receipts"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "bounded-project-inspection",
+      "kind": "mechanical",
+      "enforcement": [
+        "tools/loom_project_inspection.py",
+        "tools/loom_survey.py",
+        "tools/loom_runtime.py",
+        "tools/loom_orchestrator.py",
+        "contracts/project-inspection-policy-v1.json",
+        "schemas/project-inspection.schema.json"
+      ],
+      "tests": [
+        "tools/test_project_inspection.py",
+        "tools/test_loom_runtime.py",
+        "tools/test_production_orchestrator.py"
+      ],
+      "required_predicates": [
+        "capability:bounded-project-inspection"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "receipt-proven-direct-bootstrap",
+      "kind": "mechanical",
+      "enforcement": [
+        "scripts/loom_bootstrap.py",
+        "tools/loom_install.py",
+        "tools/loom_update.py",
+        "tools/loom_launcher.py"
+      ],
+      "tests": [
+        "tools/test_loom_bootstrap_v11.py",
+        "tools/test_release_standard.py"
+      ],
+      "required_predicates": [
+        "capability:receipt-proven-direct-bootstrap"
+      ],
+      "required_subject_kinds": [
+        "candidate-source"
+      ],
+      "limitations": []
+    },
+    {
+      "id": "human-judgment-remains-owner-controlled",
+      "kind": "advisory",
+      "enforcement": [],
+      "tests": [],
+      "required_predicates": [
+        "capability:human-judgment-remains-owner-controlled"
+      ],
+      "required_subject_kinds": [],
+      "limitations": []
+    },
+    {
+      "id": "exact-matrix-release-certification",
+      "kind": "mechanical",
+      "enforcement": [
+        ".github/workflows/release.yml",
+        "tools/loom_release_suite.py",
+        "tools/loom_capability.py"
+      ],
+      "tests": [
+        "tools/test_release_suite.py",
+        "tools/test_workflow_policy.py",
+        "tools/test_loom_capability.py"
+      ],
+      "required_predicates": [
+        "capability:exact-matrix-release-certification"
+      ],
+      "required_subject_kinds": [
+        "main-source",
+        "candidate-source",
+        "release-tag",
+        "plugin-zip",
+        "native-helper"
+      ],
+      "limitations": []
+    }
+  ]
+}

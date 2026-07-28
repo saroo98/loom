@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Bind every exact release surface to one deterministic subject digest."""
+"""Create typed v3 release bundles; retain v2 construction for compatibility tests."""
 
 import argparse
 import hashlib
@@ -9,6 +9,7 @@ import re
 from pathlib import Path
 
 import loom_reliability
+import loom_subject_identity
 
 
 MAX_FILES = 8192
@@ -96,6 +97,7 @@ def _named_artifacts(values, label):
 def create(*, source, public_cut, plugin, helpers, sboms, workflows,
            schemas, docs, registry, provenance, commit, tag, release_sequence,
            previous_subject=None):
+    """Create a historical v2 aggregate for compatibility fixtures only."""
     if not re.fullmatch(r"[0-9a-f]{40}", commit) \
             or not re.fullmatch(r"v[0-9]+\.[0-9]+\.[0-9]+", tag) \
             or type(release_sequence) is not int or release_sequence < 1 \
@@ -118,6 +120,45 @@ def create(*, source, public_cut, plugin, helpers, sboms, workflows,
     return {**body, "subject_sha256": hashlib.sha256(_canonical(body)).hexdigest()}
 
 
+def create_typed(*, subjects, release_sequence, previous_bundle_sha256=None):
+    """Create a v3 bundle relation without collapsing component identities."""
+    if type(release_sequence) is not int or release_sequence < 1 \
+            or previous_bundle_sha256 is not None \
+            and not re.fullmatch(r"[0-9a-f]{64}", str(previous_bundle_sha256)):
+        raise ReleaseSubjectError("typed release bundle identity is invalid")
+    try:
+        mapped = loom_subject_identity.subject_map(subjects)
+    except loom_subject_identity.SubjectIdentityError as exc:
+        raise ReleaseSubjectError(str(exc)) from exc
+    required = {"main-source", "candidate-source", "release-tag", "plugin-zip"}
+    kinds = {kind for kind, _subject_id in mapped}
+    if not required <= kinds or "native-helper" not in kinds \
+            or "installed-runtime" in kinds:
+        raise ReleaseSubjectError(
+            "typed release bundle component subjects are incomplete or invalid")
+    normalized = sorted(
+        mapped.values(), key=lambda item: (
+            item["kind"], item["subject_id"], item["subject_digest"]))
+    relations = [{
+        "relation": "component",
+        "subject_kind": item["kind"],
+        "subject_id": item["subject_id"],
+        "subject_digest": item["subject_digest"],
+    } for item in normalized]
+    body = {
+        "schema_version": 3,
+        "repository": loom_subject_identity.REPOSITORY,
+        "release_sequence": release_sequence,
+        "previous_bundle_sha256": previous_bundle_sha256,
+        "subjects": normalized,
+        "relations": relations,
+    }
+    return {
+        **body,
+        "bundle_sha256": hashlib.sha256(_canonical(body)).hexdigest(),
+    }
+
+
 def _mapping(values):
     result = {}
     for value in values:
@@ -132,31 +173,22 @@ def _mapping(values):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--source", required=True)
-    parser.add_argument("--public-cut", required=True)
-    parser.add_argument("--plugin", required=True)
-    parser.add_argument("--helper", action="append", default=[])
-    parser.add_argument("--sbom", action="append", default=[])
-    parser.add_argument("--workflow", action="append", default=[])
-    parser.add_argument("--schemas", required=True)
-    parser.add_argument("--docs", required=True)
-    parser.add_argument("--registry", required=True)
-    parser.add_argument("--provenance", action="append", default=[])
-    parser.add_argument("--commit", required=True)
-    parser.add_argument("--tag", required=True)
+    parser.add_argument("--subjects", required=True)
     parser.add_argument("--release-sequence", required=True, type=int)
-    parser.add_argument("--previous-subject")
+    parser.add_argument("--previous-bundle")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     try:
-        result = create(
-            source=args.source, public_cut=args.public_cut, plugin=args.plugin,
-            helpers=_mapping(args.helper), sboms=_mapping(args.sbom),
-            workflows=_mapping(args.workflow), schemas=args.schemas, docs=args.docs,
-            registry=args.registry, provenance=_mapping(args.provenance),
-            commit=args.commit, tag=args.tag, release_sequence=args.release_sequence,
-            previous_subject=args.previous_subject)
-    except ReleaseSubjectError as exc:
+        subject_set = json.loads(
+            Path(args.subjects).read_text(encoding="utf-8"))
+        result = create_typed(
+            subjects=subject_set.get("subjects")
+            if isinstance(subject_set, dict) else None,
+            release_sequence=args.release_sequence,
+            previous_bundle_sha256=args.previous_bundle)
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            ReleaseSubjectError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
     try:
@@ -167,7 +199,7 @@ def main(argv=None):
     except (ReleaseSubjectError, loom_reliability.ReliabilityError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
-    print(json.dumps({"status": "created", "subject_sha256": result["subject_sha256"]},
+    print(json.dumps({"status": "created", "bundle_sha256": result["bundle_sha256"]},
                      sort_keys=True))
     return 0
 

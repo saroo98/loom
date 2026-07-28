@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/truth-shadow-corpus.schema.json",
+  "title": "Locked EVID-101 shadow-promotion corpus",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "policy_id",
+    "evaluation_epoch",
+    "subject_kinds",
+    "unsafe_states",
+    "fact_classes",
+    "projection_cases",
+    "rollback_cases",
+    "legacy_cases",
+    "thresholds"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-truth-shadow-corpus-v1"},
+    "evaluation_epoch": {"type": "string", "format": "date-time"},
+    "subject_kinds": {
+      "const": [
+        "main-source",
+        "candidate-source",
+        "release-tag",
+        "plugin-zip",
+        "native-helper",
+        "installed-runtime"
+      ]
+    },
+    "unsafe_states": {
+      "type": "array",
+      "minItems": 7,
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "wrong-subject",
+          "stale",
+          "expired",
+          "revoked",
+          "incomplete",
+          "malformed",
+          "ambiguous"
+        ]
+      }
+    },
+    "fact_classes": {
+      "const": [
+        "version",
+        "inventory",
+        "schema-protocol",
+        "capability",
+        "release",
+        "platform-host",
+        "generated-freshness",
+        "verification-subject"
+      ]
+    },
+    "projection_cases": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "registered", "historical", "expected_effect"],
+        "properties": {
+          "id": {"type": "string"},
+          "registered": {"type": "boolean"},
+          "historical": {"type": "boolean"},
+          "expected_effect": {"enum": ["enforcement", "advisory", "none"]}
+        }
+      }
+    },
+    "rollback_cases": {
+      "type": "array",
+      "minItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evaluated", "cached", "expected"],
+        "properties": {
+          "evaluated": {
+            "enum": [
+              "failed",
+              "stale",
+              "expired",
+              "revoked",
+              "unverified"
+            ]
+          },
+          "cached": {"const": "supported"},
+          "expected": {
+            "enum": [
+              "failed",
+              "stale",
+              "expired",
+              "revoked",
+              "unverified"
+            ]
+          }
+        }
+      }
+    },
+    "legacy_cases": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["schema_version", "readable", "may_promote"],
+        "properties": {
+          "schema_version": {"type": "integer", "minimum": 1},
+          "readable": {"const": true},
+          "may_promote": {"const": false}
+        }
+      }
+    },
+    "thresholds": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "unsafe_supported_promotions",
+        "false_positive_enforcement_downgrades",
+        "unsafe_state_recall",
+        "historical_prose_support_effects",
+        "advisory_false_positive_rate",
+        "deterministic_reports"
+      ],
+      "properties": {
+        "unsafe_supported_promotions": {"const": 0},
+        "false_positive_enforcement_downgrades": {"const": 0},
+        "unsafe_state_recall": {"const": 1.0},
+        "historical_prose_support_effects": {"const": 0},
+        "advisory_false_positive_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.03
+        },
+        "deterministic_reports": {"const": true}
+      }
+    }
+  }
+}
