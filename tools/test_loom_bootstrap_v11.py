@@ -813,6 +813,34 @@ class BootstrapIntegrationTests(unittest.TestCase):
                 capture_output=True, text=True, timeout=30, check=False)
             self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
 
+    def test_signed_update_resolves_vault_with_pre_activation_owner_module(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / "home" / ".loom"
+
+            class PreActivationOwner:
+                pass
+
+            self.assertEqual(
+                home / "vault" / "owner.sqlite3",
+                loom_bootstrap._owner_vault_path(PreActivationOwner, home))
+
+            class ActiveSetOwner:
+                @staticmethod
+                def owner_vault_path(candidate):
+                    return Path(candidate) / "state" / "active.sqlite3"
+
+            self.assertEqual(
+                home / "state" / "active.sqlite3",
+                loom_bootstrap._owner_vault_path(ActiveSetOwner, home))
+
+            class InvalidOwner:
+                owner_vault_path = "not-callable"
+
+            with self.assertRaisesRegex(
+                    loom_bootstrap.BootstrapError,
+                    "trusted owner-vault resolver is invalid"):
+                loom_bootstrap._owner_vault_path(InvalidOwner, home)
+
     def test_prebootstrap_runtime_scan_rejects_redirected_directory(self):
         with tempfile.TemporaryDirectory() as temporary:
             runtime = Path(temporary) / "runtime"

@@ -72,8 +72,8 @@ Status at this documentation cut, 2026-07-27:
 
 | Surface | Status | Evidence boundary |
 |---|---|---|
-| Published release | `v1.8.15`, published 2026-07-25 | Signed tag and release assets exist; the plugin ZIP digest is `1a252a9ce02a6a86235bb1831617af7f1a83680852326b1399d1b9455132b49a` |
-| Release candidate | `1.8.16` | This source version includes the merged remediation and public documentation updates; it is not a published artifact until signed release verification completes |
+| Published release | `v1.8.17`, published 2026-07-27 | Signed tag and release assets exist; the plugin ZIP digest is `7baf734517c6ad2218272a6ca1f530224e4353b61532606ed13db91a5cce8cdb` |
+| Release candidate | `1.8.18` | This source version includes the merged remediation and public documentation updates; it is not a published artifact until signed release verification completes |
 | Default branch | `main` at `7b10cf18a8e539cd32097d256c9d9dd130082555` | PR #33 merged the documentation update after PR #32; release promotion remains a separate signed process |
 | Remediation | Merged through [PR #32](https://github.com/saroo98/loom/pull/32) | No known Critical or High blocker was reported at merge; the merged code is not thereby released, installed, deployed, or independently certified |
 | Website work | Merged through [PR #33](https://github.com/saroo98/loom/pull/33) | Public-facing files are on `main`; GitHub Pages deployment is separate from Loom software release promotion |
@@ -146,18 +146,18 @@ automatically.
 ### Published release
 
 The current public artifact is
-[`loom-plugin-v1.8.15.zip`](https://github.com/saroo98/loom/releases/download/v1.8.15/loom-plugin-v1.8.15.zip).
+[`loom-plugin-v1.8.17.zip`](https://github.com/saroo98/loom/releases/download/v1.8.17/loom-plugin-v1.8.17.zip).
 
 Expected SHA-256:
 
 ```text
-1a252a9ce02a6a86235bb1831617af7f1a83680852326b1399d1b9455132b49a
+7baf734517c6ad2218272a6ca1f530224e4353b61532606ed13db91a5cce8cdb
 ```
 
 Verify the downloaded file before installation:
 
 ```powershell
-(Get-FileHash .\loom-plugin-v1.8.15.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\loom-plugin-v1.8.17.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
 The release also includes `SHA256SUMS` and `RELEASE-SUBJECT.json`. Follow the
