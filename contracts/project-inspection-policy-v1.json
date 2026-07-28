@@ -12,26 +12,37 @@
   "generated_rules": [
     {
       "ancestor_markers": ["Cargo.toml"],
+      "authority_scope": "recursive",
       "basenames": ["target"],
       "id": "rust-target",
       "ignored_required_in_git": true
     },
     {
       "ancestor_markers": ["package.json"],
+      "authority_scope": "recursive",
       "basenames": ["node_modules", ".next"],
       "id": "node-generated",
       "ignored_required_in_git": true
     },
     {
       "ancestor_markers": ["pyproject.toml", "requirements.txt", "setup.py", "loom_test.py", "loom_bootstrap.py"],
+      "authority_scope": "recursive",
       "basenames": ["__pycache__", ".pytest_cache", ".coverage", "htmlcov", ".venv", "venv"],
       "id": "python-generated",
       "ignored_required_in_git": true
     },
     {
       "ancestor_markers": ["BUILD-MANIFEST.json"],
+      "authority_scope": "recursive",
       "basenames": ["dist"],
       "id": "loom-public-cut",
+      "ignored_required_in_git": true
+    },
+    {
+      "ancestor_markers": ["go.mod", "Cargo.toml", "package.json", "pyproject.toml"],
+      "authority_scope": "direct",
+      "basenames": [".tools"],
+      "id": "local-toolchain-cache",
       "ignored_required_in_git": true
     }
   ],
@@ -45,6 +56,8 @@
     "SKILL.md",
     "build.gradle",
     "build.gradle.kts",
+    "go.mod",
+    "go.sum",
     "package.json",
     "pyproject.toml",
     "requirements.txt"

@@ -87,13 +87,17 @@ def load_policy(root=None):
         raise InspectionError("project inspection policy fields are invalid")
     seen = set()
     for rule in value["generated_rules"]:
-        fields = {"id", "basenames", "ancestor_markers", "ignored_required_in_git"}
+        fields = {
+            "id", "basenames", "ancestor_markers", "ignored_required_in_git",
+            "authority_scope",
+        }
         if not isinstance(rule, dict) or set(rule) != fields \
                 or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", str(rule.get("id", ""))) \
                 or rule["id"] in seen \
                 or not isinstance(rule["basenames"], list) or not rule["basenames"] \
                 or not isinstance(rule["ancestor_markers"], list) \
-                or type(rule["ignored_required_in_git"]) is not bool:
+                or type(rule["ignored_required_in_git"]) is not bool \
+                or rule["authority_scope"] not in {"direct", "recursive"}:
             raise InspectionError("generated-output policy rule is invalid")
         for values in (rule["basenames"], rule["ancestor_markers"]):
             if len(values) != len(set(values)) or not all(
@@ -160,7 +164,8 @@ def _boundary_container_is_independent(ignored_root, entries, boundaries):
     for entry in entries:
         if not _under(entry.rel, ignored_root) or entry.rel == ignored_root:
             continue
-        if any(_under(item["path"], entry.rel) for item in nested):
+        if any(_under(item["path"], entry.rel) or _under(entry.rel, item["path"])
+               for item in nested):
             continue
         return False
     return True
@@ -224,6 +229,9 @@ def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
                           for path in touches)
             authority_descendant = any(
                 _under(entry.rel, candidate)
+                and entry.rel != candidate
+                and (rule["authority_scope"] == "recursive"
+                     or PurePosixPath(entry.rel).parent.as_posix() == candidate)
                 and PurePosixPath(entry.rel).name.casefold() in authority_names
                 for entry in entries)
             if marker and not tracked_descendant and not changed_descendant and not touched \
@@ -252,25 +260,11 @@ def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
             continue
         if _boundary_container_is_independent(ignored_root, entries, boundaries):
             continue
-        unresolved_recorded = False
-        if len(unresolved) < budgets["unresolved_roots"]:
-            unresolved.append({"path": ignored_root, "reason": "ignored-unclassified",
-                               "potential_authorities": ["source", "configuration"]})
-            unresolved_recorded = True
-        root_entry = next(
-            (entry for entry in entries
-             if entry.rel == ignored_root and entry.kind == "directory"),
-            None)
-        tracked_descendant = any(_under(path, ignored_root) for path in tracked)
-        changed_descendant = any(_under(path, ignored_root) for path in changed)
-        touched = any(_under(path, ignored_root) or _under(ignored_root, path)
-                      for path in touches)
-        if unresolved_recorded and root_entry is not None and not tracked_descendant \
-                and not changed_descendant and not touched:
-            unresolved_content_exclusions.append({
-                "path": ignored_root,
-                "reason": "ignored-unclassified",
-            })
+        # Git ignore status is not an authority decision. Unknown ignored content
+        # remains in the complete workspace hash unless a closed policy rule above
+        # proves it is generated/cache material or a registered external boundary.
+        # This keeps local instructions and private project facts freshness-bound
+        # without copying their contents into the public inspection receipt.
 
     unresolved = sorted(
         {(_safe_relative(item["path"]), item["reason"],

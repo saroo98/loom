@@ -44,12 +44,14 @@ metadata-bound partial observation with a `content-hash-time-bound` obligation. 
 can route and draft, but G1 and implementation remain mechanically false until a fresh receipt is
 complete.
 
-An unclassified ignored directory outside the declared touch scope is handled differently from a
-proven generated subtree. Loom binds the directory path and unresolved reason into the world
-digest, omits its potentially large or volatile contents from the draft observation, and records an
-`ignored-unclassified` obligation. Ignored files and ignored directories inside the declared touch
-scope remain content-bound. This keeps large local toolchains and caches from preventing a draft
-without treating their unseen contents as trusted or granting implementation authority.
+Git ignore status is not treated as an authority decision. Unclassified ignored files and
+directories remain content-bound, including local project instructions and private project facts;
+their bytes affect freshness but are not copied into the public inspection receipt. Registered
+linked worktrees are separate project boundaries. A cache or generated root is excluded only by a
+closed policy rule with the required project marker, Git-ignore evidence, no tracked/current/touched
+descendant, and no trust authority in the rule's declared scope. The exact exclusion path, rule, and
+evidence remain part of the world digest. This allows a mechanically proven local toolchain cache
+to stay volatile without turning arbitrary ignored content into an implementation bypass.
 
 Plan-contract v3 introduced a bounded planning-intelligence graph. Seven declarative specialist
 modules may emit typed atoms only from active task evidence; source material and ambient repository

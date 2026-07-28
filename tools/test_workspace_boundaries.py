@@ -89,7 +89,7 @@ class WorkspaceBoundaryTests(unittest.TestCase):
             loom_lint.validate_schema(report, schema, value, schema)
             self.assertEqual([], report.errors)
 
-    def test_ignored_directory_is_unresolved_not_trusted_or_content_hashed(self):
+    def test_unclassified_ignored_directory_remains_content_bound(self):
         lookalike = self.repo / ".claude" / "worktrees" / "not-registered"
         lookalike.mkdir(parents=True)
         info_exclude = self.repo / ".git" / "info" / "exclude"
@@ -102,12 +102,13 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         payload.write_bytes(b"after")
         after = loom_survey.workspace_snapshot(self.repo)
 
-        self.assertEqual(before.state.state_hash, after.state.state_hash)
+        self.assertNotEqual(before.state.state_hash, after.state.state_hash)
         receipt = loom_project_inspection.inspect(
             after, target_identity="target-sha256:" + "2" * 64)
-        self.assertEqual("partial-requires-discovery", receipt["state"])
-        self.assertFalse(receipt["implementation_eligible"])
+        self.assertEqual("complete", receipt["state"])
+        self.assertTrue(receipt["implementation_eligible"])
         self.assertNotIn("external_boundaries", receipt)
+        self.assertEqual([], receipt["unresolved_roots"])
 
     def test_ignored_directory_in_declared_touch_scope_remains_content_bound(self):
         ignored = self.repo / ".cache"
@@ -127,13 +128,17 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertNotEqual(before.state.state_hash, after.state.state_hash)
         receipt = loom_project_inspection.inspect(
             after, target_identity="target-sha256:" + "3" * 64)
-        self.assertEqual("partial-requires-discovery", receipt["state"])
-        self.assertFalse(receipt["implementation_eligible"])
+        self.assertEqual("complete", receipt["state"])
+        self.assertTrue(receipt["implementation_eligible"])
 
-    def test_ignored_directory_with_nested_manifest_stays_unresolved(self):
+    def test_policy_proven_local_toolchain_cache_is_excluded(self):
         ignored = self.repo / ".tools"
         nested = ignored / "sdk"
         nested.mkdir(parents=True)
+        (self.repo / "go.mod").write_text(
+            "module example.invalid/fixture\n\ngo 1.22\n", encoding="utf-8")
+        git(self.repo, "add", "go.mod")
+        git(self.repo, "commit", "-m", "add go authority")
         info_exclude = self.repo / ".git" / "info" / "exclude"
         with info_exclude.open("a", encoding="utf-8") as stream:
             stream.write("/.tools/\n")
@@ -147,11 +152,76 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertEqual(before.state.state_hash, after.state.state_hash)
         receipt = loom_project_inspection.inspect(
             after, target_identity="target-sha256:" + "4" * 64)
-        self.assertEqual("partial-requires-discovery", receipt["state"])
-        self.assertIn(
-            (".tools", "ignored-unclassified"),
-            {(item["path"], item["reason"])
-             for item in receipt["unresolved_roots"]})
+        self.assertEqual("complete", receipt["state"])
+        self.assertTrue(receipt["implementation_eligible"])
+        self.assertEqual([], receipt["unresolved_roots"])
+        self.assertEqual(
+            [(".tools", "local-toolchain-cache")],
+            [(item["path"], item["rule_id"])
+             for item in receipt["generated_exclusions"]])
+
+    def test_local_toolchain_cache_in_touch_scope_remains_content_bound(self):
+        ignored = self.repo / ".tools"
+        ignored.mkdir()
+        (self.repo / "go.mod").write_text(
+            "module example.invalid/fixture\n\ngo 1.22\n", encoding="utf-8")
+        git(self.repo, "add", "go.mod")
+        git(self.repo, "commit", "-m", "add go authority")
+        info_exclude = self.repo / ".git" / "info" / "exclude"
+        with info_exclude.open("a", encoding="utf-8") as stream:
+            stream.write("/.tools/\n")
+        payload = ignored / "tool.bin"
+        payload.write_bytes(b"before")
+
+        before = loom_survey.workspace_snapshot(
+            self.repo, touch_paths=(".tools/tool.bin",))
+        payload.write_bytes(b"after")
+        after = loom_survey.workspace_snapshot(
+            self.repo, touch_paths=(".tools/tool.bin",))
+        receipt = loom_project_inspection.inspect(
+            after, target_identity="target-sha256:" + "8" * 64)
+
+        self.assertNotEqual(before.state.state_hash, after.state.state_hash)
+        self.assertEqual([], receipt["generated_exclusions"])
+        self.assertEqual("complete", receipt["state"])
+
+    def test_direct_authority_prevents_local_toolchain_cache_exclusion(self):
+        ignored = self.repo / ".tools"
+        ignored.mkdir()
+        (self.repo / "go.mod").write_text(
+            "module example.invalid/fixture\n\ngo 1.22\n", encoding="utf-8")
+        git(self.repo, "add", "go.mod")
+        git(self.repo, "commit", "-m", "add go authority")
+        info_exclude = self.repo / ".git" / "info" / "exclude"
+        with info_exclude.open("a", encoding="utf-8") as stream:
+            stream.write("/.tools/\n")
+        authority = ignored / "AGENTS.md"
+        authority.write_text("local authority\n", encoding="utf-8")
+
+        snapshot = loom_survey.workspace_snapshot(self.repo)
+        receipt = loom_project_inspection.inspect(
+            snapshot, target_identity="target-sha256:" + "9" * 64)
+
+        self.assertEqual([], receipt["generated_exclusions"])
+        self.assertEqual("complete", receipt["state"])
+
+    def test_ignored_authority_file_is_hashed_without_disclosing_content(self):
+        info_exclude = self.repo / ".git" / "info" / "exclude"
+        with info_exclude.open("a", encoding="utf-8") as stream:
+            stream.write("/AGENTS.md\n")
+        authority = self.repo / "AGENTS.md"
+        secret = "private local instruction 7b64df"
+        authority.write_text(secret, encoding="utf-8")
+
+        before = loom_survey.workspace_snapshot(self.repo)
+        authority.write_text("updated local instruction\n", encoding="utf-8")
+        after = loom_survey.workspace_snapshot(self.repo)
+        receipt = loom_project_inspection.inspect(
+            after, target_identity="target-sha256:" + "7" * 64)
+
+        self.assertNotEqual(before.state.state_hash, after.state.state_hash)
+        self.assertEqual("complete", receipt["state"])
+        self.assertNotIn(secret, str(receipt))
 
     def test_ignored_content_beyond_disclosure_budget_remains_content_bound(self):
         info_exclude = self.repo / ".git" / "info" / "exclude"
@@ -170,10 +240,8 @@ class WorkspaceBoundaryTests(unittest.TestCase):
         self.assertNotEqual(before.state.state_hash, after.state.state_hash)
         receipt = loom_project_inspection.inspect(
             after, target_identity="target-sha256:" + "6" * 64)
-        self.assertEqual(32, len(receipt["unresolved_roots"]))
-        self.assertNotIn(
-            ".cache-32",
-            {item["path"] for item in receipt["unresolved_roots"]})
+        self.assertEqual("complete", receipt["state"])
+        self.assertEqual([], receipt["unresolved_roots"])
 
     def test_content_deadline_returns_bounded_partial_observation(self):
         with mock.patch.object(loom_survey, "STATE_HASH_DEADLINE_SECONDS", -1):
