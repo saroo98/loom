@@ -126,6 +126,16 @@ Depending on the request, Loom can expose:
 Small work does not need every possible artifact. A skipped artifact should have a reason; a
 produced artifact should have a consumer and decision.
 
+### Project-write boundary
+
+Persistent planning creates Loom-owned metadata inside the project. Tier S creates
+`plans/.loom-small-lifecycle.json`; larger tiers begin with `plans/MANIFEST.md` and
+`plans/lifecycle.json`, then replace that seed with the authored plan.
+
+If an owner explicitly prohibits project or file writes, Loom stops before creating `plans/`.
+Loom does not currently provide an ephemeral plan-authoring mode. To receive a persistent,
+reviewable plan, the owner must allow Loom to create the bounded `plans/` tree.
+
 ## Validation and recovery model
 
 Loom keeps a written claim separate from qualifying evidence:

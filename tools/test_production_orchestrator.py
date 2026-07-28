@@ -615,6 +615,54 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotIn("interaction-accessibility", active)
         self.assertNotIn("migration-release", active)
 
+    def test_explicit_no_file_modification_plan_leaves_project_unchanged(self):
+        request = (
+            "Produce a reviewable plan for adding a short 'Development notes' section "
+            "to README.md in this disposable project. Do not implement the plan, modify "
+            "files, install anything, publish anything, or contact external services.")
+        before_manifest = loom_reliability.deterministic_manifest(self.repo)
+        before_status = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-uall"],
+            cwd=self.repo, capture_output=True, text=True, check=True).stdout
+
+        result = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("project-write-prohibited", result["code"])
+        self.assertIn("stopped before changing the project", result["user_message"])
+        self.assertFalse((self.repo / "plans").exists())
+        self.assertEqual(before_manifest, loom_reliability.deterministic_manifest(self.repo))
+        self.assertEqual(before_status, subprocess.run(
+            ["git", "status", "--porcelain=v1", "-uall"],
+            cwd=self.repo, capture_output=True, text=True, check=True).stdout)
+
+    def test_zero_project_write_detection_is_explicit_and_bounded(self):
+        blocked = (
+            "Plan this change but do not modify files.",
+            "Plan this change but do not implement or modify files.",
+            "Plan this change but do not implement, modify files, or publish.",
+            "Plan this change with no project writes.",
+            "Plan this change without touching any files.",
+            "Plan this change and leave the project byte-for-byte unchanged.",
+        )
+        allowed = (
+            "Plan a tool that does not modify files.",
+            "Plan read-only evidence handling.",
+            "Plan this change without modifying generated files.",
+            "Do not ask questions, modify files directly.",
+            "Do not merely describe the fix, modify files and test it.",
+        )
+        for request in blocked:
+            with self.subTest(request=request):
+                self.assertTrue(
+                    loom_orchestrator._explicit_zero_project_write_requested(request))
+        for request in allowed:
+            with self.subTest(request=request):
+                self.assertFalse(
+                    loom_orchestrator._explicit_zero_project_write_requested(request))
+
     def test_installed_invoke_drives_real_gate_and_seals_receipt(self):
         opened = self.cli(
             "invoke", "--request", self.request, "--cwd", self.repo,
@@ -637,7 +685,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertTrue(action["owner_message"]["changes_made"])
         self.assertEqual("unavailable", action["owner_message"]["undo_status"])
         self.assertIn(
-            "no project deliverable was changed",
+            "plans/manifest.md and plans/lifecycle.json",
             action["owner_message"]["summary"].casefold())
         self.assertEqual(2, len(action["owner_message"]["human"].splitlines()))
         contract = action["plan_contract"]

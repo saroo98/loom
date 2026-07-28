@@ -30,6 +30,10 @@ runtime below. Never read every Loom file into context.
    host narration must not assign intent, complexity, breadth, tier,
    domain, or motivation to the request. Those claims are authoritative only when returned by
    Loom. A host may state only that it is invoking the selected Loom runtime.
+   An explicit owner prohibition on project or file writes is terminal for planning before any
+   `plans/` metadata is created. Return that receipt as written. Do not draft a substitute plan,
+   reinterpret the prohibition as applying only to implementation files, or ask Loom to author
+   until the owner submits a fresh request that permits the bounded project-local planning pack.
    On other supported hosts, run the installed skill's bounded bootstrap, then start only the receipt-owned Python launcher
    at `~/.loom/bin/loom.py` in bridge mode with fixed arguments. Send the initialized protocol-v2
    `invoke` frame through its stdin. Owner request text must never cross a shell, argv, environment
