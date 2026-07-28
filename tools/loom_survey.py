@@ -267,7 +267,11 @@ def _display_git_path(path):
 
 
 def _path_key(path):
-    value = os.path.abspath(os.fspath(path))
+    # Git reports physical worktree paths. Hosted runners and operating systems may
+    # present the same directory through a filesystem alias (for example macOS
+    # /var -> /private/var or a Windows junction). Compare absolute physical names,
+    # while continuing to preserve the caller's lexical root for project paths.
+    value = os.path.realpath(os.path.abspath(os.fspath(path)))
     return os.path.normcase(value) if os.name == "nt" else value
 
 

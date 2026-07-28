@@ -289,6 +289,15 @@ class WorkspaceBoundaryTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(loom_survey.SurveyError):
                 loom_survey._parse_worktree_registry(value)
 
+    def test_worktree_identity_normalizes_filesystem_aliases(self):
+        with mock.patch.object(
+                loom_survey.os.path, "realpath",
+                side_effect=lambda value: str(value).replace(
+                    "alias-root", "physical-root")):
+            self.assertEqual(
+                loom_survey._path_key(self.repo / "alias-root"),
+                loom_survey._path_key(self.repo / "physical-root"))
+
     def test_repeated_registered_worktree_root_fails_closed(self):
         duplicate = loom_survey.WorkspaceBoundary(".independent/child")
         with mock.patch.object(
