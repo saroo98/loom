@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Treat healthy nested Git worktrees as independently registered project boundaries and return a
+  bounded partial planning observation, without implementation authority, when large ignored local
+  directories or complete content hashing cannot be resolved safely.
+
 ## 1.8.18
 
 - Preserve signed upgrade compatibility with active runtimes that predate activation-set

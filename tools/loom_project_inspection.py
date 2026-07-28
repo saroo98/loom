@@ -87,13 +87,17 @@ def load_policy(root=None):
         raise InspectionError("project inspection policy fields are invalid")
     seen = set()
     for rule in value["generated_rules"]:
-        fields = {"id", "basenames", "ancestor_markers", "ignored_required_in_git"}
+        fields = {
+            "id", "basenames", "ancestor_markers", "ignored_required_in_git",
+            "authority_scope",
+        }
         if not isinstance(rule, dict) or set(rule) != fields \
                 or not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", str(rule.get("id", ""))) \
                 or rule["id"] in seen \
                 or not isinstance(rule["basenames"], list) or not rule["basenames"] \
                 or not isinstance(rule["ancestor_markers"], list) \
-                or type(rule["ignored_required_in_git"]) is not bool:
+                or type(rule["ignored_required_in_git"]) is not bool \
+                or rule["authority_scope"] not in {"direct", "recursive"}:
             raise InspectionError("generated-output policy rule is invalid")
         for values in (rule["basenames"], rule["ancestor_markers"]):
             if len(values) != len(set(values)) or not all(
@@ -150,6 +154,23 @@ def _ignored_roots(snapshot):
     return tuple(sorted(set(roots), key=lambda item: os.fsencode(item)))
 
 
+def _boundary_container_is_independent(ignored_root, entries, boundaries):
+    """Return true only when an ignored root contains boundary scaffolding and nothing else."""
+    nested = tuple(
+        item for item in boundaries
+        if _under(item["path"], ignored_root) or _under(ignored_root, item["path"]))
+    if not nested:
+        return False
+    for entry in entries:
+        if not _under(entry.rel, ignored_root) or entry.rel == ignored_root:
+            continue
+        if any(_under(item["path"], entry.rel) or _under(entry.rel, item["path"])
+               for item in nested):
+            continue
+        return False
+    return True
+
+
 def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
     """Classify generated roots once from the frozen census and Git evidence.
 
@@ -168,6 +189,10 @@ def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
     rules = _rule_map(policy)
     authority_names = {item.casefold() for item in policy["trust_authority_names"]}
     ignored = _ignored_roots(snapshot)
+    boundaries = tuple({
+        "path": item.rel,
+        "kind": item.kind,
+    } for item in getattr(snapshot, "boundaries", ()))
 
     candidate_dirs = []
     for entry in entries:
@@ -177,7 +202,12 @@ def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
     candidate_dirs = sorted(candidate_dirs, key=lambda item: os.fsencode(item))
 
     exclusions = []
-    unresolved = []
+    unresolved = ([{
+        "path": "(workspace-content)",
+        "reason": "content-hash-time-bound",
+        "potential_authorities": ["configuration", "manifest", "source"],
+    }] if not getattr(snapshot, "content_hash_complete", True) else [])
+    unresolved_content_exclusions = []
     accepted_roots = set()
     for candidate in candidate_dirs:
         if len(exclusions) >= budgets["generated_exclusions"]:
@@ -199,6 +229,9 @@ def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
                           for path in touches)
             authority_descendant = any(
                 _under(entry.rel, candidate)
+                and entry.rel != candidate
+                and (rule["authority_scope"] == "recursive"
+                     or PurePosixPath(entry.rel).parent.as_posix() == candidate)
                 and PurePosixPath(entry.rel).name.casefold() in authority_names
                 for entry in entries)
             if marker and not tracked_descendant and not changed_descendant and not touched \
@@ -225,9 +258,13 @@ def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
         if any(_under(ignored_root, root_value) or _under(root_value, ignored_root)
                for root_value in accepted_roots):
             continue
-        if len(unresolved) < budgets["unresolved_roots"]:
-            unresolved.append({"path": ignored_root, "reason": "ignored-unclassified",
-                               "potential_authorities": ["source", "configuration"]})
+        if _boundary_container_is_independent(ignored_root, entries, boundaries):
+            continue
+        # Git ignore status is not an authority decision. Unknown ignored content
+        # remains in the complete workspace hash unless a closed policy rule above
+        # proves it is generated/cache material or a registered external boundary.
+        # This keeps local instructions and private project facts freshness-bound
+        # without copying their contents into the public inspection receipt.
 
     unresolved = sorted(
         {(_safe_relative(item["path"]), item["reason"],
@@ -243,6 +280,10 @@ def classify_generated(snapshot, *, policy_root=None, touch_paths=()):
                                    key=lambda item: os.fsencode(item["path"]))),
         "unresolved": tuple(unresolved),
         "ignored_roots": ignored,
+        "boundaries": boundaries,
+        "unresolved_content_exclusions": tuple(sorted(
+            unresolved_content_exclusions,
+            key=lambda item: os.fsencode(item["path"]))),
     }
 
 
@@ -308,6 +349,7 @@ def inspect(snapshot, *, target_identity, policy_root=None):
     exclusions = list(frozen["exclusions"])
     unresolved = list(frozen["unresolved"])
     ignored = tuple(frozen["ignored_roots"])
+    boundaries = tuple(frozen.get("boundaries", ()))
     excluded_roots = {item["path"] for item in exclusions}
 
     if len(untracked_set) > budgets["detailed_facts"]:
@@ -427,6 +469,9 @@ def inspect(snapshot, *, target_identity, policy_root=None):
     state_value = "complete" if complete else "partial-requires-discovery"
     source_complete = "complete"
     source_partial = "partial-requires-discovery" if not complete else "complete"
+    content_source = (
+        "complete" if getattr(snapshot, "content_hash_complete", True)
+        else "partial-requires-discovery")
     body = {
         "schema_version": SCHEMA_VERSION,
         "policy_version": POLICY_VERSION,
@@ -435,10 +480,10 @@ def inspect(snapshot, *, target_identity, policy_root=None):
         "state": state_value,
         "source_states": {
             "filesystem_safety": source_complete,
-            "tracked": source_complete if state.is_git else "unsupported",
-            "staged": source_complete if state.is_git else "unsupported",
-            "unstaged": source_complete if state.is_git else "unsupported",
-            "untracked": source_complete,
+            "tracked": content_source if state.is_git else "unsupported",
+            "staged": content_source if state.is_git else "unsupported",
+            "unstaged": content_source if state.is_git else "unsupported",
+            "untracked": content_source,
             "ignored_generated": source_partial,
             "manifests": source_partial,
         },
@@ -473,6 +518,15 @@ def inspect(snapshot, *, target_identity, policy_root=None):
         "implementation_eligible": complete,
         "tier_floor": "S" if complete else "L",
     }
+    if boundaries:
+        ordered_boundaries = sorted(
+            boundaries, key=lambda item: os.fsencode(item["path"]))
+        body["external_boundaries"] = {
+            "count": len(ordered_boundaries),
+            "digest": _digest(ordered_boundaries),
+            "records": ordered_boundaries[:32],
+            "records_saturated": len(ordered_boundaries) > 32,
+        }
     value = {**body, "receipt_digest": _digest(body)}
     validate(value)
     return value
@@ -486,13 +540,42 @@ def validate(value):
         "draft_planning_eligible", "g1_eligible", "implementation_eligible", "tier_floor",
         "receipt_digest",
     }
-    if not isinstance(value, dict) or set(value) != required \
+    optional = {"external_boundaries"}
+    if not isinstance(value, dict) or not required <= set(value) \
+            or set(value) - required - optional \
             or value["schema_version"] != SCHEMA_VERSION \
             or value["policy_version"] != POLICY_VERSION \
             or not TARGET_RE.fullmatch(str(value["target_identity"])) \
             or not HASH_RE.fullmatch(str(value["survey_hash"])) \
             or value["state"] not in STATES or value["tier_floor"] not in TIER_ORDER:
         raise InspectionError("project inspection receipt identity is invalid")
+    external = value.get("external_boundaries")
+    if external is not None:
+        external_fields = {"count", "digest", "records", "records_saturated"}
+        if not isinstance(external, dict) or set(external) != external_fields \
+                or type(external["count"]) is not int \
+                or not 1 <= external["count"] <= 4096 \
+                or not DIGEST_RE.fullmatch(str(external["digest"])) \
+                or type(external["records_saturated"]) is not bool \
+                or not isinstance(external["records"], list) \
+                or not 1 <= len(external["records"]) <= 32 \
+                or external["records_saturated"] != (
+                    external["count"] > len(external["records"])):
+            raise InspectionError("external project boundary summary is invalid")
+        paths = []
+        for item in external["records"]:
+            if not isinstance(item, dict) \
+                    or set(item) != {"path", "kind"} \
+                    or item["kind"] != "registered-linked-worktree":
+                raise InspectionError("external project boundary record is invalid")
+            _safe_relative(item["path"])
+            paths.append(item["path"])
+        if paths != sorted(paths, key=lambda item: os.fsencode(item)) \
+                or len(paths) != len(set(paths)):
+            raise InspectionError("external project boundaries are noncanonical")
+        if not external["records_saturated"] \
+                and external["digest"] != _digest(external["records"]):
+            raise InspectionError("external project boundary digest mismatch")
     booleans = {"relevant_coverage_complete", "routing_eligible",
                 "draft_planning_eligible", "g1_eligible", "implementation_eligible"}
     if any(type(value[name]) is not bool for name in booleans):
@@ -582,7 +665,8 @@ def validate(value):
                            for evidence in item["evidence"]):
             raise InspectionError("generated exclusion evidence is invalid")
     unresolved_reasons = {
-        "detailed-budget", "ignored-unclassified", "manifest-oversized",
+        "content-hash-time-bound", "detailed-budget", "ignored-unclassified",
+        "manifest-oversized",
         "manifest-invalid", "non-git-generated-uncertain", "partition-budget",
         "untracked-volume",
     }
@@ -659,6 +743,9 @@ def capsule(value):
                                       for item in value["generated_exclusions"]})[:8],
         "unresolved_roots": [item["path"] for item in value["unresolved_roots"][:8]],
     }
+    if "external_boundaries" in value:
+        body["external_boundaries"] = {
+            key: value["external_boundaries"][key] for key in ("count", "digest")}
     if len(_canonical_bytes(body)) > 2048:
         raise InspectionError("project inspection capsule exceeds 2 KB")
     return body
@@ -672,6 +759,7 @@ def capsule_from_capsule(value):
         "implementation_eligible", "tier_floor", "counts", "generated_rule_ids",
         "unresolved_roots",
     }
+    optional = {"external_boundaries"}
     count_fields = {
         "entries_seen", "tracked_paths_seen", "changed_paths_seen",
         "untracked_paths_seen", "generated_subtrees_excluded",
@@ -681,7 +769,8 @@ def capsule_from_capsule(value):
         "relevant_coverage_complete", "routing_eligible", "draft_planning_eligible",
         "g1_eligible", "implementation_eligible",
     }
-    if not isinstance(value, dict) or set(value) != fields \
+    if not isinstance(value, dict) or not fields <= set(value) \
+            or set(value) - fields - optional \
             or value.get("schema_version") != 1 or value.get("state") not in STATES \
             or not DIGEST_RE.fullmatch(str(value.get("receipt_digest"))) \
             or value.get("tier_floor") not in TIER_ORDER \
@@ -704,6 +793,14 @@ def capsule_from_capsule(value):
                 value["unresolved_roots"], key=lambda item: os.fsencode(item)) \
             or len(value["unresolved_roots"]) != len(set(value["unresolved_roots"])):
         raise InspectionError("project inspection capsule is invalid")
+    external = value.get("external_boundaries")
+    if external is not None and (
+            not isinstance(external, dict)
+            or set(external) != {"count", "digest"}
+            or type(external["count"]) is not int
+            or not 1 <= external["count"] <= 4096
+            or not DIGEST_RE.fullmatch(str(external["digest"]))):
+        raise InspectionError("project inspection capsule boundary summary is invalid")
     for path in value["unresolved_roots"]:
         _safe_relative(path)
     if (value["g1_eligible"] or value["implementation_eligible"]) \

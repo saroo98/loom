@@ -2237,29 +2237,26 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertFalse((target / "plans").exists())
 
     def test_partial_project_inspection_routes_but_cannot_seal_g1(self):
-        _write(self.repo / ".gitignore", "unknown-output/\n")
-        subprocess.run(["git", "-C", str(self.repo), "add", ".gitignore"], check=True)
-        subprocess.run(["git", "-C", str(self.repo), "commit", "-qm",
-                        "ignore ambiguous output"], check=True)
-        _write(self.repo / "unknown-output" / "payload.bin", "ambiguous\n")
+        with mock.patch.object(
+                loom_orchestrator.loom_runtime.loom_survey,
+                "STATE_HASH_DEADLINE_SECONDS", -1):
+            opened = loom_orchestrator.invoke(
+                request=self.request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
 
-        opened = loom_orchestrator.invoke(
-            request=self.request, cwd=self.repo, home=self.home,
-            install_root=self.installed)
-
-        self.assertEqual("action-required", opened["status"])
-        self.assertEqual("L", opened["tier"])
-        self.assertEqual(
-            "partial-requires-discovery",
-            opened["plan_contract"]["project_inspection"]["state"])
-        self.assertIn("project-inspection", opened["plan_contract"]["completion_gates"])
-        self.assertEqual(
-            "unknown-output",
-            opened["plan_contract"]["inspection_obligations"][0]["path"])
-        with self.assertRaisesRegex(
-                loom_orchestrator.OrchestratorError,
-                "PROJECT_INSPECTION_INCOMPLETE"):
-            loom_orchestrator.complete(opened["action_path"])
+            self.assertEqual("action-required", opened["status"])
+            self.assertEqual("L", opened["tier"])
+            self.assertEqual(
+                "partial-requires-discovery",
+                opened["plan_contract"]["project_inspection"]["state"])
+            self.assertIn("project-inspection", opened["plan_contract"]["completion_gates"])
+            self.assertEqual(
+                "(workspace-content)",
+                opened["plan_contract"]["inspection_obligations"][0]["path"])
+            with self.assertRaisesRegex(
+                    loom_orchestrator.OrchestratorError,
+                    "PROJECT_INSPECTION_INCOMPLETE"):
+                loom_orchestrator.complete(opened["action_path"])
 
     def test_invoke_supplies_bounded_owner_context_before_host_work(self):
         instance_id = loom_memory.initialize(self.home, self.installed)

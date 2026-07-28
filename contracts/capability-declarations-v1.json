@@ -28,10 +28,12 @@
       "kind": "mechanical",
       "enforcement": [
         "tools/loom_runtime.py",
-        "tools/loom_survey.py"
+        "tools/loom_survey.py",
+        "tools/loom_project_inspection.py"
       ],
       "tests": [
-        "tools/test_loom_runtime.py"
+        "tools/test_loom_runtime.py",
+        "tools/test_workspace_boundaries.py"
       ],
       "required_predicates": [
         "capability:complete-world-fingerprint"
@@ -1256,6 +1258,7 @@
       "tests": [
         "tools/test_project_inspection.py",
         "tools/test_loom_runtime.py",
+        "tools/test_workspace_boundaries.py",
         "tools/test_production_orchestrator.py"
       ],
       "required_predicates": [

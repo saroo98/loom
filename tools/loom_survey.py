@@ -36,6 +36,9 @@ MAX_STATE_FILE_BYTES = 64 * 1024 * 1024 * 1024
 MAX_STATE_TOTAL_BYTES = 512 * 1024 * 1024 * 1024
 STATE_HASH_DEADLINE_SECONDS = 60.0
 GIT_CONFIG_CAP = 256 * 1024
+WORKTREE_REGISTRY_CAP = 4 * 1024 * 1024
+WORKTREE_BOUNDARY_CAP = 4096
+WORKTREE_BOUNDARY_DEADLINE_SECONDS = 20.0
 FILTER_DRIVER_RE = re.compile(r"^filter\.([A-Za-z0-9._-]{1,128})\."
                               r"(?:clean|smudge|process)$", re.I)
 
@@ -78,6 +81,10 @@ class SurveyError(RuntimeError):
     """Repository state could not be established safely."""
 
 
+class WorkspaceHashTimeBound(SurveyError):
+    """Complete content observation exceeded its time budget."""
+
+
 @dataclass(frozen=True)
 class RepoState:
     is_git: bool
@@ -112,6 +119,14 @@ class _WorkspaceEntry:
 
 
 @dataclass(frozen=True)
+class WorkspaceBoundary:
+    """One independently registered project root excluded from this worktree."""
+
+    rel: str
+    kind: str = "registered-linked-worktree"
+
+
+@dataclass(frozen=True)
 class WorkspaceSnapshot:
     """One frozen, bounded world observation shared by freshness and domain evidence."""
 
@@ -121,6 +136,8 @@ class WorkspaceSnapshot:
     tracked: tuple = ()
     filter_drivers: tuple = ()
     generated_classification: object = None
+    boundaries: tuple = ()
+    content_hash_complete: bool = True
 
     def git_query(self, *args, allowed=(0,), timeout=20, binary=False):
         if not self.state.is_git:
@@ -247,6 +264,149 @@ def _nul_path_bytes(content):
 
 def _display_git_path(path):
     return path.decode("utf-8", errors="backslashreplace")
+
+
+def _path_key(path):
+    # Git reports physical worktree paths. Hosted runners and operating systems may
+    # present the same directory through a filesystem alias (for example macOS
+    # /var -> /private/var or a Windows junction). Compare absolute physical names,
+    # while continuing to preserve the caller's lexical root for project paths.
+    value = os.path.realpath(os.path.abspath(os.fspath(path)))
+    return os.path.normcase(value) if os.name == "nt" else value
+
+
+def _physical_relative(path, root):
+    """Return a relative path when two possibly aliased names share a physical root."""
+    try:
+        return Path(_path_key(path)).relative_to(Path(_path_key(root)))
+    except ValueError:
+        return None
+
+
+def _parse_worktree_registry(content):
+    """Parse Git's stable NUL-delimited porcelain worktree registry."""
+    if not isinstance(content, bytes):
+        raise SurveyError("Git worktree registry query did not return bytes")
+    if len(content) > WORKTREE_REGISTRY_CAP:
+        raise SurveyError("Git worktree registry exceeds its safety bound")
+    records, current = [], []
+    for field in content.split(b"\0"):
+        if not field:
+            if current:
+                records.append(tuple(current))
+                current = []
+            continue
+        current.append(field)
+    if current:
+        records.append(tuple(current))
+    if len(records) > WORKTREE_BOUNDARY_CAP:
+        raise SurveyError("Git worktree registry exceeds its entry bound")
+    parsed = []
+    allowed = {b"worktree", b"HEAD", b"branch", b"bare", b"detached",
+               b"locked", b"prunable"}
+    for fields in records:
+        values = {}
+        for field in fields:
+            label, separator, raw = field.partition(b" ")
+            if label not in allowed:
+                raise SurveyError("Git worktree registry contains an unknown field")
+            if label in values:
+                raise SurveyError("Git worktree registry repeats a field")
+            if label in {b"worktree", b"HEAD", b"branch"} and not separator:
+                raise SurveyError("Git worktree registry field omits its value")
+            values[label] = raw if separator else None
+        if not fields or not fields[0].startswith(b"worktree ") \
+                or b"worktree" not in values:
+            raise SurveyError("Git worktree registry record is malformed")
+        try:
+            path = Path(os.fsdecode(values[b"worktree"]))
+        except (TypeError, UnicodeError) as exc:
+            raise SurveyError("Git worktree registry path is invalid") from exc
+        parsed.append({
+            "path": path,
+            "bare": b"bare" in values,
+            "prunable": b"prunable" in values,
+        })
+    return tuple(parsed)
+
+
+def _reported_git_toplevel(path, timeout):
+    result = run_git(
+        path, "rev-parse", "--show-toplevel", allowed=(0, 128),
+        timeout=timeout)
+    if result.returncode != 0:
+        raise SurveyError("registered nested worktree cannot establish its Git root")
+    value = result.stdout.rstrip("\r\n")
+    if not value or "\n" in value or "\r" in value:
+        raise SurveyError("registered nested worktree reported an ambiguous Git root")
+    return Path(value)
+
+
+def _registered_worktree_boundaries(root):
+    """Return healthy registered worktree roots nested below the current root."""
+    result = run_git(
+        root, "worktree", "list", "--porcelain", "-z",
+        allowed=(0, 128), binary=True)
+    if result.returncode != 0:
+        diagnostic = (result.stderr or result.stdout).lower()
+        if b"not a git repository" in diagnostic or b"not a git directory" in diagnostic:
+            return ()
+        raise SurveyError(
+            "cannot determine Git worktree boundaries: "
+            + (diagnostic.decode("utf-8", errors="replace").strip()
+               or "unknown error"))
+    records = _parse_worktree_registry(result.stdout)
+    registry_keys = tuple(_path_key(record["path"]) for record in records)
+    if len(registry_keys) != len(set(registry_keys)):
+        raise SurveyError("Git worktree registry repeats a project root")
+    root_key = _path_key(root)
+    if sum(_path_key(record["path"]) == root_key for record in records) != 1:
+        raise SurveyError("Git worktree registry does not identify the current root exactly")
+    boundaries = []
+    verification_deadline = (
+        time.monotonic() + WORKTREE_BOUNDARY_DEADLINE_SECONDS)
+    for record in records:
+        path = Path(os.path.abspath(record["path"]))
+        if _path_key(path) == root_key or record["bare"]:
+            continue
+        relative = _physical_relative(path, root)
+        if relative is None:
+            continue
+        if not relative.parts:
+            continue
+        rel = relative.as_posix()
+        if record["prunable"]:
+            if path.exists():
+                raise SurveyError(
+                    f"nested Git worktree registry entry is prunable but present: {rel}")
+            continue
+        try:
+            info = path.lstat()
+        except OSError as exc:
+            raise SurveyError(
+                f"cannot inspect registered nested worktree boundary {rel}: {exc}") from exc
+        attributes = getattr(info, "st_file_attributes", 0)
+        reparse = bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+        if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or reparse:
+            raise SurveyError(
+                f"registered nested worktree boundary is redirected or not a directory: {rel}")
+        remaining = verification_deadline - time.monotonic()
+        if remaining <= 0:
+            raise SurveyError(
+                "registered nested worktree verification exceeded its time bound")
+        if _path_key(_reported_git_toplevel(
+                path, timeout=max(0.1, min(5.0, remaining)))) != _path_key(path):
+            raise SurveyError(
+                f"registered nested worktree does not resolve to its registered root: {rel}")
+        boundaries.append(WorkspaceBoundary(rel))
+    boundaries = tuple(sorted(set(boundaries), key=lambda item: os.fsencode(item.rel)))
+    if len(boundaries) > WORKTREE_BOUNDARY_CAP:
+        raise SurveyError("registered nested worktree boundary count exceeds its safety bound")
+    for index, boundary in enumerate(boundaries):
+        if any(_is_excluded(boundary.rel, (parent.rel,))
+               for parent in boundaries[:index]):
+            raise SurveyError("registered nested worktree boundaries overlap")
+    return boundaries
 
 
 def _is_excluded(rel, excluded):
@@ -406,7 +566,8 @@ def _hash_stream_header(digest, label, size):
     digest.update(int(size).to_bytes(8, "big"))
 
 
-def _hash_workspace(entries, content_excluded=(), exclusion_evidence=()):
+def _hash_workspace(entries, content_excluded=(), exclusion_evidence=(),
+                    boundaries=(), unresolved_evidence=()):
     """Hash semantic project state while using volatile metadata only for race detection."""
     digest = hashlib.sha256(b"complete-workspace-v5\0")
     digest.update(sum(not _is_excluded(item.rel, content_excluded)
@@ -414,15 +575,20 @@ def _hash_workspace(entries, content_excluded=(), exclusion_evidence=()):
     for path, rule_id in sorted(exclusion_evidence):
         _hash_field(digest, b"generated-root", os.fsencode(path))
         _hash_field(digest, b"generated-rule", rule_id.encode("ascii"))
+    for boundary in boundaries:
+        _hash_field(digest, b"external-root", os.fsencode(boundary.rel))
+        _hash_field(digest, b"external-kind", boundary.kind.encode("ascii"))
+    for path, reason in sorted(unresolved_evidence):
+        _hash_field(digest, b"unresolved-root", os.fsencode(path))
+        _hash_field(digest, b"unresolved-reason", reason.encode("ascii"))
     deadline = time.monotonic() + STATE_HASH_DEADLINE_SECONDS
     total_read = 0
     for entry in entries:
         if _is_excluded(entry.rel, content_excluded):
             continue
         if time.monotonic() > deadline:
-            raise SurveyError(
-                "complete workspace hash exceeded its time bound; no partial state hash "
-                "was produced")
+            raise WorkspaceHashTimeBound(
+                "complete workspace hash exceeded its time bound")
         entry_digest = hashlib.sha256(b"workspace-entry-v2\0")
         _hash_field(entry_digest, b"path", os.fsencode(entry.rel))
         _hash_field(entry_digest, b"kind", entry.kind.encode("ascii"))
@@ -464,9 +630,8 @@ def _hash_workspace(entries, content_excluded=(), exclusion_evidence=()):
                         raise SurveyError(
                             f"workspace file grew or exceeded a hash bound: {entry.rel}")
                     if time.monotonic() > deadline:
-                        raise SurveyError(
-                            "complete workspace hash exceeded its time bound; no partial "
-                            "state hash was produced")
+                        raise WorkspaceHashTimeBound(
+                            "complete workspace hash exceeded its time bound")
                     entry_digest.update(chunk)
                 after = os.fstat(stream.fileno())
         except SurveyError:
@@ -486,6 +651,43 @@ def _hash_workspace(entries, content_excluded=(), exclusion_evidence=()):
             raise SurveyError(f"workspace file size changed during survey: {entry.rel}")
         digest.update(entry_digest.digest())
     return digest.hexdigest()
+
+
+def _bounded_workspace_observation(entries, content_excluded=(),
+                                   exclusion_evidence=(), boundaries=(),
+                                   unresolved_evidence=()):
+    """Bind complete census metadata when content cannot be read within its time bound."""
+    digest = hashlib.sha256(b"bounded-workspace-observation-v1\0")
+    for path, rule_id in sorted(exclusion_evidence):
+        _hash_field(digest, b"generated-root", os.fsencode(path))
+        _hash_field(digest, b"generated-rule", rule_id.encode("ascii"))
+    for boundary in boundaries:
+        _hash_field(digest, b"external-root", os.fsencode(boundary.rel))
+        _hash_field(digest, b"external-kind", boundary.kind.encode("ascii"))
+    for path, reason in sorted(unresolved_evidence):
+        _hash_field(digest, b"unresolved-root", os.fsencode(path))
+        _hash_field(digest, b"unresolved-reason", reason.encode("ascii"))
+    for entry in entries:
+        if _is_excluded(entry.rel, content_excluded):
+            continue
+        _hash_field(digest, b"path", os.fsencode(entry.rel))
+        _hash_field(digest, b"kind", entry.kind.encode("ascii"))
+        _hash_field(digest, b"mode", f"{entry.mode:o}".encode("ascii"))
+        _hash_field(digest, b"size", str(entry.size).encode("ascii"))
+        _hash_field(digest, b"mtime-ns", str(entry.mtime_ns).encode("ascii"))
+    return digest.hexdigest()
+
+
+def _observe_workspace_hash(entries, content_excluded=(), exclusion_evidence=(),
+                            boundaries=(), unresolved_evidence=()):
+    try:
+        return (_hash_workspace(
+            entries, content_excluded, exclusion_evidence, boundaries,
+            unresolved_evidence), True)
+    except WorkspaceHashTimeBound:
+        return (_bounded_workspace_observation(
+            entries, content_excluded, exclusion_evidence, boundaries,
+            unresolved_evidence), False)
 
 
 def _enforce_state_file_cap(*path_sets):
@@ -596,8 +798,11 @@ def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
         exclude_prefixes = ("plans",) if (root / "plans" / "MANIFEST.md").is_file() else ()
     excluded = tuple(sorted(str(path).replace("\\", "/").strip("/")
                             for path in exclude_prefixes if str(path).strip("/\\")))
-    entries = _workspace_census(root, excluded)
-    pathspec = _state_pathspec(excluded)
+    boundaries = _registered_worktree_boundaries(root)
+    boundary_paths = tuple(item.rel for item in boundaries)
+    census_excluded = tuple(sorted(set(excluded + boundary_paths), key=os.fsencode))
+    entries = _workspace_census(root, census_excluded)
+    pathspec = _state_pathspec(census_excluded)
     filter_drivers = _configured_filter_drivers(root)
     status_result = run_git(
         root, "status", "--porcelain=v2", "--branch", "-z",
@@ -608,18 +813,36 @@ def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
         if b"not a git repository" in diagnostic or b"not a git directory" in diagnostic:
             provisional = WorkspaceSnapshot(
                 root, RepoState(is_git=False, mode="filesystem", state_hash="0" * 64,
-                                excluded=excluded), tuple(entries))
+                                excluded=excluded), tuple(entries),
+                boundaries=boundaries)
             import loom_project_inspection
             classification = loom_project_inspection.classify_generated(
                 provisional, touch_paths=touch_paths)
             generated = tuple(item["path"] for item in classification["exclusions"])
             evidence = tuple((item["path"], item["rule_id"])
                              for item in classification["exclusions"])
-            workspace_hash = _hash_workspace(entries, generated, evidence)
+            unresolved = tuple(
+                (item["path"], item["reason"])
+                for item in classification["unresolved_content_exclusions"])
+            content_excluded = tuple(sorted(
+                set(generated + tuple(path for path, _reason in unresolved)),
+                key=os.fsencode))
+            workspace_hash, content_complete = _observe_workspace_hash(
+                entries, content_excluded, evidence, boundaries, unresolved)
             state = _filesystem_state(root, excluded, entries, workspace_hash)
+            if not content_complete:
+                partial = WorkspaceSnapshot(
+                    root, state, tuple(entries), boundaries=boundaries,
+                    content_hash_complete=False)
+                classification = loom_project_inspection.classify_generated(
+                    partial, touch_paths=touch_paths)
+            if _registered_worktree_boundaries(root) != boundaries:
+                raise SurveyError(
+                    "registered nested worktree boundaries changed during observation")
             return WorkspaceSnapshot(
                 root, state, tuple(entries),
-                generated_classification=classification)
+                generated_classification=classification, boundaries=boundaries,
+                content_hash_complete=content_complete)
         raise SurveyError(
             "cannot determine Git state: "
             + (diagnostic.decode("utf-8", errors="replace").strip() or "unknown error"))
@@ -653,20 +876,40 @@ def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
     _enforce_state_file_cap(staged, unstaged, untracked)
     tracked = tuple(sorted({_display_git_path(path) for path in tracked_raw}))
     _enforce_state_file_cap(tracked, staged, unstaged, untracked)
+    if any(_is_excluded(path, boundary_paths) for path in tracked):
+        raise SurveyError(
+            "registered nested worktree boundary overlaps tracked project content")
     provisional_state = RepoState(
         is_git=True, mode="git", head=head, branch=branch, staged=staged,
         unstaged=unstaged, untracked=untracked, state_hash="0" * 64,
         excluded=excluded)
     provisional = WorkspaceSnapshot(
         root, provisional_state, tuple(entries), tracked=tracked,
-        filter_drivers=tuple(filter_drivers))
+        filter_drivers=tuple(filter_drivers), boundaries=boundaries)
     import loom_project_inspection
     classification = loom_project_inspection.classify_generated(
         provisional, touch_paths=touch_paths)
     generated = tuple(item["path"] for item in classification["exclusions"])
     evidence = tuple((item["path"], item["rule_id"])
                      for item in classification["exclusions"])
-    workspace_hash = _hash_workspace(entries, generated, evidence)
+    unresolved = tuple(
+        (item["path"], item["reason"])
+        for item in classification["unresolved_content_exclusions"])
+    content_excluded = tuple(sorted(
+        set(generated + tuple(path for path, _reason in unresolved)),
+        key=os.fsencode))
+    workspace_hash, content_complete = _observe_workspace_hash(
+        entries, content_excluded, evidence, boundaries, unresolved)
+    if not content_complete:
+        partial = WorkspaceSnapshot(
+            root, provisional_state, tuple(entries), tracked=tracked,
+            filter_drivers=tuple(filter_drivers), boundaries=boundaries,
+            content_hash_complete=False)
+        classification = loom_project_inspection.classify_generated(
+            partial, touch_paths=touch_paths)
+    if _registered_worktree_boundaries(root) != boundaries:
+        raise SurveyError(
+            "registered nested worktree boundaries changed during observation")
     digest = hashlib.sha256()
     digest.update(b"head\0" + head.encode("ascii") + b"\0")
     digest.update(b"branch\0" + branch_raw + b"\0")
@@ -685,7 +928,8 @@ def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
     return WorkspaceSnapshot(
         root, state, tuple(entries), tracked=tracked,
         filter_drivers=tuple(filter_drivers),
-        generated_classification=classification)
+        generated_classification=classification, boundaries=boundaries,
+        content_hash_complete=content_complete)
 
 
 def repo_state(root_path, exclude_prefixes=None):

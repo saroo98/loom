@@ -62,7 +62,7 @@ class ProjectInspectionTests(unittest.TestCase):
         self.assertEqual("target", value["generated_exclusions"][0]["path"])
         self.assertLess(len(json.dumps(inspection.capsule(value))), 2048)
 
-    def test_ignored_target_without_owner_marker_degrades_and_blocks_g1(self):
+    def test_ignored_target_without_owner_marker_remains_content_bound(self):
         (self.repo / ".gitignore").write_text("target/\n", encoding="utf-8")
         (self.repo / "README.md").write_text("fixture\n", encoding="utf-8")
         self.commit()
@@ -70,15 +70,20 @@ class ProjectInspectionTests(unittest.TestCase):
         target.mkdir()
         (target / "payload.bin").write_bytes(b"not proven generated")
 
-        value = self.receipt()
+        before = loom_survey.workspace_snapshot(self.repo)
+        (target / "payload.bin").write_bytes(b"changed local source")
+        after = loom_survey.workspace_snapshot(self.repo)
+        value = inspection.inspect(
+            after, target_identity="target-sha256:" + "1" * 64)
 
-        self.assertEqual("partial-requires-discovery", value["state"])
+        self.assertNotEqual(before.state.state_hash, after.state.state_hash)
+        self.assertEqual("complete", value["state"])
         self.assertTrue(value["routing_eligible"])
         self.assertTrue(value["draft_planning_eligible"])
-        self.assertFalse(value["g1_eligible"])
-        self.assertFalse(value["implementation_eligible"])
-        self.assertEqual("L", value["tier_floor"])
-        self.assertEqual("ignored-unclassified", value["unresolved_roots"][0]["reason"])
+        self.assertTrue(value["g1_eligible"])
+        self.assertTrue(value["implementation_eligible"])
+        self.assertEqual("S", value["tier_floor"])
+        self.assertEqual([], value["unresolved_roots"])
 
     def test_known_authority_inside_generated_basename_is_never_excluded(self):
         (self.repo / "Cargo.toml").write_text(
@@ -92,8 +97,8 @@ class ProjectInspectionTests(unittest.TestCase):
         value = self.receipt()
 
         self.assertEqual([], value["generated_exclusions"])
-        self.assertFalse(value["g1_eligible"])
-        self.assertIn("target", [item["path"] for item in value["unresolved_roots"]])
+        self.assertTrue(value["g1_eligible"])
+        self.assertEqual([], value["unresolved_roots"])
 
     def test_request_touch_intersection_prevents_generated_exclusion(self):
         (self.repo / "Cargo.toml").write_text(
@@ -110,8 +115,8 @@ class ProjectInspectionTests(unittest.TestCase):
             snapshot, target_identity="target-sha256:" + "4" * 64)
 
         self.assertEqual([], value["generated_exclusions"])
-        self.assertFalse(value["g1_eligible"])
-        self.assertIn("target", [item["path"] for item in value["unresolved_roots"]])
+        self.assertTrue(value["g1_eligible"])
+        self.assertEqual([], value["unresolved_roots"])
 
     def test_large_tracked_repository_uses_bounded_facts_without_losing_coverage(self):
         paths = tuple(f"sources/module_{index:04d}.txt" for index in range(600))
