@@ -956,7 +956,7 @@ def _validate_action(value, path):
                      "not-needed" if message_builder is loom_message.v2_build
                      else "not-applicable"),
         summary=(
-            "Loom prepared the planning contract; no project deliverable was changed."
+            _planning_seed_summary(value["tier"])
             if planning_metadata_changed
             else "Loom prepared the next safe frontier."),
         next_action=(
@@ -3984,6 +3984,36 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
     }
 
 
+_ZERO_PROJECT_WRITE_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\bdo\s+not\s+"
+    r"(?:(?:implement|execute|apply)(?:\s+the\s+(?:plan|changes?|work))?"
+    r"\s*(?:,|\band\b|\bor\b)\s*)?"
+    r"(?:modify|change|write|create|touch)\s+(?:any\s+)?files?\b",
+    r"\bdo\s+not\s+(?:modify|change|write|create|touch)\s+(?:the\s+)?project\b",
+    r"\bno\s+(?:project(?:-local)?\s+)?(?:file\s+)?writes?\b",
+    r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
+    r"(?:any\s+)?files?\b",
+    r"\bleave\s+(?:the\s+)?project\s+(?:byte[- ]for[- ]byte\s+)?unchanged\b",
+))
+
+
+def _explicit_zero_project_write_requested(request):
+    """Return true only for an explicit owner prohibition on project-local writes."""
+    if not isinstance(request, str):
+        return False
+    return any(pattern.search(request) for pattern in _ZERO_PROJECT_WRITE_PATTERNS)
+
+
+def _planning_seed_summary(tier):
+    if tier == "S":
+        return (
+            "Loom created plans/.loom-small-lifecycle.json in the project; "
+            "no implementation file was changed.")
+    return (
+        "Loom created plans/MANIFEST.md and plans/lifecycle.json in the project; "
+        "no implementation file was changed.")
+
+
 def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        timeout_seconds, now, instance_id, memory,
                        transport_invocation_id=None, assurance=None):
@@ -4050,6 +4080,23 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared).to_dict()
+    if prepared.intent == "plan" and _explicit_zero_project_write_requested(request):
+        controller.handlers["plan"] = lambda _context: {
+            "status": "blocked",
+            "code": "project-write-prohibited",
+            "success": False,
+            "metrics": {},
+            "evidence_ids": [],
+            "reversible_action_ids": [],
+            "user_message": (
+                "Loom stopped before changing the project. Creating a persistent Loom plan "
+                "currently requires project-local planning files under plans/. Remove the "
+                "no-file-write constraint if you want those files created."),
+        }
+        return controller.run(
+            request, invocation_id=invocation_id, cwd=cwd,
+            explicit_target=target, now=now, continue_open=True,
+            prepared=prepared).to_dict()
     context_capsule = controller.prepare_context(opened, request)
     expires_at = _stamp(
         loom_runtime._parse_time(created_at) + dt.timedelta(seconds=timeout_seconds))
@@ -4091,7 +4138,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             undo_status=("unavailable" if prepared.intent == "plan"
                          else "not-applicable"),
             summary=(
-                "Loom prepared the planning contract; no project deliverable was changed."
+                _planning_seed_summary(prepared.route_contract["tier"])
                 if prepared.intent == "plan"
                 else "Loom prepared the next safe frontier."),
             next_action=(
