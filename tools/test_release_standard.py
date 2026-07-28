@@ -50,6 +50,9 @@ class ReleaseStandardTests(unittest.TestCase):
     def test_exhaustive_suite_ceiling_has_supported_runner_headroom(self):
         self.assertEqual(2100, loom_release.FULL_SUITE_MAX_SECONDS)
 
+    def test_public_cut_keeps_the_repository_pinned_rust_toolchain(self):
+        self.assertIn("rust-toolchain.toml", loom_release.ROOT_FILES)
+
     def test_suite_separates_correctness_from_cross_platform_capability_skips(self):
         tools = self.root / "tools"
         tools.mkdir()
@@ -150,6 +153,10 @@ class ReleaseStandardTests(unittest.TestCase):
         (source / "START-HERE.md").write_text(
             "Loom 1.0.0 /loom <request>\n", encoding="utf-8")
         (source / "VERSION").write_text("1.0.0\n", encoding="utf-8")
+        (source / "rust-toolchain.toml").write_text(
+            '[toolchain]\nchannel = "1.97.1"\nprofile = "minimal"\n',
+            encoding="utf-8",
+        )
         (source / ".gitignore").write_text("__pycache__/\n*.py[cod]\n", encoding="utf-8")
         (source / ".mcp.json").write_text(
             json.dumps({"mcpServers": {}}) + "\n", encoding="utf-8")
