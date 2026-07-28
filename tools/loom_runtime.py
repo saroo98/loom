@@ -578,13 +578,35 @@ def _has_positive_software_clause(text):
 
 
 def _split_control_clauses(request):
-    """Return bounded clauses and the coordination immediately before each clause."""
+    """Return bounded control clauses, excluding descriptive scope prose."""
     normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
+    planning_envelope = bool(
+        re.match(r"^(?:now\s+)?(?:please\s+)?plan\b", normalized)
+        or _PLAN_DELIVERABLE_RE.search(normalized))
     separators = list(_CLAUSE_SEPARATOR_RE.finditer(normalized))
     clauses = []
     start = 0
     pending = None
     overflow = False
+
+    def append_control(separator, value):
+        nonlocal overflow
+        value = " ".join(value.split())
+        role = _classify_control_clause(value) if value else None
+        if role is None:
+            return
+        if planning_envelope and clauses \
+                and role["intent"] == "plan" \
+                and role["control"] == "implementation" \
+                and not role["negated"] \
+                and _PLAN_DELIVERABLE_RE.search(value) is None:
+            # Imperative requirements inside one explicit planning envelope
+            # describe the requested system. They are not separate requests for
+            # Loom to implement each bullet.
+            return
+        clauses.append((separator, value))
+        overflow = len(clauses) > MAX_ROUTE_CLAUSES
+
     for position, match in enumerate(separators):
         if match.lastgroup != "hard":
             next_start = (
@@ -599,12 +621,9 @@ def _split_control_clauses(request):
             # Loom control or planning action.
             if not candidate or _classify_control_clause(candidate) is None:
                 continue
-        value = " ".join(normalized[start:match.start()].split())
-        if value:
-            clauses.append((pending, value))
-            if len(clauses) > MAX_ROUTE_CLAUSES:
-                overflow = True
-                break
+        append_control(pending, normalized[start:match.start()])
+        if overflow:
+            break
         pending = (
             "hard" if match.lastgroup == "hard"
             else "and" if match.lastgroup == "comma"
@@ -612,10 +631,7 @@ def _split_control_clauses(request):
         )
         start = match.end()
     if not overflow:
-        value = " ".join(normalized[start:].split())
-        if value:
-            clauses.append((pending, value))
-        overflow = len(clauses) > MAX_ROUTE_CLAUSES
+        append_control(pending, normalized[start:])
     return clauses[:MAX_ROUTE_CLAUSES], overflow
 
 
@@ -701,7 +717,10 @@ def _resolve_clause_roles(request, state):
         return _decision(
             "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
             confidence=0.0, evidence=("clause-limit",),
-            recommendation="State one bounded positive outcome and its prohibitions.")
+            recommendation=(
+                "The request contains more than 16 separate Loom actions. Start a "
+                "fresh request with one positive action; group requirements as "
+                "descriptive bullets and prohibitions under one Do not section."))
     classified = []
     for index, (separator, clause) in enumerate(clauses):
         role = _classify_control_clause(clause)

@@ -96,6 +96,26 @@ class StableSurveyCountTests(RuntimeFixture):
         self.assertIn(
             "project-inspection-incomplete", prepared.route_contract["evidence"])
 
+    def test_large_multisection_plan_reaches_prepared_plan_route(self):
+        request = "\n".join([
+            "Plan a production backend service for a public dictionary.",
+            "",
+            "Requirements:",
+            *[
+                f"Build subsystem {index}, define its API and data model, and "
+                "specify its accessibility, recovery, and verification scope."
+                for index in range(1, 41)
+            ],
+            "",
+            "Do not implement, publish, deploy, install, or contact external services.",
+        ])
+
+        prepared = self.prepare(request)
+
+        self.assertEqual("plan", prepared.intent)
+        self.assertFalse(prepared.route_contract["blocked"])
+        self.assertNotEqual("INTENT_AMBIGUOUS", prepared.route_contract["code"])
+
 
 class PlanScopeDecisionTests(RuntimeFixture):
     def test_placeholder_plan_requires_one_bounded_scope_decision(self):

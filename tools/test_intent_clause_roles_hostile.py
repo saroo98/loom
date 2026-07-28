@@ -175,6 +175,38 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
         self.assertRoute(
             request, intent="plan", blocked=False, code="ROUTE_PLAN")
 
+    def test_multisection_program_scope_does_not_exhaust_the_control_clause_budget(self):
+        scope = "\n".join(
+            f"Build bounded subsystem {index}, define its data contract, document "
+            "failure behavior, prove recovery, and specify acceptance evidence."
+            for index in range(1, 41))
+        request = (
+            "Plan one reviewable, implementation-ready multi-year software program.\n"
+            f"{scope}\n"
+            "Do not implement source code, publish, deploy, install, contact external "
+            "services, or modify files outside the disposable planning project."
+        )
+
+        self.assertGreater(len(request.splitlines()), loom_runtime.MAX_ROUTE_CLAUSES)
+        self.assertRoute(
+            request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_true_control_clause_overflow_names_the_limit_and_exact_recovery(self):
+        request = "\n".join(
+            f"Plan independent product {index}." for index in range(1, 19))
+
+        decision = self.assertRoute(
+            request, intent="status", blocked=True, code="INTENT_AMBIGUOUS")
+
+        self.assertEqual(["clause-limit"], decision["evidence"])
+        self.assertIn("16", decision["block_reason"]["observed"])
+        self.assertIn("separate Loom actions",
+                      decision["block_reason"]["observed"])
+        self.assertIn("one positive action",
+                      decision["block_reason"]["next_action"])
+        self.assertIn("descriptive bullets",
+                      decision["block_reason"]["next_action"])
+
     def test_detailed_plan_with_semicolon_prohibitions_remains_planning(self):
         request = (
             "Create one detailed implementation plan, and only a plan, for a "

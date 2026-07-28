@@ -165,4 +165,6 @@ def generic(code, recommendation, *, category="unknown"):
         finding_codes=[finding], finding_count=1,
         ownership="not-applicable", pristine_proof="not-applicable",
         automatic_recovery="owner-decision",
-        next_action="Resolve the reported condition, then start a fresh Loom request.")
+        next_action=(
+            observed if category == "intent" else
+            "Resolve the reported condition, then start a fresh Loom request."))

@@ -106,8 +106,9 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertIn(".codex/skills/loom/SKILL.md",
                       loom_host_registry.project_skill_paths())
         self.assertEqual("stale", loom_host_registry.HOSTS["gemini-cli"]["contract_status"])
-        self.assertFalse(loom_host_registry.detect(
-            Path("."), which=lambda _name: None))
+        with tempfile.TemporaryDirectory() as raw:
+            self.assertFalse(loom_host_registry.detect(
+                Path(raw), which=lambda _name: None))
 
     def test_bridge_requires_initialize_before_any_request(self):
         session = {}

@@ -68,6 +68,8 @@ def _render_v5(value):
     first = value["summary"]
     if value["result_path"] is not None:
         first += f" Open: {value['result_path']}."
+    elif value["details_available"] and value["state"] in INTERVENTIONS:
+        first += " Details: ask Loom why."
     return first + "\n" + f"Next: {value['next_action']}"
 
 
@@ -256,6 +258,13 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
                 decision = "Name the project kind and its smallest desired outcome."
                 recommendation = (
                     "Reply with one concrete outcome, such as a Python CLI that greets a name.")
+                next_action = block_reason["next_action"]
+            elif block_reason["category"] == "intent":
+                summary = (
+                    "Loom stopped before changing anything because it could not identify "
+                    "one safely authorized action.")
+                decision = "No implementation or fallback is authorized by this receipt."
+                recommendation = "Follow the specific next step below."
                 next_action = block_reason["next_action"]
             else:
                 summary = (
