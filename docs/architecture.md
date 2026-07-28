@@ -26,13 +26,30 @@ Planning actions also seal a deterministic plan contract: every artifact decisio
 invariant/current fact/real medium, an explicitly defined `loom-lexical-v1` token and character
 ceiling, work-order topology, allowed host write scope, and the pre-authoring pack identity.
 Plan-contract v4 additionally binds a typed project-inspection receipt, its compact capsule,
-generated-rule identities, and any unresolved structural obligations. The survey takes a complete
-bounded census once per world observation; freshness hashing and inspection derive from that same
-frozen entry set and Git index/status evidence. Detailed facts can summarize after their independent
-budget without losing counted coverage. A generated subtree is excluded from content hashing only
-when a versioned rule proves its owner marker, Git-ignored state, absence of tracked/current/touched
-descendants, absence of known trust authority, and safe census. Partial coverage can route and draft,
-but G1 and implementation remain mechanically false until a fresh receipt is complete.
+generated-rule identities, independently registered project boundaries, and any unresolved
+structural obligations. Before census, the survey parses Git's bounded NUL-delimited worktree
+registry and excludes only healthy linked worktrees that are strict descendants of the selected
+root. It binds their relative paths and boundary kind into the parent world digest, verifies the
+registry again after observation, and never treats a directory name or Git-ignore rule alone as
+boundary authority. Content inside another registered worktree therefore belongs to that worktree,
+not its parent.
+
+The survey takes one bounded census per world observation; freshness hashing and inspection derive
+from that same frozen entry set and Git index/status evidence. Detailed facts can summarize after
+their independent budget without losing counted coverage. A generated subtree is excluded from
+content hashing only when a versioned rule proves its owner marker, Git-ignored state, absence of
+tracked/current/touched descendants, absence of known trust authority, and safe census. If the
+complete content hash exceeds its time bound after the census is frozen, Loom emits a deterministic
+metadata-bound partial observation with a `content-hash-time-bound` obligation. Partial coverage
+can route and draft, but G1 and implementation remain mechanically false until a fresh receipt is
+complete.
+
+An unclassified ignored directory outside the declared touch scope is handled differently from a
+proven generated subtree. Loom binds the directory path and unresolved reason into the world
+digest, omits its potentially large or volatile contents from the draft observation, and records an
+`ignored-unclassified` obligation. Ignored files and ignored directories inside the declared touch
+scope remain content-bound. This keeps large local toolchains and caches from preventing a draft
+without treating their unseen contents as trusted or granting implementation authority.
 
 Plan-contract v3 introduced a bounded planning-intelligence graph. Seven declarative specialist
 modules may emit typed atoms only from active task evidence; source material and ambient repository

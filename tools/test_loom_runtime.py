@@ -83,6 +83,19 @@ class StableSurveyCountTests(RuntimeFixture):
             self.prepare("Fix one documentation typo")
         self.assertEqual(2, len(calls))
 
+    def test_content_time_bound_allows_draft_but_never_implementation_authority(self):
+        with mock.patch.object(loom_survey, "STATE_HASH_DEADLINE_SECONDS", -1):
+            prepared = self.prepare(
+                "Plan a tiny Python command-line greeting tool. Planning only.")
+
+        inspection = prepared.project_inspection
+        self.assertEqual("partial-requires-discovery", inspection["state"])
+        self.assertTrue(inspection["draft_planning_eligible"])
+        self.assertFalse(inspection["g1_eligible"])
+        self.assertFalse(inspection["implementation_eligible"])
+        self.assertIn(
+            "project-inspection-incomplete", prepared.route_contract["evidence"])
+
 
 class PlanScopeDecisionTests(RuntimeFixture):
     def test_placeholder_plan_requires_one_bounded_scope_decision(self):

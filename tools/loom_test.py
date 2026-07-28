@@ -76,6 +76,8 @@ FAST_TESTS = (
     "test_domain_benchmark.DomainBenchmarkTests.test_locked_corpus_meets_release_thresholds",
     "test_truth_shadow_corpus_phase4.TruthShadowCorpusPhase4Tests."
     "test_locked_corpus_meets_every_promotion_threshold",
+    "test_workspace_boundaries.WorkspaceBoundaryTests."
+    "test_registered_nested_worktree_is_independent_of_parent_world",
     "test_planning_evaluation.PlanningEvaluationTests."
     "test_release_corpus_has_zero_critical_failures",
     "test_unknown_domain_learning.UnknownDomainLearningTests."
