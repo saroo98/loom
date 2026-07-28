@@ -13,6 +13,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+import loom_subject_identity
+
 
 def _probe(root):
     results = {}
@@ -66,7 +68,7 @@ def _probe(root):
     return results
 
 
-def collect(*, runner=None, workflow_digest=None):
+def collect(*, runner=None, workflow_digest=None, subject_bindings=None):
     if (runner is None) != (workflow_digest is None):
         raise ValueError("CI evidence requires both runner identity and workflow digest")
     if runner is not None and (not isinstance(runner, str) or not runner.strip()
@@ -74,12 +76,29 @@ def collect(*, runner=None, workflow_digest=None):
         raise ValueError("CI evidence binding is invalid")
     with tempfile.TemporaryDirectory(prefix="loom-platform-") as temporary:
         capabilities = _probe(Path(temporary))
+    bindings = []
+    if subject_bindings is not None:
+        if not isinstance(subject_bindings, list) or not subject_bindings:
+            raise ValueError("platform subject bindings are incomplete")
+        for binding in subject_bindings:
+            if not isinstance(binding, dict) or set(binding) != {
+                    "kind", "subject_id", "subject_digest"} \
+                    or binding.get("kind") not in (
+                        loom_subject_identity.SUBJECT_KINDS & {
+                        "candidate-source", "native-helper",
+                        "installed-runtime"}) \
+                    or not isinstance(binding.get("subject_id"), str) \
+                    or not binding["subject_id"] \
+                    or not re.fullmatch(
+                        r"[0-9a-f]{64}", str(binding.get("subject_digest", ""))):
+                raise ValueError("platform subject binding is invalid")
+            bindings.append(dict(binding))
     system = platform.system().lower()
     credential_command = ({"windows": "cmdkey", "darwin": "security"}.get(
         system, "secret-tool"))
     credential_store = "available" if shutil.which(credential_command) else "unavailable"
     body = {
-        "schema_version": 1,
+        "schema_version": 2 if bindings else 1,
         "evidence_class": "ci-reproduced" if workflow_digest else "mechanical-local",
         "runner": runner, "os": platform.system(), "os_release": platform.release(),
         "os_version": platform.version(), "architecture": platform.machine(),
@@ -88,6 +107,10 @@ def collect(*, runner=None, workflow_digest=None):
         "workflow_digest": workflow_digest,
         "limitations": ["Unavailable means this environment did not prove the capability."],
     }
+    if bindings:
+        body["subject_bindings"] = sorted(
+            bindings, key=lambda item: (
+                item["kind"], item["subject_id"], item["subject_digest"]))
     return {**body, "receipt_sha256": hashlib.sha256(json.dumps(
         body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()}
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Generate capability status only from current evidence-graph predicates."""
+"""Generate capability projection from declarations and current typed evidence."""
 
 import argparse
+import datetime as dt
 import hashlib
 import json
 import re
 from pathlib import Path, PurePosixPath
 
 import loom_reliability
+import loom_subject_identity
 
 
 STATUSES = {"supported", "experimental", "stale-proof", "unsupported", "unverified"}
@@ -18,6 +20,12 @@ SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 
 class CapabilityRegistryError(RuntimeError):
     pass
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=False).encode("utf-8")).hexdigest()
 
 
 def _strict_object(pairs):
@@ -59,8 +67,12 @@ def _root_version(root):
 
 
 def _declarations(value):
-    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
-            or not isinstance(value.get("version"), str) \
+    authoritative = isinstance(value, dict) \
+        and value.get("schema_version") == 1 \
+        and value.get("policy_id") == "loom-capability-declarations-v1"
+    legacy = isinstance(value, dict) and value.get("schema_version") in {1, 2} \
+        and isinstance(value.get("version"), str)
+    if not (authoritative or legacy) \
             or not isinstance(value.get("capabilities"), list) \
             or len(value["capabilities"]) > 512:
         raise CapabilityRegistryError("capability declarations are invalid")
@@ -68,7 +80,11 @@ def _declarations(value):
     for item in value["capabilities"]:
         required = {"id", "kind", "enforcement", "tests"}
         allowed = set(required)
-        if value["schema_version"] == 2:
+        if authoritative:
+            required |= {
+                "required_predicates", "required_subject_kinds", "limitations"}
+            allowed = set(required)
+        elif value["schema_version"] == 2:
             allowed |= {"status", "evidence_ids", "limitations", "proof_binding"}
         if not isinstance(item, dict) or not required <= set(item) or not set(item) <= allowed \
                 or not isinstance(item.get("id"), str) \
@@ -80,30 +96,67 @@ def _declarations(value):
                 or len(item["enforcement"]) != len(set(item["enforcement"])) \
                 or len(item["tests"]) != len(set(item["tests"])) \
                 or any(not isinstance(path, str) or not path
-                       for path in item["enforcement"] + item["tests"]):
+                       for path in item["enforcement"] + item["tests"]) \
+                or authoritative and (
+                    not isinstance(item["required_predicates"], list)
+                    or not item["required_predicates"]
+                    or len(item["required_predicates"])
+                    != len(set(item["required_predicates"]))
+                    or any(not isinstance(predicate, str) or not predicate
+                           for predicate in item["required_predicates"])
+                    or not isinstance(item["required_subject_kinds"], list)
+                    or len(item["required_subject_kinds"])
+                    != len(set(item["required_subject_kinds"]))
+                    or any(kind not in loom_subject_identity.SUBJECT_KINDS
+                           for kind in item["required_subject_kinds"])
+                    or not isinstance(item["limitations"], list)
+                    or any(not isinstance(limitation, str) or not limitation
+                           for limitation in item["limitations"])):
             raise CapabilityRegistryError("capability declaration entry is invalid")
         seen.add(item["id"])
-        declarations.append({key: item[key] for key in
-                             ("id", "kind", "enforcement", "tests")})
-    return value["version"], declarations
+        declaration = {key: item[key] for key in
+                       ("id", "kind", "enforcement", "tests")}
+        declaration.update({
+            "required_predicates": list(item["required_predicates"])
+            if authoritative else [f"capability:{item['id']}"],
+            "required_subject_kinds": list(item["required_subject_kinds"])
+            if authoritative and item["kind"] == "mechanical" else [],
+            "limitations": list(item["limitations"]) if authoritative else [],
+        })
+        declarations.append(declaration)
+    return value.get("version"), declarations, authoritative
 
 
 def _graph(value):
     if value is None:
         return None
-    required = {"schema_version", "policy_id", "subject_digest", "evaluated_at",
-                "active", "inactive", "predicates", "graph_sha256"}
-    if not isinstance(value, dict) or set(value) != required \
-            or value.get("schema_version") != 1 \
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
             or value.get("policy_id") != "loom-evidence-policy-v1" \
             or not isinstance(value.get("predicates"), dict) \
             or not isinstance(value.get("inactive"), list):
         raise CapabilityRegistryError("evidence graph result is invalid")
+    required = {
+        "schema_version", "policy_id", "subject_digest", "evaluated_at",
+        "active", "inactive", "predicates", "graph_sha256",
+    } if value["schema_version"] == 1 else {
+        "schema_version", "policy_id", "expected_subjects_sha256",
+        "subject_bindings", "active_bindings_by_evidence",
+        "evaluated_at", "next_invalidation_at",
+        "active", "inactive", "predicates", "graph_sha256",
+    }
+    if set(value) != required:
+        raise CapabilityRegistryError("evidence graph result fields are invalid")
+    if value.get("graph_sha256") != _digest({
+            key: item for key, item in value.items()
+            if key != "graph_sha256"}):
+        raise CapabilityRegistryError("evidence graph result digest is invalid")
     return value
 
 
-def generate(declarations, graph=None, *, root=None):
-    version, items = _declarations(declarations)
+def generate(
+        declarations, graph=None, *, root=None,
+        trusted_expected_subjects_sha256=None):
+    version, items, authoritative = _declarations(declarations)
     graph = _graph(graph)
     if root is not None:
         try:
@@ -111,7 +164,28 @@ def generate(declarations, graph=None, *, root=None):
                 root, "capability proof root", must_exist=True)
         except loom_reliability.ReliabilityError as exc:
             raise CapabilityRegistryError(str(exc)) from exc
+        root_version = _root_version(root)
+        if authoritative:
+            version = root_version
+        elif version != root_version:
+            version = root_version
+    if authoritative and root is None:
+        raise CapabilityRegistryError(
+            "authoritative capability declarations require the VERSION authority")
     inactive_ids = {item.get("evidence_id") for item in graph["inactive"]} if graph else set()
+    trusted_graph = graph is not None and graph["schema_version"] == 2 \
+        and graph["expected_subjects_sha256"] \
+        == trusted_expected_subjects_sha256
+    subject_bindings = []
+    if trusted_graph:
+        subject_bindings = sorted({
+            (binding["kind"], binding["subject_id"], binding["subject_digest"]):
+            binding
+            for bindings in graph["active_bindings_by_evidence"].values()
+            for binding in bindings
+        }.values(), key=lambda binding: (
+            binding["kind"], binding["subject_id"],
+            binding["subject_digest"]))
     result = []
     for item in items:
         proof_files = []
@@ -140,8 +214,27 @@ def generate(declarations, graph=None, *, root=None):
                     proof_files.append({"role": role, "path": relative,
                                         "bytes": len(raw),
                                         "sha256": hashlib.sha256(raw).hexdigest()})
-        predicate = f"capability:{item['id']}"
-        active = sorted(graph["predicates"].get(predicate, [])) if graph else []
+        active_by_predicate = {
+            predicate: sorted(graph["predicates"].get(predicate, []))
+            for predicate in item["required_predicates"]} if graph else {}
+        all_active = trusted_graph and bool(active_by_predicate) and all(
+            active_by_predicate[predicate] for predicate in active_by_predicate)
+        active = sorted({
+            evidence_id
+            for evidence_ids in active_by_predicate.values()
+            for evidence_id in evidence_ids})
+        relevant_bindings = []
+        if trusted_graph:
+            relevant_bindings = sorted({
+                (binding["kind"], binding["subject_id"], binding["subject_digest"]):
+                binding
+                for evidence_id in active
+                for binding in graph["active_bindings_by_evidence"].get(
+                    evidence_id, [])
+            }.values(), key=lambda binding: (
+                binding["kind"], binding["subject_id"],
+                binding["subject_digest"]))
+        subject_kinds = {binding["kind"] for binding in relevant_bindings}
         stale = sorted(inactive_ids & set(
             evidence_id for row in (graph["inactive"] if graph else [])
             for evidence_id in [row.get("evidence_id")]
@@ -149,61 +242,119 @@ def generate(declarations, graph=None, *, root=None):
                 f"ev-cap-{item['id']}-")))
         if item["kind"] == "advisory":
             status = "unsupported"
-            limitations = ["Human judgment is not machine-enforced."]
-        elif active and root is not None:
+            limitations = item["limitations"] or [
+                "Human judgment is not machine-enforced."]
+        elif all_active and root is not None \
+                and set(item["required_subject_kinds"]) <= subject_kinds:
             status = "supported"
-            limitations = []
-        elif active:
-            status = "experimental"
-            limitations = [
-                "Evidence is current, but enforcement and test bytes were not bound during generation."]
+            limitations = item["limitations"]
+        elif all_active:
+            status = "unverified"
+            limitations = item["limitations"] + [
+                "Evidence is incomplete until code bytes and every required typed "
+                "subject are bound."]
         elif stale:
             status = "stale-proof"
-            limitations = ["The last bound proof expired, was revoked, or lost a dependency."]
+            limitations = item["limitations"] + [
+                "The last bound proof expired, was revoked, became stale, or lost a dependency."]
         else:
             status = "unverified"
-            limitations = ["No current exact-subject evidence envelope is active."]
-        result.append({**item, "status": status, "evidence_ids": active or stale,
+            limitations = item["limitations"] + [
+                "No current exact-subject typed evidence envelope is active."]
+        public_declaration = {key: item[key] for key in
+                              ("id", "kind", "enforcement", "tests",
+                               "required_predicates", "required_subject_kinds")}
+        result.append({**public_declaration, "status": status,
+                       "evidence_ids": active or stale,
                        "limitations": limitations,
                        "proof_binding": {
-                           "subject_digest": graph["subject_digest"] if graph else None,
+                           "subject_bindings": relevant_bindings,
                            "evidence_graph_sha256": graph["graph_sha256"] if graph else None,
                            "files": proof_files,
                        }})
     return {
-        "schema_version": 2, "version": version,
+        "schema_version": 3, "version": version,
         "generated_by": "tools/loom_capability_registry.py",
         "evidence_policy": "loom-evidence-policy-v1",
-        "subject_digest": graph["subject_digest"] if graph else None,
+        "declarations_policy": "loom-capability-declarations-v1"
+        if authoritative else "legacy-read-only",
+        "subject_bindings": subject_bindings,
+        "expected_subjects_sha256": (
+            graph.get("expected_subjects_sha256") if trusted_graph else None),
         "evaluated_at": graph["evaluated_at"] if graph else None,
+        "next_invalidation_at": (
+            graph.get("next_invalidation_at") if trusted_graph else None),
         "capabilities": result,
     }
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("declarations")
+    parser.add_argument("root")
     parser.add_argument("--graph")
-    parser.add_argument("--root")
-    parser.add_argument("--output", required=True)
+    parser.add_argument("--expected-subjects")
+    parser.add_argument("--trusted-ci-attestation")
+    parser.add_argument("--trusted-run-id")
+    parser.add_argument("--output")
+    parser.add_argument("--check", action="store_true")
+    parser.add_argument("--now")
     args = parser.parse_args(argv)
     try:
-        declarations = _read(args.declarations)
-        if args.root:
-            declarations = dict(declarations)
-            declarations["version"] = _root_version(args.root)
+        root = loom_reliability._absolute(
+            args.root, "capability registry root", must_exist=True)
+        declarations_path = root / "contracts" / "capability-declarations-v1.json"
+        declarations = _read(declarations_path)
         graph = _read(args.graph) if args.graph else None
-        result = generate(declarations, graph, root=args.root)
-    except CapabilityRegistryError as exc:
+        trusted_expected_digest = None
+        if args.expected_subjects:
+            expected_receipt = loom_subject_identity.validate_expected_subjects(
+                _read(args.expected_subjects),
+                ci_attestation_verifier=lambda candidate: (
+                    candidate["issuer_kind"] == "ci"
+                    and candidate["run_id"] == args.trusted_run_id
+                    and candidate["authority"]["attestation_sha256"]
+                    == args.trusted_ci_attestation))
+            trusted_expected_digest = loom_subject_identity.digest({
+                "schema_version": 1,
+                "subjects": sorted(
+                    expected_receipt["subjects"],
+                    key=lambda item: (item["kind"], item["subject_id"])),
+            })
+        result = generate(
+            declarations, graph, root=root,
+            trusted_expected_subjects_sha256=trusted_expected_digest)
+        output = loom_reliability._absolute(
+            args.output if args.output else root / "docs" / "capabilities.json",
+            "capability registry output")
+        if args.check:
+            if result["next_invalidation_at"] is not None:
+                if args.now is None:
+                    raise CapabilityRegistryError(
+                        "trusted current time is required for capability expiry")
+                try:
+                    current = dt.datetime.fromisoformat(
+                        args.now.replace("Z", "+00:00"))
+                    boundary = dt.datetime.fromisoformat(
+                        result["next_invalidation_at"].replace("Z", "+00:00"))
+                except (AttributeError, ValueError) as exc:
+                    raise CapabilityRegistryError(
+                        "capability expiry time is invalid") from exc
+                if current.tzinfo is None or boundary.tzinfo is None \
+                        or current >= boundary:
+                    raise CapabilityRegistryError(
+                        "capability evidence crossed its invalidation boundary")
+            if _read(output) != result:
+                raise CapabilityRegistryError(
+                    "generated capability projection is stale")
+        else:
+            loom_reliability.atomic_write_json(output, result)
+    except (
+            CapabilityRegistryError, loom_reliability.ReliabilityError,
+            loom_subject_identity.SubjectIdentityError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
-    try:
-        output = loom_reliability._absolute(args.output, "capability registry output")
-        loom_reliability.atomic_write_json(output, result)
-    except loom_reliability.ReliabilityError as exc:
-        print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
-        return 2
-    print(json.dumps({"status": "generated", "output": str(output),
+    print(json.dumps({"status": "current" if args.check else "generated",
+                      "output": str(output),
                       "capabilities": len(result["capabilities"])}, sort_keys=True))
     return 0
 

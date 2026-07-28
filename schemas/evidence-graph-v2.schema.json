@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/evidence-graph-v2.schema.json",
+  "title": "Typed deterministic Loom evidence graph result v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "policy_id", "expected_subjects_sha256",
+    "subject_bindings", "active_bindings_by_evidence",
+    "evaluated_at", "next_invalidation_at",
+    "active", "inactive", "predicates", "graph_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "policy_id": {"const": "loom-evidence-policy-v1"},
+    "expected_subjects_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subject_bindings": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {"$ref": "evidence-envelope-v2.schema.json#/$defs/subjectBinding"}
+    },
+    "active_bindings_by_evidence": {
+      "type": "object",
+      "maxProperties": 4096,
+      "additionalProperties": {
+        "type": "array",
+        "maxItems": 16,
+        "items": {"$ref": "evidence-envelope-v2.schema.json#/$defs/subjectBinding"}
+      }
+    },
+    "evaluated_at": {"type": "string", "format": "date-time"},
+    "next_invalidation_at": {"type": ["string", "null"], "format": "date-time"},
+    "active": {"type": "array", "maxItems": 4096, "uniqueItems": true, "items": {"type": "string"}},
+    "inactive": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["evidence_id", "reason", "predicate_type", "subject_bindings"],
+        "properties": {
+          "evidence_id": {"type": "string"},
+          "predicate_type": {"type": "string"},
+          "reason": {"enum": ["expired", "revoked", "stale", "wrong-subject", "expected-subject-unavailable", "verification-failed", "dependency-inactive"]},
+          "subject_bindings": {"type": "array", "maxItems": 16}
+        }
+      }
+    },
+    "predicates": {"type": "object", "maxProperties": 4096, "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+    "graph_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

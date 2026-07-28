@@ -1,35 +1,185 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "loom/schemas/release-readiness.schema.json",
-  "title": "Evidence-generated Loom release readiness",
-  "type": "object",
-  "additionalProperties": false,
-  "required": ["schema_version", "version", "release_subject", "generated_at", "registry_sha256", "overall", "claims", "counts", "promotion_blockers"],
-  "properties": {
-    "schema_version": {"const": 1},
-    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
-    "release_subject": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-    "generated_at": {"type": "string", "format": "date-time"},
-    "registry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "overall": {"enum": ["ready", "not-ready"]},
-    "claims": {"type": "array", "items": {"$ref": "#/$defs/claim"}},
-    "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
-    "promotion_blockers": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
-  },
+  "title": "Evidence-generated Loom release readiness v2",
+  "oneOf": [
+    {"$ref": "#/$defs/v1"},
+    {"$ref": "#/$defs/v2"}
+  ],
   "$defs": {
-    "claim": {
+    "binding": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "status", "required", "reason_codes", "receipt_ids", "release_subject", "valid_until", "public_summary"],
+      "required": ["kind", "subject_id", "subject_digest"],
+      "properties": {
+        "kind": {
+          "enum": [
+            "main-source",
+            "candidate-source",
+            "release-tag",
+            "plugin-zip",
+            "native-helper",
+            "installed-runtime"
+          ]
+        },
+        "subject_id": {"type": "string", "minLength": 1, "maxLength": 200},
+        "subject_digest": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      }
+    },
+    "v2Claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "status",
+        "required",
+        "reason_codes",
+        "receipt_ids",
+        "subject_bindings",
+        "legacy_release_subject",
+        "valid_until",
+        "public_summary"
+      ],
       "properties": {
         "id": {"type": "string", "minLength": 1},
-        "status": {"enum": ["supported", "experimental", "failed", "skipped", "expired", "stale", "unverified", "unsupported", "not_applicable", "revoked"]},
+        "status": {
+          "enum": [
+            "supported",
+            "experimental",
+            "failed",
+            "skipped",
+            "expired",
+            "stale",
+            "unverified",
+            "unsupported",
+            "not_applicable",
+            "revoked"
+          ]
+        },
         "required": {"type": "boolean"},
-        "reason_codes": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
-        "receipt_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
-        "release_subject": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
-        "valid_until": {"type": ["string", "null"], "format": "date-time"},
+        "reason_codes": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "receipt_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        },
+        "subject_bindings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/binding"}
+        },
+        "legacy_release_subject": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "valid_until": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
         "public_summary": {"type": "string", "minLength": 1}
+      }
+    },
+    "v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "version",
+        "evaluated_at",
+        "next_invalidation_at",
+        "expected_subjects_sha256",
+        "subject_bindings",
+        "legacy_release_subject",
+        "registry_sha256",
+        "overall",
+        "claims",
+        "counts",
+        "promotion_blockers"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "evaluated_at": {"type": "string", "format": "date-time"},
+        "next_invalidation_at": {
+          "type": ["string", "null"],
+          "format": "date-time"
+        },
+        "expected_subjects_sha256": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "subject_bindings": {
+          "type": "array",
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/binding"}
+        },
+        "legacy_release_subject": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "registry_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "overall": {"enum": ["ready", "not-ready"]},
+        "claims": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/v2Claim"}
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": {"type": "integer", "minimum": 0}
+        },
+        "promotion_blockers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "version",
+        "release_subject",
+        "generated_at",
+        "registry_sha256",
+        "overall",
+        "claims",
+        "counts",
+        "promotion_blockers"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "version": {
+          "type": "string",
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        },
+        "release_subject": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "generated_at": {"type": "string", "format": "date-time"},
+        "registry_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "overall": {"enum": ["ready", "not-ready"]},
+        "claims": {"type": "array"},
+        "counts": {"type": "object"},
+        "promotion_blockers": {"type": "array"}
       }
     }
   }

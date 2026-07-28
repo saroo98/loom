@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "policy_id": "loom-truth-shadow-corpus-v1",
+  "evaluation_epoch": "2026-07-28T12:00:00Z",
+  "subject_kinds": [
+    "main-source",
+    "candidate-source",
+    "release-tag",
+    "plugin-zip",
+    "native-helper",
+    "installed-runtime"
+  ],
+  "unsafe_states": [
+    "wrong-subject",
+    "stale",
+    "expired",
+    "revoked",
+    "incomplete",
+    "malformed",
+    "ambiguous"
+  ],
+  "fact_classes": [
+    "version",
+    "inventory",
+    "schema-protocol",
+    "capability",
+    "release",
+    "platform-host",
+    "generated-freshness",
+    "verification-subject"
+  ],
+  "projection_cases": [
+    {
+      "id": "registered-current-slot",
+      "registered": true,
+      "historical": false,
+      "expected_effect": "enforcement"
+    },
+    {
+      "id": "unregistered-free-prose",
+      "registered": false,
+      "historical": false,
+      "expected_effect": "advisory"
+    },
+    {
+      "id": "historical-version-reference",
+      "registered": false,
+      "historical": true,
+      "expected_effect": "advisory"
+    },
+    {
+      "id": "clean-unregistered-prose",
+      "registered": false,
+      "historical": false,
+      "expected_effect": "none"
+    }
+  ],
+  "rollback_cases": [
+    {"evaluated": "failed", "cached": "supported", "expected": "failed"},
+    {"evaluated": "stale", "cached": "supported", "expected": "stale"},
+    {"evaluated": "expired", "cached": "supported", "expected": "expired"},
+    {"evaluated": "revoked", "cached": "supported", "expected": "revoked"},
+    {"evaluated": "unverified", "cached": "supported", "expected": "unverified"}
+  ],
+  "legacy_cases": [
+    {"schema_version": 1, "readable": true, "may_promote": false}
+  ],
+  "thresholds": {
+    "unsafe_supported_promotions": 0,
+    "false_positive_enforcement_downgrades": 0,
+    "unsafe_state_recall": 1.0,
+    "historical_prose_support_effects": 0,
+    "advisory_false_positive_rate": 0.03,
+    "deterministic_reports": true
+  }
+}

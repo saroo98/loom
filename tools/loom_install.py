@@ -8,7 +8,7 @@ import os
 import shutil
 import tempfile
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import loom_reliability
 
@@ -163,6 +163,22 @@ def check(target):
     return {"status": "installed", "install_id": receipt["install_id"],
             "files_verified": len(receipt["files"]),
             "receipt_hash": receipt["receipt_hash"]}
+
+
+def subject_inputs(target):
+    """Expose only privacy-safe digests needed for an installed-runtime subject."""
+    checked = check(target)
+    receipt = _read_receipt(_root(target, "installation target", exists=True))
+    payload = [{
+        "path": item["path"], "sha256": item["sha256"],
+    } for item in receipt["files"]
+        if _is_install_payload(PurePosixPath(item["path"]))]
+    return {
+        "payload_sha256": hashlib.sha256(json.dumps(
+            sorted(payload, key=lambda item: item["path"]),
+            sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest(),
+        "install_receipt_sha256": checked["receipt_hash"],
+    }
 
 
 def uninstall(target, *, confirmation):

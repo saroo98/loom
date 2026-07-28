@@ -12,6 +12,7 @@ from contextlib import closing
 from pathlib import Path
 
 import loom_reliability
+import loom_subject_identity
 
 
 VERSION_RE = re.compile(
@@ -67,6 +68,24 @@ def runtime_identity(pointer):
             or value["release_sequence"] < 1:
         raise ActivationError("runtime pointer identity is invalid")
     return value
+
+
+def installed_runtime_subject(pointer, *, install_receipt_sha256):
+    """Return a path-free typed runtime subject for external comparison."""
+    value = runtime_identity(pointer)
+    activation_receipt = pointer.get("activation_receipt_sha256")
+    if not HEX64.fullmatch(str(install_receipt_sha256)) \
+            or not HEX64.fullmatch(str(activation_receipt)):
+        raise ActivationError("installed runtime receipt binding is incomplete")
+    try:
+        return loom_subject_identity.installed_runtime(
+            version=value["version"],
+            release_sequence=value["release_sequence"],
+            payload_sha256=value["payload_sha256"],
+            install_receipt_sha256=install_receipt_sha256,
+            activation_receipt_sha256=activation_receipt)
+    except loom_subject_identity.SubjectIdentityError as exc:
+        raise ActivationError(str(exc)) from exc
 
 
 def _redirect(path):

@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/subject-identity.schema.json",
+  "title": "Typed, non-interchangeable Loom subject identity",
+  "oneOf": [
+    {"$ref": "#/$defs/mainSource"},
+    {"$ref": "#/$defs/candidateSource"},
+    {"$ref": "#/$defs/releaseTag"},
+    {"$ref": "#/$defs/pluginZip"},
+    {"$ref": "#/$defs/nativeHelper"},
+    {"$ref": "#/$defs/installedRuntime"}
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "repository": {"const": "https://github.com/saroo98/loom"},
+    "base": {
+      "type": "object",
+      "required": ["schema_version", "kind", "subject_id", "subject_digest"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"type": "string"},
+        "subject_id": {"type": "string"},
+        "subject_digest": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "mainSource": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "schema_version": {"const": 1},
+            "kind": {"const": "main-source"},
+            "subject_id": {"const": "main"},
+            "subject_digest": {"$ref": "#/$defs/digest"},
+            "repository": {"$ref": "#/$defs/repository"},
+            "commit": {"$ref": "#/$defs/commit"},
+            "tree_sha256": {"$ref": "#/$defs/digest"}
+          },
+          "required": ["repository", "commit", "tree_sha256"]
+        }
+      ]
+    },
+    "candidateSource": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "schema_version": {"const": 1},
+            "kind": {"const": "candidate-source"},
+            "subject_id": {"const": "candidate"},
+            "subject_digest": {"$ref": "#/$defs/digest"},
+            "repository": {"$ref": "#/$defs/repository"},
+            "base_commit": {"$ref": "#/$defs/commit"},
+            "commit": {"oneOf": [{"$ref": "#/$defs/commit"}, {"type": "null"}]},
+            "tree_sha256": {"$ref": "#/$defs/digest"},
+            "overlay_sha256": {"$ref": "#/$defs/digest"},
+            "dirty": {"type": "boolean"}
+          },
+          "required": [
+            "repository", "base_commit", "commit", "tree_sha256",
+            "overlay_sha256", "dirty"
+          ]
+        }
+      ]
+    },
+    "releaseTag": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "schema_version": {"const": 1},
+            "kind": {"const": "release-tag"},
+            "subject_id": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            "subject_digest": {"$ref": "#/$defs/digest"},
+            "repository": {"$ref": "#/$defs/repository"},
+            "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+            "tag_object_id": {"$ref": "#/$defs/commit"},
+            "tag_object_sha256": {"$ref": "#/$defs/digest"},
+            "peeled_commit": {"$ref": "#/$defs/commit"},
+            "signature_state": {"enum": ["verified", "unverified", "invalid", "unsigned"]}
+          },
+          "required": [
+            "repository", "tag", "tag_object_id", "tag_object_sha256",
+            "peeled_commit", "signature_state"
+          ]
+        }
+      ]
+    },
+    "pluginZip": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "schema_version": {"const": 1},
+            "kind": {"const": "plugin-zip"},
+            "subject_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.zip$"},
+            "subject_digest": {"$ref": "#/$defs/digest"},
+            "filename": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\\.zip$"},
+            "bytes": {"type": "integer", "minimum": 1},
+            "sha256": {"$ref": "#/$defs/digest"}
+          },
+          "required": ["filename", "bytes", "sha256"]
+        }
+      ]
+    },
+    "nativeHelper": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "schema_version": {"const": 1},
+            "kind": {"const": "native-helper"},
+            "subject_id": {"enum": ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64", "linux-arm64"]},
+            "subject_digest": {"$ref": "#/$defs/digest"},
+            "platform": {"enum": ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64", "linux-arm64"]},
+            "filename": {"enum": ["loom-vault", "loom-vault.exe"]},
+            "bytes": {"type": "integer", "minimum": 1},
+            "sha256": {"$ref": "#/$defs/digest"},
+            "sbom_sha256": {"$ref": "#/$defs/digest"},
+            "provenance_sha256": {"$ref": "#/$defs/digest"}
+          },
+          "required": [
+            "platform", "filename", "bytes", "sha256",
+            "sbom_sha256", "provenance_sha256"
+          ]
+        }
+      ]
+    },
+    "installedRuntime": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "schema_version": {"const": 1},
+            "kind": {"const": "installed-runtime"},
+            "subject_id": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+            "subject_digest": {"$ref": "#/$defs/digest"},
+            "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+            "release_sequence": {"type": "integer", "minimum": 1},
+            "payload_sha256": {"$ref": "#/$defs/digest"},
+            "install_receipt_sha256": {"$ref": "#/$defs/digest"},
+            "activation_receipt_sha256": {"$ref": "#/$defs/digest"}
+          },
+          "required": [
+            "version", "release_sequence", "payload_sha256",
+            "install_receipt_sha256", "activation_receipt_sha256"
+          ]
+        }
+      ]
+    }
+  }
+}

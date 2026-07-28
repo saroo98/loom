@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/capability-declarations.schema.json",
+  "title": "Authoritative Loom capability declarations",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy_id", "capabilities"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-capability-declarations-v1"},
+    "capabilities": {
+      "type": "array",
+      "maxItems": 512,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id", "kind", "enforcement", "tests", "required_predicates",
+          "required_subject_kinds", "limitations"
+        ],
+        "properties": {
+          "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,95}$"},
+          "kind": {"enum": ["mechanical", "advisory"]},
+          "enforcement": {
+            "type": "array", "maxItems": 64, "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 256}
+          },
+          "tests": {
+            "type": "array", "maxItems": 64, "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1, "maxLength": 256}
+          },
+          "required_predicates": {
+            "type": "array", "maxItems": 32, "uniqueItems": true,
+            "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._:-]{0,127}$"}
+          },
+          "required_subject_kinds": {
+            "type": "array", "maxItems": 6, "uniqueItems": true,
+            "items": {"enum": ["main-source", "candidate-source", "release-tag", "plugin-zip", "native-helper", "installed-runtime"]}
+          },
+          "limitations": {
+            "type": "array", "maxItems": 32,
+            "items": {"type": "string", "minLength": 1, "maxLength": 512}
+          }
+        }
+      }
+    }
+  }
+}

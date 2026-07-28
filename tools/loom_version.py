@@ -7,17 +7,42 @@ import re
 from pathlib import Path
 
 import loom_cargo
+import loom_truth
 
 
 class VersionError(RuntimeError):
     pass
 
 
-TEXT_SURFACES = (
-    "README.md", "START-HERE.md", "skills/loom/SKILL.md", "skill/loom/SKILL.md",
-    "templates/pack/MANIFEST.md", "docs/architecture.md", "docs/limitations.md",
-    "docs/index.html", "CHANGELOG.md",
-)
+HTML_VERSION_RE = re.compile(
+    r"<[^>]+\bdata-loom-version=[\"']([^\"']+)[\"'][^>]*>([^<]+)</",
+    re.I)
+
+
+def _json_pointer(value, pointer):
+    if not isinstance(pointer, str) or not pointer.startswith("/"):
+        raise VersionError("registered version JSON pointer is invalid")
+    current = value
+    for raw in pointer[1:].split("/"):
+        key = raw.replace("~1", "/").replace("~0", "~")
+        if not isinstance(current, dict) or key not in current:
+            raise VersionError("registered version JSON pointer is unavailable")
+        current = current[key]
+    return current
+
+
+def _registered_version_projections(root):
+    try:
+        registry = loom_truth.validate_registry(json.loads(
+            (root / "contracts" / "truth-authorities-v1.json").read_text(
+                encoding="utf-8")))
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            loom_truth.TruthError) as exc:
+        raise VersionError(f"truth authority registry is unavailable: {exc}") from exc
+    return [
+        item for item in registry["structured_projections"]
+        if item["authority_id"] == "root-version"]
 
 
 def verify(root):
@@ -29,20 +54,38 @@ def verify(root):
     if not re.fullmatch(r"\d+\.\d+\.\d+", version):
         raise VersionError("VERSION is not stable semantic versioning")
     findings = []
-    marker = re.compile(rf"(?<![0-9.]){re.escape(version)}(?![0-9.])")
-    for relative in TEXT_SURFACES:
+    projections = _registered_version_projections(root)
+    for projection in projections:
+        relative = projection["path"]
         path = root / relative
-        if not path.is_file() or not marker.search(path.read_text(encoding="utf-8")):
-            findings.append(relative)
-    for relative, key in ((".codex-plugin/plugin.json", "version"),
-                          ("docs/capabilities.json", "version"),
-                          ("docs/generated-evidence.json", "loom_version")):
         try:
-            value = json.loads((root / relative).read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
+            if projection["selector_kind"] == "json-pointer":
+                value = json.loads(path.read_text(encoding="utf-8"))
+                observed = _json_pointer(value, projection["selector"])
+            elif projection["selector_kind"] == "html-data-attribute":
+                text = path.read_text(encoding="utf-8")
+                matches = HTML_VERSION_RE.findall(text)
+                if projection["selector"] != "data-loom-version" \
+                        or len(matches) != 1:
+                    raise VersionError(
+                        "registered HTML version slot is missing or ambiguous")
+                attribute, label = matches[0]
+                observed = attribute if label.strip() == attribute else None
+            elif projection["selector_kind"] == "markdown-marker":
+                marker = (
+                    f"<!-- loom:projection {projection['selector']} -->"
+                    f"{version}"
+                    f"<!-- /loom:projection {projection['selector']} -->")
+                observed = version if marker in path.read_text(
+                    encoding="utf-8") else None
+            else:
+                continue
+        except (
+                OSError, UnicodeError, json.JSONDecodeError,
+                VersionError):
             findings.append(relative)
             continue
-        if value.get(key) != version:
+        if observed != version:
             findings.append(relative)
     try:
         cargo_version = loom_cargo.package_version(root / "vault-helper" / "Cargo.toml")
@@ -57,7 +100,7 @@ def verify(root):
     if findings:
         raise VersionError("version drift: " + ", ".join(sorted(set(findings))))
     return {"status": "coherent", "version": version,
-            "surfaces": len(TEXT_SURFACES) + 5}
+            "surfaces": len(projections) + 2}
 
 
 def main(argv=None):
