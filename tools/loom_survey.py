@@ -275,6 +275,14 @@ def _path_key(path):
     return os.path.normcase(value) if os.name == "nt" else value
 
 
+def _physical_relative(path, root):
+    """Return a relative path when two possibly aliased names share a physical root."""
+    try:
+        return Path(_path_key(path)).relative_to(Path(_path_key(root)))
+    except ValueError:
+        return None
+
+
 def _parse_worktree_registry(content):
     """Parse Git's stable NUL-delimited porcelain worktree registry."""
     if not isinstance(content, bytes):
@@ -361,9 +369,8 @@ def _registered_worktree_boundaries(root):
         path = Path(os.path.abspath(record["path"]))
         if _path_key(path) == root_key or record["bare"]:
             continue
-        try:
-            relative = path.relative_to(root)
-        except ValueError:
+        relative = _physical_relative(path, root)
+        if relative is None:
             continue
         if not relative.parts:
             continue

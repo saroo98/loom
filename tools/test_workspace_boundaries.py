@@ -297,6 +297,11 @@ class WorkspaceBoundaryTests(unittest.TestCase):
             self.assertEqual(
                 loom_survey._path_key(self.repo / "alias-root"),
                 loom_survey._path_key(self.repo / "physical-root"))
+            self.assertEqual(
+                Path("child"),
+                loom_survey._physical_relative(
+                    self.repo / "alias-root" / "child",
+                    self.repo / "physical-root"))
 
     def test_repeated_registered_worktree_root_fails_closed(self):
         duplicate = loom_survey.WorkspaceBoundary(".independent/child")
