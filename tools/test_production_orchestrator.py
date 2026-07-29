@@ -31,6 +31,7 @@ import loom_plan_author  # noqa: E402
 import loom_performance  # noqa: E402
 import loom_reliability  # noqa: E402
 import loom_release  # noqa: E402
+import loom_session  # noqa: E402
 from test_loom_vault_v11 import TestCrypto  # noqa: E402
 
 
@@ -468,6 +469,69 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("blocked", result["status"])
         self.assertEqual("RUNTIME_BLOCKED", result["code"])
         self.assertIn("specialist modules", result["error"])
+
+    def test_survey_failure_is_a_bounded_json_block(self):
+        envelope = loom_adapter_protocol.request_envelope({
+            "schema_version": 2,
+            "message_type": "invoke",
+            "request_id": "req-survey-block",
+            "request": "Plan a project",
+            "cwd": str(self.repo),
+        }, {"id": "codex", "version": "test"})
+        output = io.StringIO()
+        with mock.patch.object(
+                loom_orchestrator.loom_adapter_protocol,
+                "read_single_frame", return_value=envelope), \
+                mock.patch.object(
+                    loom_orchestrator, "invoke",
+                    side_effect=loom_orchestrator.loom_survey.SurveyError(
+                        "seeded survey failure")), \
+                redirect_stdout(output):
+            returncode = loom_orchestrator.main([
+                "invoke-stdio", "--home", str(self.home),
+                "--install-root", str(self.installed),
+            ])
+        self.assertEqual(2, returncode)
+        result = json.loads(output.getvalue())
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("RUNTIME_BLOCKED", result["code"])
+        self.assertIn("seeded survey failure", result["error"])
+
+    def test_gitless_invoke_binds_filesystem_mode_before_memory_housekeeping(self):
+        target = self.root / "gitless-target"
+        target.mkdir()
+        instance_id = str(uuid.uuid4())
+
+        class BoundMemory(loom_session.NoopMemoryAdapter):
+            def __init__(self):
+                self.bindings = []
+
+            def bind_project_state(self, project_id, state_mode):
+                self.bindings.append((project_id, state_mode))
+
+        memory = BoundMemory()
+
+        def missing_git(*_args, **_kwargs):
+            try:
+                raise FileNotFoundError(2, "git unavailable")
+            except FileNotFoundError as exc:
+                raise loom_orchestrator.loom_survey.SurveyError(
+                    f"git unavailable: {exc}") from exc
+
+        with mock.patch.object(
+                loom_orchestrator, "_memory_backend",
+                return_value=(instance_id, memory)), \
+                mock.patch.object(
+                    loom_orchestrator.loom_survey, "run_git",
+                    side_effect=missing_git):
+            result = loom_orchestrator.invoke(
+                request="Plan a small Python command-line project.",
+                cwd=target, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", result["status"])
+        self.assertEqual(1, len(memory.bindings))
+        self.assertEqual("filesystem", memory.bindings[0][1])
+        self.assertTrue(memory.bindings[0][0].startswith("p-"))
 
     def complete_machine_authored_plan(self):
         action = loom_orchestrator.invoke(

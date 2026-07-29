@@ -60,6 +60,26 @@ class VaultAdapterTests(unittest.TestCase):
             "balanced journal entries",
             self.adapter.profile_summary(selected_context))
 
+    def test_project_housekeeping_requires_one_resolved_state_binding(self):
+        project = self.root / "project"
+        project.mkdir()
+        adapter = loom_vault_adapter.VaultMemoryAdapter(
+            owner_home=self.root, vault=self.vault, project_root=project)
+        project_id = loom_vault_adapter.loom_memory.project_identity(
+            adapter.instance_id, project, state_mode="filesystem")
+        context = types.SimpleNamespace(project_id=project_id)
+
+        with self.assertRaisesRegex(
+                loom_vault_adapter.VaultAdapterError, "resolved project state"):
+            adapter.housekeeping(context)
+
+        adapter.bind_project_state(project_id, "filesystem")
+        result = adapter.housekeeping(context)
+        self.assertEqual(0, result["project_memory_rekeyed"])
+        with self.assertRaisesRegex(
+                loom_vault_adapter.VaultAdapterError, "binding changed"):
+            adapter.bind_project_state("p-" + "2" * 32, "filesystem")
+
     def test_session_journal_encrypts_owner_statements_and_replays_receipt(self):
         self.adapter.remember(
             self.context,
