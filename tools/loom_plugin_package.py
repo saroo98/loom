@@ -19,6 +19,7 @@ import loom_reliability
 import loom_release
 import loom_privacy
 import loom_sbom
+import loom_vault
 
 
 PLATFORMS = {
@@ -291,8 +292,13 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             item["archive_sha256"] for item in runtime_results)
         manifest = {
             "package": "loom", "release_sequence": release_sequence, "version": version,
-            "targets": targets, "schema_range": {"minimum": 1, "maximum": 2},
-            "migration_chain": ["legacy-0.8", "legacy-1.0", "vault-1", "vault-2"],
+            "targets": targets,
+            "schema_range": {
+                "minimum": 1, "maximum": loom_vault.VAULT_SCHEMA_VERSION},
+            "migration_chain": [
+                "legacy-0.8", "legacy-1.0",
+                *(f"vault-{schema}" for schema in range(
+                    1, loom_vault.VAULT_SCHEMA_VERSION + 1))],
             "adapter_range": {"minimum": 1, "maximum": 1},
         }
         release = output / "release"

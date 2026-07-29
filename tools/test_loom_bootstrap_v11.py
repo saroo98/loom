@@ -8,10 +8,12 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 from unittest import mock
 from pathlib import Path
 
@@ -87,6 +89,69 @@ class BootstrapIntegrationTests(unittest.TestCase):
         target = Path(root) / "direct-install"
         loom_install.install(self.direct_public, target)
         return target
+
+    def test_signed_update_uses_the_exact_active_owner_schema(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / ".loom"
+            runtime = home / "runtime"
+            runtime.mkdir(parents=True)
+            pointer = {
+                "version": "1.8.18", "path": "1.8.18",
+                "payload_sha256": "a" * 64, "release_sequence": 33,
+                "previous": None,
+                "activation_set_id": str(uuid.uuid4()),
+                "activation_receipt_sha256": "b" * 64,
+                "state": {
+                    "state_set_id": str(uuid.uuid4()),
+                    "path": "vault/generations/unused/owner.sqlite3",
+                    "owner_vault_id": str(uuid.uuid4()),
+                    "generation": 116, "schema_version": 3,
+                    "deletion_epoch": 0, "inventory_sha256": "c" * 64,
+                    "baseline_sha256": "d" * 64,
+                },
+                "previous_activation_set_id": None,
+            }
+            (runtime / "current.json").write_text(
+                json.dumps(pointer), encoding="utf-8")
+
+            class Manager:
+                current_path = runtime / "current.json"
+
+                @staticmethod
+                def current():
+                    return pointer
+
+            self.assertEqual(
+                3, loom_bootstrap._active_vault_schema(home, Manager()))
+
+    def test_legacy_owner_schema_is_verified_instead_of_assumed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary) / ".loom"
+            runtime = home / "runtime"
+            vault = home / "vault"
+            runtime.mkdir(parents=True)
+            vault.mkdir()
+            (runtime / "current.json").write_text("{}", encoding="utf-8")
+            database = vault / "owner.sqlite3"
+            connection = sqlite3.connect(database)
+            try:
+                connection.execute(
+                    "CREATE TABLE metadata(key TEXT PRIMARY KEY,value TEXT NOT NULL)")
+                connection.execute(
+                    "INSERT INTO metadata(key,value) VALUES('schema_version','3')")
+                connection.commit()
+            finally:
+                connection.close()
+
+            class Manager:
+                current_path = runtime / "current.json"
+
+                @staticmethod
+                def current():
+                    return {}
+
+            self.assertEqual(
+                3, loom_bootstrap._active_vault_schema(home, Manager()))
 
     def test_native_helper_cache_identity_binds_cargo_and_temp_environments(self):
         baseline = _build_environment_identity({

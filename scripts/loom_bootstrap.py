@@ -8,11 +8,13 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import stat
 import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import closing
 from pathlib import Path
 from pathlib import PurePosixPath
 
@@ -498,6 +500,38 @@ def _empty_inventory():
     return hashlib.sha256(b"loom-empty-owner-vault-v1").hexdigest()
 
 
+def _active_vault_schema(home, manager):
+    """Read the authoritative schema of the owner state an update will preserve."""
+    if not manager.current_path.is_file():
+        return 1
+    pointer = manager.current()
+    state = pointer.get("state")
+    if state is not None:
+        schema = state.get("schema_version") if isinstance(state, dict) else None
+        if type(schema) is not int or schema < 1:
+            raise BootstrapError("active owner-vault schema identity is invalid")
+        return schema
+    database = Path(home) / "vault" / "owner.sqlite3"
+    if not database.exists():
+        return 1
+    if not database.is_file() or _redirect(database):
+        raise BootstrapError("legacy owner-vault schema source is unsafe")
+    try:
+        with closing(sqlite3.connect(
+                "file:" + database.as_posix() + "?mode=ro",
+                uri=True, timeout=2)) as connection:
+            integrity = connection.execute("PRAGMA quick_check").fetchone()
+            row = connection.execute(
+                "SELECT value FROM metadata WHERE key='schema_version'").fetchone()
+        schema = int(row[0])
+    except (sqlite3.Error, OSError, TypeError, ValueError) as exc:
+        raise BootstrapError(
+            f"legacy owner-vault schema cannot be verified: {exc}") from exc
+    if integrity != ("ok",) or schema < 1:
+        raise BootstrapError("legacy owner-vault schema identity is invalid")
+    return schema
+
+
 _RUNTIME_POINTER_BASE_FIELDS = {
     "version", "path", "payload_sha256", "release_sequence", "previous",
 }
@@ -902,11 +936,15 @@ def reconcile(plugin_root, home):
             "launcher": launcher,
         }
 
-    result = manager.stage_update(
-        payload, bundle, trusted_root=trusted_root,
-        verify_signature=lambda message, signature, public: loom_crypto.verify_signature(
-            helper, message, signature, public),
-        vault_schema=1, health_check=health_check, now=now)
+    vault_schema = _active_vault_schema(home, manager)
+    try:
+        result = manager.stage_update(
+            payload, bundle, trusted_root=trusted_root,
+            verify_signature=lambda message, signature, public: loom_crypto.verify_signature(
+                helper, message, signature, public),
+            vault_schema=vault_schema, health_check=health_check, now=now)
+    except loom_update.UpdateError as exc:
+        raise BootstrapError(f"signed update refused: {exc}") from exc
     if not trust_path.exists():
         loom_reliability.atomic_write_json(trust_path, supplied_root)
     activated = manager.current()
