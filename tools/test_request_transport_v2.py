@@ -275,6 +275,28 @@ class RequestTransportV2Tests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(raw).hexdigest(),
                          payload["request_identity"]["sha256"])
 
+    def test_terminal_receipt_world_fingerprint_marks_project_world_observed(self):
+        result = {
+            "status": "blocked",
+            "project_id": "p-" + "a" * 32,
+            "world_fingerprint": "b" * 64,
+        }
+        payload, observability = loom_orchestrator._project_world_observation(result)
+
+        self.assertEqual("observed", observability)
+        self.assertTrue(payload["world_observed"])
+        self.assertEqual("b" * 64, payload["world_fingerprint"])
+
+    def test_missing_world_evidence_remains_explicitly_unavailable(self):
+        payload, observability = loom_orchestrator._project_world_observation({
+            "status": "blocked",
+            "project_id": "p-" + "a" * 32,
+        })
+
+        self.assertEqual("unavailable", observability)
+        self.assertFalse(payload["world_observed"])
+        self.assertIsNone(payload["world_fingerprint"])
+
     def _write_process_chain(self, root):
         runtime = root / "runtime"
         runtime_tools = runtime / "tools"

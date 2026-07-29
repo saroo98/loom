@@ -545,6 +545,14 @@ _PLAN_DELIVERABLE_RE = re.compile(
     r"(?:(?:one|a|an|the)\s+)?"
     r"(?:(?:reviewable|detailed|small|release-ready|implementation|coding|"
     r"project|research|writing|research-and-writing)\s+|and\s+){0,6}plan\b")
+_PLAN_REPORTING_REQUIREMENT_RE = re.compile(
+    r"^(?:preserve\s+(?:and\s+)?)?report\b"
+    r"(?=[^.!?;]{0,200}\b(?:observable|generated|produced|refusal|timeout|"
+    r"validation|artifact|elapsed|lifecycle)\b)")
+_PLAN_INSPECTION_METHOD_RE = re.compile(
+    r"^(?:review|inspect|audit)\b"
+    r"(?=[^.!?;]{0,160}\b(?:only|necessary|bounded|relevant|source|input|"
+    r"facts?|requirements?|constraints?|repository|project|codebase)\b)")
 _CLAUSE_SEPARATOR_RE = re.compile(
     r"(?P<hard>\r?\n+|[.;!?]+)"
     r"|(?P<comma>,\s*(?:(?:and|but|then)\b\s*)?)"
@@ -592,12 +600,17 @@ def _has_positive_software_clause(text):
     return False
 
 
+def _has_planning_envelope(request):
+    normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
+    return bool(
+        re.match(r"^(?:now\s+)?(?:please\s+)?plan\b", normalized)
+        or _PLAN_DELIVERABLE_RE.search(normalized))
+
+
 def _split_control_clauses(request):
     """Return bounded control clauses, excluding descriptive scope prose."""
     normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
-    planning_envelope = bool(
-        re.match(r"^(?:now\s+)?(?:please\s+)?plan\b", normalized)
-        or _PLAN_DELIVERABLE_RE.search(normalized))
+    planning_envelope = _has_planning_envelope(normalized)
     separators = list(_CLAUSE_SEPARATOR_RE.finditer(normalized))
     clauses = []
     start = 0
@@ -618,6 +631,14 @@ def _split_control_clauses(request):
             # Imperative requirements inside one explicit planning envelope
             # describe the requested system. They are not separate requests for
             # Loom to implement each bullet.
+            return
+        if planning_envelope and clauses \
+                and role["intent"] == "status" \
+                and not role["negated"] \
+                and _PLAN_REPORTING_REQUIREMENT_RE.search(value):
+            # A planning stress test may require the host to report observable
+            # lifecycle outcomes. That is acceptance evidence for the requested
+            # plan, not a second request to inspect an existing Loom action.
             return
         clauses.append((separator, value))
         overflow = len(clauses) > MAX_ROUTE_CLAUSES
@@ -748,13 +769,21 @@ def _resolve_clause_roles(request, state):
     # not a competing lifecycle review operation. Preserve separate negated
     # implementation clauses as planning constraints.
     plan_deliverable = _PLAN_DELIVERABLE_RE.search(request.casefold())
-    if plan_deliverable:
+    planning_envelope = _has_planning_envelope(request)
+    if planning_envelope:
         for item in classified:
-            if not item["negated"] and item["intent"] == "review":
+            if not item["negated"] and item["intent"] == "review" \
+                    and (
+                        plan_deliverable is not None
+                        or _PLAN_INSPECTION_METHOD_RE.search(
+                            item.get("clause", "")) is not None
+                    ):
                 item["intent"] = "plan"
                 item["control"] = "planning"
             elif not item["negated"] and item["intent"] == "plan" \
-                    and item["index"] == 0 and plan_deliverable.start() == 0:
+                    and item["index"] == 0 \
+                    and plan_deliverable is not None \
+                    and plan_deliverable.start() == 0:
                 # Clause splitting may divide a compound deliverable such as
                 # "create a research and writing plan" at "and". The leading
                 # create fragment still belongs to the matched plan deliverable.
@@ -817,10 +846,23 @@ def _resolve_clause_roles(request, state):
             recommendation="Keep lifecycle state unchanged; state one positive next action.")
     if has_or and len(classified) > 1 \
             or conflicting_polarity or multiple_positive_outcomes:
+        positive_labels = sorted(
+            f"{item['intent']}/{item['control']}" for item in positives)
+        negative_labels = sorted(
+            f"{item['intent']}/{item['control']}" for item in negatives)
+        role_summary = ", ".join(positive_labels)
+        if negative_labels:
+            role_summary += "; prohibited: " + ", ".join(negative_labels)
         return _decision(
             "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
-            confidence=0.0, evidence=("clause-role-conflict",),
-            recommendation="State one positive outcome; keep prohibitions in a separate clause.")
+            confidence=0.0,
+            evidence=("clause-role-conflict", *(
+                f"positive:{label}" for label in positive_labels), *(
+                f"negative:{label}" for label in negative_labels)),
+            recommendation=(
+                "The request contains conflicting Loom controls: "
+                f"{role_summary}. State one primary Loom action; phrase review or "
+                "reporting requirements as acceptance criteria for that action."))
     if not positives and negatives:
         return _decision(
             "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,

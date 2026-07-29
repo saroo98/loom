@@ -4658,6 +4658,29 @@ def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=N
             "session_id": action["session_id"], "recovery_receipt": receipt}
 
 
+def _project_world_observation(result):
+    context = result.get("context_manifest")
+    world_fingerprint = result.get("world_fingerprint")
+    project_id = result.get("project_id")
+    observed = (
+        isinstance(context, dict)
+        or (
+            isinstance(project_id, str)
+            and loom_runtime.PROJECT_RE.fullmatch(project_id) is not None
+            and isinstance(world_fingerprint, str)
+            and re.fullmatch(r"[0-9a-f]{64}", world_fingerprint) is not None
+        )
+    )
+    return {
+        "project_id": project_id,
+        "action_id": result.get("action_id"),
+        "context_manifest_sha256": (
+            _hash(context) if isinstance(context, dict) else None),
+        "world_fingerprint": world_fingerprint if observed else None,
+        "world_observed": observed,
+    }, ("observed" if observed else "unavailable")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -4709,16 +4732,10 @@ def main(argv=None):
                 transport_invocation_id=_transport_invocation_id(envelope),
                 assurance=envelope["assurance"])
             if chain_id is not None:
-                context = result.get("context_manifest")
+                project_world, observability = _project_world_observation(result)
                 loom_execution_chain.append(
-                    args.home, chain_id, "project-world", {
-                        "project_id": result.get("project_id"),
-                        "action_id": result.get("action_id"),
-                        "context_manifest_sha256": (
-                            _hash(context) if isinstance(context, dict) else None),
-                        "world_observed": isinstance(context, dict),
-                    }, observability=(
-                        "observed" if isinstance(context, dict) else "unavailable"))
+                    args.home, chain_id, "project-world", project_world,
+                    observability=observability)
                 action_id = result.get("action_id")
                 session_id = result.get("session_id")
                 loom_execution_chain.append(
