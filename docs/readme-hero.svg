@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
   <title id="title">Loom keeps planning separate from implementation authority</title>
   <desc id="desc">A monochrome flowing field surrounds the Loom mark and the words Planning before implementation authority.</desc>
-  <metadata>Loom 1.8.18</metadata>
+  <metadata>Loom 1.8.19</metadata>
   <defs>
     <linearGradient id="field" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#242424"/>
