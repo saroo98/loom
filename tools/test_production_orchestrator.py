@@ -529,6 +529,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 cwd=target, home=self.home, install_root=self.installed)
 
         self.assertEqual("action-required", result["status"])
+        self.assertRegex(result["world_fingerprint"], r"^[0-9a-f]{64}$")
         self.assertEqual(1, len(memory.bindings))
         self.assertEqual("filesystem", memory.bindings[0][1])
         self.assertTrue(memory.bindings[0][0].startswith("p-"))
