@@ -11,6 +11,7 @@ from unittest import mock
 
 import loom_plugin_package
 import loom_privacy
+import loom_vault
 import v11_test_support
 from v11_test_support import build_vault_helper, package_evidence, package_source_commit
 
@@ -81,6 +82,12 @@ class PluginPackageTests(unittest.TestCase):
                 version="1.1.0", release_sequence=2,
                 source_commit=package_source_commit(ROOT))
             self.assertTrue(result["firewall"]["clean"])
+            self.assertEqual(
+                {"minimum": 1, "maximum": loom_vault.VAULT_SCHEMA_VERSION},
+                result["manifest"]["schema_range"])
+            self.assertEqual(
+                f"vault-{loom_vault.VAULT_SCHEMA_VERSION}",
+                result["manifest"]["migration_chain"][-1])
             for platform in loom_plugin_package.PLATFORMS:
                 self.assertTrue((output / "runtime-payload" / platform /
                                  "loom-runtime.zip").is_file())
