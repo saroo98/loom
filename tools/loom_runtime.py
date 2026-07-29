@@ -336,11 +336,17 @@ class ProjectResolution:
     state_mode: str
 
 
+def _git_executable_missing(error):
+    """Return whether a survey failure proves that Git could not be started."""
+    return isinstance(getattr(error, "__cause__", None), FileNotFoundError)
+
+
 def resolve_project(instance_id, *, explicit_target=None, cwd=None,
                     candidate_roots=None):
     """Resolve exactly one project without searching any sibling directory."""
     _canonical_uuid(instance_id, "instance_id")
     invocation_cwd = _validate_invocation_cwd(cwd)
+    state_mode = None
     if explicit_target is not None:
         root = _validate_target(
             _path_from_invocation(explicit_target, invocation_cwd, "project target"))
@@ -370,28 +376,37 @@ def resolve_project(instance_id, *, explicit_target=None, cwd=None,
             probe = loom_survey.run_git(
                 cwd_root, "rev-parse", "--show-toplevel", allowed=(0, 128))
         except loom_survey.SurveyError as exc:
-            raise RuntimeBlocked(
-                "PROJECT_INDETERMINATE", f"cannot establish Git containment: {exc}") from exc
-        if probe.returncode == 0:
-            root = _validate_target(probe.stdout.strip())
-            try:
-                cwd_root.relative_to(root)
-            except ValueError as exc:
+            if not _git_executable_missing(exc):
                 raise RuntimeBlocked(
-                    "PROJECT_INDETERMINATE", "Git root does not contain the working directory") \
-                    from exc
-            source = "git-cwd"
+                    "PROJECT_INDETERMINATE",
+                    f"cannot establish Git containment: {exc}") from exc
+            root, source, state_mode = cwd_root, "filesystem-cwd", "filesystem"
         else:
-            root, source = cwd_root, "filesystem-cwd"
+            if probe.returncode == 0:
+                root = _validate_target(probe.stdout.strip())
+                try:
+                    cwd_root.relative_to(root)
+                except ValueError as exc:
+                    raise RuntimeBlocked(
+                        "PROJECT_INDETERMINATE",
+                        "Git root does not contain the working directory") from exc
+                source = "git-cwd"
+            else:
+                root, source = cwd_root, "filesystem-cwd"
     identity = "target-sha256:" + _sha(os.path.normcase(str(root)))
-    try:
-        git_probe = loom_survey.run_git(
-            root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
-    except loom_survey.SurveyError as exc:
-        raise RuntimeBlocked(
-            "PROJECT_INDETERMINATE", f"cannot establish project state mode: {exc}") from exc
-    state_mode = "git" if git_probe.returncode == 0 \
-        and git_probe.stdout.strip() == "true" else "filesystem"
+    if state_mode is None:
+        try:
+            git_probe = loom_survey.run_git(
+                root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
+        except loom_survey.SurveyError as exc:
+            if not _git_executable_missing(exc):
+                raise RuntimeBlocked(
+                    "PROJECT_INDETERMINATE",
+                    f"cannot establish project state mode: {exc}") from exc
+            state_mode = "filesystem"
+        else:
+            state_mode = "git" if git_probe.returncode == 0 \
+                and git_probe.stdout.strip() == "true" else "filesystem"
     try:
         project_id = loom_memory.project_identity(
             instance_id, root, state_mode=state_mode)
@@ -530,6 +545,14 @@ _PLAN_DELIVERABLE_RE = re.compile(
     r"(?:(?:one|a|an|the)\s+)?"
     r"(?:(?:reviewable|detailed|small|release-ready|implementation|coding|"
     r"project|research|writing|research-and-writing)\s+|and\s+){0,6}plan\b")
+_PLAN_REPORTING_REQUIREMENT_RE = re.compile(
+    r"^(?:preserve\s+(?:and\s+)?)?report\b"
+    r"(?=[^.!?;]{0,200}\b(?:observable|generated|produced|refusal|timeout|"
+    r"validation|artifact|elapsed|lifecycle)\b)")
+_PLAN_INSPECTION_METHOD_RE = re.compile(
+    r"^(?:review|inspect|audit)\b"
+    r"(?=[^.!?;]{0,160}\b(?:only|necessary|bounded|relevant|source|input|"
+    r"facts?|requirements?|constraints?|repository|project|codebase)\b)")
 _CLAUSE_SEPARATOR_RE = re.compile(
     r"(?P<hard>\r?\n+|[.;!?]+)"
     r"|(?P<comma>,\s*(?:(?:and|but|then)\b\s*)?)"
@@ -577,14 +600,49 @@ def _has_positive_software_clause(text):
     return False
 
 
-def _split_control_clauses(request):
-    """Return bounded clauses and the coordination immediately before each clause."""
+def _has_planning_envelope(request):
     normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
+    return bool(
+        re.match(r"^(?:now\s+)?(?:please\s+)?plan\b", normalized)
+        or _PLAN_DELIVERABLE_RE.search(normalized))
+
+
+def _split_control_clauses(request):
+    """Return bounded control clauses, excluding descriptive scope prose."""
+    normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
+    planning_envelope = _has_planning_envelope(normalized)
     separators = list(_CLAUSE_SEPARATOR_RE.finditer(normalized))
     clauses = []
     start = 0
     pending = None
     overflow = False
+
+    def append_control(separator, value):
+        nonlocal overflow
+        value = " ".join(value.split())
+        role = _classify_control_clause(value) if value else None
+        if role is None:
+            return
+        if planning_envelope and clauses \
+                and role["intent"] == "plan" \
+                and role["control"] == "implementation" \
+                and not role["negated"] \
+                and _PLAN_DELIVERABLE_RE.search(value) is None:
+            # Imperative requirements inside one explicit planning envelope
+            # describe the requested system. They are not separate requests for
+            # Loom to implement each bullet.
+            return
+        if planning_envelope and clauses \
+                and role["intent"] == "status" \
+                and not role["negated"] \
+                and _PLAN_REPORTING_REQUIREMENT_RE.search(value):
+            # A planning stress test may require the host to report observable
+            # lifecycle outcomes. That is acceptance evidence for the requested
+            # plan, not a second request to inspect an existing Loom action.
+            return
+        clauses.append((separator, value))
+        overflow = len(clauses) > MAX_ROUTE_CLAUSES
+
     for position, match in enumerate(separators):
         if match.lastgroup != "hard":
             next_start = (
@@ -599,12 +657,9 @@ def _split_control_clauses(request):
             # Loom control or planning action.
             if not candidate or _classify_control_clause(candidate) is None:
                 continue
-        value = " ".join(normalized[start:match.start()].split())
-        if value:
-            clauses.append((pending, value))
-            if len(clauses) > MAX_ROUTE_CLAUSES:
-                overflow = True
-                break
+        append_control(pending, normalized[start:match.start()])
+        if overflow:
+            break
         pending = (
             "hard" if match.lastgroup == "hard"
             else "and" if match.lastgroup == "comma"
@@ -612,10 +667,7 @@ def _split_control_clauses(request):
         )
         start = match.end()
     if not overflow:
-        value = " ".join(normalized[start:].split())
-        if value:
-            clauses.append((pending, value))
-        overflow = len(clauses) > MAX_ROUTE_CLAUSES
+        append_control(pending, normalized[start:])
     return clauses[:MAX_ROUTE_CLAUSES], overflow
 
 
@@ -701,7 +753,10 @@ def _resolve_clause_roles(request, state):
         return _decision(
             "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
             confidence=0.0, evidence=("clause-limit",),
-            recommendation="State one bounded positive outcome and its prohibitions.")
+            recommendation=(
+                "The request contains more than 16 separate Loom actions. Start a "
+                "fresh request with one positive action; group requirements as "
+                "descriptive bullets and prohibitions under one Do not section."))
     classified = []
     for index, (separator, clause) in enumerate(clauses):
         role = _classify_control_clause(clause)
@@ -714,13 +769,21 @@ def _resolve_clause_roles(request, state):
     # not a competing lifecycle review operation. Preserve separate negated
     # implementation clauses as planning constraints.
     plan_deliverable = _PLAN_DELIVERABLE_RE.search(request.casefold())
-    if plan_deliverable:
+    planning_envelope = _has_planning_envelope(request)
+    if planning_envelope:
         for item in classified:
-            if not item["negated"] and item["intent"] == "review":
+            if not item["negated"] and item["intent"] == "review" \
+                    and (
+                        plan_deliverable is not None
+                        or _PLAN_INSPECTION_METHOD_RE.search(
+                            item.get("clause", "")) is not None
+                    ):
                 item["intent"] = "plan"
                 item["control"] = "planning"
             elif not item["negated"] and item["intent"] == "plan" \
-                    and item["index"] == 0 and plan_deliverable.start() == 0:
+                    and item["index"] == 0 \
+                    and plan_deliverable is not None \
+                    and plan_deliverable.start() == 0:
                 # Clause splitting may divide a compound deliverable such as
                 # "create a research and writing plan" at "and". The leading
                 # create fragment still belongs to the matched plan deliverable.
@@ -783,10 +846,23 @@ def _resolve_clause_roles(request, state):
             recommendation="Keep lifecycle state unchanged; state one positive next action.")
     if has_or and len(classified) > 1 \
             or conflicting_polarity or multiple_positive_outcomes:
+        positive_labels = sorted(
+            f"{item['intent']}/{item['control']}" for item in positives)
+        negative_labels = sorted(
+            f"{item['intent']}/{item['control']}" for item in negatives)
+        role_summary = ", ".join(positive_labels)
+        if negative_labels:
+            role_summary += "; prohibited: " + ", ".join(negative_labels)
         return _decision(
             "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
-            confidence=0.0, evidence=("clause-role-conflict",),
-            recommendation="State one positive outcome; keep prohibitions in a separate clause.")
+            confidence=0.0,
+            evidence=("clause-role-conflict", *(
+                f"positive:{label}" for label in positive_labels), *(
+                f"negative:{label}" for label in negative_labels)),
+            recommendation=(
+                "The request contains conflicting Loom controls: "
+                f"{role_summary}. State one primary Loom action; phrase review or "
+                "reporting requirements as acceptance criteria for that action."))
     if not positives and negatives:
         return _decision(
             "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
@@ -1978,7 +2054,8 @@ def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
     """Read one complete preparation snapshot through owned bounded primitives."""
     pack_rel = pack.relative_to(project.root).as_posix()
     snapshot = loom_survey.workspace_snapshot(
-        project.root, exclude_prefixes=(pack_rel,), touch_paths=touch_paths)
+        project.root, exclude_prefixes=(pack_rel,), touch_paths=touch_paths,
+        state_mode=project.state_mode)
     repo_state = snapshot.state
     inspection = loom_project_inspection.inspect(
         snapshot, target_identity=project.canonical_target_identity)

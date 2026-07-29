@@ -1,6 +1,7 @@
 import re
 import unittest
 
+import loom_block_reason
 import loom_message
 
 
@@ -112,6 +113,28 @@ class OwnerMessageTests(unittest.TestCase):
         self.assertEqual("not-applicable", value["undo_status"])
         self.assertIn("invalid JSON", value["human"])
         self.assertNotIn("reversible: no", value["human"])
+
+    def test_blocked_intent_message_exposes_one_action_and_how_to_inspect_details(self):
+        reason = loom_block_reason.build(
+            code="INTENT_AMBIGUOUS", category="intent",
+            expected="One unambiguous Loom action.",
+            observed="The request contains more than 16 separate Loom actions.",
+            finding_codes=["INTENT_AMBIGUOUS"], finding_count=1,
+            ownership="not-applicable", pristine_proof="not-applicable",
+            automatic_recovery="owner-decision",
+            next_action=(
+                "Start a fresh request with one positive action; group requirements as "
+                "descriptive bullets and prohibitions under one Do not section."))
+
+        value = loom_message.from_session(
+            status="blocked", code="intent-ambiguous", intent="status", tier="S",
+            owner_input_required=True, reversible_action_ids=[], detail="",
+            receipt_id="session-intent-block", block_reason=reason)
+
+        self.assertIn("could not identify one safely authorized action",
+                      value["human"])
+        self.assertIn("descriptive bullets", value["human"])
+        self.assertIn("Details: ask Loom why.", value["human"])
 
     def test_result_locator_rejects_absolute_and_parent_traversal_paths(self):
         for detail in (

@@ -58,7 +58,7 @@ class AdapterProtocolV2Tests(unittest.TestCase):
             cursor = cursor["unknown"]
         with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "nesting"):
             loom_adapter_protocol.validate_message(nested)
-        raw = b"{" + b"x" * loom_adapter_protocol.MAX_MESSAGE_BYTES + b"\n"
+        raw = b"{" + b"x" * loom_adapter_protocol.MAX_RESULT_MESSAGE_BYTES + b"\n"
         with self.assertRaisesRegex(loom_adapter_protocol.ProtocolError, "oversized"):
             loom_adapter_protocol.read_frame(io.BytesIO(raw))
         for malformed in (b"{not-json}\n", b'{"request":"\xff"}\n', b"{}"):
@@ -87,8 +87,16 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         contract = json.loads((ROOT / "contracts" / "adapter-protocol-v2.json").read_text(
             encoding="utf-8"))
         self.assertEqual(2, contract["protocol_version"])
+        self.assertEqual(
+            loom_adapter_protocol.ADAPTER_VERSION,
+            contract["adapter_version"],
+        )
         self.assertFalse(contract["network_listener"])
         self.assertEqual(65536, contract["maximum_message_bytes"])
+        self.assertEqual(
+            loom_adapter_protocol.MAX_RESULT_MESSAGE_BYTES,
+            contract["maximum_result_message_bytes"],
+        )
         self.assertEqual("bounded-utf8-json-stdio-end-to-end",
                          contract["request_transport"])
         self.assertIn("requestEnvelope", message["$defs"])
@@ -106,8 +114,9 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertIn(".codex/skills/loom/SKILL.md",
                       loom_host_registry.project_skill_paths())
         self.assertEqual("stale", loom_host_registry.HOSTS["gemini-cli"]["contract_status"])
-        self.assertFalse(loom_host_registry.detect(
-            Path("."), which=lambda _name: None))
+        with tempfile.TemporaryDirectory() as raw:
+            self.assertFalse(loom_host_registry.detect(
+                Path(raw), which=lambda _name: None))
 
     def test_bridge_requires_initialize_before_any_request(self):
         session = {}
@@ -226,6 +235,80 @@ class AdapterProtocolV2Tests(unittest.TestCase):
                 with self.assertRaisesRegex(
                         loom_adapter_protocol.ProtocolError, "non-finite"):
                     loom_adapter_protocol.validate_message(changed)
+
+    def test_large_result_has_a_separate_bound_without_weakening_request_ingress(self):
+        payload_text = "x" * (loom_adapter_protocol.MAX_MESSAGE_BYTES + 1024)
+        result = {
+            "schema_version": 2,
+            "message_type": "result",
+            "request_id": "req-large-result",
+            "returncode": 0,
+            "payload": {
+                "status": "action-required",
+                "plan_contract": payload_text,
+            },
+        }
+        self.assertGreater(
+            len(json.dumps(
+                result, sort_keys=True, separators=(",", ":"),
+            ).encode("utf-8")),
+            loom_adapter_protocol.MAX_MESSAGE_BYTES,
+        )
+        self.assertEqual(result, loom_adapter_protocol.round_trip(result))
+
+        oversized_request = {
+            "schema_version": 2,
+            "message_type": "invoke",
+            "request_id": "req-oversized-request",
+            "request": "\u0800" * loom_adapter_protocol.MAX_REQUEST_CHARACTERS,
+            "cwd": "C:/disposable/project",
+        }
+        with self.assertRaisesRegex(
+                loom_adapter_protocol.ProtocolError, "byte bound"):
+            loom_adapter_protocol.validate_message(oversized_request)
+
+        result["payload"]["plan_contract"] = (
+            "x" * loom_adapter_protocol.MAX_RESULT_MESSAGE_BYTES
+        )
+        with self.assertRaisesRegex(
+                loom_adapter_protocol.ProtocolError, "byte bound"):
+            loom_adapter_protocol.validate_message(result)
+
+    def test_bridge_returns_a_large_bounded_action_frontier(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {
+                "id": "codex",
+                "version": loom_adapter_protocol.ADAPTER_VERSION,
+            },
+            "capabilities": capabilities(),
+            "protocol_version": 2,
+        }
+        message = {
+            "schema_version": 2,
+            "message_type": "invoke",
+            "request_id": "req-large-frontier",
+            "request": "Plan the bounded large project.",
+            "cwd": "C:/disposable/project",
+        }
+        payload = {
+            "status": "action-required",
+            "plan_contract": "x" * (loom_adapter_protocol.MAX_MESSAGE_BYTES + 1024),
+        }
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(0, payload)):
+            result = loom_adapter_bridge.dispatch(
+                message,
+                home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session,
+            )
+        self.assertEqual(payload, result["payload"])
+        self.assertGreater(
+            len(loom_adapter_protocol.canonical_bytes(result)),
+            loom_adapter_protocol.MAX_MESSAGE_BYTES,
+        )
 
     def test_bridge_returns_selected_memory_with_fractional_confidence(self):
         session = {

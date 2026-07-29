@@ -3423,6 +3423,18 @@ def _memory_backend(home, install_root, project_root=None):
     return adapter.instance_id, adapter
 
 
+def _bind_memory_project(memory, project):
+    binder = getattr(memory, "bind_project_state", None)
+    if binder is None:
+        return
+    try:
+        binder(project.project_id, project.state_mode)
+    except loom_vault_adapter.VaultAdapterError as exc:
+        raise OrchestratorError(
+            "PROJECT_INDETERMINATE",
+            f"owner memory could not bind the resolved project state: {exc}") from exc
+
+
 def _controller(action, *, usage=None, seal_plan_author=None):
     home = Path(action["owner_home"])
     root = Path(action["explicit_target"] or action["cwd"])
@@ -3430,6 +3442,16 @@ def _controller(action, *, usage=None, seal_plan_author=None):
     if instance_id != action["instance_id"]:
         raise OrchestratorError(
             "OWNER_VAULT_CHANGED", "the action owner vault no longer matches the active vault")
+    try:
+        project = loom_runtime.resolve_project(
+            instance_id, explicit_target=root, cwd=root)
+    except loom_runtime.RuntimeBlocked as exc:
+        raise OrchestratorError(exc.code, exc.message) from exc
+    if project.project_id != action["project_id"]:
+        raise OrchestratorError(
+            "PROJECT_CHANGED",
+            "the action project identity no longer matches the active target")
+    _bind_memory_project(memory, project)
     handlers = default_handlers(
         root=root, owner_home=home, usage=usage,
         work_order=action.get("work_order"),
@@ -3632,6 +3654,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             instance_id, explicit_target=target, cwd=cwd)
     except loom_runtime.RuntimeBlocked as exc:
         raise OrchestratorError(exc.code, exc.message) from exc
+    _bind_memory_project(memory, project)
     directory = _orchestration_directory(home, instance_id, project.project_id)
     instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
     intent_decision = loom_runtime.resolve_intent(request)
@@ -3961,6 +3984,7 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
                           else action["plan_contract"]),
         "semantic_draft_shape": semantic_draft_shape,
         "context_manifest": action["context_manifest"],
+        "world_fingerprint": action["prepared"]["world_fingerprint"],
         "continuation_authority": action["continuation_authority"],
         "resolved_terminal_block": resolved_terminal_block,
         "owner_message": action["owner_message"],
@@ -4635,6 +4659,29 @@ def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=N
             "session_id": action["session_id"], "recovery_receipt": receipt}
 
 
+def _project_world_observation(result):
+    context = result.get("context_manifest")
+    world_fingerprint = result.get("world_fingerprint")
+    project_id = result.get("project_id")
+    observed = (
+        isinstance(context, dict)
+        or (
+            isinstance(project_id, str)
+            and loom_runtime.PROJECT_RE.fullmatch(project_id) is not None
+            and isinstance(world_fingerprint, str)
+            and re.fullmatch(r"[0-9a-f]{64}", world_fingerprint) is not None
+        )
+    )
+    return {
+        "project_id": project_id,
+        "action_id": result.get("action_id"),
+        "context_manifest_sha256": (
+            _hash(context) if isinstance(context, dict) else None),
+        "world_fingerprint": world_fingerprint if observed else None,
+        "world_observed": observed,
+    }, ("observed" if observed else "unavailable")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -4686,16 +4733,10 @@ def main(argv=None):
                 transport_invocation_id=_transport_invocation_id(envelope),
                 assurance=envelope["assurance"])
             if chain_id is not None:
-                context = result.get("context_manifest")
+                project_world, observability = _project_world_observation(result)
                 loom_execution_chain.append(
-                    args.home, chain_id, "project-world", {
-                        "project_id": result.get("project_id"),
-                        "action_id": result.get("action_id"),
-                        "context_manifest_sha256": (
-                            _hash(context) if isinstance(context, dict) else None),
-                        "world_observed": isinstance(context, dict),
-                    }, observability=(
-                        "observed" if isinstance(context, dict) else "unavailable"))
+                    args.home, chain_id, "project-world", project_world,
+                    observability=observability)
                 action_id = result.get("action_id")
                 session_id = result.get("session_id")
                 loom_execution_chain.append(
@@ -4772,7 +4813,20 @@ def main(argv=None):
             loom_vault_adapter.VaultAdapterError, loom_runtime.RuntimeError,
             loom_session.SessionError, loom_install.InstallError,
             loom_planning_intelligence.PlanningIntelligenceError,
-            loom_execution_chain.ExecutionChainError) as exc:
+            loom_execution_chain.ExecutionChainError,
+            loom_survey.SurveyError) as exc:
+        if chain_id is not None:
+            try:
+                loom_execution_chain.append(
+                    args.home, chain_id, "result", {
+                        "status": "blocked",
+                        "error_code": "RUNTIME_BLOCKED",
+                        "error_sha256": hashlib.sha256(
+                            str(exc).encode("utf-8")).hexdigest(),
+                    })
+                loom_execution_chain.seal(args.home, chain_id, blocked=True)
+            except loom_execution_chain.ExecutionChainError:
+                pass
         print(json.dumps({
             "schema_version": SCHEMA_VERSION, "status": "blocked",
             "code": "RUNTIME_BLOCKED", "error": str(exc),

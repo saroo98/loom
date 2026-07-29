@@ -9,8 +9,9 @@ import re
 
 
 PROTOCOL_VERSION = 2
-ADAPTER_VERSION = "2.1.0"
+ADAPTER_VERSION = "2.2.0"
 MAX_MESSAGE_BYTES = 65536
+MAX_RESULT_MESSAGE_BYTES = 262144
 MAX_DEPTH = 16
 MAX_REQUEST_CHARACTERS = 32768
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
@@ -71,6 +72,15 @@ def canonical_bytes(value):
         ensure_ascii=False,
         allow_nan=False,
     ).encode("utf-8")
+
+
+def _message_byte_limit(message_type):
+    """Keep request ingress tight while bounding larger public result frontiers."""
+    return (
+        MAX_RESULT_MESSAGE_BYTES
+        if message_type == "result"
+        else MAX_MESSAGE_BYTES
+    )
 
 
 def digest(value):
@@ -301,7 +311,7 @@ def validate_message(value):
     except UnicodeEncodeError as exc:
         raise ProtocolError(
             "MESSAGE_INVALID", "adapter message is not valid Unicode scalar text") from exc
-    if len(raw) > MAX_MESSAGE_BYTES:
+    if len(raw) > _message_byte_limit(message_type):
         raise ProtocolError("MESSAGE_TOO_LARGE", "adapter message exceeds its byte bound")
     return value
 
@@ -317,10 +327,10 @@ def negotiate(protocol_range):
 
 
 def read_frame(stream):
-    raw = stream.readline(MAX_MESSAGE_BYTES + 2)
+    raw = stream.readline(MAX_RESULT_MESSAGE_BYTES + 2)
     if raw == b"":
         return None
-    if len(raw) > MAX_MESSAGE_BYTES + 1 or not raw.endswith(b"\n"):
+    if len(raw) > MAX_RESULT_MESSAGE_BYTES + 1 or not raw.endswith(b"\n"):
         raise ProtocolError("MESSAGE_TOO_LARGE", "adapter frame is incomplete or oversized")
     try:
         value = json.loads(raw.decode("utf-8"))
@@ -343,7 +353,7 @@ def read_single_frame(stream, *, message_type):
 
 def write_frame(stream, value):
     raw = canonical_bytes(value) + b"\n"
-    if len(raw) > MAX_MESSAGE_BYTES + 1:
+    if len(raw) > _message_byte_limit(value.get("message_type")) + 1:
         raise ProtocolError("MESSAGE_TOO_LARGE", "adapter frame exceeds its byte bound")
     stream.write(raw)
     stream.flush()

@@ -252,6 +252,11 @@ def run_git(repo, *args, allowed=(0,), timeout=20, filter_drivers=None,
     return result
 
 
+def _git_executable_missing(error):
+    """Return whether a survey failure proves that Git could not be started."""
+    return isinstance(getattr(error, "__cause__", None), FileNotFoundError)
+
+
 def _nul_paths(text):
     return tuple(sorted(path for path in text.split("\0") if path))
 
@@ -787,8 +792,47 @@ def _parse_porcelain_v2(content):
     }
 
 
-def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
+def _filesystem_snapshot(root, excluded, entries, boundaries, touch_paths,
+                         *, verify_boundaries):
+    provisional = WorkspaceSnapshot(
+        root, RepoState(is_git=False, mode="filesystem", state_hash="0" * 64,
+                        excluded=excluded), tuple(entries),
+        boundaries=boundaries)
+    import loom_project_inspection
+    classification = loom_project_inspection.classify_generated(
+        provisional, touch_paths=touch_paths)
+    generated = tuple(item["path"] for item in classification["exclusions"])
+    evidence = tuple((item["path"], item["rule_id"])
+                     for item in classification["exclusions"])
+    unresolved = tuple(
+        (item["path"], item["reason"])
+        for item in classification["unresolved_content_exclusions"])
+    content_excluded = tuple(sorted(
+        set(generated + tuple(path for path, _reason in unresolved)),
+        key=os.fsencode))
+    workspace_hash, content_complete = _observe_workspace_hash(
+        entries, content_excluded, evidence, boundaries, unresolved)
+    state = _filesystem_state(root, excluded, entries, workspace_hash)
+    if not content_complete:
+        partial = WorkspaceSnapshot(
+            root, state, tuple(entries), boundaries=boundaries,
+            content_hash_complete=False)
+        classification = loom_project_inspection.classify_generated(
+            partial, touch_paths=touch_paths)
+    if verify_boundaries and _registered_worktree_boundaries(root) != boundaries:
+        raise SurveyError(
+            "registered nested worktree boundaries changed during observation")
+    return WorkspaceSnapshot(
+        root, state, tuple(entries),
+        generated_classification=classification, boundaries=boundaries,
+        content_hash_complete=content_complete)
+
+
+def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=(),
+                       state_mode=None):
     """Return the complete frozen census and Git state used by one world observation."""
+    if state_mode not in {None, "git", "filesystem"}:
+        raise SurveyError("workspace state mode is invalid")
     root = Path(root_path)
     # Runtime callers have already supplied and validated an absolute root.
     # Do not call resolve() on that path: on Windows it can consult ambient cwd.
@@ -798,10 +842,24 @@ def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
         exclude_prefixes = ("plans",) if (root / "plans" / "MANIFEST.md").is_file() else ()
     excluded = tuple(sorted(str(path).replace("\\", "/").strip("/")
                             for path in exclude_prefixes if str(path).strip("/\\")))
-    boundaries = _registered_worktree_boundaries(root)
+    filesystem_only = state_mode == "filesystem"
+    if filesystem_only:
+        boundaries = ()
+    else:
+        try:
+            boundaries = _registered_worktree_boundaries(root)
+        except SurveyError as exc:
+            if state_mode == "git" or not _git_executable_missing(exc):
+                raise
+            boundaries = ()
+            filesystem_only = True
     boundary_paths = tuple(item.rel for item in boundaries)
     census_excluded = tuple(sorted(set(excluded + boundary_paths), key=os.fsencode))
     entries = _workspace_census(root, census_excluded)
+    if filesystem_only:
+        return _filesystem_snapshot(
+            root, excluded, entries, boundaries, touch_paths,
+            verify_boundaries=False)
     pathspec = _state_pathspec(census_excluded)
     filter_drivers = _configured_filter_drivers(root)
     status_result = run_git(
@@ -811,38 +869,9 @@ def workspace_snapshot(root_path, exclude_prefixes=None, touch_paths=()):
     if status_result.returncode != 0:
         diagnostic = (status_result.stderr or status_result.stdout).lower()
         if b"not a git repository" in diagnostic or b"not a git directory" in diagnostic:
-            provisional = WorkspaceSnapshot(
-                root, RepoState(is_git=False, mode="filesystem", state_hash="0" * 64,
-                                excluded=excluded), tuple(entries),
-                boundaries=boundaries)
-            import loom_project_inspection
-            classification = loom_project_inspection.classify_generated(
-                provisional, touch_paths=touch_paths)
-            generated = tuple(item["path"] for item in classification["exclusions"])
-            evidence = tuple((item["path"], item["rule_id"])
-                             for item in classification["exclusions"])
-            unresolved = tuple(
-                (item["path"], item["reason"])
-                for item in classification["unresolved_content_exclusions"])
-            content_excluded = tuple(sorted(
-                set(generated + tuple(path for path, _reason in unresolved)),
-                key=os.fsencode))
-            workspace_hash, content_complete = _observe_workspace_hash(
-                entries, content_excluded, evidence, boundaries, unresolved)
-            state = _filesystem_state(root, excluded, entries, workspace_hash)
-            if not content_complete:
-                partial = WorkspaceSnapshot(
-                    root, state, tuple(entries), boundaries=boundaries,
-                    content_hash_complete=False)
-                classification = loom_project_inspection.classify_generated(
-                    partial, touch_paths=touch_paths)
-            if _registered_worktree_boundaries(root) != boundaries:
-                raise SurveyError(
-                    "registered nested worktree boundaries changed during observation")
-            return WorkspaceSnapshot(
-                root, state, tuple(entries),
-                generated_classification=classification, boundaries=boundaries,
-                content_hash_complete=content_complete)
+            return _filesystem_snapshot(
+                root, excluded, entries, boundaries, touch_paths,
+                verify_boundaries=True)
         raise SurveyError(
             "cannot determine Git state: "
             + (diagnostic.decode("utf-8", errors="replace").strip() or "unknown error"))

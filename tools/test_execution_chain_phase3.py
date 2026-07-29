@@ -47,7 +47,24 @@ class ExecutionChainTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256(raw).hexdigest(),
                          request_stage["payload"]["sha256"])
         self.assertEqual(
-            {"chain_id", "status", "stages", "chain_sha256"}, set(projection))
+            {
+                "chain_id", "status", "stages", "chain_sha256",
+                "started_at", "completed_at", "duration_ms", "stage_timeline",
+            },
+            set(projection))
+        self.assertEqual(
+            ["launcher", "request", "host-adapter"],
+            [stage["name"] for stage in projection["stage_timeline"]])
+        self.assertEqual(
+            [0, 1, 2],
+            [stage["index"] for stage in projection["stage_timeline"]])
+        self.assertTrue(all(
+            isinstance(stage["recorded_at"], str)
+            and isinstance(stage["elapsed_ms_from_prior"], int)
+            and stage["elapsed_ms_from_prior"] >= 0
+            for stage in projection["stage_timeline"]))
+        self.assertIsInstance(projection["duration_ms"], int)
+        self.assertGreaterEqual(projection["duration_ms"], 0)
         self.assertNotIn(str(self.home), json.dumps(projection))
 
     def test_tampered_stage_and_prior_digest_fail_closed(self):
@@ -60,6 +77,36 @@ class ExecutionChainTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 loom_execution_chain.ExecutionChainError, "digest"):
             loom_execution_chain.read(self.home, chain["chain_id"])
+
+    def test_legacy_v1_chain_without_stage_times_remains_readable(self):
+        chain = loom_execution_chain.create(
+            self.home, launcher_path=self.launcher)
+        path = Path(chain["path"])
+        value = loom_execution_chain.read(self.home, chain["chain_id"])
+        for stage in value["stages"]:
+            stage["payload"].pop("_recorded_at")
+            body = {key: stage[key] for key in (
+                "index", "name", "observability", "prior_sha256", "payload")}
+            stage["stage_sha256"] = loom_execution_chain._sha(body)
+        loom_execution_chain._write(path, value)
+
+        projection = loom_execution_chain.projection(
+            loom_execution_chain.read(self.home, chain["chain_id"]))
+
+        self.assertEqual(
+            projection["started_at"],
+            projection["stage_timeline"][0]["recorded_at"])
+        self.assertEqual(
+            0, projection["stage_timeline"][0]["elapsed_ms_from_prior"])
+
+    def test_reserved_stage_time_cannot_be_supplied_by_a_caller(self):
+        chain = loom_execution_chain.create(
+            self.home, launcher_path=self.launcher)
+        with self.assertRaisesRegex(
+                loom_execution_chain.ExecutionChainError, "append"):
+            loom_execution_chain.append(
+                self.home, chain["chain_id"], "request",
+                {"_recorded_at": "2026-01-01T00:00:00.000Z"})
 
     def test_loaded_loom_module_outside_runtime_is_refused(self):
         inside_path = self.runtime / "loom_inside.py"

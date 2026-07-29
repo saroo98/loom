@@ -104,6 +104,26 @@ class OperationSupervisorTests(unittest.TestCase):
             self.assertFalse(
                 loom_operation_supervisor._ps_group_live_state(42))
 
+    @unittest.skipUnless(os.name == "nt", "Windows Job Object release contract")
+    def test_windows_timeout_releases_cwd_before_returning_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            parent = Path(temporary).resolve()
+            for index in range(12):
+                operation_root = parent / f"operation-{index}"
+                operation_root.mkdir()
+                receipt = loom_operation_supervisor.run(
+                    operation_class="timeout-fixture",
+                    command=[
+                        sys.executable, "-c",
+                        "import subprocess,sys,time;"
+                        "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)']);"
+                        "time.sleep(60)",
+                    ],
+                    cwd=operation_root, timeout=0.2,
+                    allowed_roots=[operation_root])
+                self.assertTrue(receipt["survivors_confirmed_zero"])
+                operation_root.rmdir()
+
     def test_cancellation_is_distinct_and_reconciles_descendants(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

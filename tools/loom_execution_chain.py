@@ -38,8 +38,18 @@ def _sha(value):
 
 
 def _stamp():
-    return dt.datetime.now(dt.timezone.utc).replace(
-        microsecond=0).isoformat().replace("+00:00", "Z")
+    return dt.datetime.now(dt.timezone.utc).isoformat(
+        timespec="milliseconds").replace("+00:00", "Z")
+
+
+def _parse_stamp(value):
+    try:
+        parsed = dt.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            raise ValueError
+        return parsed
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise ExecutionChainError("execution chain time is invalid") from exc
 
 
 def request_identity(request):
@@ -81,13 +91,14 @@ def _validate(value):
     try:
         if str(uuid.UUID(value["chain_id"])) != value["chain_id"]:
             raise ValueError
-        for field in ("created_at", "updated_at"):
-            parsed = dt.datetime.fromisoformat(value[field].replace("Z", "+00:00"))
-            if parsed.tzinfo is None:
-                raise ValueError
     except (ValueError, TypeError, AttributeError) as exc:
         raise ExecutionChainError("execution chain identity or time is invalid") from exc
+    created_at = _parse_stamp(value["created_at"])
+    updated_at = _parse_stamp(value["updated_at"])
+    if updated_at < created_at:
+        raise ExecutionChainError("execution chain time is not monotonic")
     prior = None
+    prior_time = created_at
     for index, stage in enumerate(value["stages"]):
         fields = {
             "index", "name", "observability", "prior_sha256", "payload",
@@ -101,6 +112,12 @@ def _validate(value):
                 or not isinstance(stage["payload"], dict) \
                 or len(stage["payload"]) > 32:
             raise ExecutionChainError("execution chain stage is invalid")
+        if "_recorded_at" in stage["payload"]:
+            recorded_at = _parse_stamp(stage["payload"]["_recorded_at"])
+            if recorded_at < prior_time or recorded_at > updated_at:
+                raise ExecutionChainError(
+                    "execution chain stage time is not monotonic")
+            prior_time = recorded_at
         body = {key: stage[key] for key in (
             "index", "name", "observability", "prior_sha256", "payload")}
         if stage["stage_sha256"] != _sha(body):
@@ -164,16 +181,18 @@ def read(home, chain_id):
 def _append_value(value, name, payload, *, observability="observed"):
     if value["status"] != "open" or name not in STAGES \
             or observability not in OBSERVABILITY \
-            or not isinstance(payload, dict) or len(payload) > 32 \
+            or not isinstance(payload, dict) or len(payload) > 31 \
+            or "_recorded_at" in payload \
             or len(value["stages"]) >= MAX_STAGES:
         raise ExecutionChainError("execution chain append is invalid")
+    recorded_payload = {**payload, "_recorded_at": _stamp()}
     prior = value["stages"][-1]["stage_sha256"] if value["stages"] else None
     body = {
         "index": len(value["stages"]),
         "name": name,
         "observability": observability,
         "prior_sha256": prior,
-        "payload": payload,
+        "payload": recorded_payload,
     }
     value["stages"].append({**body, "stage_sha256": _sha(body)})
     value["updated_at"] = _stamp()
@@ -202,11 +221,34 @@ def seal(home, chain_id, *, blocked=False):
 
 def projection(value):
     value = _validate(value)
+    started = _parse_stamp(value["created_at"])
+    completed = _parse_stamp(value["updated_at"])
+    prior = started
+    timeline = []
+    for stage in value["stages"]:
+        recorded_at = stage["payload"].get("_recorded_at")
+        recorded = _parse_stamp(recorded_at) if recorded_at else prior
+        timeline.append({
+            "index": stage["index"],
+            "name": stage["name"],
+            "observability": stage["observability"],
+            "recorded_at": (
+                recorded_at if recorded_at is not None
+                else value["created_at"]),
+            "elapsed_ms_from_prior": max(
+                0, round((recorded - prior).total_seconds() * 1000)),
+        })
+        prior = recorded
     return {
         "chain_id": value["chain_id"],
         "status": value["status"],
         "stages": len(value["stages"]),
         "chain_sha256": value["chain_sha256"],
+        "started_at": value["created_at"],
+        "completed_at": value["updated_at"],
+        "duration_ms": max(
+            0, round((completed - started).total_seconds() * 1000)),
+        "stage_timeline": timeline,
     }
 
 

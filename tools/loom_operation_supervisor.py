@@ -203,6 +203,17 @@ if os.name == "nt":
     _KERNEL32.QueryInformationJobObject.restype = wintypes.BOOL
     _KERNEL32.CloseHandle.argtypes = [wintypes.HANDLE]
     _KERNEL32.CloseHandle.restype = wintypes.BOOL
+    _KERNEL32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    _KERNEL32.CreateFileW.restype = wintypes.HANDLE
+
+    _DELETE_ACCESS = 0x00010000
+    _FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+    _OPEN_EXISTING = 3
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    _ERROR_SHARING_VIOLATION = 32
+    _INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
 
     _BOOTSTRAP = (
         "import json,subprocess,sys;"
@@ -214,6 +225,47 @@ if os.name == "nt":
 def _windows_error(action):
     return SupervisorError(
         f"operation containment could not {action}: WinError {ctypes.get_last_error()}")
+
+
+def _windows_delete_ready(path):
+    """Return whether a Windows directory can be opened with delete access."""
+    if os.name != "nt":
+        return None
+    ctypes.set_last_error(0)
+    handle = _KERNEL32.CreateFileW(
+        str(path), _DELETE_ACCESS, _FILE_SHARE_ALL, None, _OPEN_EXISTING,
+        _FILE_FLAG_BACKUP_SEMANTICS, None)
+    if handle == _INVALID_HANDLE_VALUE:
+        error = ctypes.get_last_error()
+        return False if error == _ERROR_SHARING_VIOLATION else None
+    _KERNEL32.CloseHandle(handle)
+    return True
+
+
+def _wait_for_windows_cwd_release(path, timeout=5):
+    """Wait until terminated Windows children release their cwd directory handle."""
+    if os.name != "nt":
+        return True
+    deadline = time.monotonic() + timeout
+    while True:
+        ready = _windows_delete_ready(path)
+        if ready is not False:
+            return ready
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
+def _terminate_and_settle(process, containment, cwd, release_observable):
+    survivors_zero, secondary = _terminate(process, containment)
+    if survivors_zero and release_observable:
+        released = _wait_for_windows_cwd_release(cwd)
+        if released is not True:
+            survivors_zero = False
+            secondary.append(
+                "cwd-release-timeout" if released is False
+                else "cwd-release-census:unavailable")
+    return survivors_zero, secondary
 
 
 def _start(command, cwd, environment, stdout_file, stderr_file):
@@ -398,6 +450,7 @@ def run(*, operation_class, command, cwd, timeout, environment=None,
     except (ValueError, TypeError, AttributeError) as exc:
         raise SupervisorError("operation identity is invalid") from exc
     cwd = _safe_path(cwd, "operation cwd", directory=True)
+    release_observable = _windows_delete_ready(cwd) is True
     allowed = [_safe_path(item, "allowed root") for item in allowed_roots]
     if allowed and not any(cwd == root or root in cwd.parents for root in allowed):
         raise SupervisorError("operation cwd is outside its allowed roots")
@@ -454,7 +507,8 @@ def run(*, operation_class, command, cwd, timeout, environment=None,
                         break
                     time.sleep(0.02)
                 returncode = process.returncode
-                survivors_zero, cleanup = _terminate(process, containment)
+                survivors_zero, cleanup = _terminate_and_settle(
+                    process, containment, cwd, release_observable)
                 process = containment = None
                 body["survivors_confirmed_zero"] = survivors_zero
                 body["secondary_failures"].extend(cleanup)
@@ -474,7 +528,8 @@ def run(*, operation_class, command, cwd, timeout, environment=None,
                 body["secondary_failures"].append(
                     f"{type(exc).__name__}:{str(exc)[:240]}")
                 if process is not None:
-                    survivors_zero, cleanup = _terminate(process, containment)
+                    survivors_zero, cleanup = _terminate_and_settle(
+                        process, containment, cwd, release_observable)
                     body["survivors_confirmed_zero"] = survivors_zero
                     body["secondary_failures"].extend(cleanup)
                     process = containment = None

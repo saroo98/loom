@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 import loom_memory
 import loom_migrate
@@ -167,12 +168,16 @@ class MigrationTests(unittest.TestCase):
             self.vault.identity()["owner_vault_id"], project, state_mode="filesystem")
         adapter = loom_vault_adapter.VaultMemoryAdapter(
             owner_home=self.home, vault=self.vault, project_root=project)
+        adapter.bind_project_state(current_project_id, "filesystem")
         context = types.SimpleNamespace(
             project_id=current_project_id,
             prepared=types.SimpleNamespace(
                 route_contract={"tier": "M"}, domains=("accounting",)),
             intent="plan")
-        result = adapter.housekeeping(context)
+        with mock.patch.object(
+                loom_memory.loom_survey, "run_git",
+                side_effect=AssertionError("memory housekeeping re-probed Git")):
+            result = adapter.housekeeping(context)
         self.assertEqual(1, result["project_memory_rekeyed"])
         selected = self.vault.select_memory(
             domain="accounting", project_id=current_project_id)

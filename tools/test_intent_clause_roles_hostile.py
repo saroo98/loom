@@ -175,6 +175,75 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
         self.assertRoute(
             request, intent="plan", blocked=False, code="ROUTE_PLAN")
 
+    def test_multisection_program_scope_does_not_exhaust_the_control_clause_budget(self):
+        scope = "\n".join(
+            f"Build bounded subsystem {index}, define its data contract, document "
+            "failure behavior, prove recovery, and specify acceptance evidence."
+            for index in range(1, 41))
+        request = (
+            "Plan one reviewable, implementation-ready multi-year software program.\n"
+            f"{scope}\n"
+            "Do not implement source code, publish, deploy, install, contact external "
+            "services, or modify files outside the disposable planning project."
+        )
+
+        self.assertGreater(len(request.splitlines()), loom_runtime.MAX_ROUTE_CLAUSES)
+        self.assertRoute(
+            request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_maximal_plan_treats_inspection_and_reporting_as_acceptance_methods(self):
+        request = (
+            "Plan the largest realistic production project Loom can support. "
+            "Treat this as a genuine high-consequence, multi-year product program. "
+            "The plan must be reviewable and implementation-ready, with architecture, "
+            "data model, bounded work orders, dependency graph, expected touch paths, "
+            "acceptance evidence, real verification media, rollback and recovery, "
+            "security and privacy boundaries, unknowns, assumptions, explicit non-goals, "
+            "staged releases, migration strategy, operational ownership, and measurable "
+            "completion criteria. Inspect only what is necessary and bounded. "
+            "This is also a Loom stress test. Follow Loom's installed contract exactly. "
+            "Preserve and report every observable Loom status, refusal, timeout, "
+            "validation error, generated artifact, owner message, elapsed-time signal, "
+            "and lifecycle stage. Do not implement source code, publish, deploy, install, "
+            "contact external services, or write outside this disposable test project."
+        )
+
+        clauses, overflow = loom_runtime._split_control_clauses(request)
+        self.assertFalse(overflow)
+        self.assertNotIn(
+            "status",
+            {loom_runtime._classify_control_clause(clause)["intent"]
+             for _separator, clause in clauses})
+        self.assertRoute(
+            request, intent="plan", blocked=False, code="ROUTE_PLAN")
+
+    def test_explicit_plan_and_separate_current_status_request_remain_ambiguous(self):
+        decision = self.assertRoute(
+            "Plan the new API. Report the current Loom status.",
+            intent="status", blocked=True, code="INTENT_AMBIGUOUS")
+
+        self.assertIn("positive:plan/planning", decision["evidence"])
+        self.assertIn("positive:status/status", decision["evidence"])
+        self.assertIn(
+            "plan/planning, status/status",
+            decision["block_reason"]["observed"])
+
+    def test_true_control_clause_overflow_names_the_limit_and_exact_recovery(self):
+        request = "\n".join(
+            f"Plan independent product {index}." for index in range(1, 19))
+
+        decision = self.assertRoute(
+            request, intent="status", blocked=True, code="INTENT_AMBIGUOUS")
+
+        self.assertEqual(["clause-limit"], decision["evidence"])
+        self.assertIn("16", decision["block_reason"]["observed"])
+        self.assertIn("separate Loom actions",
+                      decision["block_reason"]["observed"])
+        self.assertIn("one positive action",
+                      decision["block_reason"]["next_action"])
+        self.assertIn("descriptive bullets",
+                      decision["block_reason"]["next_action"])
+
     def test_detailed_plan_with_semicolon_prohibitions_remains_planning(self):
         request = (
             "Create one detailed implementation plan, and only a plan, for a "

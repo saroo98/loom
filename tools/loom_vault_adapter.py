@@ -10,7 +10,6 @@ from pathlib import Path
 import loom_performance
 import loom_vault
 import loom_memory
-import loom_survey
 import loom_owner
 
 
@@ -58,10 +57,25 @@ class VaultMemoryAdapter:
         self.instance_id = vault.identity()["owner_vault_id"]
         self.project_root = Path(project_root).resolve() if project_root is not None else None
         self._rekeyed_project = None
+        self._bound_project_id = None
+        self._bound_state_mode = None
         if max_chars is not None and (
                 type(max_chars) is not int or not 256 <= max_chars <= 4096):
             raise VaultAdapterError("memory max_chars ceiling must be between 256 and 4096")
         self.max_chars = max_chars
+
+    def bind_project_state(self, project_id, state_mode):
+        """Bind housekeeping to the runtime's already resolved project authority."""
+        if not isinstance(project_id, str) \
+                or re.fullmatch(r"p-[0-9a-f]{32}", project_id) is None \
+                or state_mode not in {"git", "filesystem"}:
+            raise VaultAdapterError("resolved project state binding is invalid")
+        if self._bound_project_id is not None and (
+                self._bound_project_id != project_id
+                or self._bound_state_mode != state_mode):
+            raise VaultAdapterError("resolved project state binding changed")
+        self._bound_project_id = project_id
+        self._bound_state_mode = state_mode
 
     def protect_session_payload(self, operation_id, payload):
         """Encrypt mutable session details while leaving the journal chain inspectable."""
@@ -102,13 +116,14 @@ class VaultMemoryAdapter:
     def housekeeping(self, context):
         rekeyed = 0
         if self.project_root is not None and self._rekeyed_project != context.project_id:
-            probe = loom_survey.run_git(
-                self.project_root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
-            state_mode = "git" if probe.returncode == 0 \
-                and probe.stdout.strip() == "true" else "filesystem"
+            if self._bound_project_id != context.project_id \
+                    or self._bound_state_mode not in {"git", "filesystem"}:
+                raise VaultAdapterError(
+                    "memory housekeeping requires the resolved project state binding")
             for legacy_install_id in self.vault.legacy_alias_ids("legacy-install"):
                 legacy_project = loom_memory.project_identity(
-                    legacy_install_id, self.project_root, state_mode=state_mode)
+                    legacy_install_id, self.project_root,
+                    state_mode=self._bound_state_mode)
                 rekeyed += self.vault.rekey_project_memory(
                     legacy_project, context.project_id)["rekeyed"]
             self._rekeyed_project = context.project_id
