@@ -211,6 +211,20 @@ class PlanScopeDecisionTests(RuntimeFixture):
 
 
 class ProjectResolutionTests(RuntimeFixture):
+    @staticmethod
+    def _missing_git(*_args, **_kwargs):
+        try:
+            raise FileNotFoundError(2, "git executable not found")
+        except FileNotFoundError as exc:
+            raise loom_survey.SurveyError(f"git unavailable: {exc}") from exc
+
+    @staticmethod
+    def _timed_out_git(*_args, **_kwargs):
+        try:
+            raise subprocess.TimeoutExpired(["git"], 1)
+        except subprocess.TimeoutExpired as exc:
+            raise loom_survey.SurveyError("git timed out while inspecting project") from exc
+
     def test_explicit_target_wins_without_scanning_siblings(self):
         other = self.root / "other"
         other.mkdir()
@@ -238,6 +252,54 @@ class ProjectResolutionTests(RuntimeFixture):
         result = loom_runtime.resolve_project(self.instance, cwd=plain)
         self.assertEqual(result.root, plain)
         self.assertEqual(result.source, "filesystem-cwd")
+
+    def test_missing_git_executable_uses_filesystem_mode_for_explicit_target(self):
+        plain = self.root / "gitless-explicit"
+        plain.mkdir()
+        with mock.patch.object(
+                loom_survey, "run_git", side_effect=self._missing_git):
+            result = loom_runtime.resolve_project(
+                self.instance, cwd=plain, explicit_target=plain)
+        self.assertEqual(result.root, plain)
+        self.assertEqual(result.source, "explicit")
+        self.assertEqual(result.state_mode, "filesystem")
+
+    def test_missing_git_executable_uses_exact_cwd_without_searching(self):
+        plain = self.root / "gitless-cwd"
+        plain.mkdir()
+        with mock.patch.object(
+                loom_survey, "run_git", side_effect=self._missing_git):
+            result = loom_runtime.resolve_project(self.instance, cwd=plain)
+        self.assertEqual(result.root, plain)
+        self.assertEqual(result.source, "filesystem-cwd")
+        self.assertEqual(result.state_mode, "filesystem")
+
+    def test_missing_git_executable_prepares_plan_in_filesystem_mode(self):
+        plain = self.root / "gitless-plan"
+        plain.mkdir()
+        with mock.patch.object(
+                loom_survey, "run_git", side_effect=self._missing_git):
+            prepared = loom_runtime.prepare_invocation(
+                "Plan a safe text file",
+                instance_id=self.instance,
+                invocation_id=self.invocation,
+                cwd=plain,
+                explicit_target=plain,
+                owner_home=self.owner_home)
+        self.assertEqual(prepared.intent, "plan")
+        self.assertEqual(
+            prepared.project_inspection["source_states"]["tracked"], "unsupported")
+        self.assertFalse(prepared.route_contract["blocked"])
+
+    def test_git_timeout_still_fails_closed(self):
+        plain = self.root / "git-timeout"
+        plain.mkdir()
+        with mock.patch.object(
+                loom_survey, "run_git", side_effect=self._timed_out_git):
+            with self.assertRaisesRegex(
+                    loom_runtime.RuntimeBlocked, "PROJECT_INDETERMINATE"):
+                loom_runtime.resolve_project(
+                    self.instance, cwd=plain, explicit_target=plain)
 
     def test_git_project_identity_survives_a_repository_move(self):
         before = loom_runtime.resolve_project(self.instance, cwd=self.repo)

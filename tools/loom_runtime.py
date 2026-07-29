@@ -336,11 +336,17 @@ class ProjectResolution:
     state_mode: str
 
 
+def _git_executable_missing(error):
+    """Return whether a survey failure proves that Git could not be started."""
+    return isinstance(getattr(error, "__cause__", None), FileNotFoundError)
+
+
 def resolve_project(instance_id, *, explicit_target=None, cwd=None,
                     candidate_roots=None):
     """Resolve exactly one project without searching any sibling directory."""
     _canonical_uuid(instance_id, "instance_id")
     invocation_cwd = _validate_invocation_cwd(cwd)
+    state_mode = None
     if explicit_target is not None:
         root = _validate_target(
             _path_from_invocation(explicit_target, invocation_cwd, "project target"))
@@ -370,28 +376,37 @@ def resolve_project(instance_id, *, explicit_target=None, cwd=None,
             probe = loom_survey.run_git(
                 cwd_root, "rev-parse", "--show-toplevel", allowed=(0, 128))
         except loom_survey.SurveyError as exc:
-            raise RuntimeBlocked(
-                "PROJECT_INDETERMINATE", f"cannot establish Git containment: {exc}") from exc
-        if probe.returncode == 0:
-            root = _validate_target(probe.stdout.strip())
-            try:
-                cwd_root.relative_to(root)
-            except ValueError as exc:
+            if not _git_executable_missing(exc):
                 raise RuntimeBlocked(
-                    "PROJECT_INDETERMINATE", "Git root does not contain the working directory") \
-                    from exc
-            source = "git-cwd"
+                    "PROJECT_INDETERMINATE",
+                    f"cannot establish Git containment: {exc}") from exc
+            root, source, state_mode = cwd_root, "filesystem-cwd", "filesystem"
         else:
-            root, source = cwd_root, "filesystem-cwd"
+            if probe.returncode == 0:
+                root = _validate_target(probe.stdout.strip())
+                try:
+                    cwd_root.relative_to(root)
+                except ValueError as exc:
+                    raise RuntimeBlocked(
+                        "PROJECT_INDETERMINATE",
+                        "Git root does not contain the working directory") from exc
+                source = "git-cwd"
+            else:
+                root, source = cwd_root, "filesystem-cwd"
     identity = "target-sha256:" + _sha(os.path.normcase(str(root)))
-    try:
-        git_probe = loom_survey.run_git(
-            root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
-    except loom_survey.SurveyError as exc:
-        raise RuntimeBlocked(
-            "PROJECT_INDETERMINATE", f"cannot establish project state mode: {exc}") from exc
-    state_mode = "git" if git_probe.returncode == 0 \
-        and git_probe.stdout.strip() == "true" else "filesystem"
+    if state_mode is None:
+        try:
+            git_probe = loom_survey.run_git(
+                root, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
+        except loom_survey.SurveyError as exc:
+            if not _git_executable_missing(exc):
+                raise RuntimeBlocked(
+                    "PROJECT_INDETERMINATE",
+                    f"cannot establish project state mode: {exc}") from exc
+            state_mode = "filesystem"
+        else:
+            state_mode = "git" if git_probe.returncode == 0 \
+                and git_probe.stdout.strip() == "true" else "filesystem"
     try:
         project_id = loom_memory.project_identity(
             instance_id, root, state_mode=state_mode)
@@ -1997,7 +2012,8 @@ def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
     """Read one complete preparation snapshot through owned bounded primitives."""
     pack_rel = pack.relative_to(project.root).as_posix()
     snapshot = loom_survey.workspace_snapshot(
-        project.root, exclude_prefixes=(pack_rel,), touch_paths=touch_paths)
+        project.root, exclude_prefixes=(pack_rel,), touch_paths=touch_paths,
+        state_mode=project.state_mode)
     repo_state = snapshot.state
     inspection = loom_project_inspection.inspect(
         snapshot, target_identity=project.canonical_target_identity)
