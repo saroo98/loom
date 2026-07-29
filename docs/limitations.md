@@ -1,4 +1,4 @@
-# Loom 1.8.18 Limitations
+# Loom 1.8.19 Limitations
 
 Loom fails closed around evidence it does not possess.
 
@@ -62,7 +62,7 @@ Loom fails closed around evidence it does not possess.
   package all pass the package builder. The builder opens and hashes every claimed evidence
   artifact; local source tests do not substitute for those release inputs.
 - The canonical deterministic ZIP builder, independent receipt verifier, semantic Cargo.lock SBOM
-  reconciliation, and provenance schema are implemented and locally tested. The published 1.8.18
+  reconciliation, and provenance schema are implemented and locally tested. The published 1.8.19
   tag and assets exist, but generated readiness still has no qualifying release subject. Later
   candidate bytes remain **[UNVERIFIED]** until the release workflow and every required evidence
   cell pass against that exact candidate.

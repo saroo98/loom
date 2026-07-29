@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+## 1.8.19
+
+- Preserve explicit planning intent in long natural-language requests whose prohibitions only
+  restrict implementation, publication, deployment, or external access.
+- Support bounded planning in clean Git-less projects and carry large plan frontiers without
+  truncating their planning method or work-order contract.
+- Observe large and ignored project content through bounded world-state evidence instead of
+  recursively hashing unrelated workspace copies.
+- Keep explicit no-project-write planning requests free of project-local lifecycle metadata.
+- Add a deterministic truth-authority radar for stale, contradictory, or wrong-subject evidence.
+
 - Treat healthy nested Git worktrees as independently registered project boundaries and return a
   bounded partial planning observation, without implementation authority, when large ignored local
   directories or complete content hashing cannot be resolved safely.
