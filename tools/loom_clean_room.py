@@ -20,6 +20,9 @@ class CleanRoomError(RuntimeError):
     pass
 
 
+MAX_VERIFY_RECEIPT_BYTES = 2 * 1024 * 1024
+
+
 def _tail(value, *, limit=2400):
     value = value or ""
     return value[-limit:].replace("\x00", "\\0")
@@ -172,11 +175,12 @@ def verify(cut, *, timeout=2400):
             ) if path.exists()
         ]
         try:
+            verification_output = home / "verify-cut.json"
             operation, stdout, stderr = loom_operation_envelope.run_supervised(
                 operation_class="clean-room-verification",
                 command=[
                     sys.executable, "-B", str(cut / "tools" / "loom_release.py"),
-                    "verify-cut", str(cut),
+                    "verify-cut", str(cut), "--output", str(verification_output),
                 ],
                 cwd=cut / "tools", environment=environment, timeout=timeout,
                 allowed_roots=[cut, home], protected_roots=protected,
@@ -186,6 +190,23 @@ def verify(cut, *, timeout=2400):
             stderr_text = stderr.decode("utf-8", errors="replace")
         except (OSError, loom_operation_supervisor.SupervisorError) as exc:
             raise CleanRoomError(f"clean-room verification failed to run: {exc}") from exc
+        verification = None
+        if operation["status"] == "passed":
+            try:
+                info = verification_output.lstat()
+                if verification_output.is_symlink() or not verification_output.is_file() \
+                        or info.st_size <= 0 or info.st_size > MAX_VERIFY_RECEIPT_BYTES:
+                    raise CleanRoomError(
+                        "clean-room verification receipt is missing or unsafe")
+                verification = json.loads(
+                    verification_output.read_text(encoding="utf-8"))
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+                raise CleanRoomError(
+                    f"clean-room verification receipt is unreadable: {exc}") from exc
+            if not isinstance(verification, dict) \
+                    or verification.get("status") != "passed":
+                raise CleanRoomError(
+                    "clean-room verification receipt did not report success")
         home_inventory = _bounded_home_inventory(home)
     after = loom_release_subject._tree(cut)
     if before != after:
