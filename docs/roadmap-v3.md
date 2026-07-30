@@ -25,10 +25,10 @@ upgrade an item to released or supported.
 
 | Subject | Exact state | Interpretation |
 |---|---|---|
-| Published release | `v1.8.22` at `0021a61449bb4d3d1832d68ba3f4b1400a7eb0e9` | Published 2026-07-30 as an immutable signed release |
-| Plugin ZIP | `loom-plugin-v1.8.22.zip` | SHA-256 `490e739f13d0833f9ea107aff0a77d8cc99d746959c2cd46f4f36a7243303141` |
-| Release candidate | `1.8.23` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
-| Current `main` | `4b8790a02e2f9a1cfb6966a5861b06c6d630c673` | PR #58 closes the natural-language project-write-prohibition regression found in installed acceptance |
+| Published release | `v1.8.23` at `bd9840c79bb5feafd3a36abbdbd110ee33c88222` | Published 2026-07-30 as an immutable signed release |
+| Plugin ZIP | `loom-plugin-v1.8.23.zip` | SHA-256 `d83b262a47b807c27476bdaeca6c940778b80e006c3cdbd128a1567a2f4f0cc4` |
+| Release candidate | `1.8.24` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
+| Current `main` | `552904af3d153bac526cacde6c565cd1d8efd1e6` | PR #60 preserves complete plain-language blocked responses after installed 1.8.23 acceptance |
 | Remediation checks | 9 required quality checks and 21 native-compatibility checks passed | Merge evidence for PR #32; not release, installation, deployment, support, or independent-assurance evidence |
 | Known blockers at merge | No known Critical or High blocker | Absence of a known blocker is not a guarantee of security, reliability, or recovery |
 | Website/documentation | Merged through PR #33 | Public-facing changes are on `main`; Pages deployment and software release promotion remain separate |
@@ -38,9 +38,9 @@ upgrade an item to released or supported.
 
 ## Immediate release truth
 
-The published 1.8.22 release is the current immutable public artifact. The 1.8.23 candidate adds
-the exact no-project-write wording correction from PR #58. It still requires exact-main CI,
-exact-cut verification, signed release promotion, installation, and installed-runtime acceptance.
+The published 1.8.23 release is the current immutable public artifact. The 1.8.24 candidate adds
+the owner-message boundary correction from PR #60. It still requires exact-main CI, exact-cut
+verification, signed release promotion, installation, and installed-runtime acceptance.
 
 Those results supersede the earlier pre-remediation workflow failures recorded by the previous
 roadmap cut. They do not publish a new artifact, modify an installation, deploy the website,
