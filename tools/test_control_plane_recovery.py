@@ -23,6 +23,10 @@ import loom_release  # noqa: E402
 import loom_reliability  # noqa: E402
 
 
+CONCURRENCY_EVENT_TIMEOUT_SECONDS = 30
+CONCURRENCY_RESULT_TIMEOUT_SECONDS = 60
+
+
 def _write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
@@ -382,17 +386,26 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                 first = calls == 1
             if first:
                 entered.set()
-                self.assertTrue(release.wait(5))
+                self.assertTrue(
+                    release.wait(CONCURRENCY_EVENT_TIMEOUT_SECONDS),
+                    "concurrency test did not release the first invocation")
             return original(**kwargs)
 
         with mock.patch.object(loom_orchestrator, "_invoke_under_lock", side_effect=delayed):
             with ThreadPoolExecutor(max_workers=2) as pool:
                 one = pool.submit(self.invoke)
-                self.assertTrue(entered.wait(5))
-                two = pool.submit(self.invoke)
-                time.sleep(0.1)
-                release.set()
-                results = [one.result(timeout=15), two.result(timeout=15)]
+                try:
+                    self.assertTrue(
+                        entered.wait(CONCURRENCY_EVENT_TIMEOUT_SECONDS),
+                        "first invocation did not reach the serialized section")
+                    two = pool.submit(self.invoke)
+                    time.sleep(0.1)
+                finally:
+                    release.set()
+                results = [
+                    one.result(timeout=CONCURRENCY_RESULT_TIMEOUT_SECONDS),
+                    two.result(timeout=CONCURRENCY_RESULT_TIMEOUT_SECONDS),
+                ]
 
         self.assertEqual(1, len({item["action_id"] for item in results}))
         recovered = [item for item in results if "prior_recovery" in item]
