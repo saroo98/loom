@@ -781,10 +781,30 @@ class ProductionOrchestratorTests(unittest.TestCase):
             ["git", "status", "--porcelain=v1", "-uall"],
             cwd=self.repo, capture_output=True, text=True, check=True).stdout)
 
+    def test_exact_installed_acceptance_wording_leaves_project_unchanged(self):
+        request = (
+            "Plan a small local Python command-line tool that reads a JSON task list "
+            "and prints overdue items. Do not implement it or modify project files. "
+            "Finalize the reviewable plan and present the result in plain language, "
+            "including what is authorized, how completion would be verified, and where "
+            "the plan can be inspected.")
+        before_manifest = loom_reliability.deterministic_manifest(self.repo)
+
+        result = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("project-write-prohibited", result["code"])
+        self.assertFalse((self.repo / "plans").exists())
+        self.assertEqual(before_manifest, loom_reliability.deterministic_manifest(self.repo))
+
     def test_zero_project_write_detection_is_explicit_and_bounded(self):
         blocked = (
             "Plan this change but do not modify files.",
             "Plan this change but do not implement or modify files.",
+            "Plan this change but do not implement it or modify project files.",
+            "Plan this change but do not implement this or modify the project files.",
             "Plan this change but do not implement, modify files, or publish.",
             "Plan this change with no project writes.",
             "Plan this change without touching any files.",
