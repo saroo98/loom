@@ -1,4 +1,4 @@
-# Loom 1.8.19 Limitations
+# Loom 1.8.20 Limitations
 
 Loom fails closed around evidence it does not possess.
 

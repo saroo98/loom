@@ -6,8 +6,8 @@ Loom’s owner-facing request surface is:
 /loom <request>
 ```
 
-The current source candidate is 1.8.19. Until its signed release is published, the latest immutable
-artifact remains 1.8.18. Check [release readiness](./release-readiness.md) and
+The current source candidate is 1.8.20. Until its signed release is published, the latest immutable
+artifact remains 1.8.19. Check [release readiness](./release-readiness.md) and
 [current limitations](./limitations.md) before treating a host or platform as supported.
 
 ## Requirements
@@ -21,18 +21,18 @@ This repository does not claim that a public Codex marketplace listing has been 
 ## Use the published artifact
 
 Download the immutable
-[Loom 1.8.18 release](https://github.com/saroo98/loom/releases/tag/v1.8.18).
+[Loom 1.8.19 release](https://github.com/saroo98/loom/releases/tag/v1.8.19).
 
-The expected SHA-256 for `loom-plugin-v1.8.18.zip` is:
+The expected SHA-256 for `loom-plugin-v1.8.19.zip` is:
 
 ```text
-6c3c42d5b800ff12ffc12cb076b191f1723617918b652e262dfe7c9c2bb5b103
+d14d7ab133ea3341a55af17bd53400528982470de36a6946fcbe977ac5b027b9
 ```
 
 Verify the downloaded file:
 
 ```powershell
-(Get-FileHash .\loom-plugin-v1.8.18.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\loom-plugin-v1.8.19.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
 The release also contains `SHA256SUMS` and `RELEASE-SUBJECT.json`. Treat a digest mismatch, missing
