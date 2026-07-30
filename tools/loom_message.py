@@ -46,6 +46,18 @@ def _result_detail(value):
     return marker, remainder
 
 
+def _bounded_summary(value, maximum=240):
+    """Keep owner summaries bounded without cutting the last visible word."""
+    normalized = " ".join(str(value).split())
+    if len(normalized) <= maximum:
+        return normalized
+    shortened = normalized[:maximum - 1].rstrip()
+    boundary = shortened.rfind(" ")
+    if boundary >= maximum // 2:
+        shortened = shortened[:boundary].rstrip(" ,;:")
+    return shortened + "\u2026"
+
+
 def _render(value):
     changes = ("unknown" if value["changes_made"] is None else
                "made" if value["changes_made"] else "none")
@@ -275,9 +287,10 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
                 recommendation = "Follow the specific next step below."
                 next_action = block_reason["next_action"]
             else:
-                summary = (
-                    f"Loom stopped before changing anything{location}: "
-                    f"{block_reason['observed']}"[:240].rstrip())
+                observed = block_reason["observed"]
+                summary = _bounded_summary(
+                    observed if observed.casefold().startswith("loom stopped")
+                    else f"Loom stopped before changing anything{location}: {observed}")
                 decision = "No implementation or fallback is authorized by this receipt."
                 recommendation = "Follow the receipt's exact bounded next action."
                 next_action = block_reason["next_action"]
