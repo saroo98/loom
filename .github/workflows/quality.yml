@@ -104,7 +104,7 @@ jobs:
       - name: Validate the fixed evidence score rubric
         working-directory: tools
         run: python -B loom_scorecard.py validate-rubric
-      - name: Refuse stale generated readiness and host documentation
+      - name: Refuse stale generated release data
         working-directory: tools
         run: python -B loom_readiness.py .. --check
       - name: Enforce one version across every shipped surface

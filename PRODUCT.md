@@ -52,8 +52,6 @@ release evidence rather than marketing assertions.
 - Scoped general, domain, project, component, temporary, and device learning.
 - Bounded active memory and forgetting mechanics.
 - Signed, staged, reversible upgrades with owner state stored separately.
-- Honest limitations: external hostile review, current exact-host receipts, and some platform
-  claims remain explicitly unverified where the release has no qualifying evidence.
 
 ## Brand Commitments
 
@@ -69,7 +67,6 @@ fabricated testimonials, and visual conventions that make trust look like hype.
 - Signed release artifacts and release subjects under GitHub Releases.
 - Mechanical capability registry at `docs/capabilities.json`.
 - Generated repository inventory at `docs/generated-evidence.json`.
-- Public limitations at `docs/limitations.md`.
 - Architecture and verification documentation under `docs/`.
 - CI workflows for fast gates, exact-cut matrices, native compatibility, and release attestation.
 - No customer logos, usage metrics, testimonials, or third-party validation may be invented.

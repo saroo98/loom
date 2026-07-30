@@ -610,7 +610,6 @@ def _advisory_prose(root):
         "README.md": re.compile(
             r"(?:published release|current candidate).{0,40}v?[0-9]+\.[0-9]+\.[0-9]+",
             re.I),
-        "docs/roadmap-v3.md": re.compile(r"\bv[0-9]+\.[0-9]+\.[0-9]+\b"),
     }
     for relative, pattern in probes.items():
         path = Path(root) / relative
@@ -655,7 +654,6 @@ def main(argv=None):
     registry_path = Path(args.registry) if args.registry else \
         root / "contracts" / "truth-authorities-v1.json"
     output = root / "docs" / "truth-contradictions.json"
-    markdown = root / "docs" / "truth-contradictions.md"
     try:
         registry = validate_registry(read_json(registry_path, "truth registry"))
         if args.check:
@@ -687,8 +685,6 @@ def main(argv=None):
             if recomputed != report:
                 raise TruthError(
                     "truth contradiction report is stale at its stored epoch")
-            if render_markdown(report) != markdown.read_text(encoding="utf-8"):
-                raise TruthError("truth contradiction Markdown projection is stale")
             if report.get("next_invalidation_at") is not None \
                     and args.now is None:
                 raise TruthError(
@@ -719,7 +715,6 @@ def main(argv=None):
                 advisories=_advisory_prose(root),
                 mode=args.mode, advisory_epoch=args.advisory_epoch)
             loom_reliability.atomic_write_json(output, report)
-            loom_reliability.atomic_write_text(markdown, render_markdown(report))
             status = {"status": "generated", "current": True}
     except (
             OSError, UnicodeError, json.JSONDecodeError, TruthError,

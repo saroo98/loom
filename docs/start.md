@@ -1,111 +1,115 @@
 # Start with Loom
 
-Loom’s owner-facing request surface is:
+Loom gives AI coding agents one project-aware planning and verification surface:
 
 ```text
 /loom <request>
 ```
 
-The current source candidate is 1.8.24. Until its signed release is published, the latest immutable
-artifact remains 1.8.23. Check [release readiness](./release-readiness.md) and
-[current limitations](./limitations.md) before treating a host or platform as supported.
+The current signed release is **Loom 1.8.24**.
 
 ## Requirements
 
 - Python 3.10 or newer
 - A clean installation target
-- A host integration whose current capability evidence is sufficient for your use
+- A supported AI coding host or local development checkout
 
-This repository does not claim that a public Codex marketplace listing has been approved.
+## Download and verify Loom 1.8.24
 
-## Use the published artifact
+Open the immutable
+[Loom 1.8.24 release](https://github.com/saroo98/loom/releases/tag/v1.8.24) and download
+`loom-plugin-v1.8.24.zip`.
 
-Download the immutable
-[Loom 1.8.23 release](https://github.com/saroo98/loom/releases/tag/v1.8.23).
-
-The expected SHA-256 for `loom-plugin-v1.8.23.zip` is:
+Expected SHA-256:
 
 ```text
-d83b262a47b807c27476bdaeca6c940778b80e006c3cdbd128a1567a2f4f0cc4
+ee8f229e01037b0dc701122d7161f1363dcc08b653039c170e50864ddd28343a
 ```
 
-Verify the downloaded file:
+Verify the archive:
 
 ```powershell
-(Get-FileHash .\loom-plugin-v1.8.23.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\loom-plugin-v1.8.24.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
-The release also contains `SHA256SUMS` and `RELEASE-SUBJECT.json`. Treat a digest mismatch, missing
-release subject, or changed archive as a hard stop.
+The release also contains `SHA256SUMS`, `RELEASE-SUBJECT.json`, signature metadata, and the exact
+installation instructions for the published artifact.
 
-## Evaluate from public source
+## Work from a source checkout
 
-For a direct-source evaluation:
+Developers can verify the public source before using the repository tools:
 
 ```powershell
 git clone https://github.com/saroo98/loom.git
 cd loom
 python -B tools/loom_release.py verify . --source-classification public-release
+```
+
+For a local development installation:
+
+```powershell
 python tools/loom_install.py install . "$HOME/.codex/skills/loom"
 python "$HOME/.codex/skills/loom/scripts/loom_bootstrap.py" --ensure --plugin-root "$HOME/.codex/skills/loom" --home "$HOME/.loom"
 ```
-
-A direct-source install is labeled `direct-source-install-unattested`. Its ownership receipt proves
-local byte consistency, not publisher identity. It does not become a signed-release install.
 
 ## Make the first request
 
 Open a project and write:
 
 ```text
-/loom Plan a safe health-check endpoint for this project.
+/loom Plan a health-check endpoint for this project.
 ```
 
-Loom should return a reviewable plan or one bounded condition that must be resolved first. Review:
+Review:
 
-- the exact project and observed state;
-- proposed steps and likely touch paths;
-- facts, assumptions, and unresolved decisions;
-- whether implementation authority exists; and
-- the evidence required before completion.
+- the exact project state Loom observed;
+- the proposed steps and likely touch paths;
+- known facts, assumptions, and owner decisions;
+- the implementation-authority state; and
+- the checks that define completion.
 
-A blocking result authorizes no fallback implementation. Resolve the condition and begin a fresh
-request so the plan and authority describe the current world.
+When the plan matches your intent, continue through the connected coding host.
 
-## What the plan can contain
+## What Loom can return
 
-Depending on consequence, uncertainty, domain coverage, and consumer need:
+Loom selects the smallest useful planning surface for the request. Depending on the work, that can
+include:
 
-- a project-inspection receipt;
-- plan contract and dependencies;
-- bounded work orders;
-- assumptions, decisions, and planning obligations;
-- implementation-authority state;
-- verification and recovery evidence; and
-- an owner-facing result with consequence, freshness, reversibility, verification, and one next
-  action.
-
-Small work does not require every artifact. Produced artifacts have a consumer and decision;
-skipped artifacts have a reason.
+- a bounded project snapshot;
+- a plan contract and dependencies;
+- work orders with expected touch paths;
+- assumptions and decisions;
+- explicit implementation authority;
+- a proof graph that connects claims to evidence;
+- verification and recovery records; and
+- a plain-language completion report with one next action.
 
 ## Check the installation
 
-Ask through the same request surface:
+Use the same request surface:
 
 ```text
 /loom Check Loom's health.
 ```
 
-Loom should report the runtime, integration, vault, and relevant blocking condition without
-exposing owner-memory bodies.
+Loom reports the active runtime, integration, local vault connection, and the next action when
+attention is needed.
 
-## Local data and support
+## Local data
 
-Loom sends no Loom telemetry. Owner learning and preferences remain in the local owner vault and
-are excluded from the public package. Read the [privacy policy](../PRIVACY.md) for the exact
-boundary.
+Loom sends no Loom telemetry. Owner learning, preferences, outcomes, and device state remain in the
+encrypted local owner vault and are excluded from the public package.
 
-If installation or invocation fails, open a
-[GitHub issue](https://github.com/saroo98/loom/issues) with the Loom version, host version,
-operating system, and exact bounded error message. Do not attach the private vault, credentials,
-owner-memory bodies, or unrelated repository content.
+Read the [privacy policy](../PRIVACY.md) for the complete boundary.
+
+## Get help
+
+Open a [GitHub issue](https://github.com/saroo98/loom/issues) with:
+
+- Loom version;
+- host version;
+- operating system; and
+- the exact bounded error message.
+
+Keep private vault data, credentials, owner-memory bodies, and unrelated repository content out of
+public issues.

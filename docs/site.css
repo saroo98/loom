@@ -288,7 +288,6 @@ button {
 .authority-copy h2,
 .section-heading h2,
 .evidence-intro h2,
-.limitations-section h2,
 .start-copy h2,
 .not-found-copy h1 {
   margin: 0;
@@ -507,7 +506,6 @@ button {
 .authority-copy h2,
 .section-heading h2,
 .evidence-intro h2,
-.limitations-section h2,
 .start-copy h2 {
   font-size: clamp(3.3rem, 6vw, 6.7rem);
 }
@@ -1025,45 +1023,6 @@ button {
   font-weight: 400;
 }
 
-.limitations-section {
-  display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(24rem, 0.75fr);
-  gap: clamp(4rem, 9vw, 12rem);
-  padding: clamp(8rem, 12vw, 12rem) var(--page-pad);
-  background: #141412;
-  border-top: 1px solid var(--line-dark);
-}
-
-.limitations-section h2 {
-  max-width: 11ch;
-}
-
-.limitations-section ul {
-  margin: 0;
-  padding: 0;
-  align-self: end;
-  list-style: none;
-  border-top: 1px solid var(--line-dark);
-}
-
-.limitations-section li {
-  position: relative;
-  padding: 1.25rem 1rem 1.25rem 2.4rem;
-  border-bottom: 1px solid var(--line-dark);
-  color: rgba(250, 250, 246, 0.63);
-  font-size: 0.92rem;
-}
-
-.limitations-section li::before {
-  position: absolute;
-  top: 1.7rem;
-  left: 0.35rem;
-  width: 0.7rem;
-  height: 1px;
-  content: "";
-  background: var(--accent);
-}
-
 .start-section {
   display: grid;
   grid-template-columns: minmax(0, 0.8fr) minmax(26rem, 1fr);
@@ -1449,10 +1408,6 @@ button {
     margin-top: 2.8rem;
   }
 
-  .limitations-section {
-    grid-template-columns: 1fr;
-  }
-
   .site-footer {
     grid-template-columns: 1fr;
   }
@@ -1504,7 +1459,6 @@ button {
   .authority-section,
   .outputs-section,
   .evidence-section,
-  .limitations-section,
   .start-section {
     padding-right: 1.25rem;
     padding-left: 1.25rem;
@@ -1515,7 +1469,6 @@ button {
   .authority-copy h2,
   .section-heading h2,
   .evidence-intro h2,
-  .limitations-section h2,
   .start-copy h2 {
     font-size: clamp(3rem, 14.5vw, 4.4rem);
   }
@@ -1683,7 +1636,7 @@ button {
   z-index: 1;
   display: block;
   color: #fff;
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--sans);
   font-size: clamp(5rem, 14vw, 12rem);
   font-weight: 900;
   line-height: 0.75;

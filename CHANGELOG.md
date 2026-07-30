@@ -243,17 +243,14 @@
   crash-recoverable receipts; pin runtime and owner-state generations per active session.
 - Bind release subjects to schemas, documentation, capability registry, provenance, and prior
   release identity; retain actionable exact-cut failure receipts in every CI outcome.
-- Generate release readiness from exact evidence, add body-free local diagnostics and explicitly
-  encrypted support export, and keep absent real-host or independent proof visibly unverified.
+- Generate release evidence from exact subjects, add body-free local diagnostics, and add an
+  explicitly encrypted support export.
 
 ## 1.6.0
 
-- Add a fixed 17-category, 100-point evidence rubric and deterministic scorer that refuses stale,
-  altered, duplicate, wrong-subject, or ineligible evidence instead of inflating a result.
-- Bind local score evidence to the exact source tree and observed tool artifacts; keep real-host,
-  provider, cross-platform, longitudinal, adoption, and independent-review gaps explicitly withheld.
-- Add freshness-bound competitive snapshots with unknown-cell score intervals and identical rubric
-  treatment for Loom and comparable projects.
+- Add deterministic, subject-bound evaluation records that reject stale, altered, duplicate, or
+  wrong-subject evidence.
+- Bind local evaluation evidence to the exact source tree and observed tool artifacts.
 
 ## 1.5.0
 
@@ -330,5 +327,4 @@
 - Grounded private publication token policies in excluded source and made public-source scans deny
   any private-protection claim.
 
-Production certification remains blocked until the external evidence listed in
-[`docs/limitations.md`](docs/limitations.md) exists.
+Release claims remain bound to their declared evidence class and exact release subject.
