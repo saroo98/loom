@@ -415,12 +415,6 @@ def render_host(host_id):
 def write_outputs(root, value):
     root = Path(root).resolve()
     loom_reliability.atomic_write_json(root / "docs" / "release-readiness.json", value)
-    loom_reliability.atomic_write_text(
-        root / "docs" / "release-readiness.md", render_markdown(value))
-    hosts = root / "docs" / "hosts"
-    hosts.mkdir(parents=True, exist_ok=True)
-    for host_id in loom_host_registry.HOSTS:
-        loom_reliability.atomic_write_text(hosts / f"{host_id}.md", render_host(host_id))
 
 
 def main(argv=None):
@@ -482,13 +476,8 @@ def main(argv=None):
                         "readiness evidence crossed its invalidation boundary")
             expected = json.loads((root / "docs" / "release-readiness.json").read_text(
                 encoding="utf-8"))
-            if expected != value or (root / "docs" / "release-readiness.md").read_text(
-                    encoding="utf-8") != render_markdown(value):
-                raise ReadinessError("generated readiness documentation is stale")
-            for host_id in loom_host_registry.HOSTS:
-                if (root / "docs" / "hosts" / f"{host_id}.md").read_text(
-                        encoding="utf-8") != render_host(host_id):
-                    raise ReadinessError("generated host documentation is stale")
+            if expected != value:
+                raise ReadinessError("generated readiness data is stale")
         else:
             write_outputs(root, value)
     except (

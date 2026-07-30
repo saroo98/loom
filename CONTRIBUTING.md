@@ -15,8 +15,8 @@ For source changes:
    claim. A build from private-owner source uses the default `private-owner` classification and
    refuses a token policy unless at least one configured token is grounded outside the public
    allowlist. Never use `public-release` to publish private-owner source.
-6. Do not claim production certification while `docs/limitations.md` contains unresolved external
-   evidence requirements.
+6. Bind release claims to the exact source, artifact, platform, host, and evidence class they
+   describe.
 7. Run `python -B tools/loom_version.py .`, `python -B tools/loom_cli_contract.py . --verify`, and
    `python -B tools/loom_release_verify.py <canonical-zip>` before a release candidate is attested.
 

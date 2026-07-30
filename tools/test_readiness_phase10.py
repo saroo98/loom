@@ -1,5 +1,7 @@
 import hashlib
 import json
+from pathlib import Path
+import tempfile
 import unittest
 
 import loom_readiness
@@ -52,6 +54,17 @@ class ReadinessPhase10Tests(unittest.TestCase):
         self.assertIn("**Standard:**", rendered)
         self.assertIn("**Verified:**", rendered)
         self.assertIn("guardrail, not a sandbox", rendered)
+
+    def test_generated_readiness_keeps_public_output_machine_readable(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            loom_readiness.write_outputs(
+                root, loom_readiness.generate(version="1.6.0"))
+            self.assertTrue(
+                (root / "docs" / "release-readiness.json").is_file())
+            self.assertFalse(
+                (root / "docs" / "release-readiness.md").exists())
+            self.assertFalse((root / "docs" / "hosts").exists())
 
     def test_missing_receipts_never_become_supported(self):
         value = loom_readiness.generate(version="1.6.0")

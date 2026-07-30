@@ -216,12 +216,11 @@ imports with a retired ID or semantic tag remain inactive.
 ## Truth surfaces
 
 `contracts/capability-declarations-v1.json` is the sole production authority for capability IDs,
-proof paths, predicates, subject kinds, and static limitations. `docs/capabilities.json` is a
-generated projection. It binds exact implementation and test bytes plus evaluated evidence, but it
-cannot declare or restore its own support state. `tools/loom_docs.py` checks entry-point version
-agreement, links, command sprawl, legacy learning claims, and proof paths using the expected Git
-tree and the declared generated-output inventory. `docs/generated-evidence.json` is regenerated
-from that bounded inventory.
+proof paths, predicates, subject kinds, and evidence requirements. `docs/capabilities.json` is a
+generated technical projection. It binds exact implementation and test bytes plus evaluated
+evidence, but it cannot declare or restore its own state. `tools/loom_docs.py` checks entry-point
+version agreement, links, command sprawl, proof paths, and generated-output inventory against the
+expected Git tree. `docs/generated-evidence.json` is regenerated from that bounded inventory.
 
 Release bundle schema v3 preserves current main, candidate source, annotated release tag, plugin
 ZIP, each native helper, and installed runtime as non-interchangeable typed subjects. Its aggregate
@@ -236,14 +235,11 @@ persist `next_invalidation_at`; a separate live check applies wall-clock expiry 
 canonical output. Only registered JSON pointers, HTML metadata, Markdown projection markers, and
 fully generated files participate in enforcement. Historical and unregistered prose is advisory.
 
-`docs/truth-contradictions.json` and its Markdown projection record the governing authority,
-expected and observed typed subjects, affected claims, dependency paths, and the smallest honest
-repair. Regeneration is not a resolution. The contradiction disappears only after reevaluation no
-longer reproduces it. `docs/release-readiness.json` consumes evaluated typed predicates and remains
-not ready when exact subject, runner, evidence-class, freshness, or controller/CI expectation
-bindings are absent. Shadow mode relaxes only new non-safety CI failures. Wrong-subject, stale,
-expired, revoked, incomplete, malformed, ambiguous, and conflicting evidence never retain
-`supported`, and rollback never restores status from cached or legacy projections.
+The truth evaluator records governing authority, typed subjects, affected claims, dependency paths,
+and deterministic repair codes. Regeneration never changes the underlying observation.
+`docs/release-readiness.json` consumes evaluated typed predicates for local and CI release
+decisions. Subject, runner, evidence class, freshness, and controller or CI expectation bindings
+are evaluated from the same closed authority registry.
 
 `tools/loom_adaptation_eval.py` runs disposable, deterministic longitudinal scenarios for domain
 switches, aging, project alternation, preference drift, scale bounds, interruption, concurrency,
@@ -296,30 +292,6 @@ does not listen on a network socket and does not expose vault operations.
 
 `contracts/host-contracts-v2.json` is the bounded host authority for canonical and alternate global
 roots, project-local shadow routes, precedence, executable and headless probes, surfaces, proof TTL,
-and update/removal behavior. Discovery records the exact executable or configuration marker
-observed; it is not a support claim. Codex, Claude Code, OpenCode, and Copilot currently have
-`simulated-conformant` adapter evidence from disposable profiles. Cursor is experimental, Gemini's
-transition contract is stale, and Factory Droid plus generic Agent Skills are unsupported. None may
-be described as real-host verified until an exact host/version invocation produces a subject-bound
-evidence bundle. The complete status matrix and evidence boundary are in
-[Integration ecosystem](integration-ecosystem.md).
-
-## Evidence-bound score plane
-
-`contracts/score-rubric-v1.json` is the only scoring authority. Its 17 category weights total
-exactly 100, every category's requirements total 100, and changing either is a rubric-version
-change. Evidence records contain no free-form points. They can satisfy only one known requirement
-using an allowed evidence class, and they bind the subject tree, source artifact, observation time,
-expiry, and canonical digest. Duplicate coverage, altered artifacts, wrong subjects, stale records,
-and incompatible evidence classes fail the score operation.
-
-Missing evidence is not an execution failure. It remains a named withheld requirement and lowers
-the category and overall result. A provided record that is stale, contradictory, or corrupt is an
-execution failure because silently ignoring it would make the result ambiguous. Claimed-only
-records never earn points. This keeps local deterministic proof separate from matrix reproduction,
-real-host use, provider receipts, longitudinal outcomes, independent review, and public adoption.
-
-Competitive snapshots use the same rubric and exact revisions. Unknown categories remain null and
-produce lower and upper score bounds; not-applicable categories are explicitly normalized out.
-A stale snapshot or a verified score without a primary source is refused. See
-[Cross-cutting scoring](cross-cutting-scoring.md).
+and update or removal behavior. Discovery records the exact executable or configuration marker
+observed. Each host adapter uses the same bounded protocol and attaches evidence to the exact
+host, version, runtime, request, and result it observed.

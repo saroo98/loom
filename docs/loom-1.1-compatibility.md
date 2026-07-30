@@ -21,7 +21,7 @@ full; a verified owner vault is not replaced, implicitly merged, or reset.
 - The exact active verified legacy installation migrates into the owner vault. Additional
   independent legacy installations remain untouched and are never merged implicitly. Automatic
   discovery and separate inactive candidate-vault creation remains a declared release gap in
-  `docs/limitations.md`.
+  `docs/architecture.md`.
 
 ## Identity compatibility
 

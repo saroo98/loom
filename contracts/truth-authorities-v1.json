@@ -39,17 +39,7 @@
     {"path": "docs/generated-evidence.json", "generator": "tools/loom_docs.py", "inputs": ["git-source-tree", "docs/capabilities.json"]},
     {"path": "docs/generated-semantic-parity.json", "generator": "tools/loom_semantic_parity.py", "inputs": ["git-source-tree"]},
     {"path": "docs/truth-contradictions.json", "generator": "tools/loom_truth.py", "inputs": ["contracts/truth-authorities-v1.json", "expected-subject-set", "observed-subject-set", "evidence-graph"]},
-    {"path": "docs/truth-contradictions.md", "generator": "tools/loom_truth.py", "inputs": ["docs/truth-contradictions.json"]},
-    {"path": "docs/release-readiness.json", "generator": "tools/loom_readiness.py", "inputs": ["VERSION", "evidence-graph", "docs/truth-contradictions.json"]},
-    {"path": "docs/release-readiness.md", "generator": "tools/loom_readiness.py", "inputs": ["docs/release-readiness.json"]},
-    {"path": "docs/hosts/claude-code.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
-    {"path": "docs/hosts/codex.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
-    {"path": "docs/hosts/copilot.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
-    {"path": "docs/hosts/cursor.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
-    {"path": "docs/hosts/factory-droid.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
-    {"path": "docs/hosts/gemini-cli.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
-    {"path": "docs/hosts/generic-agent-skills.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]},
-    {"path": "docs/hosts/opencode.md", "generator": "tools/loom_readiness.py", "inputs": ["contracts/host-contracts-v2.json"]}
+    {"path": "docs/release-readiness.json", "generator": "tools/loom_readiness.py", "inputs": ["VERSION", "evidence-graph", "docs/truth-contradictions.json"]}
   ],
   "structured_projections": [
     {"id": "capability-registry", "path": "docs/capabilities.json", "selector_kind": "full-file", "selector": "/", "authority_id": "capability-declarations"},
