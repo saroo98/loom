@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.8.22
+
+- Accept the canonical `verified` success state written by exact-cut receipts when the
+  clean-room wrapper validates its durable result.
+- Continue to reject missing, malformed, oversized, redirected, failed, or otherwise
+  non-verified clean-room receipts.
+- Add regression coverage for both the successful canonical receipt and a zero-exit
+  subprocess that writes a non-verified result.
+
 ## 1.8.21
 
 - Keep the complete clean-room verification receipt in a durable disposable-home file while
