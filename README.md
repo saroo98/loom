@@ -72,9 +72,9 @@ Status at this documentation cut, 2026-07-30:
 
 | Surface | Status | Evidence boundary |
 |---|---|---|
-| Published release | `v1.8.22`, published 2026-07-30 | Immutable signed release; canonical plugin ZIP SHA-256 `490e739f13d0833f9ea107aff0a77d8cc99d746959c2cd46f4f36a7243303141` |
-| Release candidate | `1.8.23` | This source version adds the exact project-write-prohibition correction from PR #58; it is not a published artifact until signed release verification completes |
-| Default branch | `main` at `4b8790a02e2f9a1cfb6966a5861b06c6d630c673` | PR #58 makes natural `do not implement it or modify project files` wording stop before creating `plans/` |
+| Published release | `v1.8.23`, published 2026-07-30 | Immutable signed release; canonical plugin ZIP SHA-256 `d83b262a47b807c27476bdaeca6c940778b80e006c3cdbd128a1567a2f4f0cc4` |
+| Release candidate | `1.8.24` | This source version preserves complete blocked-state sentences after the live 1.8.23 acceptance test; it is not a published artifact until signed release verification completes |
+| Default branch | `main` at `552904af3d153bac526cacde6c565cd1d8efd1e6` | PR #60 prevents owner messages from duplicating a stop prefix or ending mid-word |
 | Remediation | Merged through [PR #32](https://github.com/saroo98/loom/pull/32) | No known Critical or High blocker was reported at merge; the merged code is not thereby released, installed, deployed, or independently certified |
 | Website work | Merged through [PR #33](https://github.com/saroo98/loom/pull/33) | Public-facing files are on `main`; GitHub Pages deployment is separate from Loom software release promotion |
 | Generated readiness | `not-ready` | No current supported host or native platform claims in the generated readiness record |
@@ -156,18 +156,18 @@ automatically.
 ### Published release
 
 The current public artifact is
-[`loom-plugin-v1.8.19.zip`](https://github.com/saroo98/loom/releases/download/v1.8.19/loom-plugin-v1.8.19.zip).
+[`loom-plugin-v1.8.23.zip`](https://github.com/saroo98/loom/releases/download/v1.8.23/loom-plugin-v1.8.23.zip).
 
 Expected SHA-256:
 
 ```text
-d14d7ab133ea3341a55af17bd53400528982470de36a6946fcbe977ac5b027b9
+d83b262a47b807c27476bdaeca6c940778b80e006c3cdbd128a1567a2f4f0cc4
 ```
 
 Verify the downloaded file before installation:
 
 ```powershell
-(Get-FileHash .\loom-plugin-v1.8.19.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\loom-plugin-v1.8.23.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
 The release also includes `SHA256SUMS` and `RELEASE-SUBJECT.json`. Follow the

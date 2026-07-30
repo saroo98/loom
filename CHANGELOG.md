@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.8.24
+
+- Preserve complete, plain blocked-state sentences in the default owner message.
+- Avoid duplicating the stop prefix when the sealed observation already explains that Loom
+  stopped, and truncate hostile long observations only at a visible word boundary.
+- Add exact regressions for the installed no-project-write response and bounded long summaries.
+
 ## 1.8.23
 
 - Honor natural owner wording such as `do not implement it or modify project files` as an
