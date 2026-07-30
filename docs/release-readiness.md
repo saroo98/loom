@@ -1,6 +1,6 @@
 # Loom release readiness
 
-Version: `1.8.21`
+Version: `1.8.22`
 Overall: **NOT-READY**
 
 Evaluated at: `2026-07-28T12:00:00Z`

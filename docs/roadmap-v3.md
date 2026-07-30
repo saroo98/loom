@@ -27,8 +27,8 @@ upgrade an item to released or supported.
 |---|---|---|
 | Published release | `v1.8.19` at `c09e99d2d0794e72e2a2226e28fc6c0d44518e65` | Published 2026-07-29 with a signed tag and release assets |
 | Plugin ZIP | `loom-plugin-v1.8.19.zip` | SHA-256 `d14d7ab133ea3341a55af17bd53400528982470de36a6946fcbe977ac5b027b9` |
-| Release candidate | `1.8.21` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
-| Current `main` | `39444b7f99cc8e7b53e6d51e63e0ecc6ef7c1fb3` | PR #46 merged Proofline and Completion; PR #47 repaired cross-platform executable identity; PR #54 preserved complete clean-room receipts outside the bounded process transcript |
+| Release candidate | `1.8.22` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
+| Current `main` | `34b51aeba5fc5b2849e3f9e4dc2791dda9e04366` | PR #46 merged Proofline and Completion; PR #47 repaired cross-platform executable identity; PR #54 preserved complete clean-room receipts outside the bounded process transcript; PR #56 aligned clean-room acceptance with the canonical verified receipt state |
 | Remediation checks | 9 required quality checks and 21 native-compatibility checks passed | Merge evidence for PR #32; not release, installation, deployment, support, or independent-assurance evidence |
 | Known blockers at merge | No known Critical or High blocker | Absence of a known blocker is not a guarantee of security, reliability, or recovery |
 | Website/documentation | Merged through PR #33 | Public-facing changes are on `main`; Pages deployment and software release promotion remain separate |
@@ -40,7 +40,8 @@ upgrade an item to released or supported.
 
 The published 1.8.19 release remains the current immutable public artifact. Proofline and
 Completion merged into `main` through PR #46, followed by the cross-platform verification-contract
-repair in PR #47 and bounded clean-room receipt transport in PR #54. The 1.8.21 candidate still
+repair in PR #47, bounded clean-room receipt transport in PR #54, and canonical receipt-state
+validation in PR #56. The 1.8.22 candidate still
 requires exact-main CI, exact-cut verification, signed release promotion, installation, and
 installed-runtime acceptance.
 
