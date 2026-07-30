@@ -1144,7 +1144,20 @@ def main(argv=None):
     except (ReleaseError, OSError, UnicodeError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
-    print(json.dumps(result, indent=2, sort_keys=True))
+    printable = result
+    if args.command == "verify-cut" and args.output:
+        suite = result.get("suite", {})
+        printable = {
+            "status": result.get("status"),
+            "root_sha256": result.get("root_sha256"),
+            "suite": {
+                key: suite.get(key) for key in (
+                    "passed", "tests_run", "failure_count", "error_count",
+                    "capability_complete",
+                )
+            },
+        }
+    print(json.dumps(printable, indent=2, sort_keys=True))
     return 0 if result["status"] in {"built", "certified", "passed", "verified"} else 1
 
 

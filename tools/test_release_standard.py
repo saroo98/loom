@@ -1,7 +1,9 @@
 import base64
+import contextlib
 import copy
 import datetime as dt
 import hashlib
+import io
 import json
 import shutil
 import subprocess
@@ -43,6 +45,31 @@ class ReleaseStandardTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
+
+    def test_verify_cut_output_keeps_stdout_bounded(self):
+        output = self.root / "verify-cut.json"
+        result = {
+            "status": "passed",
+            "root_sha256": "a" * 64,
+            "suite": {
+                "passed": True,
+                "tests_run": 5000,
+                "failure_count": 0,
+                "error_count": 0,
+                "capability_complete": True,
+                "tests": [{"test": "x" * 2048}] * 400,
+            },
+        }
+        stdout = io.StringIO()
+        with mock.patch.object(loom_release, "verify_cut", return_value=result), \
+                contextlib.redirect_stdout(stdout):
+            code = loom_release.main([
+                "verify-cut", str(self.root), "--output", str(output)])
+        self.assertEqual(0, code)
+        self.assertEqual(result, json.loads(output.read_text(encoding="utf-8")))
+        rendered = stdout.getvalue()
+        self.assertLess(len(rendered.encode("utf-8")), 1024)
+        self.assertNotIn('"tests"', rendered)
 
     def tearDown(self):
         self.tmp.cleanup()

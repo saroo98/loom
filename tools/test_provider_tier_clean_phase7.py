@@ -77,6 +77,11 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
             called = {}
             def run(**kwargs):
                 called.update(kwargs)
+                output = Path(kwargs["command"][-1])
+                output.write_text(json.dumps({
+                    "status": "passed",
+                    "suite": {"tests": ["x" * 1024] * 400},
+                }), encoding="utf-8")
                 return ({
                     "status": "passed", "returncode": 0,
                     "receipt_sha256": "a" * 64,
@@ -88,6 +93,8 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
                     side_effect=run):
                 receipt = loom_clean_room.verify(cut)
             self.assertEqual((cut / "tools").resolve(), Path(called["cwd"]).resolve())
+            self.assertEqual("--output", called["command"][-2])
+            self.assertEqual("verify-cut.json", Path(called["command"][-1]).name)
             child_environment = called["environment"]
             child_temp = Path(child_environment["TMPDIR"]).resolve()
             self.assertEqual(child_temp, Path(child_environment["TEMP"]).resolve())
@@ -139,6 +146,26 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
                         loom_clean_room.CleanRoomError, "stdout-marker.*stderr-marker") as raised:
                     loom_clean_room.verify(cut)
             self.assertLess(len(str(raised.exception)), 5000)
+
+    def test_clean_room_refuses_missing_verification_receipt_after_zero_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cut = Path(temporary) / "cut"
+            (cut / "tools").mkdir(parents=True)
+            (cut / "tools" / "loom_release.py").write_text(
+                "# fixture\n", encoding="utf-8")
+            result = ({
+                "status": "passed", "returncode": 0,
+                "receipt_sha256": "a" * 64,
+                "containment_provider": "test-provider",
+                "primary_failure": None,
+            }, b'{"status":"passed"}\n', b"")
+            with mock.patch.object(
+                    loom_clean_room.loom_operation_supervisor, "run",
+                    return_value=result):
+                with self.assertRaisesRegex(
+                        loom_clean_room.CleanRoomError,
+                        "receipt is unreadable"):
+                    loom_clean_room.verify(cut)
 
 
 if __name__ == "__main__":
