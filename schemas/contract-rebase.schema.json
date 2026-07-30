@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/contract-rebase.schema.json",
+  "title": "Proofline advisory contract rebase",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "policy_id", "mode", "prior_graph_sha256",
+    "changed_paths", "prior_consequence", "current_consequence",
+    "world_coverage", "domain_state", "preserved", "invalidated", "unknown",
+    "decision_required", "implementation_authorized", "fresh_action_required",
+    "authority_effect", "report_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-contract-rebase-policy-v1"},
+    "mode": {"const": "advisory"},
+    "prior_graph_sha256": {"$ref": "#/$defs/sha256"},
+    "changed_paths": {
+      "type": "array",
+      "maxItems": 100000,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 1000}
+    },
+    "prior_consequence": {"enum": ["ordinary", "material", "high", "critical"]},
+    "current_consequence": {"enum": ["ordinary", "material", "high", "critical"]},
+    "world_coverage": {"enum": ["complete", "incomplete"]},
+    "domain_state": {"enum": ["consistent", "conflicted", "unknown"]},
+    "preserved": {"$ref": "#/$defs/rows"},
+    "invalidated": {"$ref": "#/$defs/rows"},
+    "unknown": {"$ref": "#/$defs/rows"},
+    "decision_required": {"$ref": "#/$defs/rows"},
+    "implementation_authorized": {"const": false},
+    "fresh_action_required": {"const": true},
+    "authority_effect": {"const": "none"},
+    "report_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "rows": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["subject_id", "subject_type", "reason_code", "rule_id"],
+        "properties": {
+          "subject_id": {"type": "string", "minLength": 1, "maxLength": 256},
+          "subject_type": {
+            "enum": [
+              "current-fact", "domain-invariant", "evidence", "intent-atom",
+              "path-effect", "verification-recipe", "work-order"
+            ]
+          },
+          "reason_code": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9-]{0,127}$"
+          },
+          "rule_id": {"type": ["string", "null"], "maxLength": 128}
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "registry_id": "loom-verification-recipes-v1",
+  "templates": [
+    {
+      "template_id": "cargo-test-v1",
+      "outcome_class": "rust-tests",
+      "medium": "cli-process",
+      "tool": "cargo",
+      "evidence_parser": "exit-code-zero-v1",
+      "failure_meaning": "rust-test-command-failed",
+      "maximum_timeout_seconds": 300
+    },
+    {
+      "template_id": "npm-script-v1",
+      "outcome_class": "package-script",
+      "medium": "cli-process",
+      "tool": "npm",
+      "evidence_parser": "exit-code-zero-v1",
+      "failure_meaning": "declared-package-script-failed",
+      "maximum_timeout_seconds": 300
+    },
+    {
+      "template_id": "pytest-node-v1",
+      "outcome_class": "python-pytest",
+      "medium": "cli-process",
+      "tool": "python",
+      "evidence_parser": "exit-code-zero-v1",
+      "failure_meaning": "selected-pytest-node-failed",
+      "maximum_timeout_seconds": 300
+    },
+    {
+      "template_id": "python-unittest-v1",
+      "outcome_class": "python-unittest",
+      "medium": "cli-process",
+      "tool": "python",
+      "evidence_parser": "exit-code-zero-v1",
+      "failure_meaning": "selected-unittest-target-failed",
+      "maximum_timeout_seconds": 300
+    }
+  ],
+  "unsupported_policy": "remain-unsupported",
+  "host_pass_flags": "rejected",
+  "execution_isolation": "disposable-target-snapshot"
+}

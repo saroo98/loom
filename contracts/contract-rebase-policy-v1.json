@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "policy_id": "loom-contract-rebase-policy-v1",
+  "mode": "advisory",
+  "monotone_rules": [
+    {
+      "rule_id": "disjoint-authorized-path-v1",
+      "subject_types": ["intent-atom", "path-effect", "work-order"],
+      "predicate": "no changed path matches the subject's declared touch patterns"
+    },
+    {
+      "rule_id": "identical-content-subject-v1",
+      "subject_types": ["domain-invariant", "current-fact", "verification-recipe"],
+      "predicate": "the exact content digest and every dependency digest are unchanged"
+    }
+  ],
+  "automatic_authority": "never",
+  "fresh_action_required": true,
+  "rollback": "Remove the optional advisory projection; retain normal repair and fresh-action rules."
+}
