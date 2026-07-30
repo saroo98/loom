@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "corpus_id": "loom-proofline-orphan-v1",
+  "frozen_before_evaluation": true,
+  "cases": [
+    {"id": "authorized-exact", "path": "src/app.py", "touches": ["src/app.py"], "expected": "authorized"},
+    {"id": "authorized-recursive", "path": "src/a/b.py", "touches": ["src/**"], "expected": "authorized"},
+    {"id": "authorized-test", "path": "tests/test_app.py", "touches": ["tests/**"], "expected": "authorized"},
+    {"id": "orphan-adjacent", "path": "scripts/release.py", "touches": ["src/**"], "expected": "orphan"},
+    {"id": "orphan-root", "path": "README.md", "touches": ["src/**"], "expected": "orphan"},
+    {"id": "generated-plan", "path": "plans/proofline/proof-graph.json", "touches": ["src/**"], "expected": "excluded-advisory"},
+    {"id": "vendored-node", "path": "node_modules/pkg/index.js", "touches": ["src/**"], "expected": "excluded-advisory"},
+    {"id": "vendored-python", "path": ".venv/lib/site.py", "touches": ["src/**"], "expected": "excluded-advisory"},
+    {"id": "path-prefix-not-enough", "path": "src2/app.py", "touches": ["src/**"], "expected": "orphan"},
+    {"id": "single-level-glob", "path": "docs/a.md", "touches": ["docs/*.md"], "expected": "authorized"},
+    {"id": "single-level-glob-nested", "path": "docs/nested/a.md", "touches": ["docs/*.md"], "expected": "authorized"},
+    {"id": "multiple-authorities", "path": "src/app.py", "touches": ["src/**", "src/app.py"], "expected": "authorized"}
+  ]
+}

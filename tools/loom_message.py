@@ -70,6 +70,14 @@ def _render_v5(value):
         first += f" Open: {value['result_path']}."
     elif value["details_available"] and value["state"] in INTERVENTIONS:
         first += " Details: ask Loom why."
+    if value["changes_made"] is False:
+        first += " No project changes were made."
+    elif value["changes_made"] is None:
+        first += " Loom could not confirm whether changes were made."
+    elif value["undo_status"] == "available":
+        first += " You can undo this Loom action."
+    elif value["undo_status"] == "unavailable":
+        first += " Loom cannot undo this automatically."
     return first + "\n" + f"Next: {value['next_action']}"
 
 

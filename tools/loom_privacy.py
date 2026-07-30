@@ -8,12 +8,13 @@ import base64
 import hashlib
 import json
 import os
+import queue
 import re
-import selectors
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 from pathlib import Path
 
 import loom_memory
@@ -175,15 +176,34 @@ class _SecretScanWorker:
 
     def __init__(self):
         self.process = None
+        self.responses = None
+        self.reader = None
+
+    @staticmethod
+    def _read_responses(stdout, responses):
+        while True:
+            response = stdout.readline()
+            responses.put(response)
+            if not response:
+                return
 
     def _start(self):
         self.process = subprocess.Popen(
             [sys.executable, "-B", str(Path(__file__).resolve()), "_secret-worker"],
             stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
             bufsize=0)
+        self.responses = queue.Queue()
+        self.reader = threading.Thread(
+            target=self._read_responses,
+            args=(self.process.stdout, self.responses),
+            name="loom-secret-scan-reader",
+            daemon=True)
+        self.reader.start()
 
     def _stop(self):
         process, self.process = self.process, None
+        self.responses = None
+        self.reader = None
         if process is None:
             return
         try:
@@ -214,11 +234,10 @@ class _SecretScanWorker:
                 self.process.stdin.write(len(content).to_bytes(8, "big"))
                 self.process.stdin.write(content)
                 self.process.stdin.flush()
-                with selectors.DefaultSelector() as selector:
-                    selector.register(self.process.stdout, selectors.EVENT_READ)
-                    if not selector.select(timeout=30):
-                        raise TimeoutError("secret scan worker timed out")
-                response = self.process.stdout.readline()
+                try:
+                    response = self.responses.get(timeout=30)
+                except queue.Empty as exc:
+                    raise TimeoutError("secret scan worker timed out") from exc
                 if not response.endswith(b"\n"):
                     raise BrokenPipeError("secret scan worker stopped before its receipt")
                 label = response[:-1].decode("ascii")
@@ -311,10 +330,11 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False,
         if token_match is not None:
             findings.append({"kind": "forbidden-content", "path": relative,
                              "rule": hashlib.sha256(token_match.encode()).hexdigest()[:12]})
-        secret_match = (_isolated_secret_signature_match(content)
-                        if sys.platform.startswith("linux")
-                        and sys.version_info >= (3, 14)
-                        else _secret_signature_match(scan_views))
+        # Regex-engine failures have occurred on more than one CPython/platform
+        # combination while scanning large staged packages.  Keep every
+        # content scan behind the supervised worker so an interpreter-level
+        # regex failure can never certify a publication as clean.
+        secret_match = _isolated_secret_signature_match(content)
         if secret_match is not None:
             findings.append({"kind": "secret-signature", "path": relative,
                              "rule": secret_match})

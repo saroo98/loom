@@ -20,6 +20,7 @@ import loom_gate
 import loom_lifecycle
 import loom_lint
 import loom_planning_intelligence
+import loom_proofline
 import loom_reliability
 
 
@@ -1012,6 +1013,15 @@ is mechanical independence, not a human or second-model review.
 def _render_known_or_bound_pack(stage, *, contract, draft, request, version, today):
     assignments, atoms_by_wo = _planning_assignments(
         contract, draft["work_orders"])
+    material_ledger = loom_proofline.build_material_ledger(
+        request=request, plan_contract=contract, semantic_draft=draft)
+    proof_graph = loom_proofline.build_graph(
+        ledger=material_ledger, plan_contract=contract,
+        semantic_draft=draft, assignments=assignments)
+    _write_json(
+        stage / "proofline" / "material-intent-ledger.json",
+        material_ledger)
+    _write_json(stage / "proofline" / "proof-graph.json", proof_graph)
     if contract["tier"] == "S":
         _write_work_orders(stage, contract, draft, today, atoms_by_wo)
         return

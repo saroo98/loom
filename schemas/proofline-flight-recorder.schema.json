@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/proofline-flight-recorder.schema.json",
+  "title": "Proofline local Flight Recorder",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "events", "privacy", "recorder_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "events": {
+      "type": "array",
+      "maxItems": 2048,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "receipt_id", "receipt_sha256", "completed_at", "intent", "status",
+          "summary", "verification", "freshness", "changes_made", "undo_status",
+          "result_path"
+        ],
+        "properties": {
+          "receipt_id": {"type": "string", "minLength": 1, "maxLength": 128},
+          "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "completed_at": {"type": "string", "minLength": 1, "maxLength": 64},
+          "intent": {"type": "string", "minLength": 1, "maxLength": 32},
+          "status": {"type": "string", "minLength": 1, "maxLength": 32},
+          "summary": {"type": "string", "minLength": 1, "maxLength": 240},
+          "verification": {"type": "string", "minLength": 1, "maxLength": 32},
+          "freshness": {"type": "string", "minLength": 1, "maxLength": 32},
+          "changes_made": {"type": ["boolean", "null"]},
+          "undo_status": {"type": "string", "minLength": 1, "maxLength": 32},
+          "result_path": {"type": ["string", "null"], "maxLength": 512}
+        }
+      }
+    },
+    "privacy": {
+      "const": {
+        "memory_bodies": "excluded",
+        "raw_transcripts": "excluded",
+        "owner_request_bodies": "excluded"
+      }
+    },
+    "recorder_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

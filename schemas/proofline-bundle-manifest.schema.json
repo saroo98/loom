@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/proofline-bundle-manifest.schema.json",
+  "title": "Proofline offline bundle manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "bundle_id", "receipt_sha256",
+    "proofline_report_sha256", "files", "privacy_firewall", "manifest_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "bundle_id": {"type": "string", "pattern": "^proof-[0-9a-f]{24}$"},
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "proofline_report_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "files": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "visibility", "bytes", "sha256"],
+        "properties": {
+          "path": {"type": "string", "minLength": 1, "maxLength": 256},
+          "visibility": {"enum": ["public", "private-reference"]},
+          "bytes": {"type": "integer", "minimum": 1},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    },
+    "privacy_firewall": {
+      "const": {
+        "allowlisted_files_only": true,
+        "memory_bodies": "excluded",
+        "raw_transcripts": "excluded",
+        "owner_request_bodies": "excluded"
+      }
+    },
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

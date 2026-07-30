@@ -330,7 +330,8 @@ def _validate_handler_result(value):
         "applied_memory_ids", "verified_memory_ids", "rejected_memory_ids",
     }
     optional_structures = {
-        "preference_observations", "artifact_usage", "memory_effects", "usage", "user_message"}
+        "preference_observations", "artifact_usage", "memory_effects", "usage",
+        "user_message", "result_path"}
     allowed = required | optional_id_lists | optional_structures
     if not isinstance(value, dict) or set(value) - allowed or not required.issubset(value):
         raise SessionBlocked(
@@ -443,6 +444,12 @@ def _validate_handler_result(value):
     if not isinstance(user_message, str) or len(user_message) > 1000:
         raise SessionBlocked("HANDLER_RESULT_INVALID", "user message is invalid")
     normalized["user_message"] = user_message
+    result_path = value.get("result_path")
+    if result_path is not None and (
+            not isinstance(result_path, str)
+            or loom_message.SAFE_RESULT_PATH.fullmatch(result_path) is None):
+        raise SessionBlocked("HANDLER_RESULT_INVALID", "handler result path is invalid")
+    normalized["result_path"] = result_path
     try:
         normalized["usage"] = loom_performance.normalize_usage(value.get("usage"))
     except loom_performance.PerformanceError as exc:
@@ -651,6 +658,8 @@ def _receipt_from_data(value, *, repeated):
             loom_message.v2_from_session, loom_message.v3_from_session,
             loom_message.v4_from_session, loom_message.from_session}:
         message_arguments["intent"] = data["intent"]
+    if message_factory is loom_message.from_session:
+        message_arguments["result_path"] = data["owner_message"]["result_path"]
     if data["schema_version"] == RECEIPT_SCHEMA_VERSION:
         if message_factory not in {
                 loom_message.v3_from_session, loom_message.v4_from_session,
@@ -1195,7 +1204,9 @@ def validate_active_session(journal_path, session_id, operation_id, *, project_i
 class SessionController:
     """One public controller that prepares, dispatches, and seals an invocation."""
 
-    def __init__(self, *, owner_home, instance_id, handlers, memory):
+    def __init__(
+            self, *, owner_home, instance_id, handlers, memory,
+            receipt_observer=None):
         loom_runtime._canonical_uuid(instance_id, "instance_id")
         if owner_home is None:
             raise SessionBlocked("SESSION_HOME_REQUIRED", "owner_home must be explicit")
@@ -1210,6 +1221,9 @@ class SessionController:
         self.instance_id = instance_id
         self.handlers = dict(handlers)
         self.memory = memory
+        if receipt_observer is not None and not callable(receipt_observer):
+            raise SessionError("receipt observer must be callable")
+        self.receipt_observer = receipt_observer
 
     def _journal_path(self, project_id):
         return (self.owner_home / "instances" / self.instance_id / "runtime" /
@@ -1637,7 +1651,7 @@ class SessionController:
             reversible_action_ids=reversible_action_ids,
             detail=result.get("user_message", ""),
             receipt_id="session-" + operation_id[:16],
-            block_reason=block_reason)
+            block_reason=block_reason, result_path=result.get("result_path"))
         receipt_data = {
             "schema_version": RECEIPT_SCHEMA_VERSION,
             "session_id": session_id,
@@ -1679,6 +1693,19 @@ class SessionController:
             "completed_at": completed,
         }
         receipt_data["receipt_hash"] = _receipt_hash(receipt_data)
+        if self.receipt_observer is not None:
+            try:
+                self.receipt_observer(json.loads(json.dumps(receipt_data)))
+            except Exception as exc:
+                _append_event(
+                    journal, "session-interrupted", session_id, operation_id, instant,
+                    self._protect_payload(
+                        operation_id, {"code": "receipt-projection-failed"}))
+                _atomic_json(path, journal)
+                raise SessionInterrupted(
+                    "RECEIPT_PROJECTION_FAILED",
+                    "owner proof projection failed; the next invocation will reconcile it") \
+                    from exc
         _append_event(
             journal, "session-receipt-sealed", session_id, operation_id, instant,
             self._protect_payload(
