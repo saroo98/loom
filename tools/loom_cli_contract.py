@@ -33,6 +33,26 @@ WRITE_CLASS = {
 RUNTIME = {"loom_launcher", "loom_orchestrator"}
 TEXT_OUTPUT = {"loom_lint"}
 MIXED_OUTPUT = {"loom_launcher"}
+CLI_PROBE_TIMEOUT_SECONDS = 30
+WINDOWS_VERIFY_WORKERS = 2
+DEFAULT_VERIFY_WORKERS = 8
+
+
+def _worker_count(count, *, platform=None):
+    platform = os.name if platform is None else platform
+    ceiling = WINDOWS_VERIFY_WORKERS if platform == "nt" else DEFAULT_VERIFY_WORKERS
+    return min(ceiling, max(1, count))
+
+
+def _run_probe(command, *, cwd, environment, label):
+    try:
+        return subprocess.run(
+            command, cwd=cwd, env=environment, capture_output=True,
+            text=True, timeout=CLI_PROBE_TIMEOUT_SECONDS, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise ContractError(
+            f"{label} exceeded the bounded "
+            f"{CLI_PROBE_TIMEOUT_SECONDS}-second CLI probe budget") from exc
 
 
 def _entrypoints(root):
@@ -131,10 +151,10 @@ def _runtime_help_options(root, path, subcommands):
     environment = dict(os.environ, PYTHONDONTWRITEBYTECODE="1")
     outputs = []
     for suffix in [[], *[[command] for command in subcommands]]:
-        probe = subprocess.run(
+        label = f"{path.stem} {' '.join(suffix)} --help".replace("  ", " ")
+        probe = _run_probe(
             [sys.executable, "-B", str(path), *suffix, "--help"],
-            cwd=root / "tools", env=environment, capture_output=True,
-            text=True, timeout=10, check=False)
+            cwd=root / "tools", environment=environment, label=label)
         if probe.returncode != 0 or probe.stderr.strip():
             raise ContractError(f"{path.stem} help contract cannot be inventoried")
         outputs.append(probe.stdout)
@@ -176,7 +196,7 @@ def inventory(root):
     if not (root / "tools").is_dir():
         raise ContractError("repository tools directory is missing")
     paths = _entrypoints(root)
-    workers = min(8, max(1, len(paths)))
+    workers = _worker_count(len(paths))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         tools = list(executor.map(
             lambda path: _inventory_tool(root, path), paths))
@@ -185,22 +205,19 @@ def inventory(root):
 
 def _verify_tool(root, item, environment):
     command = [sys.executable, "-B", str(root / item["path"]), "--help"]
-    try:
-        probe = subprocess.run(
-            command, cwd=root / "tools", env=environment, capture_output=True,
-            text=True, timeout=10, check=False)
-    except subprocess.TimeoutExpired as exc:
-        raise ContractError(f"{item['name']} --help exceeded 10 seconds") from exc
+    probe = _run_probe(
+        command, cwd=root / "tools", environment=environment,
+        label=f"{item['name']} --help")
     if probe.returncode != 0 or "usage:" not in probe.stdout.casefold() \
             or probe.stderr.strip():
         raise ContractError(
             f"{item['name']} --help violated its zero-exit stdout-only contract")
     help_outputs = [probe.stdout]
     for command_name in item["subcommands"]:
-        subprobe = subprocess.run(
+        subprobe = _run_probe(
             [sys.executable, "-B", str(root / item["path"]), command_name, "--help"],
-            cwd=root / "tools", env=environment, capture_output=True,
-            text=True, timeout=10, check=False)
+            cwd=root / "tools", environment=environment,
+            label=f"{item['name']} {command_name} --help")
         if subprobe.returncode != 0 or "usage:" not in subprobe.stdout.casefold() \
                 or subprobe.stderr.strip():
             raise ContractError(
@@ -217,11 +234,11 @@ def _verify_tool(root, item, environment):
         isolated = dict(environment, HOME=str(sandbox), USERPROFILE=str(sandbox),
                         LOOM_HOME=str(sandbox / ".loom"))
         before = _tree_digest(sandbox)
-        invalid = subprocess.run(
+        invalid = _run_probe(
             [sys.executable, "-B", str(root / item["path"]),
              "--loom-contract-invalid-option"],
-            cwd=sandbox, env=isolated, capture_output=True, text=True,
-            timeout=10, check=False)
+            cwd=sandbox, environment=isolated,
+            label=f"{item['name']} invalid-option refusal")
         invalid_violations = _refusal_violations(
             invalid, before, _tree_digest(sandbox))
         if invalid_violations:
@@ -232,10 +249,10 @@ def _verify_tool(root, item, environment):
                        if flag.startswith("--") and contract["requires_value"]]
         missing_value_exit = None
         if value_flags:
-            missing = subprocess.run(
+            missing = _run_probe(
                 [sys.executable, "-B", str(root / item["path"]), value_flags[0]],
-                cwd=sandbox, env=isolated, capture_output=True, text=True,
-                timeout=10, check=False)
+                cwd=sandbox, environment=isolated,
+                label=f"{item['name']} missing-value refusal")
             missing_value_exit = missing.returncode
             missing_violations = _refusal_violations(
                 missing, before, _tree_digest(sandbox))
@@ -257,7 +274,7 @@ def verify(root):
     environment = dict(os.environ)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     tools = value["tools"]
-    workers = min(8, max(1, len(tools)))
+    workers = _worker_count(len(tools))
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         receipts = list(executor.map(
             lambda item: _verify_tool(root, item, environment), tools))
