@@ -73,8 +73,8 @@ Status at this documentation cut, 2026-07-30:
 | Surface | Status | Evidence boundary |
 |---|---|---|
 | Published release | `v1.8.19`, published 2026-07-29 | Signed tag and release assets exist; the plugin ZIP digest is `d14d7ab133ea3341a55af17bd53400528982470de36a6946fcbe977ac5b027b9` |
-| Release candidate | `1.8.20` | This source version includes merged Proofline and Completion enforcement; it is not a published artifact until signed release verification completes |
-| Default branch | `main` at `9c6f1f83b3e0c57cb5e33328bb2cd961bb6a2a8d` | PR #46 merged Proofline and Completion; PR #47 repaired cross-platform executable identity in its verification contract |
+| Release candidate | `1.8.21` | This source version includes merged Proofline and Completion enforcement plus the bounded clean-room release receipt fix; it is not a published artifact until signed release verification completes |
+| Default branch | `main` at `39444b7f99cc8e7b53e6d51e63e0ecc6ef7c1fb3` | PR #46 merged Proofline and Completion; PR #47 repaired cross-platform executable identity; PR #54 preserved full clean-room receipts outside the bounded process transcript |
 | Remediation | Merged through [PR #32](https://github.com/saroo98/loom/pull/32) | No known Critical or High blocker was reported at merge; the merged code is not thereby released, installed, deployed, or independently certified |
 | Website work | Merged through [PR #33](https://github.com/saroo98/loom/pull/33) | Public-facing files are on `main`; GitHub Pages deployment is separate from Loom software release promotion |
 | Generated readiness | `not-ready` | No current supported host or native platform claims in the generated readiness record |

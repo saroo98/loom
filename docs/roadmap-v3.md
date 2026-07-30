@@ -27,21 +27,22 @@ upgrade an item to released or supported.
 |---|---|---|
 | Published release | `v1.8.19` at `c09e99d2d0794e72e2a2226e28fc6c0d44518e65` | Published 2026-07-29 with a signed tag and release assets |
 | Plugin ZIP | `loom-plugin-v1.8.19.zip` | SHA-256 `d14d7ab133ea3341a55af17bd53400528982470de36a6946fcbe977ac5b027b9` |
-| Release candidate | `1.8.20` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
-| Current `main` | `9c6f1f83b3e0c57cb5e33328bb2cd961bb6a2a8d` | PR #46 merged Proofline and Completion; PR #47 repaired cross-platform executable identity in its verification contract |
+| Release candidate | `1.8.21` | Prepared from the current protected `main`; it remains unreleased until exact-cut, signing, and draft-release verification pass |
+| Current `main` | `39444b7f99cc8e7b53e6d51e63e0ecc6ef7c1fb3` | PR #46 merged Proofline and Completion; PR #47 repaired cross-platform executable identity; PR #54 preserved complete clean-room receipts outside the bounded process transcript |
 | Remediation checks | 9 required quality checks and 21 native-compatibility checks passed | Merge evidence for PR #32; not release, installation, deployment, support, or independent-assurance evidence |
 | Known blockers at merge | No known Critical or High blocker | Absence of a known blocker is not a guarantee of security, reliability, or recovery |
 | Website/documentation | Merged through PR #33 | Public-facing changes are on `main`; Pages deployment and software release promotion remain separate |
 | Pages source | `main:/docs` | GitHub Pages source; the public site changes only after this branch is reviewed, merged, and the Pages workflow succeeds |
-| Current generated inventory | 1,330 test methods in 119 modules | Repository inventory only; it does not say the full suite passed in this documentation update |
+| Current generated inventory | 1,332 test methods in 119 modules | Repository inventory only; it does not say the full suite passed in this documentation update |
 | Generated readiness | `not-ready` | 0 supported claims, 9 experimental, 1 stale, 2 unsupported, 14 unverified |
 
 ## Immediate release truth
 
 The published 1.8.19 release remains the current immutable public artifact. Proofline and
 Completion merged into `main` through PR #46, followed by the cross-platform verification-contract
-repair in PR #47. The 1.8.20 candidate still requires exact-main CI, exact-cut verification,
-signed release promotion, installation, and installed-runtime acceptance.
+repair in PR #47 and bounded clean-room receipt transport in PR #54. The 1.8.21 candidate still
+requires exact-main CI, exact-cut verification, signed release promotion, installation, and
+installed-runtime acceptance.
 
 Those results supersede the earlier pre-remediation workflow failures recorded by the previous
 roadmap cut. They do not publish a new artifact, modify an installation, deploy the website,
