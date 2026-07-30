@@ -136,6 +136,48 @@ class OwnerMessageTests(unittest.TestCase):
         self.assertIn("descriptive bullets", value["human"])
         self.assertIn("Details: ask Loom why.", value["human"])
 
+    def test_project_write_block_preserves_complete_plain_sentence(self):
+        observed = (
+            "Loom stopped before changing the project. Creating a persistent Loom plan "
+            "currently requires project-local planning files under plans/. Remove the "
+            "no-file-write constraint if you want those files created.")
+        reason = loom_block_reason.build(
+            code="PROJECT-WRITE-PROHIBITED", category="handler",
+            expected="One unambiguous, current, and safely authorized Loom action.",
+            observed=observed,
+            finding_codes=["PROJECT-WRITE-PROHIBITED"], finding_count=1,
+            ownership="not-applicable", pristine_proof="not-applicable",
+            automatic_recovery="owner-decision",
+            next_action="Resolve the reported condition, then start a fresh Loom request.")
+
+        value = loom_message.from_session(
+            status="blocked", code="project-write-prohibited", intent="plan", tier="M",
+            owner_input_required=False, reversible_action_ids=[], detail="",
+            receipt_id="session-project-write", block_reason=reason)
+
+        self.assertEqual(observed, value["summary"])
+        self.assertIn("those files created. Details:", value["human"])
+        self.assertNotIn("those files creat Details:", value["human"])
+
+    def test_long_block_summary_uses_a_visible_word_boundary(self):
+        reason = loom_block_reason.build(
+            code="LONG-BLOCK", category="handler",
+            expected="One bounded owner message.",
+            observed="A " + ("lengthy observation " * 11),
+            finding_codes=["LONG-BLOCK"], finding_count=1,
+            ownership="not-applicable", pristine_proof="not-applicable",
+            automatic_recovery="owner-decision",
+            next_action="Inspect the bounded condition.")
+
+        value = loom_message.from_session(
+            status="blocked", code="long-block", intent="plan", tier="M",
+            owner_input_required=False, reversible_action_ids=[], detail="",
+            receipt_id="session-long-block", block_reason=reason)
+
+        self.assertLessEqual(len(value["summary"]), 240)
+        self.assertTrue(value["summary"].endswith("\u2026"))
+        self.assertRegex(value["summary"], r"(?:lengthy|observation)\u2026$")
+
     def test_result_locator_rejects_absolute_and_parent_traversal_paths(self):
         for detail in (
                 "LOOM_RESULT C:/private/plan.md | ready",
