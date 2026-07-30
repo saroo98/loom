@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.8.21
+
+- Keep the complete clean-room verification receipt in a durable disposable-home file while
+  emitting only a bounded summary through the supervised process transcript.
+- Validate the durable verification receipt before accepting a clean-room run, preserving the
+  existing transcript limit and fail-closed release behavior.
+- Add regression coverage proving a successful exact-cut verification cannot be rejected merely
+  because its complete JSON receipt exceeds the bounded supervisor transcript.
+
 ## 1.8.20
 
 - Add typed Proofline intent atoms that bind exact owner-request spans to work orders,
