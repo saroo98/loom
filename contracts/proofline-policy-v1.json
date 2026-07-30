@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "policy_id": "loom-proofline-policy-v1",
+  "mode": "enforced-monotone-only",
+  "path_classes": {
+    "generated": [
+      "plans/**"
+    ],
+    "vendored": [
+      "node_modules/**",
+      "vendor/**",
+      ".venv/**",
+      "venv/**"
+    ],
+    "ignored": [],
+    "unrelated": []
+  },
+  "promoted_predicates": [
+    "exact-unauthorized-project-path"
+  ],
+  "advisory_predicates": [
+    "material-intent-semantic-completion",
+    "generated-path-relevance",
+    "ignored-path-relevance",
+    "unrelated-path-relevance",
+    "vendored-path-relevance"
+  ],
+  "thresholds": {
+    "minimum_cases": 12,
+    "maximum_false_positives": 0,
+    "maximum_false_negatives": 0
+  },
+  "rollback": "Set mode to shadow; retain reports and corpus results."
+}

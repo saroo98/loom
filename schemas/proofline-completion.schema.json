@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/proofline-completion.schema.json",
+  "title": "Proofline shadow completion and orphan-change report",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "policy_id", "mode", "ledger_sha256",
+    "graph_sha256", "lifecycle_sha256", "intent_coverage", "path_evaluation",
+    "gate", "limitations", "report_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "policy_id": {"const": "loom-proofline-policy-v1"},
+    "mode": {"enum": ["shadow", "enforced-monotone-only"]},
+    "ledger_sha256": {"$ref": "#/$defs/sha256"},
+    "graph_sha256": {"$ref": "#/$defs/sha256"},
+    "lifecycle_sha256": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "intent_coverage": {
+      "type": "array",
+      "maxItems": 128,
+      "items": {"$ref": "#/$defs/coverage"}
+    },
+    "path_evaluation": {
+      "type": "array",
+      "maxItems": 100000,
+      "items": {"$ref": "#/$defs/path"}
+    },
+    "gate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason_codes", "orphan_paths"],
+      "properties": {
+        "state": {"enum": ["passed", "failed", "advisory"]},
+        "reason_codes": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"}
+        },
+        "orphan_paths": {
+          "type": "array",
+          "maxItems": 100000,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/pathText"}
+        }
+      }
+    },
+    "limitations": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1, "maxLength": 300}
+    },
+    "report_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "pathText": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1000,
+      "pattern": "^(?![A-Za-z]:)(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["atom_id", "work_order", "state", "evidence_ids",
+        "reason_codes", "semantic_claim"],
+      "properties": {
+        "atom_id": {"type": "string", "pattern": "^intent-[0-9]{3}$"},
+        "work_order": {"type": ["string", "null"], "pattern": "^WO-[0-9]{3,}$"},
+        "state": {"enum": ["evidence-present", "pending", "unknown"]},
+        "evidence_ids": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^sha256-[0-9a-f]{64}$"}
+        },
+        "reason_codes": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,127}$"}
+        },
+        "semantic_claim": {"const": "advisory"}
+      }
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "class", "authorization", "matched_patterns",
+        "reason_code"],
+      "properties": {
+        "path": {"$ref": "#/$defs/pathText"},
+        "class": {"enum": ["generated", "ignored", "project", "unknown",
+          "unrelated", "vendored"]},
+        "authorization": {"enum": ["authorized", "excluded-advisory", "orphan",
+          "unknown"]},
+        "matched_patterns": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/pathText"}
+        },
+        "reason_code": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{0,127}$"
+        }
+      }
+    }
+  }
+}
