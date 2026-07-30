@@ -132,7 +132,7 @@ class VerificationRecipeTests(unittest.TestCase):
         step = recipe["steps"][0]
         self.assertEqual("current-project-authority", step["authority"])
         self.assertEqual(
-            [sys.executable, "run", "--silent", "test"],
+            [str(Path(sys.executable).resolve()), "run", "--silent", "test"],
             step["command"])
         package.write_text(json.dumps({
             "name": "proof-project",
