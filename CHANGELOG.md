@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.8.20
+
+- Add typed Proofline intent atoms that bind exact owner-request spans to work orders,
+  verification recipes, evidence, and completion outcomes.
+- Reject semantic completion when required proof is missing, stale, wrong-subject, contradictory,
+  or unable to trace back to the authorized owner intent.
+- Add bounded owner-facing status, explanation, and completion messages that identify the concrete
+  result and one plain-language next action without exposing internal lifecycle jargon by default.
+- Preserve continuation authority across completion, cancellation, timeout, reopening, recovery,
+  and replay while keeping verification execution subject-bound and reproducible.
+- Normalize executable identities in verification recipes across POSIX symlink layouts so hosted
+  Linux and macOS verification agrees with the canonical runtime command.
+
 ## 1.8.19
 
 - Preserve explicit planning intent in long natural-language requests whose prohibitions only
