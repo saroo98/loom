@@ -6,7 +6,7 @@ Loom’s owner-facing request surface is:
 /loom <request>
 ```
 
-The current source candidate is 1.8.22. Until its signed release is published, the latest immutable
+The current source candidate is 1.8.23. Until its signed release is published, the latest immutable
 artifact remains 1.8.19. Check [release readiness](./release-readiness.md) and
 [current limitations](./limitations.md) before treating a host or platform as supported.
 

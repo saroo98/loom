@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.8.23
+
+- Honor natural owner wording such as `do not implement it or modify project files` as an
+  explicit zero-project-write planning request.
+- Stop before creating project-local `plans/` metadata when that prohibition is present.
+- Add the exact installed 1.8.22 acceptance request as a regression test and refresh the generated
+  final test inventory.
+
 ## 1.8.22
 
 - Accept the canonical `verified` success state written by exact-cut receipts when the
