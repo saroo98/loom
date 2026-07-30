@@ -271,6 +271,29 @@ def capture_repair_verification(pack, repo, section, *, medium, command,
     return json.loads(json.dumps(evidence))
 
 
+def capture_compiled_verification(
+        pack, repo, sections, *, medium, command, timeout,
+        evidence_parser, failure_meaning, now=None):
+    if not isinstance(sections, list) or not sections \
+            or len(sections) != len(set(sections)) \
+            or any(not isinstance(section, str) or not SAFE_ID.fullmatch(section)
+                   for section in sections) \
+            or evidence_parser != "exit-code-zero-v1" \
+            or not isinstance(failure_meaning, str) \
+            or not SAFE_ID.fullmatch(failure_meaning):
+        raise LifecycleError("compiled verification identity is invalid")
+    evidence = _seal_content_evidence({
+        "schema_version": 1,
+        "sections": sorted(sections),
+        "evidence_parser": evidence_parser,
+        "failure_meaning": failure_meaning,
+        **_capture_real_medium(
+            pack, repo, medium=medium, command=command,
+            timeout=timeout, now=now),
+    })
+    return json.loads(json.dumps(evidence))
+
+
 def validate_acceptance_evidence(pack, work_order, repo=None, *,
                                  require_current=False, expected_state_hash=None):
     if not WO_ID.fullmatch(str(work_order)):

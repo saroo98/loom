@@ -765,7 +765,7 @@ def _lint_small_pack(pack, repo_path=None, strict_staleness=False,
         scan_text(rep, wo, text)
     allowed_roots = {
         ".loom-small-lifecycle.json", "WO-001.md",
-        ".loom-small-history", "evidence",
+        ".loom-small-history", "evidence", "proofline",
     }
     try:
         for path in pack.iterdir():
@@ -773,7 +773,7 @@ def _lint_small_pack(pack, repo_path=None, strict_staleness=False,
                 rep.add(
                     "ERROR", "E19", path, 1,
                     "unexpected file in compact Tier-S pack")
-            elif path.name in {".loom-small-history", "evidence"} \
+            elif path.name in {".loom-small-history", "evidence", "proofline"} \
                     and (path.is_symlink() or not path.is_dir()):
                 rep.add(
                     "ERROR", "E19", path, 1,

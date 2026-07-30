@@ -29,6 +29,7 @@ import loom_memory  # noqa: E402
 import loom_orchestrator  # noqa: E402
 import loom_plan_author  # noqa: E402
 import loom_performance  # noqa: E402
+import loom_proofline  # noqa: E402
 import loom_reliability  # noqa: E402
 import loom_release  # noqa: E402
 import loom_session  # noqa: E402
@@ -43,7 +44,8 @@ def _write(path, text):
     path.write_text(text, encoding="utf-8")
 
 
-def _write_planning_assignments(pack, contract, work_order="WO-001", milestone="delivery"):
+def _write_planning_assignments(
+        pack, contract, work_order="WO-001", milestone="delivery", *, write=True):
     atoms = [item for item in contract["planning_intelligence"]["atoms"]
              if item["gate_effect"] != "none"]
     assignments = [{
@@ -62,11 +64,27 @@ def _write_planning_assignments(pack, contract, work_order="WO-001", milestone="
     }
     value = {**body, "assignment_digest": loom_orchestrator.loom_domain_contract.digest(
         "planning-obligation-assignments-v1", body)}
-    _write(pack / "planning-obligations.json", json.dumps(value, indent=2) + "\n")
+    if write:
+        _write(pack / "planning-obligations.json", json.dumps(value, indent=2) + "\n")
     return [item["atom_id"] for item in assignments]
 
 
-def _author_medium_pack(pack, version, contract):
+def _write_fixture_proofline(pack, *, request, contract, work_order, assignments):
+    draft = {"work_orders": [work_order]}
+    ledger = loom_proofline.build_material_ledger(
+        request=request, plan_contract=contract, semantic_draft=draft)
+    graph = loom_proofline.build_graph(
+        ledger=ledger, plan_contract=contract, semantic_draft=draft,
+        assignments=assignments)
+    _write(
+        pack / "proofline" / "material-intent-ledger.json",
+        json.dumps(ledger, indent=2) + "\n")
+    _write(
+        pack / "proofline" / "proof-graph.json",
+        json.dumps(graph, indent=2) + "\n")
+
+
+def _author_medium_pack(pack, version, contract, *, request):
     """Act as the host agent; production code must not import test helpers."""
     _write(pack / "plan-contract.json", json.dumps(contract, indent=2) + "\n")
     obligation_ids = _write_planning_assignments(pack, contract)
@@ -269,9 +287,28 @@ loom_version: "{version}"
 | 9 Adaptation fit | 4 | intake.md |
 | 10 Clarity | 4 | MANIFEST.md |
 """)
+    assignments = json.loads(
+        (pack / "planning-obligations.json").read_text(encoding="utf-8"))
+    _write_fixture_proofline(
+        pack, request=request, contract=contract,
+        work_order={
+            "id": "WO-001",
+            "title": "Preserve accounting invariants",
+            "outcome": "Requested accounting behavior preserves ledger invariants",
+            "tasks": ["Change src/app.py within the sealed accounting boundary"],
+            "touches": ["src/app.py"],
+            "acceptance": [
+                "python -m unittest exits 0 in a real process",
+                "an unbalanced posting is rejected without a partial write",
+            ],
+            "negative_acceptance": [
+                "an unbalanced posting cannot leave a partial write",
+            ],
+        },
+        assignments=assignments)
 
 
-def _author_small_wo(pack, contract):
+def _author_small_wo(pack, contract, *, request):
     obligation_ids = [item["atom_id"] for item in contract["planning_intelligence"]["atoms"]
                       if item["gate_effect"] != "none"]
     obligation_list = ", ".join(sorted(obligation_ids))
@@ -310,6 +347,47 @@ Stop if a second component or irreversible effect is required.
 ## Close-out
 Pending implementation evidence.
 """)
+    assignment_ids = _write_planning_assignments(
+        pack, contract, write=False)
+    atoms = [item for item in contract["planning_intelligence"]["atoms"]
+             if item["gate_effect"] != "none"]
+    assignments = [{
+        "atom_id": item["atom_id"], "work_order": "WO-001",
+        "milestone": "delivery",
+        "verification": loom_orchestrator.loom_planning_intelligence.expanded_verification(
+            contract["planning_intelligence"], item),
+    } for item in sorted(atoms, key=lambda value: value["atom_id"])]
+    assignment_body = {
+        "schema_version": 1, "plan_contract_hash": contract["contract_hash"],
+        "planning_intelligence_digest": contract["planning_intelligence"][
+            "intelligence_digest"],
+        "program_digest": (
+            contract["planning_intelligence"]["program"] or {}).get(
+                "program_digest"),
+        "assignments": assignments,
+    }
+    assignment_value = {
+        **assignment_body,
+        "assignment_digest": loom_orchestrator.loom_domain_contract.digest(
+            "planning-obligation-assignments-v1", assignment_body),
+    }
+    assert assignment_ids == [item["atom_id"] for item in assignments]
+    _write_fixture_proofline(
+        pack, request=request, contract=contract,
+        work_order={
+            "id": "WO-001", "title": "Add one CLI flag",
+            "outcome": "The requested CLI flag works without changing existing contracts",
+            "tasks": ["Change only src/app.py"],
+            "touches": ["src/app.py"],
+            "acceptance": [
+                "python -m unittest exits 0",
+                "an unknown flag exits nonzero without writing normal output",
+            ],
+            "negative_acceptance": [
+                "an unknown flag cannot write normal output",
+            ],
+        },
+        assignments=assignment_value)
 
 
 def _mark_medium_wo_done(pack):
@@ -791,7 +869,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            action["plan_contract"])
+            action["plan_contract"], request=self.request)
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -803,6 +881,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
         result = json.loads(completed.stdout)
         self.assertEqual("completed", result["status"])
         self.assertEqual("plan-complete", result["code"])
+        proofline_report = json.loads(
+            (self.repo / "plans" / "proofline" / "completion-report.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual("passed", proofline_report["gate"]["state"])
+        self.assertTrue(all(
+            item["semantic_claim"] == "advisory"
+            for item in proofline_report["intent_coverage"]))
         self.assertEqual("legacy-ambiguous", result["usage"]["measurement_status"])
         self.assertIsNone(result["usage"]["processed_total_tokens"])
         self.assertEqual(900, result["usage"]["legacy_declared_total_tokens"])
@@ -1791,7 +1876,12 @@ class ProductionOrchestratorTests(unittest.TestCase):
         authored = loom_orchestrator.author(
             action["action_path"], draft, owner_home=self.home,
             install_root=self.installed)
-        self.assertEqual([".loom-small-lifecycle.json", "WO-001.md"], authored["files"])
+        self.assertEqual([
+            ".loom-small-lifecycle.json",
+            "WO-001.md",
+            "proofline/material-intent-ledger.json",
+            "proofline/proof-graph.json",
+        ], authored["files"])
         self.assertEqual(
             [], loom_lint.lint(
                 self.repo / "plans", repo_path=self.repo).errors)
@@ -2355,7 +2445,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            result["plan_contract"])
+            result["plan_contract"], request=self.request)
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -2712,7 +2802,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         manifest = self.repo / "plans" / "MANIFEST.md"
         text = manifest.read_text(encoding="utf-8")
         text = text.replace(
@@ -2738,7 +2828,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
         loom_orchestrator._validate_authored_plan(action)
         cases = (
@@ -2770,7 +2860,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
         path = self.repo / "plans" / "planning-obligations.json"
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -2859,7 +2949,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
         decisions = self.repo / "plans" / "decisions.md"
         original = decisions.read_text(encoding="utf-8")
@@ -3015,7 +3105,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         usage = self.root / "replay-usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -3150,7 +3240,8 @@ planning_obligations: [{obligations}]
             action["plan_contract"], sort_keys=True, separators=(",", ":")).encode()), 4096)
         sealed = json.loads(Path(action["action_path"]).read_text(encoding="utf-8"))
         self.assertEqual(15, len(sealed["plan_contract"]["artifact_matrix"]))
-        _author_small_wo(self.repo / "plans", sealed["plan_contract"])
+        _author_small_wo(
+            self.repo / "plans", sealed["plan_contract"], request=request)
         completed = self.cli(
             "complete", "--action", action["action_path"])
         self.assertEqual(0, completed.returncode, completed.stderr + completed.stdout)
@@ -3183,7 +3274,8 @@ planning_obligations: [{obligations}]
             "invoke", "--request", request, "--cwd", self.repo,
             "--home", self.home, "--install-root", self.installed).stdout)
         sealed = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
-        _author_small_wo(self.repo / "plans", sealed["plan_contract"])
+        _author_small_wo(
+            self.repo / "plans", sealed["plan_contract"], request=request)
         usage = self.root / "small-usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 300, "cache_read_tokens": 50,
@@ -3232,7 +3324,8 @@ planning_obligations: [{obligations}]
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed, now=started)
         sealed = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
-        _author_small_wo(self.repo / "plans", sealed["plan_contract"])
+        _author_small_wo(
+            self.repo / "plans", sealed["plan_contract"], request=request)
         usage = self.root / "small-stale-usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 300, "cache_read_tokens": 50,
@@ -3308,7 +3401,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -3342,6 +3435,39 @@ planning_obligations: [{obligations}]
         receipt = json.loads(completed.stdout)
         self.assertEqual("completed", receipt["status"], receipt)
         self.assertEqual("execute-complete", receipt["code"])
+        proofline_report = json.loads(
+            (self.repo / "plans" / "proofline" / "completion-report.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual("passed", proofline_report["gate"]["state"])
+        self.assertEqual(
+            ["src/app.py"],
+            [item["path"] for item in proofline_report["path_evaluation"]])
+        self.assertTrue(all(
+            item["authorization"] == "authorized"
+            for item in proofline_report["path_evaluation"]))
+        self.assertTrue(any(
+            item["state"] == "evidence-present"
+            for item in proofline_report["intent_coverage"]))
+        self.assertEqual(
+            "plans/proofline/trust-card.json",
+            receipt["owner_message"]["result_path"])
+        trust_card = json.loads(
+            (self.repo / "plans" / "proofline" / "trust-card.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(receipt["receipt_hash"], trust_card["receipt_sha256"])
+        recorder = json.loads(
+            (self.repo / "plans" / "proofline" / "flight-recorder.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(2, len(recorder["events"]))
+        self.assertEqual(
+            receipt["receipt_hash"], recorder["events"][-1]["receipt_sha256"])
+        loom_orchestrator.loom_proofline_ux.validate_bundle(
+            self.repo / "plans" / "proofline" / "proof-bundle")
+        replay = loom_orchestrator.loom_proofline_ux.replay(
+            self.repo / "plans" / "proofline" / "proof-bundle",
+            proofline_report)
+        self.assertEqual("current", replay["freshness"])
+        self.assertEqual(0, replay["commands_executed"])
         lifecycle = json.loads(
             (self.repo / "plans" / "lifecycle.json").read_text(encoding="utf-8"))
         self.assertEqual("WO-001", lifecycle["work_order_completions"][0]["work_order"])
@@ -3358,6 +3484,42 @@ planning_obligations: [{obligations}]
         self.assertNotEqual("execute-complete", advanced.get("code"))
         self.assertFalse(advanced.get("repeated", False))
 
+    def test_proofline_derivation_failure_rolls_back_completion_checkpoint(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"], request=self.request)
+        planned = loom_orchestrator.complete(opened["action_path"])
+        self.assertEqual("plan-complete", planned["code"])
+        execute = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        (self.repo / "src" / "app.py").write_text("VALUE = 2\n", encoding="utf-8")
+        _mark_medium_wo_done(self.repo / "plans")
+        loom_lifecycle.capture_acceptance(
+            self.repo / "plans", self.repo, "WO-001", medium="cli-process",
+            command=[sys.executable, "-c", "print('verified')"])
+        lifecycle_path = self.repo / "plans" / "lifecycle.json"
+        manifest_path = self.repo / "plans" / "MANIFEST.md"
+        before = {
+            lifecycle_path: lifecycle_path.read_text(encoding="utf-8"),
+            manifest_path: manifest_path.read_text(encoding="utf-8"),
+        }
+        with mock.patch.object(
+                loom_orchestrator, "_refresh_proofline_completion",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "PROOFLINE_COMPLETION_INVALID", "fixture failure")):
+            with self.assertRaisesRegex(
+                    loom_orchestrator.OrchestratorError, "HANDLER_INTERRUPTED"):
+                loom_orchestrator.complete(execute["action_path"])
+        self.assertEqual(
+            before[lifecycle_path], lifecycle_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            before[manifest_path], manifest_path.read_text(encoding="utf-8"))
+
     def test_execute_refuses_noop_completion(self):
         opened = json.loads(self.cli(
             "invoke", "--request", self.request, "--cwd", self.repo,
@@ -3365,7 +3527,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -3398,7 +3560,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -3432,7 +3594,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -3452,6 +3614,14 @@ planning_obligations: [{obligations}]
         self.assertIsNone(resumed["work_order"])
         self.assertEqual("full", resumed["repair_plan"]["regate_scope"])
         self.assertEqual(["full-pack"], resumed["repair_plan"]["affected_plan_sections"])
+        rebase = resumed["contract_rebase"]
+        self.assertIsNotNone(rebase)
+        self.assertFalse(rebase["implementation_authorized"])
+        self.assertTrue(rebase["fresh_action_required"])
+        self.assertEqual("none", rebase["authority_effect"])
+        self.assertTrue(
+            (self.repo / "plans" / "proofline"
+             / "contract-rebase.json").is_file())
 
         repair_result = self.root / "repair-result.json"
         repair_result.write_text(json.dumps({
@@ -3480,7 +3650,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            opened["plan_contract"])
+            opened["plan_contract"], request=self.request)
         usage = self.root / "usage.json"
         usage.write_text(json.dumps({
             "input_tokens": 500, "cache_read_tokens": 100,
@@ -3495,6 +3665,13 @@ planning_obligations: [{obligations}]
         self.assertEqual("selective", repair["repair_plan"]["regate_scope"])
         self.assertEqual(["accounting", "testing"],
                          repair["repair_plan"]["affected_plan_sections"])
+        self.assertEqual(
+            ["src/app.py"], repair["contract_rebase"]["changed_paths"])
+        self.assertTrue(
+            repair["contract_rebase"]["invalidated"]
+            or repair["contract_rebase"]["decision_required"])
+        self.assertFalse(
+            repair["contract_rebase"]["implementation_authorized"])
         with self.assertRaisesRegex(loom_orchestrator.OrchestratorError,
                                     "REPAIR_EVIDENCE_REQUIRED"):
             loom_orchestrator.complete(repair["action_path"], usage)
@@ -3565,6 +3742,64 @@ planning_obligations: [{obligations}]
             request="Continue", cwd=self.repo, home=self.home,
             install_root=self.installed)
         self.assertEqual("execute", continued["intent"])
+
+    def test_repair_compiles_and_executes_closed_recipe_once(self):
+        _write(
+            self.repo / "test_repair_probe.py",
+            "import unittest\n\n"
+            "class RepairProbeTests(unittest.TestCase):\n"
+            "    def test_current_target(self):\n"
+            "        self.assertTrue(True)\n")
+        opened = json.loads(self.cli(
+            "invoke", "--request", self.request, "--cwd", self.repo,
+            "--home", self.home, "--install-root", self.installed).stdout)
+        _author_medium_pack(
+            self.repo / "plans",
+            (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
+            opened["plan_contract"], request=self.request)
+        usage = self.root / "compiled-usage.json"
+        usage.write_text(json.dumps({
+            "input_tokens": 500, "cache_read_tokens": 100,
+            "output_tokens": 200, "tool_tokens": 100, "retry_tokens": 0,
+        }), encoding="utf-8")
+        self.assertEqual(0, self.cli(
+            "complete", "--action", opened["action_path"],
+            "--usage", usage).returncode)
+        _write(self.repo / "src" / "app.py", "VALUE = 3\n")
+        repair = loom_orchestrator.invoke(
+            request="Continue", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        sections = repair["repair_plan"]["affected_plan_sections"]
+        result = self.root / "compiled-repair.json"
+        result.write_text(json.dumps({
+            "schema_version": 3,
+            "risk": "medium",
+            "verification_requests": [{
+                "section": section,
+                "template_id": "python-unittest-v1",
+                "target": "test_repair_probe",
+                "timeout_seconds": 30,
+            } for section in sections],
+        }), encoding="utf-8")
+        completed = loom_orchestrator.complete(
+            repair["action_path"], usage, result_path=result)
+        self.assertEqual("repair-complete", completed["code"])
+        action = json.loads(
+            Path(repair["action_path"]).read_text(encoding="utf-8"))
+        entries = action["host_result"]["repair_verification"]
+        self.assertEqual(sorted(sections), sorted(
+            item["section"] for item in entries))
+        self.assertTrue(all(
+            item["attestation_status"] == "loom-compiled-executed-local"
+            for item in entries))
+        self.assertEqual(1, len({
+            item["evidence_id"] for item in entries}))
+        recipe = (
+            Path(repair["action_path"]).parent
+            / f"{action['action_id']}.evidence" / "compiled-recipe.json")
+        self.assertTrue(recipe.is_file())
+        self.assertFalse(json.loads(
+            recipe.read_text(encoding="utf-8"))["implementation_authorized"])
 
     def test_cancel_is_terminal_and_content_bound(self):
         opened = self.cli(
@@ -3658,7 +3893,7 @@ planning_obligations: [{obligations}]
         _author_medium_pack(
             self.repo / "plans",
             (self.installed / "VERSION").read_text(encoding="utf-8").strip(),
-            second["plan_contract"])
+            second["plan_contract"], request=self.request)
         with mock.patch.object(
                 loom_orchestrator, "_handler_result",
                 side_effect=RuntimeError("seeded transient failure")):

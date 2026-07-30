@@ -33,10 +33,15 @@ import loom_improvement
 import loom_lifecycle
 import loom_lint
 import loom_adapter_protocol
+import loom_contract_rebase
 import loom_memory
 import loom_message
 import loom_owner
 import loom_plan_author
+import loom_proofline
+import loom_proofline_completion
+import loom_proofline_ux
+import loom_verification_recipe
 
 
 TEST_LEGACY_BACKEND_MARKER = ".loom-test-legacy-backend-v1"
@@ -2288,7 +2293,7 @@ def _make_plan_contract(action, prepared):
         "exact-artifact-matrix", "domain-invariant-contract",
         "current-fact-contract", "verification-media-contract",
         "planning-intelligence", "budget", "work-order-topology", "lint", "g1",
-        "lifecycle",
+        "lifecycle", "proofline",
     ]
     if not project_inspection["relevant_coverage_complete"]:
         completion_gates.insert(0, "project-inspection")
@@ -2533,6 +2538,33 @@ def _validate_authored_plan(action, *, pack_override=None):
         raise OrchestratorError(
             "PLAN_CONTRACT_MISMATCH", "work-order count is outside the sealed topology")
     _validate_planning_assignments(pack, contract, work_orders)
+    proofline_required = "proofline" in contract.get("completion_gates", [])
+    proofline_present = (
+        pack / "proofline" / "material-intent-ledger.json").is_file() \
+        or (pack / "proofline" / "proof-graph.json").is_file()
+    if proofline_required or proofline_present:
+        try:
+            material_ledger = json.loads(
+                (pack / "proofline" / "material-intent-ledger.json").read_text(
+                    encoding="utf-8"))
+            proof_graph = json.loads(
+                (pack / "proofline" / "proof-graph.json").read_text(
+                    encoding="utf-8"))
+            loom_proofline.validate_material_ledger(
+                material_ledger, request=action["request"])
+            loom_proofline.validate_graph(proof_graph)
+        except (
+                OSError, UnicodeError, json.JSONDecodeError,
+                loom_proofline.ProoflineError) as exc:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH",
+                f"derived Proofline projection is invalid: {exc}") from exc
+        if material_ledger["plan_contract_sha256"] != contract["contract_hash"] \
+                or proof_graph["ledger_sha256"] != material_ledger["ledger_sha256"] \
+                or proof_graph["plan_contract_sha256"] != contract["contract_hash"]:
+            raise OrchestratorError(
+                "PLAN_CONTRACT_MISMATCH",
+                "derived Proofline projection is bound to another plan")
     if action["tier"] == "S":
         return None
 
@@ -2752,19 +2784,54 @@ def _read_repair_result(result_path, action):
         value = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise OrchestratorError("REPAIR_EVIDENCE_INVALID", str(exc)) from exc
-    if not isinstance(value, dict) or set(value) != {"schema_version", "repair_verification"} \
-            or value["schema_version"] != 2 \
-            or not isinstance(value["repair_verification"], list) \
-            or not 1 <= len(value["repair_verification"]) <= 32:
+    if not isinstance(value, dict) or value.get("schema_version") not in {2, 3}:
         raise OrchestratorError("REPAIR_EVIDENCE_INVALID", "repair result fields are invalid")
     expected = action["repair_plan"]["affected_plan_sections"]
-    entries, seen = [], set()
     root = Path(action["explicit_target"] or action["cwd"])
     pack = root / "plans"
     action_file = _action_path(
         action["owner_home"], action["instance_id"], action["project_id"],
         action["action_id"])
     receipt_root = action_file.parent / f"{action['action_id']}.evidence"
+    if value["schema_version"] == 3:
+        if set(value) != {
+                "schema_version", "risk", "verification_requests"} \
+                or value["risk"] not in {
+                    "low", "medium", "high", "critical"} \
+                or not isinstance(value["verification_requests"], list) \
+                or not 1 <= len(value["verification_requests"]) <= 32:
+            raise OrchestratorError(
+                "REPAIR_EVIDENCE_INVALID",
+                "compiled repair recipe request fields are invalid")
+        try:
+            registry = loom_verification_recipe.load_registry(
+                Path(action["install_root"]) / "contracts"
+                / "verification-recipes-v1.json")
+            recipe = loom_verification_recipe.compile_recipe(
+                root=root, pack=pack,
+                requests=value["verification_requests"],
+                expected_sections=expected, risk=value["risk"],
+                registry=registry)
+            loom_memory._atomic_json(
+                receipt_root / "compiled-recipe.json", recipe)
+            entries = loom_verification_recipe.execute_recipe(
+                recipe=recipe, registry=registry, root=root, pack=pack,
+                evidence_root=receipt_root)
+        except loom_verification_recipe.RecipeError as exc:
+            code = (
+                "REPAIR_VERIFICATION_UNSUPPORTED"
+                if "unsupported" in str(exc)
+                else "REPAIR_VERIFICATION_FAILED")
+            raise OrchestratorError(code, str(exc)) from exc
+        except (OSError, loom_memory.MemoryError) as exc:
+            raise OrchestratorError(
+                "REPAIR_VERIFICATION_FAILED", str(exc)) from exc
+        return {"schema_version": 3, "repair_verification": entries}
+    if set(value) != {"schema_version", "repair_verification"} \
+            or not isinstance(value["repair_verification"], list) \
+            or not 1 <= len(value["repair_verification"]) <= 32:
+        raise OrchestratorError("REPAIR_EVIDENCE_INVALID", "repair result fields are invalid")
+    entries, seen = [], set()
     for item in value["repair_verification"]:
         if not isinstance(item, dict) or set(item) != {
                 "section", "medium", "command", "timeout_seconds"} \
@@ -3082,9 +3149,76 @@ def _active_work_order(pack, tier):
     return work_order, path.relative_to(pack).as_posix()
 
 
+def _refresh_proofline_completion(pack, root, policy_path):
+    proofline = pack / "proofline"
+    if not (proofline / "material-intent-ledger.json").is_file() \
+            and not (proofline / "proof-graph.json").is_file():
+        return None
+    try:
+        report = loom_proofline_completion.evaluate_pack(
+            pack, root, policy_path=policy_path)
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            loom_lifecycle.LifecycleError,
+            loom_proofline.ProoflineError,
+            loom_proofline_completion.CompletionError) as exc:
+        raise OrchestratorError(
+            "PROOFLINE_COMPLETION_INVALID",
+            f"Proofline completion could not be derived safely: {exc}") from exc
+    if report["gate"]["state"] == "failed":
+        raise OrchestratorError(
+            "PROOFLINE_ORPHAN_CHANGE",
+            "changed project paths fall outside the declared work-order scope: "
+            + ", ".join(report["gate"]["orphan_paths"][:8]))
+    loom_reliability.atomic_write_json(
+        proofline / "completion-report.json", report)
+    return report
+
+
+def _write_contract_rebase(
+        pack, prepared, changed_paths, install_root, *, current_consequence):
+    proofline = pack / "proofline"
+    ledger_path = proofline / "material-intent-ledger.json"
+    graph_path = proofline / "proof-graph.json"
+    if not ledger_path.is_file() and not graph_path.is_file():
+        return None
+    try:
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        graph = json.loads(graph_path.read_text(encoding="utf-8"))
+        consequences = sorted({
+            atom["consequence"] for atom in ledger["atoms"]})
+        if len(consequences) != 1:
+            raise loom_contract_rebase.RebaseError(
+                "prior consequence is not singular")
+        report = loom_contract_rebase.evaluate(
+            ledger=ledger, graph=graph,
+            work_orders=loom_contract_rebase.work_orders_from_pack(pack),
+            changed_paths=changed_paths,
+            prior_consequence=consequences[0],
+            current_consequence=current_consequence,
+            world_coverage_complete=prepared.project_inspection[
+                "relevant_coverage_complete"],
+            domain_state=(
+                "unknown" if prepared.route_contract["needs_owner"]
+                else "consistent"),
+            policy=loom_contract_rebase.load_policy(
+                Path(install_root) / "contracts"
+                / "contract-rebase-policy-v1.json"))
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            KeyError, loom_proofline.ProoflineError,
+            loom_contract_rebase.RebaseError) as exc:
+        raise OrchestratorError(
+            "CONTRACT_REBASE_INDETERMINATE",
+            f"drift preservation could not be derived safely: {exc}") from exc
+    loom_reliability.atomic_write_json(
+        proofline / "contract-rebase.json", report)
+    return report
+
+
 def _handler_result(context, root, owner_home, usage, work_order=None,
                     repair_plan=None, host_result=None, memory_adapter=None,
-                    seal_plan_author=None):
+                    seal_plan_author=None, proofline_policy=None):
     pack = root / "plans"
     tier = context.prepared.route_contract["tier"]
     intent = context.intent
@@ -3132,6 +3266,8 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
                 "reversible_action_ids": [], "usage": usage,
                 "user_message": "Plan validation blocked: " + "; ".join(findings[:8]),
             }
+        if proofline_policy is not None:
+            _refresh_proofline_completion(pack, root, proofline_policy)
         evidence = "pack-" + _pack_hash(pack)[:24]
         reversible_action_ids = []
         if seal_plan_author is not None:
@@ -3147,6 +3283,21 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
         }
 
     if intent == "execute":
+        lifecycle_path = (
+            pack / ".loom-small-lifecycle.json"
+            if tier == "S" else pack / loom_gate.LIFECYCLE_FILE)
+        rollback_paths = [lifecycle_path]
+        if tier != "S":
+            rollback_paths.append(pack / "MANIFEST.md")
+        try:
+            rollback_text = {
+                path: path.read_text(encoding="utf-8")
+                for path in rollback_paths
+            }
+        except (OSError, UnicodeError) as exc:
+            raise OrchestratorError(
+                "PROOFLINE_COMPLETION_INVALID",
+                f"lifecycle rollback evidence is unavailable: {exc}") from exc
         if not work_order:
             findings = ["execution action is not bound to one work order"]
         else:
@@ -3166,6 +3317,13 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
                 loom_gate.verify_small(pack / ".loom-small-lifecycle.json")
                 if tier == "S" else
                 loom_gate.verify(pack, root, require_authorized=True))
+        if not findings and proofline_policy is not None:
+            try:
+                _refresh_proofline_completion(pack, root, proofline_policy)
+            except BaseException:
+                for path, text in rollback_text.items():
+                    loom_gate._atomic_write_text(path, text)
+                raise
         if findings:
             failure_evidence = "gate-" + _hash(findings)[:24]
             return {
@@ -3180,6 +3338,7 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
             "status": "completed", "code": "execute-complete", "success": True,
             "metrics": {}, "evidence_ids": [evidence],
             "reversible_action_ids": [], "usage": usage,
+            "result_path": "plans/proofline/trust-card.json",
             "user_message": (
                 "Execution completion was causally sealed against the declared "
                 f"work order ({evidence})."),
@@ -3359,7 +3518,7 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
 
 def default_handlers(*, root, owner_home, usage=None, work_order=None,
                      repair_plan=None, host_result=None, memory_adapter=None,
-                     seal_plan_author=None):
+                     seal_plan_author=None, proofline_policy=None):
     """Return the complete audited production handler registry."""
     root, owner_home = Path(root), Path(owner_home)
     normalized = loom_performance.normalize_usage(usage)
@@ -3368,7 +3527,7 @@ def default_handlers(*, root, owner_home, usage=None, work_order=None,
         intent: (lambda context, _intent=intent: _merge_host_outcome(
             _handler_result(context, root, owner_home, usage_payload, work_order,
                             repair_plan, host_result, memory_adapter,
-                            seal_plan_author), host_result))
+                            seal_plan_author, proofline_policy), host_result))
         for intent in {
             "plan", "resume", "execute", "review", "repair", "close", "remember"
         }
@@ -3456,10 +3615,20 @@ def _controller(action, *, usage=None, seal_plan_author=None):
         root=root, owner_home=home, usage=usage,
         work_order=action.get("work_order"),
         repair_plan=action.get("repair_plan"), host_result=action.get("host_result"),
-        memory_adapter=memory, seal_plan_author=seal_plan_author)
+        memory_adapter=memory, seal_plan_author=seal_plan_author,
+        proofline_policy=(
+            Path(action["install_root"]) / "contracts"
+            / "proofline-policy-v1.json"))
+    pack = root / "plans"
+    receipt_observer = None
+    if (pack / "proofline" / "material-intent-ledger.json").is_file():
+        def receipt_observer(receipt):
+            if (pack / "proofline" / "completion-report.json").is_file():
+                loom_proofline_ux.record_receipt(pack, receipt)
     return loom_session.SessionController(
         owner_home=home, instance_id=instance_id,
-        handlers=handlers, memory=memory)
+        handlers=handlers, memory=memory,
+        receipt_observer=receipt_observer)
 
 
 def _plan_undo_handler(action, memory, *, now):
@@ -3968,6 +4137,20 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
         if action["assurance"]["host_id"] == "codex" else
         "For plan, submit one semantic draft through the stable author operation, then complete "
         "it through the stable launcher. ")
+    rebase_path = (
+        Path(action["explicit_target"] or action["cwd"])
+        / "plans" / "proofline" / "contract-rebase.json")
+    contract_rebase = None
+    if action["intent"] == "repair" and rebase_path.is_file():
+        try:
+            contract_rebase = json.loads(rebase_path.read_text(encoding="utf-8"))
+            loom_contract_rebase.validate(contract_rebase)
+        except (
+                OSError, UnicodeError, json.JSONDecodeError,
+                loom_contract_rebase.RebaseError) as exc:
+            raise OrchestratorError(
+                "CONTRACT_REBASE_INDETERMINATE",
+                f"contract rebase projection is invalid: {exc}") from exc
     return {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
         "action_id": action["action_id"],
@@ -3979,6 +4162,7 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
         "domains": action["domains"], "expires_at": action["expires_at"],
         "work_order": work_order,
         "repair_plan": action["repair_plan"],
+        "contract_rebase": contract_rebase,
         "plan_contract": (_tier_s_host_capsule(action["plan_contract"])
                           if action["tier"] == "S" and action["plan_contract"] is not None
                           else action["plan_contract"]),
@@ -4306,9 +4490,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             if code:
                 raise OrchestratorError("SMALL_REBASELINE_FAILED", output)
             after = json.loads(record.read_text(encoding="utf-8"))
+            changed_paths = sorted(
+                path for path in set(before["baseline_files"])
+                | set(after["baseline_files"])
+                if before["baseline_files"].get(path)
+                != after["baseline_files"].get(path))
             action["repair_plan"] = {
                 "force_full": True,
-                "changed_paths": [],
+                "changed_paths": changed_paths,
                 "affected_plan_sections": ["compact-plan"],
                 "regate_scope": "compact",
                 "prior_state_hash": before["events"][-1]["repo_state_hash"],
@@ -4328,6 +4517,10 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 target / "plans", preview["changed_paths"], force_full=force_full)
             action["repair_plan"] = {
                 **preview, "force_full": force_full, "program_impact": program_impact}
+        _write_contract_rebase(
+            target / "plans", prepared,
+            action["repair_plan"]["changed_paths"], action["install_root"],
+            current_consequence=domain_contract["consequence"]["class"])
     if prepared.intent != "plan":
         action["initial_pack_hash"] = _pack_hash(Path(target) / "plans")
     action = _write_action(path, action, action_security)
