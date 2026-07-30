@@ -79,7 +79,7 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
                 called.update(kwargs)
                 output = Path(kwargs["command"][-1])
                 output.write_text(json.dumps({
-                    "status": "passed",
+                    "status": "verified",
                     "suite": {"tests": ["x" * 1024] * 400},
                 }), encoding="utf-8")
                 return ({
@@ -165,6 +165,34 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
                 with self.assertRaisesRegex(
                         loom_clean_room.CleanRoomError,
                         "receipt is unreadable"):
+                    loom_clean_room.verify(cut)
+
+    def test_clean_room_refuses_nonverified_receipt_after_zero_exit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cut = Path(temporary) / "cut"
+            (cut / "tools").mkdir(parents=True)
+            (cut / "tools" / "loom_release.py").write_text(
+                "# fixture\n", encoding="utf-8")
+
+            def run(**kwargs):
+                output = Path(kwargs["command"][-1])
+                output.write_text(json.dumps({
+                    "status": "failed",
+                    "suite": {"failure_count": 1},
+                }), encoding="utf-8")
+                return ({
+                    "status": "passed", "returncode": 0,
+                    "receipt_sha256": "a" * 64,
+                    "containment_provider": "test-provider",
+                    "primary_failure": None,
+                }, b'{"status":"verified"}\n', b"")
+
+            with mock.patch.object(
+                    loom_clean_room.loom_operation_supervisor, "run",
+                    side_effect=run):
+                with self.assertRaisesRegex(
+                        loom_clean_room.CleanRoomError,
+                        "receipt did not report success"):
                     loom_clean_room.verify(cut)
 
 

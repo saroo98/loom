@@ -204,7 +204,7 @@ def verify(cut, *, timeout=2400):
                 raise CleanRoomError(
                     f"clean-room verification receipt is unreadable: {exc}") from exc
             if not isinstance(verification, dict) \
-                    or verification.get("status") != "passed":
+                    or verification.get("status") != "verified":
                 raise CleanRoomError(
                     "clean-room verification receipt did not report success")
         home_inventory = _bounded_home_inventory(home)
