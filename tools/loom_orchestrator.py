@@ -4194,9 +4194,10 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
 
 _ZERO_PROJECT_WRITE_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
     r"\bdo\s+not\s+"
-    r"(?:(?:implement|execute|apply)(?:\s+the\s+(?:plan|changes?|work))?"
+    r"(?:(?:implement|execute|apply)(?:\s+(?:it|this|the\s+(?:plan|changes?|work)))?"
     r"\s*(?:,|\band\b|\bor\b)\s*)?"
-    r"(?:modify|change|write|create|touch)\s+(?:any\s+)?files?\b",
+    r"(?:modify|change|write|create|touch)\s+(?:any\s+)?(?:the\s+)?"
+    r"(?:project(?:-local)?\s+)?files?\b",
     r"\bdo\s+not\s+(?:modify|change|write|create|touch)\s+(?:the\s+)?project\b",
     r"\bno\s+(?:project(?:-local)?\s+)?(?:file\s+)?writes?\b",
     r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
