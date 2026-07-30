@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_memory
 import loom_privacy
@@ -77,6 +78,21 @@ class PrivacyExcellenceTests(unittest.TestCase):
             "path": "windows.env",
             "rule": "openai-token",
         }])
+
+    def test_firewall_always_contains_secret_regex_engine_in_worker(self):
+        cut = self.root / "cut"
+        cut.mkdir()
+        (cut / "safe.txt").write_text("public", encoding="utf-8")
+
+        with mock.patch.object(
+                loom_privacy, "_isolated_secret_signature_match",
+                return_value=None) as isolated, mock.patch.object(
+                    loom_privacy, "_secret_signature_match",
+                    side_effect=RuntimeError("injected in-process regex failure")):
+            result = loom_privacy.scan_publication(cut, forbidden_tokens=[])
+
+        self.assertTrue(result["clean"])
+        isolated.assert_called_once_with(b"public")
 
     def test_firewall_fails_closed_on_opaque_binary_content(self):
         cut = self.root / "cut"

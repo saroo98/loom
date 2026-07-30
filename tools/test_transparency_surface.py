@@ -120,7 +120,7 @@ class TransparencySurfaceTests(unittest.TestCase):
         view = receipt.owner_view()
         self.assertEqual(2, len(view.splitlines()))
         self.assertEqual(
-            "Your project plan is ready.\n"
+            "Your project plan is ready. You can undo this Loom action.\n"
             "Next: Review the plan, then say continue when you want the agent to start.",
             view)
         self.assertEqual("verified", receipt.owner_message["verification"])

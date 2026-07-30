@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/proofline-trust-card.schema.json",
+  "title": "Proofline owner Trust Card",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "receipt_id", "receipt_sha256", "state", "consequence",
+    "verification", "freshness", "changes_made", "undo_status", "summary",
+    "recommendation", "next_action", "result_path", "proofline_report_sha256",
+    "proofline_gate", "details_available", "card_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "receipt_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "receipt_sha256": {"$ref": "#/$defs/sha256"},
+    "state": {"type": "string", "minLength": 1, "maxLength": 32},
+    "consequence": {"enum": ["ordinary", "material", "high", "critical"]},
+    "verification": {"enum": ["pending", "verified", "blocked", "failed", "unknown"]},
+    "freshness": {"enum": ["current", "stale", "unknown", "not-applicable"]},
+    "changes_made": {"type": ["boolean", "null"]},
+    "undo_status": {"enum": ["available", "not-applicable", "unavailable", "unknown"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 240},
+    "recommendation": {"type": "string", "minLength": 1, "maxLength": 240},
+    "next_action": {"type": "string", "minLength": 1, "maxLength": 240},
+    "result_path": {"type": ["string", "null"], "maxLength": 512},
+    "proofline_report_sha256": {"$ref": "#/$defs/sha256"},
+    "proofline_gate": {"enum": ["passed", "failed", "advisory"]},
+    "details_available": {"const": true},
+    "card_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
