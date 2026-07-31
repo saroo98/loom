@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+## 1.8.26
+
+- Keep plan revision bound to planning intent when the owner's natural revision request also says
+  not to implement the plan.
+- Expose the deterministic plan review projection through MCP structured content while retaining
+  the complete portable Markdown fallback.
+- Return an exact work-order completion contract so an implementing agent can capture real
+  verification evidence and close only the authorized work order.
+
 ## 1.8.25
 
 - Present every completed plan as a deterministic, reviewable inline summary with a contained,
