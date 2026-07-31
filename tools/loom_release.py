@@ -52,7 +52,7 @@ EXTERNAL_CHECKS = (
 # The dedicated fast gate owns the 30-second regression budget.  The complete
 # correctness suite does not duplicate a wall-clock assertion inside its own
 # result; the verifier and CI job retain independent hard termination bounds.
-FULL_SUITE_MAX_SECONDS = 2100
+FULL_SUITE_MAX_SECONDS = 2700
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",
@@ -394,6 +394,7 @@ def verify_cut(root, *, forbidden_tokens):
         diagnostic = loom_privacy.minimize_evidence(
             json.dumps({
                 "returncode": suite.get("returncode"),
+                "primary_failure": suite.get("primary_failure"),
                 "elapsed_seconds": suite.get("elapsed_seconds"),
                 "tests_run": suite.get("tests_run"),
                 "failed_tests": failed_tests,
@@ -405,6 +406,7 @@ def verify_cut(root, *, forbidden_tokens):
                 "capability_complete": suite.get("capability_complete"),
                 "capability_status": suite.get("capability_status"),
                 "returncode": suite.get("returncode"),
+                "primary_failure": suite.get("primary_failure"),
                 "elapsed_seconds": suite.get("elapsed_seconds"),
                 "tests_run": suite.get("tests_run"),
                 "failure_count": suite.get("failure_count"),
@@ -941,6 +943,7 @@ def _suite(root):
         "capability_status": ("complete" if capability_complete else "requires-matrix"),
         "skip_receipts": timing.get("skip_receipts", []) if timing else [],
         "returncode": returncode,
+        "primary_failure": operation.get("primary_failure"),
         "output": (stderr_text if uses_runner
                    else stdout_text + stderr_text)[-4000:],
         "operation_receipt_sha256": operation["receipt_sha256"],

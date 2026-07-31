@@ -75,7 +75,20 @@ class ReleaseStandardTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_exhaustive_suite_ceiling_has_supported_runner_headroom(self):
-        self.assertEqual(2100, loom_release.FULL_SUITE_MAX_SECONDS)
+        self.assertEqual(2700, loom_release.FULL_SUITE_MAX_SECONDS)
+        root = Path(__file__).resolve().parents[1]
+        workflow_timeouts = {
+            "quality.yml": 55,
+            "compatibility.yml": 55,
+            "release.yml": 65,
+        }
+        for name, minutes in workflow_timeouts.items():
+            text = (root / ".github" / "workflows" / name).read_text(
+                encoding="utf-8")
+            self.assertIn(f"timeout-minutes: {minutes}", text)
+            self.assertGreaterEqual(
+                minutes * 60,
+                loom_release.FULL_SUITE_MAX_SECONDS + 10 * 60)
 
     def test_public_cut_keeps_the_repository_pinned_rust_toolchain(self):
         self.assertIn("rust-toolchain.toml", loom_release.ROOT_FILES)
@@ -117,6 +130,7 @@ class ReleaseStandardTests(unittest.TestCase):
 
         self.assertTrue(result["passed"])
         self.assertFalse(result["capability_complete"])
+        self.assertEqual("nonzero-exit", result["primary_failure"])
         self.assertEqual("requires-matrix", result["capability_status"])
         self.assertEqual(report["skip_receipts"], result["skip_receipts"])
         command = run.call_args.kwargs["command"]
