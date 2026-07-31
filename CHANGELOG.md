@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 1.8.29
+
+- Regenerate the correct planning lifecycle when an exact bound plan revision changes
+  between the compact and full planning tiers.
+- Add a live-prompt regression covering revision from a Tier S plan to a Tier M plan.
+
 ## 1.8.28
 
 - Refresh the exact Codex host observation required by the release gate so signed publication
