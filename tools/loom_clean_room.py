@@ -11,6 +11,7 @@ import tempfile
 from pathlib import Path
 
 import loom_reliability
+import loom_release
 import loom_release_subject
 import loom_operation_supervisor
 import loom_operation_envelope
@@ -21,6 +22,7 @@ class CleanRoomError(RuntimeError):
 
 
 MAX_VERIFY_RECEIPT_BYTES = 2 * 1024 * 1024
+CLEAN_ROOM_MAX_SECONDS = loom_release.FULL_SUITE_MAX_SECONDS + 300
 
 
 def _tail(value, *, limit=2400):
@@ -146,7 +148,7 @@ def _bounded_home_inventory(home):
             "tree_sha256": digest.hexdigest(), "path_sample": sample}
 
 
-def verify(cut, *, timeout=2400):
+def verify(cut, *, timeout=CLEAN_ROOM_MAX_SECONDS):
     cut = Path(cut).resolve()
     if not cut.is_dir() or (cut / ".git").exists() or (cut / ".loom").exists() \
             or not (cut / "tools" / "loom_release.py").is_file():
@@ -243,7 +245,7 @@ def verify(cut, *, timeout=2400):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("cut")
-    parser.add_argument("--timeout", type=int, default=2400)
+    parser.add_argument("--timeout", type=int, default=CLEAN_ROOM_MAX_SECONDS)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     try:

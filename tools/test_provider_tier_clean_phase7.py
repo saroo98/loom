@@ -65,8 +65,11 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
             rows, quality_margin=1)["fast_path_eligible"])
 
     def test_clean_room_timeout_covers_the_exact_cut_suite_budget(self):
+        self.assertEqual(
+            loom_clean_room.CLEAN_ROOM_MAX_SECONDS,
+            loom_clean_room.verify.__kwdefaults__["timeout"])
         self.assertGreaterEqual(
-            loom_clean_room.verify.__kwdefaults__["timeout"],
+            loom_clean_room.CLEAN_ROOM_MAX_SECONDS,
             loom_release.FULL_SUITE_MAX_SECONDS + 300)
 
     def test_clean_room_invokes_from_the_public_tools_directory(self):
