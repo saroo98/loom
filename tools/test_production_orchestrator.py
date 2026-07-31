@@ -2398,6 +2398,106 @@ class ProductionOrchestratorTests(unittest.TestCase):
             loom_lint.lint(
                 self.repo / "plans", repo_path=self.repo).errors)
 
+    def test_bound_revision_replaces_a_compact_plan_with_a_fresh_lifecycle(self):
+        request = (
+            "Plan a small Python command-line project that reads a text file, "
+            "reports the number of lines and words, and includes tests. "
+            "Do not implement it.")
+        action = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        self.assertEqual("S", action["tier"])
+        contract = action["plan_contract"]
+        draft = {
+            "schema_version": 1,
+            "title": "Plan a small Python text statistics CLI",
+            "summary": "Read one text file and report line and word counts.",
+            "assumptions": [], "decisions": [],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped CLI adapter",
+            } for item in contract["current_facts"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Implement text statistics",
+                "outcome": "The CLI reports deterministic line and word counts.",
+                "tasks": ["Implement line and word counting."],
+                "acceptance": ["`python -m unittest` exits 0."],
+                "negative_acceptance": ["a missing path exits nonzero"],
+                "out_of_scope": ["Directory traversal."],
+                "escalation": ["Stop if another component must change."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+        loom_orchestrator.author(
+            action["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        completed = loom_orchestrator.complete(
+            action["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        revision = loom_orchestrator.revise(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            request=(
+                "Revise the plan so the command also reports character count "
+                "and handles missing files with a clear error. Do not implement it."),
+            owner_home=self.home, install_root=self.installed)
+        revised_contract = revision["plan_contract"]
+        self.assertEqual("M", revised_contract["tier"])
+        revised_facts = revised_contract.get(
+            "current_facts_to_verify", revised_contract.get("current_facts", []))
+        revised_draft = {
+            "schema_version": 1,
+            "title": "Plan a small Python text statistics CLI",
+            "summary": (
+                "Read one text file and report line, word, and character counts "
+                "with a clear missing-file error."),
+            "assumptions": [], "decisions": [],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped CLI adapter",
+            } for item in revised_facts],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Implement revised text statistics",
+                "outcome": (
+                    "The CLI reports deterministic line, word, and character counts."),
+                "tasks": [
+                    "Implement line, word, and character counting.",
+                    "Add a clear missing-file error.",
+                ],
+                "acceptance": [
+                    "`python -m unittest` exits 0 with exact counts."],
+                "negative_acceptance": [
+                    "a missing path exits nonzero without a traceback"],
+                "out_of_scope": ["Directory traversal."],
+                "escalation": ["Stop if another component must change."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+
+        authored = loom_orchestrator.author(
+            revision["action_path"], revised_draft,
+            owner_home=self.home, install_root=self.installed)
+
+        lifecycle = (
+            ".loom-small-lifecycle.json"
+            if revised_contract["tier"] == "S" else loom_gate.LIFECYCLE_FILE)
+        self.assertIn(lifecycle, authored["files"])
+        self.assertTrue((self.repo / "plans" / lifecycle).is_file())
+
     def test_machine_authoring_rejects_malformed_draft_without_replacing_seed(self):
         action = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
