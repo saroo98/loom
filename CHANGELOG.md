@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.8.27
+
+- Preserve natural plan revision and start decisions when a later Codex turn no longer carries
+  Loom's private structured plan reference.
+- Recover only one exact, unchanged, project-local reviewable plan, and refuse missing,
+  ambiguous, stale, malformed, or mixed decision references.
+- Keep the compact Codex dispatcher within its enforced package bound.
+
 ## 1.8.26
 
 - Keep plan revision bound to planning intent when the owner's natural revision request also says
