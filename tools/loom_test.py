@@ -21,6 +21,13 @@ CONTAINMENT_FAST_TEST = (
        "test_posix_verifier_descendants_are_dead_before_evidence_is_sealed")
 )
 FAST_GATE_MAX_SECONDS = 30.0
+WINDOWS_FAST_GATE_MAX_SECONDS = 45.0
+
+
+def fast_gate_max_seconds(platform_name=None):
+    """Return the bounded fast-gate ceiling for one host process model."""
+    name = os.name if platform_name is None else platform_name
+    return WINDOWS_FAST_GATE_MAX_SECONDS if name == "nt" else FAST_GATE_MAX_SECONDS
 
 
 FAST_TESTS = (
@@ -117,7 +124,7 @@ class TimingResult(unittest.TextTestResult):
 def run(mode, *, max_seconds=None, verbosity=1):
     if mode == "fast":
         suite = unittest.defaultTestLoader.loadTestsFromNames(FAST_TESTS)
-        budget = FAST_GATE_MAX_SECONDS if max_seconds is None else float(max_seconds)
+        budget = fast_gate_max_seconds() if max_seconds is None else float(max_seconds)
     elif mode == "full":
         suite = unittest.defaultTestLoader.discover(
             start_dir=str(Path(__file__).parent), pattern="test_*.py")

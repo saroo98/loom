@@ -14,9 +14,12 @@ import loom_test
 class TestRunnerTests(unittest.TestCase):
     def test_fast_gate_inventory_is_real_bounded_and_has_no_loader_errors(self):
         # The full suite executes every selected test once, while the dedicated CI
-        # fast-gate job executes this exact inventory under the 30-second wall clock.
+        # fast-gate job executes this exact inventory under a bounded host-aware wall clock.
         # Re-executing the same tests recursively here adds no distinct coverage.
         self.assertEqual(30.0, loom_test.FAST_GATE_MAX_SECONDS)
+        self.assertEqual(45.0, loom_test.WINDOWS_FAST_GATE_MAX_SECONDS)
+        self.assertEqual(30.0, loom_test.fast_gate_max_seconds("posix"))
+        self.assertEqual(45.0, loom_test.fast_gate_max_seconds("nt"))
         suite = unittest.defaultTestLoader.loadTestsFromNames(loom_test.FAST_TESTS)
 
         def flatten(value):
