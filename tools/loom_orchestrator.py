@@ -4474,8 +4474,126 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     return result
 
 
-def start(action_path, *, presentation_sha256, owner_home, install_root, now=None):
+def _recover_plan_decision(cwd, *, owner_home, install_root):
+    """Recover one exact, unchanged displayed plan for a project-local host turn."""
+    target = _absolute(cwd, "cwd")
+    home = _absolute(owner_home, "owner home", must_exist=False)
+    install_root = _absolute(install_root, "installation root")
+    try:
+        loom_install.check(install_root)
+    except loom_install.InstallError as exc:
+        raise OrchestratorError(
+            "INSTALL_UNVERIFIED", f"installation receipt check failed: {exc}") from exc
+    instance_id, memory = _memory_backend(home, install_root, target)
+    try:
+        project = loom_runtime.resolve_project(
+            instance_id, explicit_target=target, cwd=target)
+    except loom_runtime.RuntimeBlocked as exc:
+        raise OrchestratorError(exc.code, exc.message) from exc
+    _bind_memory_project(memory, project)
+    directory = _orchestration_directory(home, instance_id, project.project_id)
+    if not directory.is_dir():
+        raise OrchestratorError(
+            "PLAN_DECISION_UNAVAILABLE",
+            "no completed displayed plan is available for this project")
+    entries = []
+    inspected = 0
+    for entry in os.scandir(directory):
+        inspected += 1
+        if inspected > MAX_ORCHESTRATION_DIRECTORY_ENTRIES:
+            raise OrchestratorError(
+                "RECOVERY_CAPACITY",
+                "reviewable-plan scan exceeds its directory-entry bound")
+        if entry.is_symlink() or not entry.is_file(follow_symlinks=False):
+            continue
+        if not re.fullmatch(
+                r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-"
+                r"[0-9a-f]{12}\.json", entry.name):
+            continue
+        entries.append(Path(entry.path))
+        if len(entries) > MAX_ORCHESTRATION_ACTIONS:
+            raise OrchestratorError(
+                "RECOVERY_CAPACITY", "reviewable-plan scan exceeds its action bound")
+    candidates = []
+    stale = False
+    for path in sorted(entries, key=lambda item: item.name):
+        _path, action, _security = _read_action(
+            path, owner_home=home, install_root=install_root)
+        result = action.get("result")
+        presentation = result.get("plan_presentation") if isinstance(result, dict) else None
+        action_target = Path(action.get("explicit_target") or action.get("cwd", ""))
+        if action.get("status") != "completed" \
+                or action.get("intent") != "plan" \
+                or action.get("project_id") != project.project_id \
+                or not isinstance(presentation, dict):
+            continue
+        try:
+            if action_target.resolve() != target:
+                continue
+        except (OSError, RuntimeError):
+            continue
+        digest = presentation.get("presentation_sha256")
+        try:
+            decision = _exact_plan_decision(
+                _path, digest, owner_home=home,
+                install_root=install_root, target=target)
+        except OrchestratorError as exc:
+            if exc.code == "PLAN_DECISION_STALE":
+                stale = True
+                continue
+            if exc.code == "PLAN_DECISION_MISMATCH":
+                continue
+            raise
+        candidates.append((_path, decision))
+    if len(candidates) > 1:
+        raise OrchestratorError(
+            "PLAN_DECISION_AMBIGUOUS",
+            "more than one unchanged displayed plan is reviewable for this project")
+    if not candidates:
+        if stale:
+            raise OrchestratorError(
+                "PLAN_DECISION_STALE",
+                "the displayed plan no longer matches the current project; review a fresh plan")
+        raise OrchestratorError(
+            "PLAN_DECISION_UNAVAILABLE",
+            "no completed displayed plan is available for this project")
+    path, decision = candidates[0]
+    return {
+        "action_path": str(path),
+        "presentation_sha256": decision["presentation_sha256"],
+    }
+
+
+def _decision_reference(
+        action_path, presentation_sha256, cwd, *, owner_home, install_root):
+    has_action = action_path is not None
+    has_digest = presentation_sha256 is not None
+    if cwd is not None:
+        if has_action or has_digest:
+            raise OrchestratorError(
+                "PLAN_DECISION_MISMATCH",
+                "name either one exact displayed-plan reference or its project directory")
+        return _recover_plan_decision(
+            cwd, owner_home=owner_home, install_root=install_root)
+    if not has_action or not has_digest:
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "name either one exact displayed-plan reference or its project directory")
+    return {
+        "action_path": action_path,
+        "presentation_sha256": presentation_sha256,
+    }
+
+
+def start(
+        action_path=None, *, presentation_sha256=None, cwd=None,
+        owner_home, install_root, now=None):
     """Start only the exact completed plan that was displayed to the owner."""
+    reference = _decision_reference(
+        action_path, presentation_sha256, cwd,
+        owner_home=owner_home, install_root=install_root)
+    action_path = reference["action_path"]
+    presentation_sha256 = reference["presentation_sha256"]
     path, action, _security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
     if action["status"] != "completed" or action["intent"] != "plan":
@@ -4499,13 +4617,18 @@ def start(action_path, *, presentation_sha256, owner_home, install_root, now=Non
 
 
 def revise(
-        action_path, *, presentation_sha256, request,
+        action_path=None, *, presentation_sha256=None, cwd=None, request,
         owner_home, install_root, now=None):
     """Open a fresh planning action bound to one exact displayed plan revision."""
     try:
         loom_adapter_protocol.request_identity(request)
     except loom_adapter_protocol.ProtocolError as exc:
         raise OrchestratorError(exc.code, str(exc)) from exc
+    reference = _decision_reference(
+        action_path, presentation_sha256, cwd,
+        owner_home=owner_home, install_root=install_root)
+    action_path = reference["action_path"]
+    presentation_sha256 = reference["presentation_sha256"]
     path, action, _security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
     if action["status"] != "completed" or action["intent"] != "plan":
@@ -5825,15 +5948,17 @@ def main(argv=None):
             message = loom_adapter_protocol.read_single_frame(
                 sys.stdin.buffer, message_type="start")
             result = start(
-                message["action"],
-                presentation_sha256=message["presentation_sha256"],
+                message.get("action"),
+                presentation_sha256=message.get("presentation_sha256"),
+                cwd=message.get("cwd"),
                 owner_home=args.home, install_root=args.install_root)
         elif args.command == "revise-stdio":
             message = loom_adapter_protocol.read_single_frame(
                 sys.stdin.buffer, message_type="revise")
             result = revise(
-                message["action"],
-                presentation_sha256=message["presentation_sha256"],
+                message.get("action"),
+                presentation_sha256=message.get("presentation_sha256"),
+                cwd=message.get("cwd"),
                 request=message["request"],
                 owner_home=args.home, install_root=args.install_root)
         elif args.command == "complete":

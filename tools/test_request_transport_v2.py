@@ -76,6 +76,27 @@ def revision_message(
     }
 
 
+def recovered_start_message(cwd, request_id="req-start-recovered"):
+    return {
+        "schema_version": 2,
+        "message_type": "start",
+        "request_id": request_id,
+        "cwd": str(cwd),
+    }
+
+
+def recovered_revision_message(
+        request, cwd, request_id="req-revise-recovered"):
+    return {
+        "schema_version": 2,
+        "message_type": "revise",
+        "request_id": request_id,
+        "cwd": str(cwd),
+        "request": request,
+        "request_identity": loom_adapter_protocol.request_identity(request),
+    }
+
+
 class FakeManager:
     class Activations:
         @staticmethod
@@ -263,6 +284,29 @@ class RequestTransportV2Tests(unittest.TestCase):
         self.assertEqual(presentation_sha256, revised["presentation_sha256"])
         self.assertFalse(revised["request_in_argv"])
 
+    def test_later_turn_project_recovery_crosses_real_processes_without_request_argv(self):
+        request = "  add --json\r\nquotes \" % ! & | < > ^ کوردی 🧵  "
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            launcher, _runtime = self._write_process_chain(root)
+            cwd = root / "project"
+            cwd.mkdir()
+
+            start_code, started = loom_adapter_bridge._run_request(
+                launcher, root / ".loom", recovered_start_message(cwd),
+                command="start-stdio", timeout=30)
+            revise_code, revised = loom_adapter_bridge._run_request(
+                launcher, root / ".loom",
+                recovered_revision_message(request, cwd),
+                command="revise-stdio", timeout=30)
+
+        self.assertEqual(0, start_code, started)
+        self.assertEqual(str(cwd), started["cwd"])
+        self.assertEqual(0, revise_code, revised)
+        self.assertEqual(str(cwd), revised["cwd"])
+        self._assert_identity(request, revised)
+        self.assertFalse(revised["request_in_argv"])
+
     def test_legacy_request_argv_surface_is_refused_before_runtime_access(self):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
@@ -369,19 +413,22 @@ class RequestTransportV2Tests(unittest.TestCase):
                 }}
 
             def transport_start(
-                    action_path, *, presentation_sha256, owner_home, install_root):
-                return {{
-                    "status": "transport-ok",
-                    "action": str(action_path),
-                    "presentation_sha256": presentation_sha256,
-                }}
-
-            def transport_revise(
-                    action_path, *, presentation_sha256, request,
+                    action_path, *, presentation_sha256, cwd=None,
                     owner_home, install_root):
                 return {{
                     "status": "transport-ok",
                     "action": str(action_path),
+                    "cwd": str(cwd) if cwd is not None else None,
+                    "presentation_sha256": presentation_sha256,
+                }}
+
+            def transport_revise(
+                    action_path, *, presentation_sha256, cwd=None, request,
+                    owner_home, install_root):
+                return {{
+                    "status": "transport-ok",
+                    "action": str(action_path),
+                    "cwd": str(cwd) if cwd is not None else None,
                     "presentation_sha256": presentation_sha256,
                     "request": request,
                     "request_identity": loom_adapter_protocol.request_identity(request),

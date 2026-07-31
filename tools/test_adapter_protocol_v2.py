@@ -436,6 +436,30 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertEqual(messages[1], run_request.call_args_list[1].args[2])
         self.assertEqual("revise-stdio", run_request.call_args_list[1].kwargs["command"])
 
+    def test_later_turn_plan_decisions_accept_only_absolute_project_recovery(self):
+        common = {"schema_version": 2}
+        start = {
+            **common, "message_type": "start", "request_id": "req-start-recovered",
+            "cwd": "C:/work/project",
+        }
+        request = "Change one acceptance check."
+        revise = {
+            **common, "message_type": "revise", "request_id": "req-revise-recovered",
+            "cwd": "C:/work/project", "request": request,
+            "request_identity": loom_adapter_protocol.request_identity(request),
+        }
+
+        self.assertEqual(start, loom_adapter_protocol.validate_message(start))
+        self.assertEqual(revise, loom_adapter_protocol.validate_message(revise))
+        for invalid in (
+                {**start, "action": "C:/action.json",
+                 "presentation_sha256": "a" * 64},
+                {**revise, "action": "C:/action.json",
+                 "presentation_sha256": "a" * 64}):
+            with self.subTest(invalid=invalid), self.assertRaises(
+                    loom_adapter_protocol.ProtocolError):
+                loom_adapter_protocol.validate_message(invalid)
+
     def test_bound_plan_decision_messages_reject_invalid_hashes_and_extra_fields(self):
         for value in (
                 {

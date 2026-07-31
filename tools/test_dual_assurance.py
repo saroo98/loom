@@ -370,6 +370,36 @@ class McpServerTests(unittest.TestCase):
                 "request": "Add one exact negative acceptance check."}),
         ], calls)
 
+    def test_later_turn_start_and_revision_use_project_local_recovery(self):
+        cwd = "C:/work/project"
+        calls = []
+
+        def call(name, value, **_kwargs):
+            calls.append((name, value))
+            return {"content": [{"type": "text", "text": "{}"}],
+                    "structuredContent": {}, "isError": False}
+
+        responses = self._serve([
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized",
+             "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "start", "arguments": {"cwd": cwd}}},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "revise", "arguments": {
+                    "cwd": cwd,
+                    "request": "Add one exact negative acceptance check."}}},
+        ], call)
+
+        self.assertNotIn("error", responses[-2])
+        self.assertNotIn("error", responses[-1])
+        self.assertEqual([
+            ("start", {"cwd": cwd}),
+            ("revise", {
+                "cwd": cwd,
+                "request": "Add one exact negative acceptance check."}),
+        ], calls)
+
     def test_revision_tool_rejects_missing_or_non_text_request_as_invalid_params(self):
         for arguments in (
                 {
@@ -479,7 +509,11 @@ class McpServerTests(unittest.TestCase):
             self.assertIn(
                 "call `loom.revise` with that exact reference", text)
             self.assertIn(
+                "never guess it", text)
+            self.assertIn(
                 "call `loom.start` with that exact reference", text)
+            self.assertIn(
+                "absolute working directory if a later turn lost it", text)
             self.assertIn(
                 "Never replace either bound decision with plain `loom.invoke`", text)
             self.assertIn(

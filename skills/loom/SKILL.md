@@ -5,9 +5,9 @@ description: Loom 1.8.26 creates safe, evidence-backed execution plans.
 
 # Loom
 
-Use only `/loom <request>`. Do not read `START-HERE.md`, the full installation, or another Loom copy.
+Use only `/loom <request>`. Do not read another Loom file or copy.
 
-Invoke Loom immediately. Do not narrate or analyze the request; do not characterize the request as broad, intentional, complex, simple, or underspecified.
+Invoke Loom immediately without narrating, analyzing, or classifying the request.
 
 On Codex:
 
@@ -28,10 +28,12 @@ On Codex:
    The complete inline fallback is mandatory. Preserve `plan_decision_reference`; do not call
    `loom.complete` again.
 5. When the owner requests a change, call `loom.revise` with that exact reference and exact request.
+   If a later turn lost it, pass the exact request and absolute working directory; never guess it.
    Author and finalize the returned fresh action from its sealed contract and `revision_context`.
    Never edit a displayed plan in place.
-6. When the owner chooses to start, call `loom.start` with that exact reference and honor only its
-   sealed execution frontier. Never replace either bound decision with plain `loom.invoke`, an
+6. When the owner chooses to start, call `loom.start` with that exact reference, or with the
+   absolute working directory if a later turn lost it. Honor only its sealed execution frontier.
+   Never replace either bound decision with plain `loom.invoke`, an
    unbound `Continue`, or a guessed path. After implementation and real verification, follow
    `execution_completion_contract` exactly: change only its named work-order file
    from `ready` or `in-progress` to `done`, mark only acceptance checks actually proven, replace
