@@ -388,6 +388,11 @@ def _call_tool(
             if key in payload
         }
         structured["plan_presentation"] = structured_presentation
+        structured["plan_host_projection"] = {
+            key: projection[key]
+            for key in ("schema_version", "format", "markdown")
+            if key in projection
+        }
         decision_action = (
             adapter_arguments.get("action")
             if isinstance(adapter_arguments, dict) else None)

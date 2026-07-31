@@ -4380,7 +4380,7 @@ def _rebind_revision_prepared(prepared, prior_action):
 def invoke(*, request, cwd, home, install_root, explicit_target=None,
            timeout_seconds=900, now=None, transport_invocation_id=None,
            assurance=None, expected_plan_decision=None,
-           revision_context=None):
+           revision_context=None, bound_intent=None):
     if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
         raise OrchestratorError("INVALID_TIMEOUT", "timeout must be between 60 and 3600 seconds")
     if transport_invocation_id is not None:
@@ -4411,8 +4411,17 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
     _bind_memory_project(memory, project)
     directory = _orchestration_directory(home, instance_id, project.project_id)
     instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
+    if bound_intent is not None and (
+            bound_intent != "plan" or revision_context is None):
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH", "bound intent is invalid")
+    if revision_context is not None and bound_intent != "plan":
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "plan revision requires its bound planning intent")
     intent_decision = loom_runtime.resolve_intent(request)
     incoming_intent = (
+        bound_intent if bound_intent is not None else
         None if intent_decision["blocked"] else intent_decision["intent"])
     try:
         with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
@@ -4431,7 +4440,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                     result = _pending_action_result(reused_action)
                 else:
                     replay = None
-                    if incoming_intent == "plan":
+                    if incoming_intent == "plan" and revision_context is None:
                         try:
                             prepared = loom_runtime.prepare_invocation(
                                 request, instance_id=instance_id,
@@ -4453,7 +4462,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             transport_invocation_id=transport_invocation_id,
                             assurance=assurance,
                             expected_plan_decision=expected_plan_decision,
-                            revision_context=revision_context)
+                            revision_context=revision_context,
+                            bound_intent=bound_intent)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
@@ -4508,7 +4518,7 @@ def revise(
         now=now, revision_context={
             "action_path": str(path),
             "presentation_sha256": presentation_sha256,
-        })
+        }, bound_intent="plan")
     context = result.get("revision_context") if isinstance(result, dict) else None
     if result.get("intent") != "plan" or not isinstance(context, dict) \
             or context.get("parent_presentation_sha256") != presentation_sha256:
@@ -4792,7 +4802,7 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
             raise OrchestratorError(
                 "CONTRACT_REBASE_INDETERMINATE",
                 f"contract rebase projection is invalid: {exc}") from exc
-    return {
+    result = {
         "schema_version": SCHEMA_VERSION, "status": "action-required",
         "action_id": action["action_id"],
         "assurance": action["assurance"],
@@ -4835,6 +4845,66 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
             "terminal block never authorizes fallback work; only this fresh sealed action can "
             "authorize its declared frontier."),
     }
+    revision = (action.get("host_result") or {}).get("plan_revision")
+    if isinstance(revision, dict):
+        result["prepared_intent_authority"] = "bound-plan-revision"
+    if action["intent"] == "execute" and action.get("work_order") is not None:
+        work_order_relative = PurePosixPath("plans", action["work_order"]).as_posix()
+        work_order_path = Path(
+            action["explicit_target"] or action["cwd"]).joinpath(
+                *PurePosixPath(work_order_relative).parts)
+        try:
+            work_order_text = work_order_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            raise OrchestratorError(
+                "ACTION_CORRUPT",
+                "execution completion contract cannot read its work order") from exc
+        pending_markers = [
+            marker for marker in (
+                "Pending real implementation evidence.",
+                "Pending implementation evidence.",
+            )
+            if marker in work_order_text
+        ]
+        if len(pending_markers) != 1:
+            raise OrchestratorError(
+                "ACTION_CORRUPT",
+                "execution completion evidence marker is missing or ambiguous")
+        result["execution_completion_contract"] = {
+            "schema_version": 1,
+            "work_order_path": work_order_relative,
+            "work_order_id": work_order,
+            "required_status": "done",
+            "acceptance_marker": "- [x]",
+            "pending_evidence_text": pending_markers[0],
+            "evidence_capture": {
+                "schema_version": 1,
+                "method": "loom-lifecycle-capture-v1",
+                "tool_path": str(
+                    Path(action["install_root"]) / "tools" / "loom_lifecycle.py"),
+                "repo_path": str(Path(
+                    action["explicit_target"] or action["cwd"])),
+                "pack_path": str(Path(
+                    action["explicit_target"] or action["cwd"]) / "plans"),
+                "argv_prefix": [
+                    sys.executable, "-B",
+                    str(Path(action["install_root"]) / "tools"
+                        / "loom_lifecycle.py"),
+                    "capture",
+                    "--repo", str(Path(
+                        action["explicit_target"] or action["cwd"])),
+                    "--pack", str(Path(
+                        action["explicit_target"] or action["cwd"]) / "plans"),
+                    "--wo", work_order,
+                    "--medium",
+                ],
+                "verification_argv_separator": "--",
+                "required_medium": "the real verification medium actually used",
+                "required_command": "the exact verification command that passed",
+            },
+            "completion_operation": "loom.complete",
+        }
+    return result
 
 
 _ZERO_PROJECT_WRITE_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
@@ -4871,7 +4941,8 @@ def _planning_seed_summary(tier):
 def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        timeout_seconds, now, instance_id, memory,
                        transport_invocation_id=None, assurance=None,
-                       expected_plan_decision=None, revision_context=None):
+                       expected_plan_decision=None, revision_context=None,
+                       bound_intent=None):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = transport_invocation_id or str(uuid.uuid4())
@@ -4880,7 +4951,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         memory=memory)
     opened = controller.open(
         request, invocation_id=invocation_id, cwd=cwd,
-        explicit_target=target, now=now)
+        explicit_target=target, now=now, bound_intent=bound_intent)
     if opened.terminal_receipt is not None:
         return opened.terminal_receipt.to_dict()
     prepared = opened.prepared
@@ -5298,11 +5369,14 @@ def author(action_path, draft, *, now=None, owner_home=None, install_root=None):
                 raise OrchestratorError(
                     "ACTION_TIMEOUT", "planning action expired before authoring",
                     status="expired")
+            revision_record = (action.get("host_result") or {}).get(
+                "plan_revision")
             current = loom_runtime.prepare_invocation(
                 action["request"], instance_id=action["instance_id"],
                 invocation_id=action["invocation_id"], cwd=action["cwd"],
                 explicit_target=action["explicit_target"],
-                owner_home=action["owner_home"], now=instant)
+                owner_home=action["owner_home"], now=instant,
+                bound_intent=("plan" if revision_record is not None else None))
             if current.survey_hash != action["survey_hash"] \
                     or current.project_id != action["project_id"] \
                     or current.intent != "plan":
@@ -5313,8 +5387,6 @@ def author(action_path, draft, *, now=None, owner_home=None, install_root=None):
             version = (
                 Path(action["install_root"]) / "VERSION").read_text(
                     encoding="utf-8").strip()
-            revision_record = (action.get("host_result") or {}).get(
-                "plan_revision")
             if revision_record is not None:
                 try:
                     presentation_draft = {
@@ -5468,13 +5540,14 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             raise OrchestratorError(
                 "TARGET_DRIFT", "delegated target identity changed")
     else:
+        revision_record = (action.get("host_result") or {}).get(
+            "plan_revision")
         current = loom_runtime.prepare_invocation(
             action["request"], instance_id=action["instance_id"],
             invocation_id=action["invocation_id"], cwd=action["cwd"],
             explicit_target=action["explicit_target"], owner_home=action["owner_home"],
-            now=instant)
-        revision_record = (action.get("host_result") or {}).get(
-            "plan_revision")
+            now=instant,
+            bound_intent=("plan" if revision_record is not None else None))
         if revision_record is not None:
             root = Path(action["explicit_target"] or action["cwd"])
             try:

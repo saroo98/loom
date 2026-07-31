@@ -453,8 +453,11 @@ class McpServerTests(unittest.TestCase):
         self.assertEqual(
             "## Tiny CLI\n\n[Open the complete plan](C:/plan.md)\n",
             result["content"][0]["text"])
-        self.assertNotIn(
-            "plan_host_projection", result["structuredContent"])
+        self.assertEqual({
+            "schema_version": 1,
+            "format": "plan-host-projection-v1",
+            "markdown": "## Tiny CLI\n\n[Open the complete plan](C:/plan.md)\n",
+        }, result["structuredContent"]["plan_host_projection"])
         self.assertEqual(
             "plan-presentation-v1",
             result["structuredContent"]["plan_presentation"]["format"])
@@ -479,6 +482,10 @@ class McpServerTests(unittest.TestCase):
                 "call `loom.start` with that exact reference", text)
             self.assertIn(
                 "Never replace either bound decision with plain `loom.invoke`", text)
+            self.assertIn(
+                "`execution_completion_contract` exactly", text)
+            self.assertIn(
+                "Never claim or mark evidence that was not observed", text)
 
     def test_author_finalize_never_completes_after_authoring_failure(self):
         with tempfile.TemporaryDirectory() as temporary:

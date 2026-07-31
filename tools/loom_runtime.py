@@ -2076,7 +2076,8 @@ def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
 
 def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
                        explicit_target=None, candidate_roots=None,
-                       explicit_config=None, owner_home=None, now=None):
+                       explicit_config=None, owner_home=None, now=None,
+                       bound_intent=None):
     """Return one immutable, non-authorizing PreparedInvocation."""
     _canonical_uuid(instance_id, "instance_id")
     _canonical_uuid(invocation_id, "invocation_id")
@@ -2123,6 +2124,24 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
     repo_state, state, components = first_repo, dict(first_state), dict(first_components)
     project_inspection = dict(first_inspection)
     decision = resolve_intent(request, state)
+    if bound_intent is not None:
+        if bound_intent != "plan":
+            raise RuntimeError("bound intent is invalid")
+        decision = {
+            **decision,
+            "intent": "plan",
+            "blocked": False,
+            "code": "ROUTE_PLAN",
+            "recommendation": "",
+            "evidence": [
+                *[item for item in decision["evidence"]
+                  if item not in {"clause-role-conflict", "negated-control"}][:14],
+                "bound-plan-revision",
+            ],
+            "confidence": 1.0,
+            "needs_owner": False,
+            "block_reason": None,
+        }
     try:
         pack_route = (_pack_route_contract(pack, state)
                       if decision["intent"] != "plan" else None)

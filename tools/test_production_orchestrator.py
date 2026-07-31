@@ -11,7 +11,7 @@ import tempfile
 import types
 import unittest
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from unittest import mock
 from contextlib import redirect_stdout
 
@@ -1306,6 +1306,34 @@ class ProductionOrchestratorTests(unittest.TestCase):
             prior["presentation_sha256"],
             revised["plan_presentation"]["presentation_sha256"])
 
+    def test_bound_revision_keeps_planning_authority_when_owner_forbids_implementation(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        request = (
+            "Change the plan so the greeting accepts an optional --name argument "
+            "and defaults to World. Keep it small and do not implement it.")
+
+        revision = loom_orchestrator.revise(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            request=request, owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", revision["status"])
+        self.assertEqual("plan", revision["intent"])
+        self.assertEqual(request, revision["revision_context"]["request"])
+        self.assertEqual(
+            "bound-plan-revision",
+            revision["prepared_intent_authority"])
+
+    def test_bound_intent_cannot_be_used_without_an_exact_revision_reference(self):
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+            loom_orchestrator.invoke(
+                request="Do not implement anything.",
+                cwd=self.repo, home=self.home, install_root=self.installed,
+                bound_intent="plan")
+
+        self.assertEqual("PLAN_DECISION_MISMATCH", raised.exception.code)
+
     def test_bound_revision_is_idempotent_while_pending_and_cancel_preserves_prior_plan(self):
         action, completed = self.complete_machine_authored_plan()
         prior = completed["plan_presentation"]
@@ -1420,6 +1448,77 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         self.assertEqual("PLAN_DECISION_STALE", raised.exception.code)
         self.assertFalse(archive_dir.exists())
+
+    def test_exact_plan_start_returns_a_bounded_completion_contract(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+
+        contract = started["execution_completion_contract"]
+        self.assertEqual({
+            "schema_version": 1,
+            "work_order_path": (
+                "plans/work-orders/WO-001-preserve-double-entry-correctness.md"),
+            "work_order_id": "WO-001",
+            "required_status": "done",
+            "acceptance_marker": "- [x]",
+            "pending_evidence_text": "Pending real implementation evidence.",
+            "completion_operation": "loom.complete",
+        }, {
+            key: contract[key]
+            for key in (
+                "schema_version", "work_order_path", "work_order_id",
+                "required_status", "acceptance_marker", "pending_evidence_text",
+                "completion_operation")
+        })
+        self.assertEqual(
+            "loom-lifecycle-capture-v1",
+            contract["evidence_capture"]["method"])
+        self.assertEqual(str(self.repo), contract["evidence_capture"]["repo_path"])
+        self.assertEqual(
+            str(self.repo / "plans"),
+            contract["evidence_capture"]["pack_path"])
+        self.assertTrue(Path(
+            contract["evidence_capture"]["tool_path"]).is_file())
+        self.assertEqual(
+            ["--wo", "WO-001", "--medium"],
+            contract["evidence_capture"]["argv_prefix"][-3:])
+        self.assertEqual(
+            "--", contract["evidence_capture"]["verification_argv_separator"])
+
+    def test_exact_plan_start_completion_contract_closes_verified_work(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        contract = started["execution_completion_contract"]
+        work_order = self.repo.joinpath(
+            *PurePosixPath(contract["work_order_path"]).parts)
+
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        text = work_order.read_text(encoding="utf-8")
+        text = text.replace("status: ready", f"status: {contract['required_status']}")
+        text = text.replace("- [ ]", contract["acceptance_marker"])
+        text = text.replace(
+            contract["pending_evidence_text"],
+            "Evidence: isolated real-process verification exited 0.")
+        work_order.write_text(text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            self.repo / "plans", self.repo, contract["work_order_id"],
+            medium="python-unittest",
+            command=[sys.executable, "-c", "print('verification passed')"])
+        sealed = loom_orchestrator.complete(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", sealed["status"])
+        self.assertEqual("execute-complete", sealed["code"])
 
     def test_revision_archive_and_encrypted_envelope_are_schema_valid(self):
         action, completed = self.complete_machine_authored_plan()

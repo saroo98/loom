@@ -1238,13 +1238,13 @@ class SessionController:
         return opener(operation_id, payload) if opener is not None else payload
 
     def open(self, request, *, invocation_id, cwd, explicit_target=None,
-             explicit_config=None, now=None):
+             explicit_config=None, now=None, bound_intent=None):
         """Open an authenticated host-agent action without sealing a false result."""
         instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
         prepared = loom_runtime.prepare_invocation(
             request, instance_id=self.instance_id, invocation_id=invocation_id,
             cwd=cwd, explicit_target=explicit_target, explicit_config=explicit_config,
-            owner_home=self.owner_home, now=instant)
+            owner_home=self.owner_home, now=instant, bound_intent=bound_intent)
         path = self._journal_path(prepared.project_id)
         with _SessionFileLock(path.with_name(".session.lock")):
             journal = _load_journal(path, self.instance_id, prepared.project_id)
