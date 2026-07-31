@@ -1456,7 +1456,8 @@ def author(
         ".loom-small-lifecycle.json"
         if contract["tier"] == "S" else loom_gate.LIFECYCLE_FILE)
     lifecycle = pack / lifecycle_name
-    if not lifecycle.is_file() or lifecycle.is_symlink():
+    if not fresh_lifecycle and (
+            not lifecycle.is_file() or lifecycle.is_symlink()):
         raise PlanAuthorError("PLAN_AUTHOR_FAILED", "planning lifecycle is unavailable")
     transaction_id = uuid.uuid4().hex
     stage = pack.parent / f".loom-plan-stage-{transaction_id}"
