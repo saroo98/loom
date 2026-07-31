@@ -45,15 +45,11 @@ class PluginPackageTests(unittest.TestCase):
             "the Codex skill must remain a complete compact dispatcher")
         self.assertTrue((ROOT / "skills" / "loom" / ".." / ".." /
                          "START-HERE.md").resolve().is_file())
-        self.assertIn(
-            "Do not read `START-HERE.md`, the full installation", plugin_skill)
+        self.assertIn("Do not read another Loom file or copy", plugin_skill)
         self.assertNotIn(
             "`LOOM_ROOT` is the installed directory containing this file", plugin_skill)
         self.assertIn(
-            "do not characterize the request as broad, intentional, complex",
-            plugin_skill)
-        self.assertIn(
-            "Invoke Loom immediately. Do not narrate or analyze the request",
+            "Invoke Loom immediately without narrating, analyzing, or classifying",
             plugin_skill)
         self.assertIn("Honor `semantic_draft_limits`", plugin_skill)
         kernel = (ROOT / "START-HERE.md").read_text(encoding="utf-8")

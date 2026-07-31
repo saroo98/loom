@@ -509,11 +509,11 @@ class McpServerTests(unittest.TestCase):
             self.assertIn(
                 "call `loom.revise` with that exact reference", text)
             self.assertIn(
-                "never guess a path or digest", text)
+                "never guess it", text)
             self.assertIn(
                 "call `loom.start` with that exact reference", text)
             self.assertIn(
-                "pass the absolute working directory", text)
+                "absolute working directory if a later turn lost it", text)
             self.assertIn(
                 "Never replace either bound decision with plain `loom.invoke`", text)
             self.assertIn(
