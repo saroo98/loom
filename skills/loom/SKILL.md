@@ -1,6 +1,6 @@
 ---
 name: loom
-description: Loom 1.8.26 creates safe, evidence-backed execution plans.
+description: Loom 1.8.27 creates safe, evidence-backed execution plans.
 ---
 
 # Loom
