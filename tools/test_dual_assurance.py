@@ -108,7 +108,10 @@ class McpServerTests(unittest.TestCase):
             {"name": "loom", "version": "0.0.0"},
             responses[0]["result"]["serverInfo"])
         self.assertEqual(
-            ["invoke", "resolve", "status", "complete", "author", "cancel"],
+            [
+                "invoke", "resolve", "status", "complete", "author",
+                "start", "revise", "cancel",
+            ],
             [tool["name"] for tool in responses[1]["result"]["tools"]])
         author = next(
             tool for tool in responses[1]["result"]["tools"]
@@ -132,6 +135,33 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn(
             "default", author["inputSchema"]["properties"]["finalize"])
         self.assertIn("same tool call", author["description"])
+
+    def test_unproven_codex_ui_capability_never_mounts_a_rich_viewer(self):
+        responses = self._serve([
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {
+                    "extensions": {
+                        "io.modelcontextprotocol/ui": {
+                            "mimeTypes": ["text/html;profile=mcp-app"],
+                        },
+                    },
+                },
+                "clientInfo": {"name": "codex", "version": "unverified-test"},
+            }},
+            {"jsonrpc": "2.0", "method": "notifications/initialized",
+             "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/list",
+             "params": {}},
+        ])
+
+        initialize = responses[0]["result"]
+        self.assertNotIn("resources", initialize["capabilities"])
+        tools = responses[1]["result"]["tools"]
+        self.assertTrue(tools)
+        for tool in tools:
+            self.assertNotIn("_meta", tool)
+            self.assertNotIn("outputSchema", tool)
 
     def test_invoke_remains_structured_at_the_mcp_boundary(self):
         request = "line one\nline two % ! & | < > ^ café"
@@ -307,6 +337,55 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("error", responses[-1])
         self.assertEqual([("author", arguments)], calls)
 
+    def test_bound_start_and_revision_preserve_exact_decision_identity(self):
+        action = "C:/owner/.loom/orchestration/action.json"
+        digest = "a" * 64
+        calls = []
+
+        def call(name, value, **_kwargs):
+            calls.append((name, value))
+            return {"content": [{"type": "text", "text": "{}"}],
+                    "structuredContent": {}, "isError": False}
+
+        responses = self._serve([
+            {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            {"jsonrpc": "2.0", "method": "notifications/initialized",
+             "params": {}},
+            {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+                "name": "start", "arguments": {
+                    "action": action, "presentation_sha256": digest}}},
+            {"jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": {
+                "name": "revise", "arguments": {
+                    "action": action, "presentation_sha256": digest,
+                    "request": "Add one exact negative acceptance check."}}},
+        ], call)
+
+        self.assertNotIn("error", responses[-2])
+        self.assertNotIn("error", responses[-1])
+        self.assertEqual([
+            ("start", {
+                "action": action, "presentation_sha256": digest}),
+            ("revise", {
+                "action": action, "presentation_sha256": digest,
+                "request": "Add one exact negative acceptance check."}),
+        ], calls)
+
+    def test_revision_tool_rejects_missing_or_non_text_request_as_invalid_params(self):
+        for arguments in (
+                {
+                    "action": "C:/owner/.loom/orchestration/action.json",
+                    "presentation_sha256": "a" * 64,
+                },
+                {
+                    "action": "C:/owner/.loom/orchestration/action.json",
+                    "presentation_sha256": "a" * 64,
+                    "request": None,
+                }):
+            with self.subTest(arguments=arguments), self.assertRaises(
+                    loom_mcp_server.McpError) as raised:
+                loom_mcp_server._adapter_message("revise", arguments)
+            self.assertEqual(-32602, raised.exception.code)
+
     def test_author_can_finalize_without_a_second_host_tool_call(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -338,6 +417,17 @@ class McpServerTests(unittest.TestCase):
                     "payload": {
                         "status": "completed", "code": "plan-complete",
                         "owner_message": {"human": "Plan sealed."},
+                        "plan_presentation": {
+                            "schema_version": 1,
+                            "format": "plan-presentation-v1",
+                            "presentation_sha256": "a" * 64,
+                            "binding": {"action_id": "action-1"},
+                        },
+                        "plan_host_projection": {
+                            "schema_version": 1,
+                            "format": "plan-host-projection-v1",
+                            "markdown": "## Tiny CLI\n\n[Open the complete plan](C:/plan.md)\n",
+                        },
                     },
                 }
 
@@ -361,7 +451,34 @@ class McpServerTests(unittest.TestCase):
         self.assertNotIn("finalize", calls[0])
         self.assertEqual(action, calls[1]["action"])
         self.assertEqual(
-            "completed", json.loads(result["content"][0]["text"])["status"])
+            "## Tiny CLI\n\n[Open the complete plan](C:/plan.md)\n",
+            result["content"][0]["text"])
+        self.assertNotIn(
+            "plan_host_projection", result["structuredContent"])
+        self.assertEqual(
+            "plan-presentation-v1",
+            result["structuredContent"]["plan_presentation"]["format"])
+        self.assertEqual({
+            "action": action,
+            "presentation_sha256": "a" * 64,
+        }, result["structuredContent"]["plan_decision_reference"])
+
+    def test_codex_skill_returns_the_review_surface_instead_of_an_internal_receipt(self):
+        root = Path(__file__).resolve().parents[1]
+        for relative in ("skill/loom/SKILL.md", "skills/loom/SKILL.md"):
+            text = (root / relative).read_text(encoding="utf-8")
+            self.assertIn(
+                "Return `plan_host_projection.markdown` verbatim", text)
+            self.assertIn(
+                "Do not replace the review surface with `owner_message.human`", text)
+            self.assertIn(
+                "The complete inline fallback is mandatory", text)
+            self.assertIn(
+                "call `loom.revise` with that exact reference", text)
+            self.assertIn(
+                "call `loom.start` with that exact reference", text)
+            self.assertIn(
+                "Never replace either bound decision with plain `loom.invoke`", text)
 
     def test_author_finalize_never_completes_after_authoring_failure(self):
         with tempfile.TemporaryDirectory() as temporary:

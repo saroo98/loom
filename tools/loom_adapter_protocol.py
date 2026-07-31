@@ -283,6 +283,36 @@ def validate_message(value):
             raise ProtocolError("MESSAGE_INVALID", "semantic plan draft is not an object")
         if "finalize" in value and type(value["finalize"]) is not bool:
             raise ProtocolError("MESSAGE_INVALID", "author finalize must be boolean")
+    elif message_type == "start":
+        _exact(
+            value, common | {"action", "presentation_sha256"},
+            "bound plan start")
+        _text(value["action"], "action path", 1, 4096)
+        if not isinstance(value["presentation_sha256"], str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", value["presentation_sha256"]):
+            raise ProtocolError(
+                "MESSAGE_INVALID", "plan presentation digest is invalid")
+    elif message_type == "revise":
+        _exact(
+            value, common | {
+                "action", "presentation_sha256", "request", "request_identity"},
+            "bound plan revision")
+        _text(value["action"], "action path", 1, 4096)
+        _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
+        if not isinstance(value["presentation_sha256"], str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", value["presentation_sha256"]):
+            raise ProtocolError(
+                "MESSAGE_INVALID", "plan presentation digest is invalid")
+        identity = value["request_identity"]
+        _exact(identity, {"utf8_bytes", "sha256"}, "revision request identity")
+        expected = request_identity(value["request"])
+        if type(identity["utf8_bytes"]) is not int \
+                or identity["utf8_bytes"] != expected["utf8_bytes"] \
+                or not isinstance(identity["sha256"], str) \
+                or identity["sha256"] != expected["sha256"]:
+            raise ProtocolError(
+                "MESSAGE_INVALID",
+                "revision request identity does not match exact UTF-8 bytes")
     elif message_type == "cancel":
         _exact(value, common | {"action"}, "cancel")
         _text(value["action"], "action path", 1, 4096)

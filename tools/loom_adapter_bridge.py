@@ -103,11 +103,14 @@ def dispatch(message, *, home, launcher, session):
     if not session:
         raise loom_adapter_protocol.ProtocolError(
             "PROTOCOL_INCOMPATIBLE", "adapter must initialize before another operation")
-    if kind not in {"invoke", "resolve", "author", "complete", "cancel", "status"}:
+    if kind not in {
+            "invoke", "resolve", "author", "start", "revise",
+            "complete", "cancel", "status"}:
         raise loom_adapter_protocol.ProtocolError(
             "MESSAGE_INVALID", "adapter request is not a bridge operation")
     required_capability = (
-        "invoke" if kind == "resolve" else "complete" if kind == "author" else kind)
+        "invoke" if kind in {"resolve", "revise"} else
+        "complete" if kind in {"author", "start"} else kind)
     if not session["capabilities"].get(required_capability, False):
         raise loom_adapter_protocol.ProtocolError(
             "CAPABILITY_MISSING",
@@ -131,6 +134,12 @@ def dispatch(message, *, home, launcher, session):
                     "author result did not prove that the sealed plan is ready for completion")
             code, payload = _run(launcher, [
                 "--home", str(home), "complete", "--action", message["action"]])
+    elif kind == "start":
+        code, payload = _run_request(
+            launcher, home, message, command="start-stdio")
+    elif kind == "revise":
+        code, payload = _run_request(
+            launcher, home, message, command="revise-stdio")
     elif kind == "complete":
         arguments = ["--home", str(home), "complete", "--action", message["action"]]
         if message["usage"] is not None:
@@ -143,7 +152,7 @@ def dispatch(message, *, home, launcher, session):
         arguments = [
             "--home", str(home), "adapter-probe", "--protocol-min", "2",
             "--protocol-max", "2"]
-    if kind not in {"invoke", "resolve", "author"}:
+    if kind not in {"invoke", "resolve", "author", "start", "revise"}:
         code, payload = _run(launcher, arguments)
     result = {"schema_version": 2, "message_type": "result",
               "request_id": request_id, "returncode": code, "payload": payload}

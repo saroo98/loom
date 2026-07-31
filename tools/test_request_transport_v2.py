@@ -53,6 +53,29 @@ def resolve_message(request, cwd, action, request_id="req-resolve"):
     }
 
 
+def start_message(action, presentation_sha256, request_id="req-start"):
+    return {
+        "schema_version": 2,
+        "message_type": "start",
+        "request_id": request_id,
+        "action": str(action),
+        "presentation_sha256": presentation_sha256,
+    }
+
+
+def revision_message(
+        request, action, presentation_sha256, request_id="req-revise"):
+    return {
+        "schema_version": 2,
+        "message_type": "revise",
+        "request_id": request_id,
+        "action": str(action),
+        "presentation_sha256": presentation_sha256,
+        "request": request,
+        "request_identity": loom_adapter_protocol.request_identity(request),
+    }
+
+
 class FakeManager:
     class Activations:
         @staticmethod
@@ -214,6 +237,32 @@ class RequestTransportV2Tests(unittest.TestCase):
         self.assertEqual(item["action_sha256"],
                          resolve.call_args.kwargs["action_sha256"])
 
+    def test_bound_start_and_revision_preserve_identity_across_real_processes(self):
+        request = "  revise\r\nquotes \" % ! & | < > ^ کوردی 🧵  "
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            launcher, _runtime = self._write_process_chain(root)
+            action = root / ".loom" / "private action.json"
+            presentation_sha256 = "a" * 64
+
+            start_code, started = loom_adapter_bridge._run_request(
+                launcher, root / ".loom",
+                start_message(action, presentation_sha256),
+                command="start-stdio", timeout=30)
+            revise_code, revised = loom_adapter_bridge._run_request(
+                launcher, root / ".loom",
+                revision_message(request, action, presentation_sha256),
+                command="revise-stdio", timeout=30)
+
+        self.assertEqual(0, start_code, started)
+        self.assertEqual(str(action), started["action"])
+        self.assertEqual(presentation_sha256, started["presentation_sha256"])
+        self.assertEqual(0, revise_code, revised)
+        self._assert_identity(request, revised)
+        self.assertEqual(str(action), revised["action"])
+        self.assertEqual(presentation_sha256, revised["presentation_sha256"])
+        self.assertFalse(revised["request_in_argv"])
+
     def test_legacy_request_argv_surface_is_refused_before_runtime_access(self):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as raised:
@@ -319,7 +368,29 @@ class RequestTransportV2Tests(unittest.TestCase):
                     "request_identity": loom_adapter_protocol.request_identity(request),
                 }}
 
+            def transport_start(
+                    action_path, *, presentation_sha256, owner_home, install_root):
+                return {{
+                    "status": "transport-ok",
+                    "action": str(action_path),
+                    "presentation_sha256": presentation_sha256,
+                }}
+
+            def transport_revise(
+                    action_path, *, presentation_sha256, request,
+                    owner_home, install_root):
+                return {{
+                    "status": "transport-ok",
+                    "action": str(action_path),
+                    "presentation_sha256": presentation_sha256,
+                    "request": request,
+                    "request_identity": loom_adapter_protocol.request_identity(request),
+                    "request_in_argv": any(request in item for item in sys.argv),
+                }}
+
             loom_orchestrator.invoke = transport_invoke
+            loom_orchestrator.start = transport_start
+            loom_orchestrator.revise = transport_revise
             raise SystemExit(loom_orchestrator.main())
         """).lstrip(), encoding="utf-8")
         launcher = root / "launcher_harness.py"

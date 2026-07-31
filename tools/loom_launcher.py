@@ -154,6 +154,8 @@ def main(argv=None):
     sub.add_parser("invoke-stdio")
     sub.add_parser("resolve-stdio")
     sub.add_parser("author-stdio")
+    sub.add_parser("start-stdio")
+    sub.add_parser("revise-stdio")
     complete = sub.add_parser("complete")
     complete.add_argument("--action", required=True)
     complete.add_argument("--usage")
@@ -232,14 +234,17 @@ def main(argv=None):
     runtime_healthy = False
     trust_failure = None
     try:
-        if args.command in {"invoke-stdio", "resolve-stdio", "author-stdio"}:
+        if args.command in {
+                "invoke-stdio", "resolve-stdio", "author-stdio",
+                "start-stdio", "revise-stdio"}:
             envelope = loom_adapter_protocol.read_single_frame(
                 sys.stdin.buffer, message_type=(
                     "request-envelope" if args.command == "invoke-stdio"
-                    else "resolve" if args.command == "resolve-stdio" else "author"))
+                    else args.command.removesuffix("-stdio")))
         manager = loom_update.SharedRuntime(args.home)
         if args.command in {
-                "invoke-stdio", "resolve-stdio", "author-stdio", "complete", "cancel"}:
+                "invoke-stdio", "resolve-stdio", "author-stdio",
+                "start-stdio", "revise-stdio", "complete", "cancel"}:
             if args.command == "invoke-stdio":
                 _reject_local_shadow(envelope["cwd"])
             lease_data = manager.begin_session()
@@ -303,6 +308,16 @@ def main(argv=None):
         elif args.command == "author-stdio":
             command = loom_execution_chain.isolated_python(
                 orchestrator, "author-stdio",
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime))
+        elif args.command == "start-stdio":
+            command = loom_execution_chain.isolated_python(
+                orchestrator, "start-stdio",
+                "--home", str(Path(args.home).resolve()),
+                "--install-root", str(runtime))
+        elif args.command == "revise-stdio":
+            command = loom_execution_chain.isolated_python(
+                orchestrator, "revise-stdio",
                 "--home", str(Path(args.home).resolve()),
                 "--install-root", str(runtime))
         elif args.command == "complete":
