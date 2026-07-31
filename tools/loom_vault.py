@@ -34,6 +34,9 @@ MAX_DEVICE_HISTORY = 256
 MAX_QUARANTINE_BYTES = 64 * 1024 * 1024
 MAX_STATE_ENTITIES = 1024
 MAX_ENTITY_TYPE = 256
+MAX_PLAN_REVISION_ARCHIVE_STORED_BYTES = 4 * 1024 * 1024
+PLAN_REVISION_ARCHIVE_CHUNK_BYTES = 512 * 1024
+MAX_PLAN_REVISION_ARCHIVE_PARTS = 8
 MAX_RECENT_EFFECTS = 4096
 BUSY_TIMEOUT_MS = 5000
 OWNER_NAMESPACE = uuid.UUID("4d137292-4498-4d60-8127-181d9e270c30")
@@ -1105,6 +1108,271 @@ class OwnerVault:
 
         return self.run_transaction(write)
 
+    def put_plan_revision_archive(
+            self, *, record_id, project_id, payload, created_at):
+        """Atomically retain one private plan revision and its forgetting identity."""
+        record_id = _uuid(record_id, "plan revision archive id")
+        if not isinstance(project_id, str) or not project_id.startswith("p-") \
+                or len(project_id) > 128:
+            raise VaultError("plan revision project identity is invalid")
+        if not isinstance(created_at, str) or not created_at:
+            raise VaultError("plan revision creation time is invalid")
+        if not isinstance(payload, dict) \
+                or payload.get("kind") != "loom-plan-revision-archive-v1" \
+                or payload.get("project_id") != project_id \
+                or not isinstance(payload.get("archive_sha256"), str) \
+                or len(payload["archive_sha256"]) != 64 \
+                or any(character not in "0123456789abcdef"
+                       for character in payload["archive_sha256"]):
+            raise VaultError("plan revision archive payload is invalid")
+        unsigned_payload = dict(payload)
+        claimed_archive_sha256 = unsigned_payload.pop("archive_sha256")
+        if hashlib.sha256(_canonical(unsigned_payload)).hexdigest() != \
+                claimed_archive_sha256:
+            raise VaultError("plan revision archive content digest is invalid")
+        encoded = _canonical(payload)
+        if not encoded or len(encoded) > MAX_PLAN_REVISION_ARCHIVE_STORED_BYTES:
+            raise VaultError("plan revision archive exceeds its storage bound")
+        payload_sha256 = hashlib.sha256(encoded).hexdigest()
+        chunks = [
+            encoded[offset:offset + PLAN_REVISION_ARCHIVE_CHUNK_BYTES]
+            for offset in range(0, len(encoded), PLAN_REVISION_ARCHIVE_CHUNK_BYTES)
+        ]
+        if not 1 <= len(chunks) <= MAX_PLAN_REVISION_ARCHIVE_PARTS:
+            raise VaultError("plan revision archive chunk inventory is invalid")
+        manifest = {
+            "schema_version": 1,
+            "kind": "loom-plan-revision-vault-manifest-v1",
+            "archive_sha256": payload["archive_sha256"],
+            "payload_sha256": payload_sha256,
+            "part_count": len(chunks),
+            "total_bytes": len(encoded),
+        }
+        parts = [{
+            "schema_version": 1,
+            "kind": "loom-plan-revision-vault-part-v1",
+            "index": index,
+            "part_sha256": hashlib.sha256(chunk).hexdigest(),
+            "payload_base64": base64.b64encode(chunk).decode("ascii"),
+        } for index, chunk in enumerate(chunks, 1)]
+        record = self._validate_record({
+            "id": record_id,
+            "scope": "project",
+            "domain": "loom-planning",
+            "project_id": project_id,
+            "category": "plan-revision",
+            "statement": (
+                "Private prior Loom plan revision retained for recovery and "
+                "owner-controlled forgetting."),
+            "provenance": "observed",
+            "status": "archived",
+            "confidence": 1.0,
+            "evidence_count": 1,
+            "created_at": created_at,
+            "preference_key": None,
+            "preference_value": None,
+        })
+        domain_tag, project_tag, _component_tag, _device_tag = self._tags(record)
+        entity_values = [
+            ("plan-revision-archive", manifest),
+            *[(f"plan-revision-archive-part-{index:04d}", part)
+              for index, part in enumerate(parts, 1)],
+        ]
+
+        def open_entity(connection, row):
+            aad = (
+                f"entity:{self._metadata(connection)['owner_vault_id']}:"
+                f"{row['entity_type']}:{row['entity_id']}").encode()
+            try:
+                return json.loads(self.crypto.open(
+                    row["ciphertext"], aad).decode("utf-8"))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                raise VaultError(
+                    "plan revision archive authentication failed") from exc
+
+        def write(connection):
+            if connection.execute(
+                    "SELECT 1 FROM tombstones WHERE record_id=?",
+                    (record_id,)).fetchone():
+                return {
+                    "record_id": record_id,
+                    "archive_sha256": payload["archive_sha256"],
+                    "idempotent": True,
+                    "forgotten": True,
+                }
+            existing_record = connection.execute(
+                "SELECT * FROM memory_records WHERE record_id=?",
+                (record_id,)).fetchone()
+            existing_entities = connection.execute(
+                "SELECT * FROM state_entities WHERE entity_id=? "
+                "AND (entity_type='plan-revision-archive' "
+                "OR entity_type LIKE 'plan-revision-archive-part-%') "
+                "ORDER BY entity_type",
+                (record_id,)).fetchall()
+            if existing_record is not None or existing_entities:
+                if existing_record is None \
+                        or self._decrypt_record(existing_record) != record:
+                    raise VaultError("plan revision archive identity conflicts")
+                observed = {
+                    row["entity_type"]: open_entity(connection, row)
+                    for row in existing_entities
+                }
+                expected = dict(entity_values)
+                if observed != expected:
+                    raise VaultError("plan revision archive content conflicts")
+                return {
+                    "record_id": record_id,
+                    "archive_sha256": payload["archive_sha256"],
+                    "idempotent": True,
+                    "forgotten": False,
+                }
+            if connection.execute(
+                    "SELECT COUNT(*) FROM memory_records").fetchone()[0] \
+                    >= MAX_MEMORY_RECORDS:
+                raise VaultError("retained memory record bound reached")
+            if connection.execute(
+                    "SELECT COUNT(*) FROM state_entities").fetchone()[0] \
+                    + len(entity_values) > MAX_STATE_ENTITIES:
+                raise VaultError("state entity bound reached before plan revision archive")
+            for entity_type, _value in entity_values:
+                if connection.execute(
+                        "SELECT COUNT(*) FROM state_entities WHERE entity_type=?",
+                        (entity_type,)).fetchone()[0] >= MAX_ENTITY_TYPE:
+                    raise VaultError(
+                        "state entity type bound reached before plan revision archive")
+            receipt = {
+                "added": 0, "updated": 0, "deduplicated": 0,
+                "forgotten": 0, "recomputed": 0, "quarantined": 0,
+            }
+            memory_event = self._next_event(
+                connection, kind="memory-upsert", payload=record,
+                scope=record["scope"], domain_tag=domain_tag,
+                project_tag=project_tag)
+            memory_event.update({
+                "scope": record["scope"], "domain": domain_tag,
+                "project_id": project_tag,
+            })
+            self._apply_event(
+                connection, event=memory_event,
+                body={"kind": "memory-upsert", "payload": record},
+                receipt=receipt)
+            for entity_type, value in entity_values:
+                body = {
+                    "kind": "state-entity-upsert",
+                    "payload": {
+                        "entity_type": entity_type,
+                        "entity_id": record_id,
+                        "value": value,
+                    },
+                }
+                event = self._next_event(
+                    connection, kind=body["kind"], payload=body["payload"],
+                    scope="vault", domain_tag=None, project_tag=None)
+                event.update({
+                    "scope": "vault", "domain": None, "project_id": None,
+                })
+                self._apply_event(
+                    connection, event=event, body=body, receipt=receipt)
+            cold_bytes = connection.execute(
+                "SELECT COALESCE(SUM(LENGTH(ciphertext)),0) FROM memory_records "
+                "WHERE status!='active'").fetchone()[0]
+            if cold_bytes > MAX_LEARNING_ARCHIVE_BYTES:
+                raise VaultError("learning archive byte bound reached")
+            return {
+                "record_id": record_id,
+                "archive_sha256": payload["archive_sha256"],
+                "idempotent": False,
+                "forgotten": False,
+            }
+
+        return self.run_transaction(write)
+
+    def get_plan_revision_archive(self, record_id):
+        record_id = _uuid(record_id, "plan revision archive id")
+        identity = self.identity()["owner_vault_id"]
+        with self._connect() as connection:
+            record_row = connection.execute(
+                "SELECT * FROM memory_records WHERE record_id=?",
+                (record_id,)).fetchone()
+            rows = connection.execute(
+                "SELECT * FROM state_entities WHERE entity_id=? "
+                "AND (entity_type='plan-revision-archive' "
+                "OR entity_type LIKE 'plan-revision-archive-part-%') "
+                "ORDER BY entity_type",
+                (record_id,)).fetchall()
+        if record_row is None and not rows:
+            return None
+        if record_row is None:
+            raise VaultError("plan revision archive metadata is missing")
+        record = self._decrypt_record(record_row)
+        if record.get("category") != "plan-revision" \
+                or record.get("status") != "archived":
+            raise VaultError("plan revision archive metadata is invalid")
+        values = {}
+        for row in rows:
+            aad = (
+                f"entity:{identity}:{row['entity_type']}:{record_id}").encode()
+            try:
+                values[row["entity_type"]] = json.loads(self.crypto.open(
+                    row["ciphertext"], aad).decode("utf-8"))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                raise VaultError(
+                    "plan revision archive authentication failed") from exc
+        manifest = values.pop("plan-revision-archive", None)
+        if not isinstance(manifest, dict) \
+                or manifest.get("schema_version") != 1 \
+                or manifest.get("kind") != "loom-plan-revision-vault-manifest-v1" \
+                or type(manifest.get("part_count")) is not int \
+                or not 1 <= manifest["part_count"] <= MAX_PLAN_REVISION_ARCHIVE_PARTS \
+                or type(manifest.get("total_bytes")) is not int \
+                or not 1 <= manifest["total_bytes"] <= \
+                MAX_PLAN_REVISION_ARCHIVE_STORED_BYTES:
+            raise VaultError("plan revision archive manifest is invalid")
+        raw_parts = []
+        for index in range(1, manifest["part_count"] + 1):
+            part = values.pop(
+                f"plan-revision-archive-part-{index:04d}", None)
+            if not isinstance(part, dict) \
+                    or part.get("schema_version") != 1 \
+                    or part.get("kind") != "loom-plan-revision-vault-part-v1" \
+                    or part.get("index") != index \
+                    or not isinstance(part.get("part_sha256"), str) \
+                    or not isinstance(part.get("payload_base64"), str):
+                raise VaultError("plan revision archive part is invalid")
+            try:
+                raw = base64.b64decode(
+                    part["payload_base64"], validate=True)
+            except (ValueError, base64.binascii.Error) as exc:
+                raise VaultError(
+                    "plan revision archive part is invalid base64") from exc
+            if not raw or len(raw) > PLAN_REVISION_ARCHIVE_CHUNK_BYTES \
+                    or hashlib.sha256(raw).hexdigest() != part["part_sha256"]:
+                raise VaultError("plan revision archive part digest is invalid")
+            raw_parts.append(raw)
+        if values:
+            raise VaultError("plan revision archive has unexpected parts")
+        encoded = b"".join(raw_parts)
+        if len(encoded) != manifest["total_bytes"] \
+                or hashlib.sha256(encoded).hexdigest() != \
+                manifest.get("payload_sha256"):
+            raise VaultError("plan revision archive payload digest is invalid")
+        try:
+            payload = json.loads(encoded.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise VaultError("plan revision archive payload is invalid") from exc
+        if not isinstance(payload, dict) \
+                or payload.get("archive_sha256") != \
+                manifest.get("archive_sha256") \
+                or payload.get("project_id") != record["project_id"]:
+            raise VaultError("plan revision archive payload identity is invalid")
+        unsigned_payload = dict(payload)
+        claimed_archive_sha256 = unsigned_payload.pop("archive_sha256", None)
+        if not isinstance(claimed_archive_sha256, str) \
+                or hashlib.sha256(_canonical(unsigned_payload)).hexdigest() != \
+                claimed_archive_sha256:
+            raise VaultError("plan revision archive content digest is invalid")
+        return payload
+
     def quarantine_import(self, kind, payload):
         if not isinstance(kind, str) or not kind or len(kind) > 64 \
                 or len(_canonical(payload)) > 1024 * 1024:
@@ -1799,6 +2067,11 @@ class OwnerVault:
                     or len(entity_type) > 64 or len(entity_id) > 128 \
                     or len(_canonical(payload["value"])) > 1024 * 1024:
                 raise VaultError("state entity event exceeds its contract bounds")
+            if connection.execute(
+                    "SELECT 1 FROM tombstones WHERE record_id=?",
+                    (entity_id,)).fetchone():
+                receipt["deduplicated"] += 1
+                return
             aad = (f"entity:{metadata['owner_vault_id']}:{entity_type}:{entity_id}").encode()
             existing = connection.execute(
                 "SELECT source_sequence FROM state_entities WHERE entity_type=? AND entity_id=?",

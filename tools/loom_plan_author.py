@@ -19,9 +19,11 @@ import loom_domain_invariants
 import loom_gate
 import loom_lifecycle
 import loom_lint
+import loom_plan_presentation
 import loom_planning_intelligence
 import loom_proofline
 import loom_reliability
+import loom_survey
 
 
 SCHEMA_VERSION = 1
@@ -1439,7 +1441,7 @@ def _safe_replace_pack(pack, stage, transaction_path, *, before, after,
 
 def author(
         pack, *, contract, draft, request, version, repo, transaction_path,
-        validate_stage=None, now=None):
+        validate_stage=None, now=None, fresh_lifecycle=False):
     """Render, validate, and atomically activate one machine-owned plan pack."""
     pack = Path(pack).resolve()
     repo = Path(repo).resolve()
@@ -1460,13 +1462,57 @@ def author(
     stage = pack.parent / f".loom-plan-stage-{transaction_id}"
     if os.path.lexists(stage):
         raise PlanAuthorError("PLAN_AUTHOR_FAILED", "plan stage already exists")
+    revision_baseline = None
+    if fresh_lifecycle:
+        try:
+            revision_baseline = loom_gate._stable_snapshot(repo, pack)
+        except loom_survey.SurveyError as exc:
+            raise PlanAuthorError(
+                "PLAN_AUTHOR_FAILED",
+                f"revision lifecycle baseline could not be observed: {exc}") from exc
     try:
         stage.mkdir()
-        shutil.copy2(lifecycle, stage / lifecycle_name)
+        if not fresh_lifecycle:
+            shutil.copy2(lifecycle, stage / lifecycle_name)
         today = now.astimezone(dt.timezone.utc).date().isoformat()
         _render_known_or_bound_pack(
             stage, contract=contract, draft=normalized, request=request,
             version=version, today=today)
+        if fresh_lifecycle:
+            state, baseline_files = revision_baseline
+            event_name = (
+                "small-planning-started"
+                if contract["tier"] == "S" else "planning-started")
+            event = loom_gate.make_event(
+                event_name, state, event_at=now,
+                baseline_snapshot_sha256=loom_gate._mapping_hash(
+                    baseline_files))
+            if contract["tier"] == "S":
+                loom_gate._atomic_write(stage / lifecycle_name, {
+                    "schema_version": loom_gate.SCHEMA_VERSION,
+                    "mode": "small",
+                    "work_order_file": "WO-001.md",
+                    "route_contract": {
+                        "tier": "S",
+                        "domain_ids": contract["domains"],
+                        "last_verified": today,
+                        "freshness_window_days": 14,
+                    },
+                    "baseline_files": baseline_files,
+                    "events": [event],
+                })
+            else:
+                manifest_path, manifest_text = loom_gate._render_manifest(
+                    stage, state, "planned")
+                loom_gate._write_lifecycle_and_manifest(
+                    stage, {
+                        "schema_version": loom_gate.SCHEMA_VERSION,
+                        "mode": "planned",
+                        "baseline_files": baseline_files,
+                        "events": [event],
+                        "work_order_completions": [],
+                    },
+                    manifest_path, manifest_text)
         if contract["tier"] == "S":
             _frontmatter_value, _body, standalone_errors = \
                 loom_gate._standalone_wo_contract(stage / "WO-001.md", "ready")
@@ -1512,6 +1558,8 @@ def author(
             "schema_version": 1, "status": "authored",
             "plan_contract_hash": contract["contract_hash"],
             "files": files, "diagnostics": diagnostics[:64],
+            "presentation_semantics": (
+                loom_plan_presentation.extract_semantics(normalized)),
             "pack_sha256": hashlib.sha256(
                 "\n".join(
                     f"{name}:{hashlib.sha256((pack / name).read_bytes()).hexdigest()}"

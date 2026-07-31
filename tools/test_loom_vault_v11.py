@@ -238,6 +238,104 @@ class OwnerVaultTests(unittest.TestCase):
         finally:
             connection.close()
 
+    def test_plan_revision_archive_is_atomic_backed_up_and_forgotten_without_resurrection(self):
+        record_id = "00000000-0000-4000-8000-00000000b501"
+        project_id = "p-" + "5" * 32
+        prior_plan = b"# Prior plan\n" + (b"x" * 450000)
+        archive = {
+            "schema_version": 1,
+            "kind": "loom-plan-revision-archive-v1",
+            "project_id": project_id,
+            "action_id": "00000000-0000-4000-8000-00000000b502",
+            "revision": 1,
+            "presentation_sha256": "1" * 64,
+            "pack_sha256": "2" * 64,
+            "files": [{
+                "path": "MANIFEST.md",
+                "sha256": hashlib.sha256(prior_plan).hexdigest(),
+                "content_base64": base64.b64encode(prior_plan).decode("ascii"),
+            }],
+        }
+        unsigned = json.dumps(
+            archive, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode("utf-8")
+        archive["archive_sha256"] = hashlib.sha256(unsigned).hexdigest()
+
+        stored = self.vault.put_plan_revision_archive(
+            record_id=record_id, project_id=project_id, payload=archive,
+            created_at="2026-07-30T12:00:00Z")
+        repeated = self.vault.put_plan_revision_archive(
+            record_id=record_id, project_id=project_id, payload=archive,
+            created_at="2026-07-30T12:00:00Z")
+
+        self.assertEqual(record_id, stored["record_id"])
+        self.assertFalse(stored["idempotent"])
+        self.assertTrue(repeated["idempotent"])
+        self.assertEqual(archive, self.vault.get_plan_revision_archive(record_id))
+        self.assertEqual(1, self.vault.count("memory_records"))
+
+        backup = self.home / "checkpoints" / "plan-revision.sqlite3"
+        self.vault.online_backup(backup)
+        reopened = loom_vault.OwnerVault.open(
+            backup, crypto=self.crypto, allow_test_crypto=True)
+        self.assertEqual(archive, reopened.get_plan_revision_archive(record_id))
+
+        forgotten = self.vault.forget_memory(record_id, reason="owner-request")
+        self.assertEqual("complete", forgotten["status"])
+        self.assertIsNone(self.vault.get_plan_revision_archive(record_id))
+        self.vault.put_entity(
+            "plan-revision-archive", record_id,
+            {"schema_version": 1, "kind": "stale-replay"},
+            source_sequence=1)
+        self.assertIsNone(self.vault.get_plan_revision_archive(record_id))
+        self.assertEqual(0, self.vault.count("state_entities"))
+
+    def test_plan_revision_archive_transaction_failure_leaves_no_partial_state(self):
+        record_id = "00000000-0000-4000-8000-00000000b511"
+        project_id = "p-" + "6" * 32
+        payload = {
+            "kind": "loom-plan-revision-archive-v1",
+            "project_id": project_id,
+        }
+        payload["archive_sha256"] = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode("utf-8")).hexdigest()
+        real_apply = self.vault._apply_event
+        calls = 0
+
+        def fail_after_memory(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise loom_vault.VaultError("injected archive failure")
+            return real_apply(*args, **kwargs)
+
+        with mock.patch.object(
+                self.vault, "_apply_event", side_effect=fail_after_memory):
+            with self.assertRaisesRegex(
+                    loom_vault.VaultError, "injected archive failure"):
+                self.vault.put_plan_revision_archive(
+                    record_id=record_id, project_id=project_id,
+                    payload=payload, created_at="2026-07-30T12:00:00Z")
+
+        self.assertEqual(0, self.vault.count("memory_records"))
+        self.assertEqual(0, self.vault.count("state_entities"))
+        self.assertEqual(0, self.vault.count("events"))
+
+    def test_plan_revision_archive_rejects_an_internally_false_digest(self):
+        with self.assertRaisesRegex(
+                loom_vault.VaultError,
+                "plan revision archive content digest is invalid"):
+            self.vault.put_plan_revision_archive(
+                record_id="00000000-0000-4000-8000-00000000b512",
+                project_id="p-" + "6" * 32,
+                payload={
+                    "kind": "loom-plan-revision-archive-v1",
+                    "project_id": "p-" + "6" * 32,
+                    "archive_sha256": "6" * 64,
+                },
+                created_at="2026-07-30T12:00:00Z")
+
     def test_ten_concurrent_writers_commit_unique_signed_events(self):
         errors = []
 

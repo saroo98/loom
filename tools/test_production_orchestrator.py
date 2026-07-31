@@ -1113,6 +1113,30 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotIn(
             "Implementation may proceed",
             completed["owner_message"]["human"])
+        presentation = completed["plan_presentation"]
+        self.assertEqual("plan-presentation-v1", presentation["format"])
+        self.assertEqual("bounded", presentation["preview_mode"])
+        self.assertEqual(
+            action["action_id"],
+            presentation["binding"]["action_id"])
+        self.assertEqual(
+            action["world_fingerprint"],
+            presentation["binding"]["world_fingerprint"])
+        self.assertEqual(
+            "plans/MANIFEST.md",
+            presentation["full_plan"]["relative_path"])
+        self.assertIn(
+            "## Preserve double-entry correctness",
+            completed["plan_host_projection"]["markdown"])
+        self.assertIn(
+            "[Open the complete plan](",
+            completed["plan_host_projection"]["markdown"])
+        self.assertIn(
+            (self.repo / "plans" / "MANIFEST.md").as_posix().replace(" ", "%20"),
+            completed["plan_host_projection"]["markdown"])
+        self.assertNotIn(
+            str(self.repo),
+            json.dumps(presentation, sort_keys=True))
         self.assertEqual([], loom_gate.verify(
             self.repo / "plans", self.repo))
         self.assertIn(
@@ -1146,6 +1170,312 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             [], loom_gate.verify(
                 self.repo / "plans", self.repo, require_authorized=True))
+
+    def test_exact_displayed_plan_start_uses_existing_execute_authority(self):
+        action, completed = self.complete_machine_authored_plan()
+        reference = completed["plan_presentation"]
+
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=reference["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", started["status"])
+        self.assertEqual("execute", started["intent"])
+        self.assertEqual("WO-001", started["work_order"])
+        self.assertEqual(
+            reference["presentation_sha256"],
+            started["plan_decision"]["presentation_sha256"])
+        self.assertEqual(
+            reference["binding"]["pack_sha256"],
+            started["plan_decision"]["pack_sha256"])
+        self.assertEqual(
+            [], loom_gate.verify(
+                self.repo / "plans", self.repo, require_authorized=True))
+
+    def test_exact_plan_start_rejects_tampered_reference_without_lifecycle_change(self):
+        action, completed = self.complete_machine_authored_plan()
+        lifecycle = self.repo / "plans" / loom_gate.LIFECYCLE_FILE
+        before = lifecycle.read_bytes()
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+            loom_orchestrator.start(
+                action["action_path"],
+                presentation_sha256="0" * 64,
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("PLAN_DECISION_MISMATCH", raised.exception.code)
+        self.assertEqual(before, lifecycle.read_bytes())
+        self.assertEqual(
+            completed["plan_presentation"]["binding"]["pack_sha256"],
+            loom_orchestrator._pack_hash(self.repo / "plans"))
+
+    def test_exact_plan_start_rejects_repository_drift_as_stale(self):
+        action, completed = self.complete_machine_authored_plan()
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+            loom_orchestrator.start(
+                action["action_path"],
+                presentation_sha256=completed[
+                    "plan_presentation"]["presentation_sha256"],
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("PLAN_DECISION_STALE", raised.exception.code)
+
+    def test_bound_revision_creates_a_new_plan_action_and_semantic_diff(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+
+        revision = loom_orchestrator.revise(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            request="Change the plan so the precision check also covers 1.005 rounding.",
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", revision["status"])
+        self.assertEqual("plan", revision["intent"])
+        self.assertEqual(2, revision["revision_context"]["revision"])
+        self.assertEqual(
+            prior["presentation_sha256"],
+            revision["revision_context"]["parent_presentation_sha256"])
+        self.assertEqual(
+            "Change the plan so the precision check also covers 1.005 rounding.",
+            revision["revision_context"]["request"])
+        self.assertEqual(
+            "Preserve double-entry correctness",
+            revision["revision_context"]["prior_semantics"]["title"])
+        self.assertRegex(
+            revision["revision_context"]["archive_sha256"], r"^[0-9a-f]{64}$")
+
+        contract = revision["plan_contract"]
+        revised_draft = {
+            "schema_version": 1,
+            "title": "Preserve double-entry precision and rounding",
+            "summary": (
+                "Keep the bounded accounting change and verify both exact decimal "
+                "precision and 1.005 rounding."),
+            "assumptions": [
+                "The requested change remains limited to the existing src/app.py boundary."],
+            "decisions": [
+                "Test the 1.005 rounding rule as part of the same accounting work order."],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped accounting adapter",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                "title": "Preserve decimal precision and rounding",
+                "outcome": "The requested behavior preserves precision and 1.005 rounding.",
+                "tasks": [
+                    "Inspect the existing posting boundary.",
+                    "Implement the requested bounded behavior.",
+                    "Run precision and rounding checks.",
+                ],
+                "acceptance": [
+                    "`python -m unittest` exits 0 for balanced postings.",
+                    "The 1.005 rounding case returns the declared result.",
+                ],
+                "negative_acceptance": [
+                    "an invalid rounding mode fails without a partial write"],
+                "out_of_scope": ["Tax policy and data migration."],
+                "escalation": ["Stop if a dated jurisdiction rule is required."],
+                "touches": ["src/app.py"], "depends_on": [],
+                "routing": "strong-coding", "size": "S",
+            }],
+            "domain_evidence": None,
+        }
+        loom_orchestrator.author(
+            revision["action_path"], revised_draft,
+            owner_home=self.home, install_root=self.installed)
+        revised = loom_orchestrator.complete(
+            revision["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(2, revised["plan_presentation"]["binding"]["revision"])
+        self.assertEqual(
+            prior["presentation_sha256"],
+            revised["plan_revision"]["parent_presentation_sha256"])
+        self.assertEqual(
+            ["decisions", "summary", "title", "work_orders"],
+            revised["plan_revision"]["changed_sections"])
+        self.assertNotEqual(
+            prior["presentation_sha256"],
+            revised["plan_presentation"]["presentation_sha256"])
+
+    def test_bound_revision_is_idempotent_while_pending_and_cancel_preserves_prior_plan(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        before = loom_orchestrator._pack_hash(self.repo / "plans")
+        request = "Change the plan so one negative acceptance case names a partial write."
+
+        first = loom_orchestrator.revise(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            request=request, owner_home=self.home, install_root=self.installed)
+        repeated = loom_orchestrator.revise(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            request=request, owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual(first["action_id"], repeated["action_id"])
+        self.assertEqual(
+            first["revision_context"]["archive_sha256"],
+            repeated["revision_context"]["archive_sha256"])
+        cancelled = loom_orchestrator.cancel(
+            first["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertIsNone(cancelled["recovery_receipt"])
+        self.assertEqual(before, loom_orchestrator._pack_hash(self.repo / "plans"))
+        self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
+        replacement = loom_orchestrator.revise(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            request="Change the plan so the recovery check names the restored file.",
+            owner_home=self.home, install_root=self.installed)
+        self.assertEqual("action-required", replacement["status"])
+        self.assertNotEqual(first["action_id"], replacement["action_id"])
+        self.assertEqual(
+            first["revision_context"]["archive_sha256"],
+            replacement["revision_context"]["archive_sha256"])
+
+    def test_bound_revision_rejects_tampered_reference_and_source_drift(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        before = loom_orchestrator._pack_hash(self.repo / "plans")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as tampered:
+            loom_orchestrator.revise(
+                action["action_path"], presentation_sha256="0" * 64,
+                request="Change one verification check.",
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("PLAN_DECISION_MISMATCH", tampered.exception.code)
+        self.assertEqual(before, loom_orchestrator._pack_hash(self.repo / "plans"))
+
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as stale:
+            loom_orchestrator.revise(
+                action["action_path"],
+                presentation_sha256=prior["presentation_sha256"],
+                request="Change one verification check.",
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("PLAN_DECISION_STALE", stale.exception.code)
+
+    def test_bound_revision_rejects_semantic_noop_and_keeps_prior_revision(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        revision = loom_orchestrator.revise(
+            action["action_path"],
+            presentation_sha256=prior["presentation_sha256"],
+            request="Reissue the exact same plan without changing its meaning.",
+            owner_home=self.home, install_root=self.installed)
+        prior_semantics = revision["revision_context"]["prior_semantics"]
+        draft = {
+            "schema_version": 1,
+            "title": prior_semantics["title"],
+            "summary": prior_semantics["summary"],
+            "assumptions": prior_semantics["assumptions"],
+            "decisions": prior_semantics["decisions"],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped accounting adapter",
+            } for item in revision["plan_contract"]["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [{
+                **{key: value for key, value in item.items() if key != "id"},
+                "routing": "strong-coding", "size": "S",
+            } for item in prior_semantics["work_orders"]],
+            "domain_evidence": None,
+        }
+        before = loom_orchestrator._pack_hash(self.repo / "plans")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+            loom_orchestrator.author(
+                revision["action_path"], draft,
+                owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual("PLAN_REVISION_EMPTY", raised.exception.code)
+        self.assertEqual(before, loom_orchestrator._pack_hash(self.repo / "plans"))
+
+    def test_bound_revision_blocked_before_action_leaves_no_private_archive(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        archive_dir = Path(action["action_path"]).parent / "plan-revisions"
+        self.assertFalse(archive_dir.exists())
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+            loom_orchestrator.revise(
+                action["action_path"],
+                presentation_sha256=prior["presentation_sha256"],
+                request=(
+                    "Change one verification check, but do not modify any project files."),
+                owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("PLAN_DECISION_STALE", raised.exception.code)
+        self.assertFalse(archive_dir.exists())
+
+    def test_revision_archive_and_encrypted_envelope_are_schema_valid(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        action_path = Path(action["action_path"])
+        _path, stored_action, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        payload = loom_orchestrator._revision_archive_payload(
+            stored_action, prior, self.repo / "plans")
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "plan-revision-archive.schema.json", payload,
+            "plan-revision-archive.schema.json")
+        self.assertEqual([], report.errors)
+
+        loom_orchestrator._write_revision_archive(
+            action_path, stored_action,
+            (TestCrypto(), stored_action["instance_id"]),
+            prior, self.repo / "plans", payload=payload)
+        archive_path = next(
+            (action_path.parent / "plan-revisions").glob("*.json"))
+        envelope = json.loads(archive_path.read_text(encoding="utf-8"))
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "plan-revision-archive.schema.json", envelope,
+            "plan-revision-archive.schema.json")
+        self.assertEqual([], report.errors)
+
+    def test_revision_archive_rejects_changed_payload_and_redirected_entry(self):
+        action, completed = self.complete_machine_authored_plan()
+        prior = completed["plan_presentation"]
+        action_path = Path(action["action_path"])
+        _path, stored_action, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        payload = loom_orchestrator._revision_archive_payload(
+            stored_action, prior, self.repo / "plans")
+        payload["archive_sha256"] = "0" * 64
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as changed:
+            loom_orchestrator._write_revision_archive(
+                action_path, stored_action, None, prior, self.repo / "plans",
+                payload=payload)
+        self.assertEqual("PLAN_REVISION_ARCHIVE_FAILED", changed.exception.code)
+
+        redirected = self.repo / "plans" / "redirected-secret.txt"
+        redirected.write_text("private\n", encoding="utf-8")
+        original_redirect = loom_orchestrator.loom_privacy._is_redirect
+        with mock.patch.object(
+                loom_orchestrator.loom_privacy, "_is_redirect",
+                side_effect=lambda path: (
+                    Path(path).name == redirected.name
+                    or original_redirect(path))):
+            with self.assertRaises(loom_orchestrator.OrchestratorError) as unsafe:
+                loom_orchestrator._revision_archive_payload(
+                    stored_action, prior, self.repo / "plans")
+        self.assertEqual("PLAN_REVISION_ARCHIVE_FAILED", unsafe.exception.code)
 
     def test_machine_authoring_produces_a_lint_clean_large_routing_snapshot(self):
         action = loom_orchestrator.invoke(

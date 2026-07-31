@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/plan-revision-archive.schema.json",
+  "title": "Private immutable archive for one superseded Loom plan revision",
+  "oneOf": [
+    {"$ref": "#/$defs/archive"},
+    {"$ref": "#/$defs/envelope"}
+  ],
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "identity": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "content_base64"],
+      "properties": {
+        "path": {
+          "type": "string",
+          "pattern": "^(?:[A-Za-z0-9._-]+/)*[A-Za-z0-9._-]+$",
+          "maxLength": 300
+        },
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "content_base64": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "maxLength": 2796204
+        }
+      }
+    },
+    "archive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "project_id",
+        "action_id",
+        "revision",
+        "presentation_sha256",
+        "pack_sha256",
+        "files",
+        "archive_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"const": "loom-plan-revision-archive-v1"},
+        "project_id": {"$ref": "#/$defs/identity"},
+        "action_id": {"$ref": "#/$defs/identity"},
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "presentation_sha256": {"$ref": "#/$defs/sha256"},
+        "pack_sha256": {"$ref": "#/$defs/sha256"},
+        "files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {"$ref": "#/$defs/file"}
+        },
+        "archive_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "envelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "kind",
+        "owner_vault_id",
+        "project_id",
+        "action_id",
+        "revision",
+        "archive_sha256",
+        "ciphertext"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "kind": {"const": "loom-encrypted-plan-revision-v1"},
+        "owner_vault_id": {"$ref": "#/$defs/identity"},
+        "project_id": {"$ref": "#/$defs/identity"},
+        "action_id": {"$ref": "#/$defs/identity"},
+        "revision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "archive_sha256": {"$ref": "#/$defs/sha256"},
+        "ciphertext": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]*={0,2}$",
+          "maxLength": 2796300
+        }
+      }
+    }
+  }
+}
