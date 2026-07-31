@@ -6,7 +6,7 @@ Loom gives AI coding agents one project-aware planning and verification surface:
 /loom <request>
 ```
 
-The current signed release is **Loom 1.8.25**.
+The current signed release is **Loom 1.8.26**.
 
 ## Requirements
 
@@ -14,23 +14,20 @@ The current signed release is **Loom 1.8.25**.
 - A clean installation target
 - A supported AI coding host or local development checkout
 
-## Download and verify Loom 1.8.25
+## Download and verify Loom 1.8.26
 
 Open the immutable
-[Loom 1.8.25 release](https://github.com/saroo98/loom/releases/tag/v1.8.25) and download
-`loom-plugin-v1.8.25.zip`.
-
-Expected SHA-256:
-
-```text
-ee8f229e01037b0dc701122d7161f1363dcc08b653039c170e50864ddd28343a
-```
+[Loom 1.8.26 release](https://github.com/saroo98/loom/releases/tag/v1.8.26) and download
+`loom-plugin-v1.8.26.zip`.
 
 Verify the archive:
 
 ```powershell
-(Get-FileHash .\loom-plugin-v1.8.25.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\loom-plugin-v1.8.26.zip -Algorithm SHA256).Hash.ToLower()
 ```
+
+Compare the result with the plugin entry in the release's signed
+[`SHA256SUMS`](https://github.com/saroo98/loom/releases/download/v1.8.26/SHA256SUMS).
 
 The release also contains `SHA256SUMS`, `RELEASE-SUBJECT.json`, signature metadata, and the exact
 installation instructions for the published artifact.
