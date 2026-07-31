@@ -857,9 +857,7 @@ def certification_report(*, local_checks, external_evidence, trust_policy=None, 
 
 def _suite(root):
     runner = root / "tools" / "loom_test.py"
-    command = ([sys.executable, "-B", "loom_test.py", "full", "--quiet"]
-               if runner.is_file() else
-               [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
+    uses_runner = runner.is_file()
     real_home = Path.home().resolve()
     cargo_home = Path(
         os.environ.get("CARGO_HOME", str(real_home / ".cargo"))).resolve()
@@ -876,8 +874,14 @@ def _suite(root):
         disposable_home = Path(temporary).resolve()
         disposable_temp = disposable_home / "tmp"
         cargo_cache = disposable_home / "c"
+        suite_report = disposable_home / "release-suite-report.json"
         disposable_temp.mkdir()
         cargo_cache.mkdir()
+        command = (
+            [sys.executable, "-B", "loom_test.py", "full", "--quiet",
+             "--output", str(suite_report)]
+            if uses_runner else
+            [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
         environment = {
             "HOME": str(disposable_home),
             "USERPROFILE": str(disposable_home),
@@ -900,14 +904,20 @@ def _suite(root):
             protected_roots=protected,
             capabilities=["local-process", "descendant-containment"],
             capture_output=True)
+        report_text = None
+        if uses_runner and suite_report.is_file() and not suite_report.is_symlink() \
+                and suite_report.stat().st_size <= 4 * 1024 * 1024:
+            report_text = suite_report.read_text(encoding="utf-8")
     stdout_text = stdout.decode("utf-8", errors="replace")
     stderr_text = stderr.decode("utf-8", errors="replace")
     returncode = operation["returncode"] if operation["returncode"] is not None else 1
     try:
-        timing = json.loads(stdout_text) if runner.is_file() else None
-    except json.JSONDecodeError:
+        timing = json.loads(
+            report_text if report_text is not None else stdout_text
+        ) if uses_runner else None
+    except (json.JSONDecodeError, UnicodeError):
         timing = None
-    if runner.is_file() and isinstance(timing, dict):
+    if uses_runner and isinstance(timing, dict):
         capability_complete = timing.get("capability_complete") is True
         expected_returncode = 0 if capability_complete else 1
         expected_status = "passed" if capability_complete else "passed-with-capability-skips"
@@ -931,7 +941,7 @@ def _suite(root):
         "capability_status": ("complete" if capability_complete else "requires-matrix"),
         "skip_receipts": timing.get("skip_receipts", []) if timing else [],
         "returncode": returncode,
-        "output": (stderr_text if runner.is_file()
+        "output": (stderr_text if uses_runner
                    else stdout_text + stderr_text)[-4000:],
         "operation_receipt_sha256": operation["receipt_sha256"],
         "elapsed_seconds": timing.get("elapsed_seconds") if timing else None,

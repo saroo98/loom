@@ -224,7 +224,17 @@ def main(argv=None):
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if output_path is not None:
         output_path.write_text(text, encoding="utf-8")
-    print(text, end="")
+    if output_path is not None and args.quiet:
+        print(json.dumps({
+            "capability_complete": report["capability_complete"],
+            "errors": report["errors"],
+            "failures": report["failures"],
+            "status": report["status"],
+            "successful": report["successful"],
+            "tests_run": report["tests_run"],
+        }, sort_keys=True))
+    else:
+        print(text, end="")
     return 0 if report["successful"] else 1
 
 
