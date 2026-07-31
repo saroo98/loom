@@ -1193,6 +1193,18 @@ class ProductionOrchestratorTests(unittest.TestCase):
             [], loom_gate.verify(
                 self.repo / "plans", self.repo, require_authorized=True))
 
+    def test_later_host_turn_recovers_the_exact_unchanged_plan_for_start(self):
+        _action, completed = self.complete_machine_authored_plan()
+
+        started = loom_orchestrator.start(
+            cwd=self.repo, owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", started["status"])
+        self.assertEqual("execute", started["intent"])
+        self.assertEqual(
+            completed["plan_presentation"]["presentation_sha256"],
+            started["plan_decision"]["presentation_sha256"])
+
     def test_exact_plan_start_rejects_tampered_reference_without_lifecycle_change(self):
         action, completed = self.complete_machine_authored_plan()
         lifecycle = self.repo / "plans" / loom_gate.LIFECYCLE_FILE
@@ -1242,6 +1254,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             "Change the plan so the precision check also covers 1.005 rounding.",
             revision["revision_context"]["request"])
+
         self.assertEqual(
             "Preserve double-entry correctness",
             revision["revision_context"]["prior_semantics"]["title"])
@@ -1305,6 +1318,39 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotEqual(
             prior["presentation_sha256"],
             revised["plan_presentation"]["presentation_sha256"])
+
+    def test_later_host_turn_recovers_the_exact_unchanged_plan_for_revision(self):
+        _action, completed = self.complete_machine_authored_plan()
+        request = "Change the plan so the precision check also covers 1.005 rounding."
+
+        revision = loom_orchestrator.revise(
+            cwd=self.repo, request=request,
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", revision["status"])
+        self.assertEqual("plan", revision["intent"])
+        self.assertEqual(
+            completed["plan_presentation"]["presentation_sha256"],
+            revision["revision_context"]["parent_presentation_sha256"])
+        self.assertEqual(request, revision["revision_context"]["request"])
+
+    def test_later_host_turn_recovery_rejects_project_drift(self):
+        self.complete_machine_authored_plan()
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+            loom_orchestrator.revise(
+                cwd=self.repo, request="Change one verification check.",
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("PLAN_DECISION_STALE", raised.exception.code)
+
+    def test_later_host_turn_recovery_refuses_when_no_plan_exists(self):
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+            loom_orchestrator.start(
+                cwd=self.repo, owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("PLAN_DECISION_UNAVAILABLE", raised.exception.code)
 
     def test_bound_revision_keeps_planning_authority_when_owner_forbids_implementation(self):
         action, completed = self.complete_machine_authored_plan()

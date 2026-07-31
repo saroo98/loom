@@ -191,15 +191,20 @@ def _tools():
         {
             "name": "start",
             "description": (
-                "Start only the exact completed plan presentation that the owner reviewed."),
+                "Start only the exact completed plan presentation that the owner reviewed. "
+                "Use cwd when a later host turn no longer retains the private exact reference."),
             "inputSchema": {
                 "type": "object", "additionalProperties": False,
-                "required": ["action", "presentation_sha256"],
                 "properties": {
                     "action": action_path,
                     "presentation_sha256": {
                         "type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "cwd": {"type": "string", "minLength": 1, "maxLength": 4096},
                 },
+                "oneOf": [
+                    {"required": ["action", "presentation_sha256"]},
+                    {"required": ["cwd"]},
+                ],
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": False,
                             "idempotentHint": True, "openWorldHint": False},
@@ -208,18 +213,24 @@ def _tools():
             "name": "revise",
             "description": (
                 "Open a fresh planning revision bound to the exact plan presentation "
-                "that the owner reviewed."),
+                "that the owner reviewed. Use cwd when a later host turn no longer retains "
+                "the private exact reference."),
             "inputSchema": {
                 "type": "object", "additionalProperties": False,
-                "required": ["action", "presentation_sha256", "request"],
+                "required": ["request"],
                 "properties": {
                     "action": action_path,
                     "presentation_sha256": {
                         "type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "cwd": {"type": "string", "minLength": 1, "maxLength": 4096},
                     "request": {
                         "type": "string", "minLength": 1,
                         "maxLength": loom_adapter_protocol.MAX_REQUEST_CHARACTERS},
                 },
+                "oneOf": [
+                    {"required": ["action", "presentation_sha256"]},
+                    {"required": ["cwd"]},
+                ],
             },
             "annotations": {"readOnlyHint": False, "destructiveHint": False,
                             "idempotentHint": True, "openWorldHint": False},
@@ -257,10 +268,13 @@ def _adapter_message(name, arguments):
         expected = {"action", "draft"}
         message = {**common, "message_type": "author", **arguments}
     elif name == "start":
-        expected = {"action", "presentation_sha256"}
+        exact = {"action", "presentation_sha256"}
+        expected = exact if set(arguments) == exact else {"cwd"}
         message = {**common, "message_type": "start", **arguments}
     elif name == "revise":
-        expected = {"action", "presentation_sha256", "request"}
+        exact = {"action", "presentation_sha256", "request"}
+        recovered = {"cwd", "request"}
+        expected = exact if set(arguments) == exact else recovered
         if set(arguments) != expected:
             raise McpError(-32602, "Loom tool arguments are unknown or missing")
         try:

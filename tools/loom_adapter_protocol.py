@@ -284,25 +284,39 @@ def validate_message(value):
         if "finalize" in value and type(value["finalize"]) is not bool:
             raise ProtocolError("MESSAGE_INVALID", "author finalize must be boolean")
     elif message_type == "start":
-        _exact(
-            value, common | {"action", "presentation_sha256"},
-            "bound plan start")
-        _text(value["action"], "action path", 1, 4096)
-        if not isinstance(value["presentation_sha256"], str) \
-                or not re.fullmatch(r"[0-9a-f]{64}", value["presentation_sha256"]):
+        exact = {"action", "presentation_sha256"}.issubset(value)
+        recovered = "cwd" in value
+        expected = common | ({"action", "presentation_sha256"} if exact else {"cwd"})
+        _exact(value, expected, "bound plan start")
+        if exact == recovered:
             raise ProtocolError(
-                "MESSAGE_INVALID", "plan presentation digest is invalid")
+                "MESSAGE_INVALID", "plan start reference is ambiguous or incomplete")
+        if exact:
+            _text(value["action"], "action path", 1, 4096)
+            if not isinstance(value["presentation_sha256"], str) \
+                    or not re.fullmatch(r"[0-9a-f]{64}", value["presentation_sha256"]):
+                raise ProtocolError(
+                    "MESSAGE_INVALID", "plan presentation digest is invalid")
+        else:
+            _text(value["cwd"], "working directory", 1, 4096)
     elif message_type == "revise":
-        _exact(
-            value, common | {
-                "action", "presentation_sha256", "request", "request_identity"},
-            "bound plan revision")
-        _text(value["action"], "action path", 1, 4096)
-        _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
-        if not isinstance(value["presentation_sha256"], str) \
-                or not re.fullmatch(r"[0-9a-f]{64}", value["presentation_sha256"]):
+        exact = {"action", "presentation_sha256"}.issubset(value)
+        recovered = "cwd" in value
+        reference = {"action", "presentation_sha256"} if exact else {"cwd"}
+        _exact(value, common | reference | {"request", "request_identity"},
+               "bound plan revision")
+        if exact == recovered:
             raise ProtocolError(
-                "MESSAGE_INVALID", "plan presentation digest is invalid")
+                "MESSAGE_INVALID", "plan revision reference is ambiguous or incomplete")
+        if exact:
+            _text(value["action"], "action path", 1, 4096)
+            if not isinstance(value["presentation_sha256"], str) \
+                    or not re.fullmatch(r"[0-9a-f]{64}", value["presentation_sha256"]):
+                raise ProtocolError(
+                    "MESSAGE_INVALID", "plan presentation digest is invalid")
+        else:
+            _text(value["cwd"], "working directory", 1, 4096)
+        _text(value["request"], "request", 1, MAX_REQUEST_CHARACTERS)
         identity = value["request_identity"]
         _exact(identity, {"utf8_bytes", "sha256"}, "revision request identity")
         expected = request_identity(value["request"])

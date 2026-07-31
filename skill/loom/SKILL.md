@@ -28,9 +28,14 @@ On Codex:
    The complete inline fallback is mandatory. Preserve `plan_decision_reference`; do not call
    `loom.complete` again.
 5. When the owner requests a change, call `loom.revise` with that exact reference and exact request.
+   If a later Codex turn no longer contains the private exact reference, pass the exact request and
+   absolute working directory instead. Loom must recover exactly one unchanged reviewable plan;
+   never guess a path or digest.
    Author and finalize the returned fresh action from its sealed contract and `revision_context`.
    Never edit a displayed plan in place.
-6. When the owner chooses to start, call `loom.start` with that exact reference and honor only its
+6. When the owner chooses to start, call `loom.start` with that exact reference. If a later Codex
+   turn no longer contains it, pass the absolute working directory so Loom can recover exactly one
+   unchanged reviewable plan. Honor only its
    sealed execution frontier. Never replace either bound decision with plain `loom.invoke`, an
    unbound `Continue`, or a guessed path. After implementation and real verification, follow
    `execution_completion_contract` exactly: change only its named work-order file
