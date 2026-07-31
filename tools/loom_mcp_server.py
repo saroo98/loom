@@ -189,6 +189,42 @@ def _tools():
                             "idempotentHint": True, "openWorldHint": False},
         },
         {
+            "name": "start",
+            "description": (
+                "Start only the exact completed plan presentation that the owner reviewed."),
+            "inputSchema": {
+                "type": "object", "additionalProperties": False,
+                "required": ["action", "presentation_sha256"],
+                "properties": {
+                    "action": action_path,
+                    "presentation_sha256": {
+                        "type": "string", "pattern": "^[0-9a-f]{64}$"},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                            "idempotentHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "revise",
+            "description": (
+                "Open a fresh planning revision bound to the exact plan presentation "
+                "that the owner reviewed."),
+            "inputSchema": {
+                "type": "object", "additionalProperties": False,
+                "required": ["action", "presentation_sha256", "request"],
+                "properties": {
+                    "action": action_path,
+                    "presentation_sha256": {
+                        "type": "string", "pattern": "^[0-9a-f]{64}$"},
+                    "request": {
+                        "type": "string", "minLength": 1,
+                        "maxLength": loom_adapter_protocol.MAX_REQUEST_CHARACTERS},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False,
+                            "idempotentHint": True, "openWorldHint": False},
+        },
+        {
             "name": "cancel", "description": "Cancel one existing Loom action safely.",
             "inputSchema": {"type": "object", "additionalProperties": False,
                             "required": ["action"],
@@ -220,6 +256,24 @@ def _adapter_message(name, arguments):
     elif name == "author":
         expected = {"action", "draft"}
         message = {**common, "message_type": "author", **arguments}
+    elif name == "start":
+        expected = {"action", "presentation_sha256"}
+        message = {**common, "message_type": "start", **arguments}
+    elif name == "revise":
+        expected = {"action", "presentation_sha256", "request"}
+        if set(arguments) != expected:
+            raise McpError(-32602, "Loom tool arguments are unknown or missing")
+        try:
+            request_identity = loom_adapter_protocol.request_identity(
+                arguments["request"])
+        except loom_adapter_protocol.ProtocolError as exc:
+            raise McpError(-32602, str(exc)) from exc
+        message = {
+            **common,
+            "message_type": "revise",
+            **arguments,
+            "request_identity": request_identity,
+        }
     elif name == "cancel":
         expected = {"action"}
         message = {**common, "message_type": "cancel", **arguments}
@@ -312,10 +366,47 @@ def _call_tool(
                 "user_config_registration": integration_source == "user-config",
             },
         }
+    projection = (
+        payload.get("plan_host_projection")
+        if isinstance(payload, dict) else None)
+    presentation = (
+        payload.get("plan_presentation")
+        if isinstance(payload, dict) else None)
+    if isinstance(projection, dict) and isinstance(projection.get("markdown"), str) \
+            and isinstance(presentation, dict):
+        structured_presentation = {
+            key: presentation[key]
+            for key in (
+                "schema_version", "format", "title", "summary", "tier",
+                "preview_mode", "presentation_sha256", "binding", "full_plan",
+                "actions")
+            if key in presentation
+        }
+        structured = {
+            key: payload[key]
+            for key in ("status", "code", "owner_message")
+            if key in payload
+        }
+        structured["plan_presentation"] = structured_presentation
+        decision_action = (
+            adapter_arguments.get("action")
+            if isinstance(adapter_arguments, dict) else None)
+        if not isinstance(decision_action, str):
+            decision_action = payload.get("action_path")
+        if isinstance(decision_action, str):
+            structured["plan_decision_reference"] = {
+                "action": decision_action,
+                "presentation_sha256": presentation["presentation_sha256"],
+            }
+        return {
+            "content": [{"type": "text", "text": projection["markdown"]}],
+            "structuredContent": structured,
+            "isError": response["returncode"] != 0,
+        }
     text = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-    # Loom intentionally uses the universally compatible TextContent form only.
-    # Returning the same payload again as structuredContent doubles large planning
-    # contracts in model context without adding a distinct machine contract.
+    # Non-presentation results retain the universal TextContent compatibility path.
+    # Successful plans use Markdown plus a deliberately small structured binding,
+    # never a duplicate of the complete inline plan.
     return {"content": [{"type": "text", "text": text}],
             "isError": response["returncode"] != 0}
 

@@ -102,6 +102,8 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertIn("requestEnvelope", message["$defs"])
         self.assertIn("resolve", message["$defs"])
         self.assertIn("author", message["$defs"])
+        self.assertIn("start", message["$defs"])
+        self.assertIn("revise", message["$defs"])
         self.assertFalse(ownership["additionalProperties"])
         for definition in message["$defs"].values():
             if isinstance(definition, dict) and definition.get("type") == "object":
@@ -393,6 +395,77 @@ class AdapterProtocolV2Tests(unittest.TestCase):
         self.assertEqual(0, result["returncode"])
         self.assertEqual(message, run_request.call_args.args[2])
         self.assertEqual("author-stdio", run_request.call_args.kwargs["command"])
+
+    def test_bridge_forwards_bound_start_and_revision_through_bounded_stdin(self):
+        session = {
+            "host": {"id": "codex", "version": "test"},
+            "adapter": {"id": "codex", "version": "2.1.0"},
+            "capabilities": capabilities(), "protocol_version": 2,
+        }
+        common = {
+            "schema_version": 2,
+            "action": "C:/disposable/home/.loom/orchestration/action.json",
+            "presentation_sha256": "a" * 64,
+        }
+        messages = [
+            {
+                **common, "message_type": "start", "request_id": "req-start",
+            },
+            {
+                **common, "message_type": "revise", "request_id": "req-revise",
+                "request": "Keep the exact plan but add one negative acceptance check.\n",
+                "request_identity": loom_adapter_protocol.request_identity(
+                    "Keep the exact plan but add one negative acceptance check.\n"),
+            },
+        ]
+        with mock.patch.object(
+                loom_adapter_bridge, "_run_request",
+                return_value=(0, {"status": "action-required"})) as run_request:
+            start = loom_adapter_bridge.dispatch(
+                messages[0], home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+            revise = loom_adapter_bridge.dispatch(
+                messages[1], home=Path("C:/disposable/home/.loom"),
+                launcher=Path("C:/disposable/home/.loom/bin/loom.py"),
+                session=session)
+        self.assertEqual(0, start["returncode"])
+        self.assertEqual(0, revise["returncode"])
+        self.assertEqual(messages[0], run_request.call_args_list[0].args[2])
+        self.assertEqual("start-stdio", run_request.call_args_list[0].kwargs["command"])
+        self.assertEqual(messages[1], run_request.call_args_list[1].args[2])
+        self.assertEqual("revise-stdio", run_request.call_args_list[1].kwargs["command"])
+
+    def test_bound_plan_decision_messages_reject_invalid_hashes_and_extra_fields(self):
+        for value in (
+                {
+                    "schema_version": 2, "message_type": "start",
+                    "request_id": "req-start", "action": "C:/action.json",
+                    "presentation_sha256": "not-a-digest",
+                },
+                {
+                    "schema_version": 2, "message_type": "revise",
+                    "request_id": "req-revise", "action": "C:/action.json",
+                    "presentation_sha256": "a" * 64,
+                    "request": "Change one check.",
+                    "request_identity": loom_adapter_protocol.request_identity(
+                        "Change one check."),
+                    "unexpected": True,
+                },
+                {
+                    "schema_version": 2, "message_type": "revise",
+                    "request_id": "req-revise-identity",
+                    "action": "C:/action.json",
+                    "presentation_sha256": "a" * 64,
+                    "request": "Change one check.",
+                    "request_identity": {
+                        "utf8_bytes": 1,
+                        "sha256": "0" * 64,
+                    },
+                }):
+            with self.subTest(value=value):
+                with self.assertRaises(loom_adapter_protocol.ProtocolError):
+                    loom_adapter_protocol.validate_message(value)
 
     def test_bridge_author_finalize_completes_only_after_authoring_proves_ready(self):
         session = {

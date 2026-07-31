@@ -1,5 +1,7 @@
 """Tests for the bounded CI test runner."""
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -126,6 +128,30 @@ class TestRunnerTests(unittest.TestCase):
                 "--output", str(output)])
         self.assertEqual(0, code)
         self.assertEqual(["bind", "suite", "certify"], order)
+
+    def test_quiet_file_output_keeps_stdout_bounded(self):
+        report = {
+            "schema_version": 1, "mode": "full", "tests_run": 5000,
+            "failures": 0, "errors": 0, "skipped": 0,
+            "elapsed_seconds": 1.0, "suppressed_stdout_chars": 0,
+            "max_seconds": None, "within_budget": True,
+            "capability_complete": True, "status": "passed",
+            "successful": True, "skip_receipts": [],
+            "timings": [{"test": "x" * 1024, "status": "passed"}] * 500,
+        }
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+                loom_test, "run", return_value=report):
+            output = Path(temp) / "report.json"
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = loom_test.main([
+                    "full", "--quiet", "--output", str(output)])
+
+            self.assertEqual(0, code)
+            self.assertEqual(
+                report, json.loads(output.read_text(encoding="utf-8")))
+            self.assertLess(len(stdout.getvalue().encode("utf-8")), 512)
+            self.assertNotIn('"timings"', stdout.getvalue())
 
     def test_failed_or_incomplete_suite_cannot_refresh_generated_evidence(self):
         with self.assertRaisesRegex(

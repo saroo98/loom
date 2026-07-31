@@ -121,6 +121,7 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertEqual(report["skip_receipts"], result["skip_receipts"])
         command = run.call_args.kwargs["command"]
         self.assertNotIn("--max-seconds", command)
+        self.assertIn("--output", command)
         self.assertEqual(loom_release.FULL_SUITE_MAX_SECONDS,
                          run.call_args.kwargs["timeout"])
         environment = run.call_args.kwargs["environment"]

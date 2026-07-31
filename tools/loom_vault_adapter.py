@@ -247,6 +247,17 @@ class VaultMemoryAdapter:
                 conflicts[item["conflict_id"]] = item
         return [conflicts[key] for key in sorted(conflicts)]
 
+    def archive_plan_revision(
+            self, *, record_id, project_id, payload, created_at):
+        """Retain superseded plan bytes inside the managed owner-vault lifecycle."""
+        try:
+            return self.vault.put_plan_revision_archive(
+                record_id=record_id, project_id=project_id,
+                payload=payload, created_at=created_at)
+        except loom_vault.VaultError as exc:
+            raise VaultAdapterError(
+                f"private plan revision could not be retained safely: {exc}") from exc
+
     def record_outcome(self, context, result):
         if context.intent in {"why", "status", "undo", "forget", "remember"}:
             return {"outcome_ids": [], "adaptation_receipts": [],

@@ -108,6 +108,20 @@ class AntiResurrectionTests(unittest.TestCase):
         self.assertEqual([], self.b.select_memory(
             domain="three-d", project_id=None))
 
+    def test_forgetting_suppresses_replayed_state_entities_with_the_same_identity(self):
+        memory_id = "00000000-0000-4000-8000-00000000a302"
+        self.a.put_memory(record(memory_id))
+        self.a.put_entity(
+            "plan-revision-archive", memory_id,
+            {"schema_version": 1, "archive_sha256": "1" * 64})
+        self.a.forget_memory(memory_id, reason="owner-request")
+
+        receipt = self.b.merge_events(self.a.export_events())
+
+        self.assertEqual(1, receipt["forgotten"])
+        self.assertTrue(self.b.is_forgotten(memory_id))
+        self.assertEqual([], self.b.list_entities("plan-revision-archive"))
+
     def test_forgetting_tombstones_derived_descendants_and_semantic_reimports(self):
         parent = "00000000-0000-4000-8000-00000000a311"
         child = "00000000-0000-4000-8000-00000000a312"

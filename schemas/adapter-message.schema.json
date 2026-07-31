@@ -9,6 +9,8 @@
     {"$ref": "#/$defs/resolve"},
     {"$ref": "#/$defs/requestEnvelope"},
     {"$ref": "#/$defs/author"},
+    {"$ref": "#/$defs/start"},
+    {"$ref": "#/$defs/revise"},
     {"$ref": "#/$defs/complete"},
     {"$ref": "#/$defs/cancel"},
     {"$ref": "#/$defs/status"},
@@ -191,6 +193,28 @@
           "type": "boolean",
           "description": "When true, complete the successfully authored plan in the same bridge operation. Omitted and false preserve the two-step compatibility path."
         }
+      }
+    },
+    "start": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "message_type", "request_id", "action", "presentation_sha256"],
+      "properties": {
+        "schema_version": {"const": 2}, "message_type": {"const": "start"},
+        "request_id": {"$ref": "#/$defs/id"},
+        "action": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "presentation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "revise": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_version", "message_type", "request_id", "action", "presentation_sha256", "request", "request_identity"],
+      "properties": {
+        "schema_version": {"const": 2}, "message_type": {"const": "revise"},
+        "request_id": {"$ref": "#/$defs/id"},
+        "action": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "presentation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "request": {"type": "string", "minLength": 1, "maxLength": 32768},
+        "request_identity": {"$ref": "#/$defs/requestIdentity"}
       }
     },
     "cancel": {

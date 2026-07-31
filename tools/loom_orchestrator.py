@@ -5,6 +5,7 @@ import sys
 sys.dont_write_bytecode = True
 
 import argparse
+import base64
 import contextlib
 import datetime as dt
 import fnmatch
@@ -15,7 +16,7 @@ import os
 import re
 import tempfile
 import uuid
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import loom_gate
 import loom_authority
@@ -38,6 +39,8 @@ import loom_memory
 import loom_message
 import loom_owner
 import loom_plan_author
+import loom_plan_presentation
+import loom_privacy
 import loom_proofline
 import loom_proofline_completion
 import loom_proofline_ux
@@ -59,6 +62,8 @@ import loom_execution_chain
 
 
 SCHEMA_VERSION = 1
+MAX_PLAN_REVISION_ARCHIVE_BYTES = 2 * 1024 * 1024
+MAX_PLAN_REVISION_FILES = 512
 ACTION_SCHEMA_VERSION = 10
 LEGACY_ACTION_SCHEMA_VERSION = 6
 INTERMEDIATE_ACTION_SCHEMA_VERSION = 7
@@ -343,6 +348,86 @@ def _validate_plan_author_record(value, *, action):
         if value["archive_path"] != expected_archive:
             raise OrchestratorError(
                 "ACTION_CORRUPT", "plan-author archive path is not action-bound")
+    return value
+
+
+def _validate_plan_review_record(value, *, action):
+    fields = {"schema_version", "state", "revision", "semantics"}
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("state") not in {"authored", "completed"} \
+            or type(value.get("revision")) is not int \
+            or not 1 <= value["revision"] <= 1_000_000:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "plan-review state is invalid")
+    if action.get("intent") != "plan":
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "non-planning action carries plan-review state")
+    try:
+        loom_plan_presentation.validate_semantics(value["semantics"])
+    except loom_plan_presentation.PresentationError as exc:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", f"plan-review semantics are invalid: {exc}") from exc
+    return value
+
+
+def _validate_plan_decision_record(value):
+    fields = {
+        "schema_version", "presentation_sha256", "plan_action_id",
+        "project_id", "revision", "pack_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or not isinstance(value.get("presentation_sha256"), str) \
+            or re.fullmatch(r"[0-9a-f]{64}", value["presentation_sha256"]) is None \
+            or not isinstance(value.get("pack_sha256"), str) \
+            or re.fullmatch(r"[0-9a-f]{64}", value["pack_sha256"]) is None \
+            or not isinstance(value.get("plan_action_id"), str) \
+            or not isinstance(value.get("project_id"), str) \
+            or type(value.get("revision")) is not int \
+            or not 1 <= value["revision"] <= 1_000_000:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "exact-plan decision binding is invalid")
+    return value
+
+
+def _validate_plan_revision_record(value, *, action):
+    fields = {
+        "schema_version", "parent_action_id", "parent_presentation_sha256",
+        "parent_pack_sha256", "revision", "request", "prior_semantics",
+        "archive_sha256", "archive_record_id", "project_state_hash",
+    }
+    try:
+        archive_record_id_valid = (
+            isinstance(value, dict)
+            and isinstance(value.get("archive_record_id"), str)
+            and str(uuid.UUID(value["archive_record_id"]))
+            == value["archive_record_id"])
+    except (ValueError, TypeError, AttributeError):
+        archive_record_id_valid = False
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or action.get("intent") != "plan" \
+            or not isinstance(value.get("parent_action_id"), str) \
+            or not isinstance(value.get("request"), str) \
+            or not 1 <= len(value["request"]) <= \
+            loom_adapter_protocol.MAX_REQUEST_CHARACTERS \
+            or type(value.get("revision")) is not int \
+            or not 2 <= value["revision"] <= 1_000_000 \
+            or not archive_record_id_valid \
+            or any(
+                not isinstance(value.get(key), str)
+                or re.fullmatch(r"[0-9a-f]{64}", value[key]) is None
+                for key in (
+                    "parent_presentation_sha256", "parent_pack_sha256",
+                    "archive_sha256", "project_state_hash")):
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "plan revision binding is invalid")
+    try:
+        loom_plan_presentation.validate_semantics(value["prior_semantics"])
+    except loom_plan_presentation.PresentationError as exc:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", f"prior plan semantics are invalid: {exc}") from exc
     return value
 
 
@@ -1073,6 +1158,19 @@ def _validate_action(value, path):
                 "ACTION_CORRUPT", "non-planning action carries plan-author state")
         _validate_plan_author_record(
             value["host_result"]["plan_author"], action=value)
+    if isinstance(value["host_result"], dict) and "plan_review" in value["host_result"]:
+        _validate_plan_review_record(
+            value["host_result"]["plan_review"], action=value)
+    if isinstance(value["host_result"], dict) and "plan_decision" in value["host_result"]:
+        decision = _validate_plan_decision_record(
+            value["host_result"]["plan_decision"])
+        if value["intent"] != "execute" \
+                or decision["project_id"] != value["project_id"]:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "exact-plan decision belongs to another action")
+    if isinstance(value["host_result"], dict) and "plan_revision" in value["host_result"]:
+        _validate_plan_revision_record(
+            value["host_result"]["plan_revision"], action=value)
     if created >= expires \
             or any(not isinstance(value[field], str) or not Path(value[field]).is_absolute()
                    for field in ("owner_home", "install_root", "cwd", "journal_path")) \
@@ -1837,16 +1935,49 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
         matches.append((
             str(plan_author.get("completed_at", "")),
             action["action_id"],
+            action,
             result,
         ))
     if not matches:
         return None
-    return max(matches, key=lambda item: (item[0], item[1]))[2]
+    _completed_at, _action_id, action, result = max(
+        matches, key=lambda item: (item[0], item[1]))
+    presentation = result.get("plan_presentation")
+    if presentation is None:
+        return result
+    try:
+        host_projection = loom_plan_presentation.project_for_host(
+            presentation, project_root=target,
+            host_id=action["assurance"]["host_id"])
+    except loom_plan_presentation.PresentationError as exc:
+        raise OrchestratorError(
+            "PLAN_PRESENTATION_INVALID",
+            f"the unchanged completed plan cannot be presented safely: {exc}") from exc
+    return {**result, "plan_host_projection": host_projection}
 
 
 def _action_matches_current_frontier(action, prepared, target, *, request, cwd):
     """Prove that one pending action still names the current target frontier."""
     sealed = action["prepared"]
+    revision = (action.get("host_result") or {}).get("plan_revision")
+    if action["intent"] == "plan" and isinstance(revision, dict) \
+            and action["status"] == "pending":
+        try:
+            revision_state = loom_gate._stable_state(
+                Path(target), Path(target) / "plans").state_hash
+        except loom_survey.SurveyError as exc:
+            raise OrchestratorError(
+                "TARGET_INDETERMINATE",
+                f"the pending revision world cannot be proven unchanged: {exc}") from exc
+        return action["request"] == request \
+            and action["cwd"] == str(cwd) \
+            and action["explicit_target"] == str(target) \
+            and action["project_id"] == prepared.project_id \
+            and sealed["request_hash"] == prepared.request_hash \
+            and prepared.intent == "plan" \
+            and revision_state == revision["project_state_hash"] \
+            and action["initial_pack_hash"] is not None \
+            and _pack_hash(Path(target) / "plans") == action["initial_pack_hash"]
     same_frontier = action["request"] == request \
             and action["cwd"] == str(cwd) \
             and action["explicit_target"] == str(target) \
@@ -2709,6 +2840,70 @@ def _store_domain_bundle(memory, bundle):
 
 def _pack_hash(pack):
     return loom_runtime._hash_frontier(pack)
+
+
+def _completed_plan_review(action, root):
+    record = (action.get("host_result") or {}).get("plan_review")
+    if record is None:
+        return None, None
+    _validate_plan_review_record(record, action=action)
+    tier = action["tier"]
+    relative_path = (
+        "plans/WO-001.md" if tier == "S" else "plans/MANIFEST.md")
+    plan_file = Path(root) / relative_path
+    if not plan_file.is_file() or plan_file.is_symlink():
+        raise OrchestratorError(
+            "PLAN_PRESENTATION_INVALID",
+            "the completed plan file is unavailable for review")
+    binding = {
+        "action_id": action["action_id"],
+        "project_id": action["project_id"],
+        "world_fingerprint": action["prepared"]["world_fingerprint"],
+        "plan_contract_hash": action["plan_contract"]["contract_hash"],
+        "pack_sha256": _pack_hash(Path(root) / "plans"),
+        "revision": record["revision"],
+        "relative_path": relative_path,
+        "manifest_sha256": hashlib.sha256(plan_file.read_bytes()).hexdigest(),
+    }
+    try:
+        presentation = loom_plan_presentation.compile_presentation(
+            record["semantics"], tier=tier, binding=binding)
+        host_projection = loom_plan_presentation.project_for_host(
+            presentation, project_root=root,
+            host_id=action["assurance"]["host_id"])
+    except (OSError, loom_plan_presentation.PresentationError) as exc:
+        raise OrchestratorError(
+            "PLAN_PRESENTATION_INVALID",
+            f"the completed plan could not be presented safely: {exc}") from exc
+    record["state"] = "completed"
+    return presentation, host_projection
+
+
+def _completed_plan_revision(action):
+    revision = (action.get("host_result") or {}).get("plan_revision")
+    if revision is None:
+        return None
+    _validate_plan_revision_record(revision, action=action)
+    current = (action.get("host_result") or {}).get("plan_review")
+    _validate_plan_review_record(current, action=action)
+    changed = sorted(
+        key for key in (
+            "title", "summary", "assumptions", "decisions", "work_orders")
+        if revision["prior_semantics"][key] != current["semantics"][key])
+    if not changed:
+        raise OrchestratorError(
+            "PLAN_REVISION_EMPTY",
+            "the revised plan is semantically identical to the displayed plan")
+    return {
+        "schema_version": 1,
+        "parent_action_id": revision["parent_action_id"],
+        "parent_presentation_sha256": revision[
+            "parent_presentation_sha256"],
+        "parent_pack_sha256": revision["parent_pack_sha256"],
+        "revision": revision["revision"],
+        "archive_sha256": revision["archive_sha256"],
+        "changed_sections": changed,
+    }
 
 
 def _repair_force_full(pack, instant):
@@ -3793,9 +3988,399 @@ def _safe_plan_undo_handler(action, memory, *, now):
         }
 
 
+def _exact_plan_decision(
+        action_path, presentation_sha256, *, owner_home, install_root, target):
+    if not isinstance(presentation_sha256, str) \
+            or re.fullmatch(r"[0-9a-f]{64}", presentation_sha256) is None:
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH", "displayed-plan reference is invalid")
+    _path, action, _security = _read_action(
+        action_path, owner_home=owner_home, install_root=install_root)
+    if action["status"] != "completed" or action["intent"] != "plan" \
+            or not isinstance(action.get("result"), dict):
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "the displayed plan action is not a completed planning action")
+    presentation = action["result"].get("plan_presentation")
+    try:
+        loom_plan_presentation.validate(presentation)
+    except loom_plan_presentation.PresentationError as exc:
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            f"the displayed plan binding is invalid: {exc}") from exc
+    if presentation["presentation_sha256"] != presentation_sha256 \
+            or presentation["binding"]["action_id"] != action["action_id"] \
+            or presentation["binding"]["project_id"] != action["project_id"]:
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "the decision does not name the exact displayed plan")
+    expected_root = Path(action["explicit_target"] or action["cwd"]).resolve()
+    if Path(target).resolve() != expected_root:
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH", "the displayed plan belongs to another project")
+    pack = expected_root / "plans"
+    relative = presentation["full_plan"]["relative_path"]
+    plan_file = expected_root.joinpath(*PurePosixPath(relative).parts)
+    try:
+        current_pack = _pack_hash(pack)
+        current_file = hashlib.sha256(plan_file.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise OrchestratorError(
+            "PLAN_DECISION_STALE", f"the displayed plan is unavailable: {exc}") from exc
+    if current_pack != presentation["binding"]["pack_sha256"] \
+            or current_file != presentation["full_plan"]["sha256"]:
+        raise OrchestratorError(
+            "PLAN_DECISION_STALE",
+            "the plan changed after it was displayed; review a fresh plan before continuing")
+    return {
+        "schema_version": 1,
+        "presentation_sha256": presentation_sha256,
+        "plan_action_id": action["action_id"],
+        "project_id": action["project_id"],
+        "revision": presentation["binding"]["revision"],
+        "pack_sha256": presentation["binding"]["pack_sha256"],
+    }
+
+
+def _revision_archive_payload(action, presentation, pack):
+    files = []
+    total = 0
+    try:
+        pack = loom_privacy._safe_absolute(
+            pack, "prior plan archive", must_exist=True)
+        paths = sorted(
+            loom_privacy._iter_regular_files(pack),
+            key=lambda item: item.relative_to(pack).as_posix())
+    except loom_privacy.PrivacyError as exc:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            f"the prior plan cannot be archived safely: {exc}") from exc
+    for path in paths:
+        if len(files) >= MAX_PLAN_REVISION_FILES:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the prior plan exceeds the private revision file bound")
+        relative = path.relative_to(pack).as_posix()
+        raw = path.read_bytes()
+        total += len(raw)
+        if total > MAX_PLAN_REVISION_ARCHIVE_BYTES:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the prior plan exceeds the private revision byte bound")
+        files.append({
+            "path": relative,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "content_base64": base64.b64encode(raw).decode("ascii"),
+        })
+    if not files:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED", "the prior plan is empty")
+    payload = {
+        "schema_version": 1,
+        "kind": "loom-plan-revision-archive-v1",
+        "project_id": action["project_id"],
+        "action_id": action["action_id"],
+        "revision": presentation["binding"]["revision"],
+        "presentation_sha256": presentation["presentation_sha256"],
+        "pack_sha256": presentation["binding"]["pack_sha256"],
+        "files": files,
+    }
+    payload["archive_sha256"] = hashlib.sha256(_canonical_bytes(payload)).hexdigest()
+    _validate_revision_archive_payload(payload)
+    return payload
+
+
+def _validate_revision_archive_payload(payload):
+    expected = {
+        "schema_version", "kind", "project_id", "action_id", "revision",
+        "presentation_sha256", "pack_sha256", "files", "archive_sha256",
+    }
+    if not isinstance(payload, dict) or set(payload) != expected \
+            or payload.get("schema_version") != 1 \
+            or payload.get("kind") != "loom-plan-revision-archive-v1":
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the private revision archive fields are invalid")
+    identity = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    digest = re.compile(r"^[0-9a-f]{64}$")
+    if any(not isinstance(payload.get(key), str)
+           or identity.fullmatch(payload[key]) is None
+           for key in ("project_id", "action_id")) \
+            or type(payload.get("revision")) is not int \
+            or not 1 <= payload["revision"] <= 1000000 \
+            or any(not isinstance(payload.get(key), str)
+                   or digest.fullmatch(payload[key]) is None
+                   for key in (
+                       "presentation_sha256", "pack_sha256",
+                       "archive_sha256")):
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the private revision archive identity is invalid")
+    files = payload.get("files")
+    if not isinstance(files, list) or not 1 <= len(files) <= MAX_PLAN_REVISION_FILES:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the private revision archive file inventory is invalid")
+    total = 0
+    seen = set()
+    for item in files:
+        if not isinstance(item, dict) or set(item) != {
+                "path", "sha256", "content_base64"}:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "a private revision archive file record is invalid")
+        relative = item.get("path")
+        try:
+            pure = PurePosixPath(relative)
+        except (TypeError, ValueError) as exc:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "a private revision archive path is invalid") from exc
+        if not relative or len(relative) > 300 or pure.is_absolute() \
+                or relative != pure.as_posix() or any(
+                    part in {"", ".", ".."} for part in pure.parts) \
+                or relative in seen:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "a private revision archive path is unsafe or duplicated")
+        seen.add(relative)
+        if not isinstance(item.get("sha256"), str) \
+                or digest.fullmatch(item["sha256"]) is None \
+                or not isinstance(item.get("content_base64"), str):
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "a private revision archive file identity is invalid")
+        try:
+            raw = base64.b64decode(item["content_base64"], validate=True)
+        except (ValueError, base64.binascii.Error) as exc:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "a private revision archive file is not valid base64") from exc
+        total += len(raw)
+        if total > MAX_PLAN_REVISION_ARCHIVE_BYTES \
+                or hashlib.sha256(raw).hexdigest() != item["sha256"]:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "a private revision archive file changed or exceeds its bound")
+    claimed = payload["archive_sha256"]
+    unsigned = dict(payload)
+    del unsigned["archive_sha256"]
+    if hashlib.sha256(_canonical_bytes(unsigned)).hexdigest() != claimed:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the private revision archive digest is invalid")
+
+
+def _validate_revision_archive_envelope(envelope):
+    expected = {
+        "schema_version", "kind", "owner_vault_id", "project_id",
+        "action_id", "revision", "archive_sha256", "ciphertext",
+    }
+    identity = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+    if not isinstance(envelope, dict) or set(envelope) != expected \
+            or envelope.get("schema_version") != 1 \
+            or envelope.get("kind") != "loom-encrypted-plan-revision-v1" \
+            or any(not isinstance(envelope.get(key), str)
+                   or identity.fullmatch(envelope[key]) is None
+                   for key in ("owner_vault_id", "project_id", "action_id")) \
+            or type(envelope.get("revision")) is not int \
+            or not 1 <= envelope["revision"] <= 1000000 \
+            or not isinstance(envelope.get("archive_sha256"), str) \
+            or re.fullmatch(r"[0-9a-f]{64}", envelope["archive_sha256"]) is None \
+            or not isinstance(envelope.get("ciphertext"), str):
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the encrypted revision archive envelope is invalid")
+    try:
+        raw = base64.b64decode(envelope["ciphertext"], validate=True)
+    except (ValueError, base64.binascii.Error) as exc:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the encrypted revision archive ciphertext is invalid") from exc
+    if not raw or len(raw) > MAX_PLAN_REVISION_ARCHIVE_BYTES + 4096:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the encrypted revision archive exceeds its bound")
+
+
+def _write_revision_archive(
+        action_path, action, security, presentation, pack, *, payload=None):
+    payload = (
+        _revision_archive_payload(action, presentation, pack)
+        if payload is None else payload)
+    _validate_revision_archive_payload(payload)
+    directory = Path(action_path).parent / "plan-revisions"
+    if os.path.lexists(directory) and (
+            directory.is_symlink() or not directory.is_dir()):
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "private revision namespace is not a safe directory")
+    directory.mkdir(mode=0o700, exist_ok=True)
+    name = (
+        f"{action['action_id']}-r{presentation['binding']['revision']:06d}-"
+        f"{payload['archive_sha256']}.json")
+    path = directory / name
+    if os.path.lexists(path):
+        try:
+            existing = json.loads(path.read_text(encoding="utf-8"))
+            if security is None:
+                _validate_revision_archive_payload(existing)
+                restored = existing
+            else:
+                _validate_revision_archive_envelope(existing)
+                crypto, owner_vault_id = security
+                aad = (
+                    f"plan-revision:{owner_vault_id}:{action['project_id']}:"
+                    f"{action['action_id']}:{presentation['binding']['revision']}"
+                ).encode("utf-8")
+                restored = json.loads(crypto.open(
+                    existing["ciphertext"].encode("ascii"), aad).decode("utf-8"))
+                _validate_revision_archive_payload(restored)
+        except (OSError, ValueError, TypeError, UnicodeError,
+                json.JSONDecodeError, loom_crypto.CryptoError) as exc:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the existing private revision archive is corrupt") from exc
+        if restored != payload:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the immutable private revision archive identity conflicts")
+        return payload["archive_sha256"]
+    if security is None:
+        loom_session._atomic_json(path, payload)
+    else:
+        crypto, owner_vault_id = security
+        aad = (
+            f"plan-revision:{owner_vault_id}:{action['project_id']}:"
+            f"{action['action_id']}:{presentation['binding']['revision']}"
+        ).encode("utf-8")
+        raw = _canonical_bytes(payload)
+        envelope = {
+            "schema_version": 1,
+            "kind": "loom-encrypted-plan-revision-v1",
+            "owner_vault_id": owner_vault_id,
+            "project_id": action["project_id"],
+            "action_id": action["action_id"],
+            "revision": presentation["binding"]["revision"],
+            "archive_sha256": payload["archive_sha256"],
+            "ciphertext": crypto.seal(raw, aad).decode("ascii"),
+        }
+        _validate_revision_archive_envelope(envelope)
+        loom_session._atomic_json(path, envelope)
+    return payload["archive_sha256"]
+
+
+def _revision_archive_record_id(action, presentation):
+    try:
+        namespace = uuid.UUID(action["instance_id"])
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            "the owner-vault identity cannot bind revision history") from exc
+    return str(uuid.uuid5(
+        namespace,
+        "plan-revision:"
+        f"{action['project_id']}:{action['action_id']}:"
+        f"{presentation['presentation_sha256']}:"
+        f"{presentation['binding']['revision']}"))
+
+
+def _persist_revision_archive(memory, archive):
+    action = archive["action"]
+    presentation = archive["presentation"]
+    payload = archive["payload"]
+    writer = getattr(memory, "archive_plan_revision", None)
+    if writer is not None:
+        try:
+            stored = writer(
+                record_id=archive["record_id"],
+                project_id=action["project_id"],
+                payload=payload,
+                created_at=action["created_at"])
+        except loom_vault_adapter.VaultAdapterError as exc:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED", str(exc)) from exc
+        if stored.get("forgotten"):
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the owner previously forgot this private plan revision")
+        if stored.get("record_id") != archive["record_id"] \
+                or stored.get("archive_sha256") != payload["archive_sha256"]:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the owner-vault revision archive identity changed")
+        return payload["archive_sha256"]
+    return _write_revision_archive(
+        archive["action_path"], action, archive["security"],
+        presentation, archive["pack"], payload=payload)
+
+
+def _prepare_revision_context(
+        action_path, presentation_sha256, request, *,
+        owner_home, install_root, target):
+    decision = _exact_plan_decision(
+        action_path, presentation_sha256, owner_home=owner_home,
+        install_root=install_root, target=target)
+    path, action, security = _read_action(
+        action_path, owner_home=owner_home, install_root=install_root)
+    prior = action["result"]["plan_presentation"]
+    prior_record = (action.get("host_result") or {}).get("plan_review")
+    _validate_plan_review_record(prior_record, action=action)
+    archive_payload = _revision_archive_payload(
+        action, prior, Path(target) / "plans")
+    archive_record_id = _revision_archive_record_id(action, prior)
+    try:
+        project_state_hash = loom_gate._stable_state(
+            Path(target), Path(target) / "plans").state_hash
+    except loom_survey.SurveyError as exc:
+        raise OrchestratorError(
+            "PLAN_REVISION_ARCHIVE_FAILED",
+            f"the revision baseline could not be observed safely: {exc}") from exc
+    return {
+        "schema_version": 1,
+        "parent_action_id": action["action_id"],
+        "parent_presentation_sha256": presentation_sha256,
+        "parent_pack_sha256": decision["pack_sha256"],
+        "revision": decision["revision"] + 1,
+        "request": request,
+        "prior_semantics": prior_record["semantics"],
+        "archive_sha256": archive_payload["archive_sha256"],
+        "archive_record_id": archive_record_id,
+        "project_state_hash": project_state_hash,
+    }, action, {
+        "action_path": path,
+        "action": action,
+        "security": security,
+        "presentation": prior,
+        "pack": Path(target) / "plans",
+        "payload": archive_payload,
+        "record_id": archive_record_id,
+    }
+
+
+def _rebind_revision_prepared(prepared, prior_action):
+    """Preserve the sealed plan's domains while observing the current world."""
+    prior_domains = list(prior_action["domains"])
+    prior_route = prior_action["prepared"]["route_contract"]
+    values = prepared.to_dict()
+    values.pop("prepared_hash")
+    route = values["route_contract"]
+    values["domains"] = prior_domains
+    route["requires_domain_discovery"] = bool(
+        prior_route["requires_domain_discovery"]
+        or not values["project_inspection"]["relevant_coverage_complete"])
+    route["evidence"] = list(dict.fromkeys([
+        *route["evidence"][:15], "bound-plan-revision",
+    ]))
+    values["route_contract"] = route
+    return loom_runtime.PreparedInvocation.build(
+        **values, operation_fingerprint=prepared.operation_fingerprint)
+
+
 def invoke(*, request, cwd, home, install_root, explicit_target=None,
            timeout_seconds=900, now=None, transport_invocation_id=None,
-           assurance=None):
+           assurance=None, expected_plan_decision=None,
+           revision_context=None):
     if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
         raise OrchestratorError("INVALID_TIMEOUT", "timeout must be between 60 and 3600 seconds")
     if transport_invocation_id is not None:
@@ -3866,7 +4451,9 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             timeout_seconds=timeout_seconds, now=instant,
                             instance_id=instance_id, memory=memory,
                             transport_invocation_id=transport_invocation_id,
-                            assurance=assurance)
+                            assurance=assurance,
+                            expected_plan_decision=expected_plan_decision,
+                            revision_context=revision_context)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
@@ -3874,6 +4461,60 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         result = {**result, "prior_recovery": recovery}
     if isinstance(result, dict) and "assurance" not in result:
         result = {**result, "assurance": assurance}
+    return result
+
+
+def start(action_path, *, presentation_sha256, owner_home, install_root, now=None):
+    """Start only the exact completed plan that was displayed to the owner."""
+    path, action, _security = _read_action(
+        action_path, owner_home=owner_home, install_root=install_root)
+    if action["status"] != "completed" or action["intent"] != "plan":
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "only a completed displayed plan can be started")
+    result = invoke(
+        request="Continue", cwd=action["cwd"], home=owner_home,
+        install_root=install_root, explicit_target=action["explicit_target"],
+        now=now, expected_plan_decision={
+            "action_path": str(path),
+            "presentation_sha256": presentation_sha256,
+        })
+    if not isinstance(result, dict) or result.get("intent") != "execute" \
+            or result.get("plan_decision", {}).get(
+                "presentation_sha256") != presentation_sha256:
+        raise OrchestratorError(
+            "PLAN_DECISION_STALE",
+            "the exact displayed plan could not enter its existing execution authority")
+    return result
+
+
+def revise(
+        action_path, *, presentation_sha256, request,
+        owner_home, install_root, now=None):
+    """Open a fresh planning action bound to one exact displayed plan revision."""
+    try:
+        loom_adapter_protocol.request_identity(request)
+    except loom_adapter_protocol.ProtocolError as exc:
+        raise OrchestratorError(exc.code, str(exc)) from exc
+    path, action, _security = _read_action(
+        action_path, owner_home=owner_home, install_root=install_root)
+    if action["status"] != "completed" or action["intent"] != "plan":
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "only a completed displayed plan can be revised")
+    result = invoke(
+        request=request, cwd=action["cwd"], home=owner_home,
+        install_root=install_root, explicit_target=action["explicit_target"],
+        now=now, revision_context={
+            "action_path": str(path),
+            "presentation_sha256": presentation_sha256,
+        })
+    context = result.get("revision_context") if isinstance(result, dict) else None
+    if result.get("intent") != "plan" or not isinstance(context, dict) \
+            or context.get("parent_presentation_sha256") != presentation_sha256:
+        raise OrchestratorError(
+            "PLAN_DECISION_STALE",
+            "the displayed plan could not enter a fresh bound revision")
     return result
 
 
@@ -4170,6 +4811,10 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
         "context_manifest": action["context_manifest"],
         "world_fingerprint": action["prepared"]["world_fingerprint"],
         "continuation_authority": action["continuation_authority"],
+        "plan_decision": (
+            (action.get("host_result") or {}).get("plan_decision")),
+        "revision_context": (
+            (action.get("host_result") or {}).get("plan_revision")),
         "resolved_terminal_block": resolved_terminal_block,
         "owner_message": action["owner_message"],
         "context": {
@@ -4225,7 +4870,8 @@ def _planning_seed_summary(tier):
 
 def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        timeout_seconds, now, instance_id, memory,
-                       transport_invocation_id=None, assurance=None):
+                       transport_invocation_id=None, assurance=None,
+                       expected_plan_decision=None, revision_context=None):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = transport_invocation_id or str(uuid.uuid4())
@@ -4238,6 +4884,41 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     if opened.terminal_receipt is not None:
         return opened.terminal_receipt.to_dict()
     prepared = opened.prepared
+    plan_decision = None
+    plan_revision = None
+    revision_archive = None
+    if expected_plan_decision is not None:
+        if not isinstance(expected_plan_decision, dict) \
+                or set(expected_plan_decision) != {
+                    "action_path", "presentation_sha256"}:
+            raise OrchestratorError(
+                "PLAN_DECISION_MISMATCH",
+                "exact-plan decision fields are unknown or missing")
+        plan_decision = _exact_plan_decision(
+            expected_plan_decision["action_path"],
+            expected_plan_decision["presentation_sha256"],
+            owner_home=home, install_root=install_root, target=target)
+        if prepared.intent != "execute":
+            raise OrchestratorError(
+                "PLAN_DECISION_STALE",
+                "the project changed after the plan was displayed; review the refreshed "
+                "plan before starting")
+    if revision_context is not None:
+        if not isinstance(revision_context, dict) or set(revision_context) != {
+                "action_path", "presentation_sha256"}:
+            raise OrchestratorError(
+                "PLAN_DECISION_MISMATCH",
+                "plan revision fields are unknown or missing")
+        if prepared.intent != "plan":
+            raise OrchestratorError(
+                "PLAN_DECISION_STALE",
+                "the revision request no longer routes to a fresh planning action")
+        plan_revision, prior_plan_action, revision_archive = (
+            _prepare_revision_context(
+            revision_context["action_path"],
+            revision_context["presentation_sha256"], request,
+            owner_home=home, install_root=install_root, target=target))
+        prepared = _rebind_revision_prepared(prepared, prior_plan_action)
     created_at = _stamp(now)
     domain_contract = loom_domain.select_domains(
         request, explicit=list(prepared.domains),
@@ -4306,6 +4987,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared).to_dict()
+    if revision_archive is not None:
+        archive_sha256 = _persist_revision_archive(
+            memory, revision_archive)
+        if archive_sha256 != plan_revision["archive_sha256"]:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the immutable revision archive identity changed before persistence")
     context_capsule = controller.prepare_context(opened, request)
     expires_at = _stamp(
         loom_runtime._parse_time(created_at) + dt.timedelta(seconds=timeout_seconds))
@@ -4329,7 +5017,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         "initial_pack_hash": None, "remove_pristine_pack": False,
         "work_order": None, "prepared": prepared.to_dict(),
         "context": context_capsule,
-        "repair_plan": None, "host_result": None, "plan_contract": None,
+        "repair_plan": None,
+        "host_result": ({
+            **({"plan_decision": plan_decision}
+               if plan_decision is not None else {}),
+            **({"plan_revision": plan_revision}
+               if plan_revision is not None else {}),
+        } or None),
+        "plan_contract": None,
         "domain_contract": domain_contract,
         "context_manifest": loom_performance.production_context_manifest(install_root),
         "continuation_authority": loom_authority.decide(
@@ -4407,9 +5102,23 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     if prepared.intent == "plan":
         pack = target / "plans"
         if not action["pack_seed"]["created_pack"]:
-            raise OrchestratorError(
-                "PLAN_PACK_EXISTS",
-                "a planning pack already exists; use resume or repair instead of mutating it")
+            if plan_revision is None:
+                raise OrchestratorError(
+                    "PLAN_PACK_EXISTS",
+                    "a planning pack already exists; use resume or repair instead of mutating it")
+            directory = path.parent
+            action = _write_action(path, action, action_security)
+            _write_active_pointer(
+                directory, action_id=action_id, project_id=prepared.project_id)
+            action["initial_pack_hash"] = _pack_hash(pack)
+            action["pack_seed"] = {
+                **action["pack_seed"],
+                "state": "installed",
+            }
+            action["plan_contract"] = _make_plan_contract(action, prepared)
+            action["status"] = "pending"
+            action = _write_action(path, action, action_security)
+            return _pending_action_result(action)
         directory = path.parent
         action = _write_action(path, action, action_security)
         _write_active_pointer(
@@ -4569,7 +5278,7 @@ def author(action_path, draft, *, now=None, owner_home=None, install_root=None):
     try:
         with loom_reliability.exclusive_file_lock(
                 _orchestration_lock(action_path.parent)):
-            path, action, _action_security = _read_action(
+            path, action, action_security = _read_action(
                 action_path, owner_home=owner_home, install_root=install_root)
             _reconcile_plan_authoring(action)
             try:
@@ -4604,12 +5313,39 @@ def author(action_path, draft, *, now=None, owner_home=None, install_root=None):
             version = (
                 Path(action["install_root"]) / "VERSION").read_text(
                     encoding="utf-8").strip()
+            revision_record = (action.get("host_result") or {}).get(
+                "plan_revision")
+            if revision_record is not None:
+                try:
+                    presentation_draft = {
+                        **draft,
+                        "work_orders": [
+                            {**item, "id": f"WO-{index:03d}"}
+                            for index, item in enumerate(
+                                draft["work_orders"], start=1)
+                        ],
+                    }
+                    candidate_semantics = (
+                        loom_plan_presentation.extract_semantics(
+                            presentation_draft))
+                except (
+                        KeyError, TypeError,
+                        loom_plan_presentation.PresentationError):
+                    candidate_semantics = None
+                if candidate_semantics is not None and _canonical_bytes(
+                        candidate_semantics) == _canonical_bytes(
+                            revision_record["prior_semantics"]):
+                    raise OrchestratorError(
+                        "PLAN_REVISION_EMPTY",
+                        "the revised plan is semantically identical to the displayed plan",
+                        status="action-required")
             try:
                 receipt = loom_plan_author.author(
                     root / "plans", contract=action["plan_contract"], draft=draft,
                     request=action["request"], version=version, repo=root,
                     transaction_path=_plan_author_transaction_path(action),
                     now=instant,
+                    fresh_lifecycle=revision_record is not None,
                     validate_stage=lambda stage: _validate_authored_plan(
                         action, pack_override=stage))
                 _validate_authored_plan(action)
@@ -4620,6 +5356,20 @@ def author(action_path, draft, *, now=None, owner_home=None, install_root=None):
                         f"{item['code']} {item['path']}: {item['message']}"
                         for item in exc.diagnostics[:8])
                 raise OrchestratorError(exc.code, detail, status="action-required") from exc
+            semantics = receipt.pop("presentation_semantics")
+            revision_number = (
+                revision_record["revision"]
+                if revision_record is not None else 1)
+            action["host_result"] = {
+                **(action.get("host_result") or {}),
+                "plan_review": {
+                    "schema_version": 1,
+                    "state": "authored",
+                    "revision": revision_number,
+                    "semantics": semantics,
+                },
+            }
+            _write_action(path, action, action_security)
             return {
                 **receipt, "action_id": action["action_id"],
                 "action_path": str(path), "ready_for_completion": True,
@@ -4723,7 +5473,27 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             invocation_id=action["invocation_id"], cwd=action["cwd"],
             explicit_target=action["explicit_target"], owner_home=action["owner_home"],
             now=instant)
-        if current.survey_hash != action["survey_hash"] \
+        revision_record = (action.get("host_result") or {}).get(
+            "plan_revision")
+        if revision_record is not None:
+            root = Path(action["explicit_target"] or action["cwd"])
+            try:
+                state = loom_gate._stable_state(root, root / "plans")
+            except loom_survey.SurveyError as exc:
+                raise OrchestratorError(
+                    "TARGET_DRIFT",
+                    f"revision target could not be observed safely: {exc}") from exc
+            project = loom_runtime.resolve_project(
+                action["instance_id"], explicit_target=action["explicit_target"],
+                cwd=action["cwd"])
+            if project.project_id != action["project_id"] \
+                    or project.canonical_target_identity \
+                    != sealed.canonical_target_identity \
+                    or state.state_hash != revision_record["project_state_hash"]:
+                raise OrchestratorError(
+                    "TARGET_DRIFT",
+                    "project files changed while the displayed plan was being revised")
+        elif current.survey_hash != action["survey_hash"] \
                 or current.project_id != action["project_id"] \
                 or current.intent != action["intent"]:
             raise OrchestratorError(
@@ -4802,12 +5572,23 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
                 "bundle_digest": validated_domain_bundle["bundle_digest"],
                 "stored_records": len(stored_domain_records),
             }
+    plan_host_projection = None
+    if result.get("status") == "completed" and action["intent"] == "plan":
+        root = Path(action["explicit_target"] or action["cwd"])
+        presentation, plan_host_projection = _completed_plan_review(action, root)
+        if presentation is not None:
+            result["plan_presentation"] = presentation
+            revision_result = _completed_plan_revision(action)
+            if revision_result is not None:
+                result["plan_revision"] = revision_result
     production_replay = _record_production_replay(action, controller.memory)
     if production_replay is not None:
         result["production_replay"] = production_replay
     action["status"], action["result"] = "completed", result
     _write_action(path, action, action_security)
     _clear_active_pointer(path.parent, action["action_id"])
+    if plan_host_projection is not None:
+        return {**result, "plan_host_projection": plan_host_projection}
     return result
 
 
@@ -4891,6 +5672,12 @@ def main(argv=None):
     author_parser = commands.add_parser("author-stdio")
     author_parser.add_argument("--home", required=True)
     author_parser.add_argument("--install-root", required=True)
+    start_parser = commands.add_parser("start-stdio")
+    start_parser.add_argument("--home", required=True)
+    start_parser.add_argument("--install-root", required=True)
+    revise_parser = commands.add_parser("revise-stdio")
+    revise_parser.add_argument("--home", required=True)
+    revise_parser.add_argument("--install-root", required=True)
     complete_parser = commands.add_parser("complete")
     complete_parser.add_argument("--action", required=True)
     complete_parser.add_argument("--usage")
@@ -4960,6 +5747,21 @@ def main(argv=None):
                 sys.stdin.buffer, message_type="author")
             result = author(
                 message["action"], message["draft"],
+                owner_home=args.home, install_root=args.install_root)
+        elif args.command == "start-stdio":
+            message = loom_adapter_protocol.read_single_frame(
+                sys.stdin.buffer, message_type="start")
+            result = start(
+                message["action"],
+                presentation_sha256=message["presentation_sha256"],
+                owner_home=args.home, install_root=args.install_root)
+        elif args.command == "revise-stdio":
+            message = loom_adapter_protocol.read_single_frame(
+                sys.stdin.buffer, message_type="revise")
+            result = revise(
+                message["action"],
+                presentation_sha256=message["presentation_sha256"],
+                request=message["request"],
                 owner_home=args.home, install_root=args.install_root)
         elif args.command == "complete":
             result = complete(

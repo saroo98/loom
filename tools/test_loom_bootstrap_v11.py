@@ -653,7 +653,10 @@ class BootstrapIntegrationTests(unittest.TestCase):
                     encoding="utf-8"))["version"],
                 responses[0]["result"]["serverInfo"]["version"])
             self.assertEqual(
-                ["invoke", "resolve", "status", "complete", "author", "cancel"],
+                [
+                    "invoke", "resolve", "status", "complete", "author",
+                    "start", "revise", "cancel",
+                ],
                 [item["name"] for item in responses[1]["result"]["tools"]])
             self.assertNotIn("error", responses[2])
             self.assertFalse(responses[2]["result"]["isError"])

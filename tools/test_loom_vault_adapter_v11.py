@@ -1,6 +1,8 @@
 """Runtime integration tests for the Loom 1.1 owner-vault memory adapter."""
 
 import datetime as dt
+import base64
+import hashlib
 import json
 import tempfile
 import types
@@ -10,6 +12,7 @@ from pathlib import Path
 
 import loom_vault
 import loom_vault_adapter
+import loom_orchestrator
 import loom_session
 from test_loom_vault_v11 import TestCrypto
 
@@ -79,6 +82,58 @@ class VaultAdapterTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 loom_vault_adapter.VaultAdapterError, "binding changed"):
             adapter.bind_project_state("p-" + "2" * 32, "filesystem")
+
+    def test_production_revision_archive_uses_vault_without_sidecar(self):
+        project_id = "p-" + "4" * 32
+        action_id = "00000000-0000-4000-8000-00000000b601"
+        presentation_sha256 = "3" * 64
+        raw = b"# Prior plan\n"
+        payload = {
+            "schema_version": 1,
+            "kind": "loom-plan-revision-archive-v1",
+            "project_id": project_id,
+            "action_id": action_id,
+            "revision": 1,
+            "presentation_sha256": presentation_sha256,
+            "pack_sha256": "4" * 64,
+            "files": [{
+                "path": "MANIFEST.md",
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "content_base64": base64.b64encode(raw).decode("ascii"),
+            }],
+        }
+        payload["archive_sha256"] = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode("utf-8")).hexdigest()
+        record_id = str(uuid.uuid5(
+            uuid.UUID(self.adapter.instance_id),
+            f"plan-revision:{project_id}:{action_id}:{presentation_sha256}:1"))
+        action_path = self.root / "orchestrations" / f"{action_id}.json"
+        archive = {
+            "record_id": record_id,
+            "action_path": action_path,
+            "action": {
+                "instance_id": self.adapter.instance_id,
+                "project_id": project_id,
+                "action_id": action_id,
+                "created_at": "2026-07-30T12:00:00Z",
+            },
+            "security": None,
+            "presentation": {
+                "presentation_sha256": presentation_sha256,
+                "binding": {"revision": 1},
+            },
+            "pack": self.root / "project" / "plans",
+            "payload": payload,
+        }
+
+        stored_sha256 = loom_orchestrator._persist_revision_archive(
+            self.adapter, archive)
+
+        self.assertEqual(payload["archive_sha256"], stored_sha256)
+        self.assertEqual(
+            payload, self.vault.get_plan_revision_archive(record_id))
+        self.assertFalse((action_path.parent / "plan-revisions").exists())
 
     def test_session_journal_encrypts_owner_statements_and_replays_receipt(self):
         self.adapter.remember(
