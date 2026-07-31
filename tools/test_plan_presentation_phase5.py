@@ -138,7 +138,7 @@ class PlanPresentationTests(unittest.TestCase):
 
     def test_host_projection_quotes_special_characters_in_clickable_plan_path(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary) / "Project (draft) [owner]"
+            root = Path(temporary) / "Project (draft) [owner] café"
             manifest = root / "plans" / "MANIFEST.md"
             manifest.parent.mkdir(parents=True)
             manifest.write_text("# Complete plan\n", encoding="utf-8")
@@ -154,6 +154,7 @@ class PlanPresentationTests(unittest.TestCase):
         self.assertIn("%20", projected["markdown"])
         self.assertIn("%28draft%29", projected["markdown"])
         self.assertIn("%5Bowner%5D", projected["markdown"])
+        self.assertIn("caf%C3%A9", projected["markdown"])
         self.assertIn(
             "[Open the complete plan](<", projected["markdown"])
 

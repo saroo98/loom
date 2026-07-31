@@ -6,7 +6,6 @@ import html
 import json
 import os
 import re
-import urllib.parse
 from pathlib import Path, PurePosixPath
 
 
@@ -18,6 +17,8 @@ HEX64 = re.compile(r"^[0-9a-f]{64}$")
 ACTION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 PROJECT_ID = re.compile(r"^p-[0-9a-f]{32}$|^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 UNSAFE_SCHEME = re.compile(r"(?i)\b(javascript|vbscript|data|file):")
+URI_PATH_SAFE = frozenset(
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/:")
 
 
 class PresentationError(ValueError):
@@ -187,6 +188,14 @@ def _inert_markdown(value):
     escaped = re.sub(r"([\\`*_\[\]{}#!|>])", r"\\\1", escaped)
     return UNSAFE_SCHEME.sub(
         lambda match: match.group(1) + "&#58;", escaped)
+
+
+def _encoded_absolute_path(value):
+    """Encode one local absolute path without importing a network-capable module."""
+    output = []
+    for byte in value.encode("utf-8"):
+        output.append(chr(byte) if byte in URI_PATH_SAFE else f"%{byte:02X}")
+    return "".join(output)
 
 
 def _lines(items, *, prefix="- "):
@@ -396,7 +405,7 @@ def project_for_host(value, *, project_root, host_id):
             preview += (
                 f"\n_{value['omitted_step_count']} more validated step(s) are in the "
                 "complete plan._\n")
-    link_target = urllib.parse.quote(resolved.as_posix(), safe="/:")
+    link_target = _encoded_absolute_path(resolved.as_posix())
     markdown = (
         preview.rstrip()
         + f"\n\n[Open the complete plan](<{link_target}>)\n\n"
