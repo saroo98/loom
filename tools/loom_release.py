@@ -49,7 +49,7 @@ EXTERNAL_CHECKS = (
     "production-performance", "production-memory-replay",
 )
 # This is a subprocess exhaustion ceiling, not a product-performance target.
-# The dedicated fast gate owns the 30-second regression budget.  The complete
+# The dedicated fast gate owns its bounded host-aware regression budget. The complete
 # correctness suite does not duplicate a wall-clock assertion inside its own
 # result; the verifier and CI job retain independent hard termination bounds.
 FULL_SUITE_MAX_SECONDS = 2700
