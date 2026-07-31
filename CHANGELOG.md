@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 1.8.25
+
+- Present every completed plan as a deterministic, reviewable inline summary with a contained,
+  clickable local plan link and a complete Markdown fallback.
+- Add revision-aware plan review with semantic diffs, no-op rejection, immutable encrypted prior
+  revisions, replay and forgetting support, and exact displayed-plan start authorization.
+- Refuse stale, tampered, or world-drifted plan starts while preserving request, project, contract,
+  pack, file, and revision identity across the review flow.
+- Keep host presentation capability claims honest: use the portable text and structured-content
+  surface unless an official host contract proves richer native controls.
+- Preserve complete exact-cut suite evidence outside the bounded supervisor transcript so large
+  successful test inventories remain verifiable without weakening process-output limits.
+
 ## 1.8.24
 
 - Preserve complete, plain blocked-state sentences in the default owner message.

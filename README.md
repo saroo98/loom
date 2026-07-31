@@ -65,13 +65,13 @@ Loom can:
 
 ## Current release
 
-Loom **1.8.24** is the current signed public release.
+Loom **1.8.25** is the current signed public release.
 
 | Item | Value |
 |---|---|
-| Release | [`v1.8.24`](https://github.com/saroo98/loom/releases/tag/v1.8.24) |
+| Release | [`v1.8.25`](https://github.com/saroo98/loom/releases/tag/v1.8.25) |
 | Source commit | [`cd4e9ea8ceae088d9f4942fb2f6404c6f55d806a`](https://github.com/saroo98/loom/commit/cd4e9ea8ceae088d9f4942fb2f6404c6f55d806a) |
-| Canonical plugin | [`loom-plugin-v1.8.24.zip`](https://github.com/saroo98/loom/releases/download/v1.8.24/loom-plugin-v1.8.24.zip) |
+| Canonical plugin | [`loom-plugin-v1.8.25.zip`](https://github.com/saroo98/loom/releases/download/v1.8.25/loom-plugin-v1.8.25.zip) |
 | Plugin SHA-256 | `ee8f229e01037b0dc701122d7161f1363dcc08b653039c170e50864ddd28343a` |
 | Licence | Apache-2.0 |
 | Runtime | Python 3.10+ |
@@ -145,12 +145,12 @@ actually changed and how the requested outcome was checked.
 
 Download the signed release:
 
-[`loom-plugin-v1.8.24.zip`](https://github.com/saroo98/loom/releases/download/v1.8.24/loom-plugin-v1.8.24.zip)
+[`loom-plugin-v1.8.25.zip`](https://github.com/saroo98/loom/releases/download/v1.8.25/loom-plugin-v1.8.25.zip)
 
 Verify its SHA-256:
 
 ```powershell
-(Get-FileHash .\loom-plugin-v1.8.24.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\loom-plugin-v1.8.25.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
 Expected value:
