@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 1.8.28
+
+- Refresh the exact Codex host observation required by the release gate so signed publication
+  cannot rely on expired local evidence.
+- Carry forward the 1.8.27 natural cross-turn plan continuity correction in the next publishable
+  patch release.
+
 ## 1.8.27
 
 - Preserve natural plan revision and start decisions when a later Codex turn no longer carries
