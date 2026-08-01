@@ -68,11 +68,39 @@ class ReadinessPhase10Tests(unittest.TestCase):
 
     def test_missing_receipts_never_become_supported(self):
         value = loom_readiness.generate(version="1.6.0")
+        self.assertEqual(3, value["schema_version"])
+        self.assertEqual("source-tree", value["report_kind"])
+        self.assertIsNone(value["release_subject_sha256"])
         self.assertEqual("not-ready", value["overall"])
         by_id = {item["id"]: item for item in value["claims"]}
         self.assertEqual("unverified", by_id["release.exact-cut"]["status"])
+        self.assertEqual("supported", by_id["release.exact-cut"]["support_status"])
+        self.assertEqual("unverified", by_id["release.exact-cut"]["evidence_status"])
         self.assertEqual("unverified", by_id["host.codex.cli"]["status"])
         self.assertNotEqual("supported", by_id["host.codex.app"]["status"])
+
+    def test_release_report_requires_and_exposes_exact_release_subject(self):
+        with self.assertRaisesRegex(
+                loom_readiness.ReadinessError, "release identity"):
+            loom_readiness.generate(version="1.6.0", report_kind="release")
+        value = loom_readiness.generate(
+            version="1.6.0", report_kind="release",
+            release_subject_sha256="f" * 64)
+        self.assertEqual("release", value["report_kind"])
+        self.assertEqual("f" * 64, value["release_subject_sha256"])
+
+    def test_support_and_evidence_status_are_independent(self):
+        value = loom_readiness.generate(version="1.6.0")
+        by_id = {item["id"]: item for item in value["claims"]}
+        codex = by_id["host.codex.app"]
+        cursor = by_id["host.cursor.ide"]
+        gemini = by_id["host.gemini-cli.cli"]
+        self.assertEqual(("supported", "unverified"),
+                         (codex["support_status"], codex["evidence_status"]))
+        self.assertEqual(("experimental", "unverified"),
+                         (cursor["support_status"], cursor["evidence_status"]))
+        self.assertEqual(("stale", "stale"),
+                         (gemini["support_status"], gemini["evidence_status"]))
 
     def test_wrong_subject_and_conflicting_receipts_fail_closed(self):
         receipt = {"receipt_id": "r1", "claim_id": "release.exact-cut",

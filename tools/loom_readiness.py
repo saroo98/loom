@@ -15,6 +15,8 @@ import loom_subject_identity
 
 STATUSES = {"supported", "experimental", "failed", "skipped", "expired", "stale",
             "unverified", "unsupported", "not_applicable", "revoked"}
+SUPPORT_STATUSES = {"supported", "experimental", "stale", "unsupported",
+                    "not_applicable"}
 SHA = re.compile(r"^[0-9a-f]{64}$")
 MAX_RECEIPTS = 2048
 GRAPH_FIELDS = {
@@ -117,7 +119,8 @@ def _receipts(value, subject, *, evaluation_epoch):
     return result
 
 
-def _legacy_claim(claim_id, default, summary, receipts, *, required=True):
+def _legacy_claim(claim_id, default, summary, receipts, *, required=True,
+                  support_status="supported"):
     rows = receipts.get(claim_id, [])
     if rows:
         statuses = {row["status"] for row in rows}
@@ -141,7 +144,9 @@ def _legacy_claim(claim_id, default, summary, receipts, *, required=True):
             ["GOVERNING_SOURCE_STALE"] if default == "stale" else
             ["GOVERNING_SOURCE_UNSUPPORTED"] if default == "unsupported" else
             ["QUALIFYING_RECEIPT_MISSING"])
-    return {"id": claim_id, "status": status, "required": required,
+    return {"id": claim_id, "status": status,
+            "support_status": support_status, "evidence_status": status,
+            "required": required,
             "reason_codes": reasons, "receipt_ids": receipt_ids,
             "subject_bindings": [], "legacy_release_subject": subject,
             "valid_until": valid_until,
@@ -196,7 +201,8 @@ def _graph(value, trusted_expected_subjects_sha256):
     return value
 
 
-def _typed_claim(claim_id, summary, graph, required_kinds, *, required=True):
+def _typed_claim(claim_id, summary, graph, required_kinds, *, required=True,
+                 support_status="supported"):
     active = sorted(graph["predicates"].get(claim_id, [])) if graph else []
     inactive = [
         item for item in graph["inactive"]
@@ -220,7 +226,9 @@ def _typed_claim(claim_id, summary, graph, required_kinds, *, required=True):
     else:
         status, reasons = "unverified", ["QUALIFYING_RECEIPT_MISSING"]
     return {
-        "id": claim_id, "status": status, "required": required,
+        "id": claim_id, "status": status,
+        "support_status": support_status, "evidence_status": status,
+        "required": required,
         "reason_codes": reasons, "receipt_ids": active or sorted(
             item["evidence_id"] for item in inactive),
         "subject_bindings": bindings, "legacy_release_subject": None,
@@ -236,7 +244,7 @@ def _truth_clamp(claim, truth_report):
     if STATUS_ORDER[state] <= STATUS_ORDER[claim["status"]]:
         return claim
     return {
-        **claim, "status": state,
+        **claim, "status": state, "evidence_status": state,
         "reason_codes": sorted(set(
             claim["reason_codes"] + ["TRUTH_CONTRADICTION"])),
     }
@@ -259,9 +267,14 @@ def _validate_truth(report, *, evaluation_epoch, expected_subjects_sha256):
 
 def generate(*, version, release_subject=None, evidence=None,
              evaluation_epoch=None, trusted_expected_subjects_sha256=None,
-             truth_report=None):
+             truth_report=None, report_kind="source-tree",
+             release_subject_sha256=None):
     if not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) \
-            or release_subject is not None and not SHA.fullmatch(str(release_subject)):
+            or release_subject is not None and not SHA.fullmatch(str(release_subject)) \
+            or report_kind not in {"source-tree", "release"} \
+            or report_kind == "source-tree" and release_subject_sha256 is not None \
+            or report_kind == "release" and not SHA.fullmatch(
+                str(release_subject_sha256 or "")):
         raise ReadinessError("readiness release identity is invalid")
     epoch = _stamp(
         evaluation_epoch or loom_host_registry.REVIEWED_AT + "T00:00:00Z")
@@ -294,24 +307,34 @@ def generate(*, version, release_subject=None, evidence=None,
                 "candidate, runtime, and helper receipts.")
             if host["contract_status"] == "stale":
                 default = "stale"
+                support_status = "stale"
             elif host["evidence_status"] == "unsupported":
                 default = "unsupported"
+                support_status = "unsupported"
+            elif host["evidence_status"] == "experimental":
+                default = "unverified"
+                support_status = "experimental"
             else:
                 default = "unverified"
+                support_status = "supported"
             claim = _typed_claim(
                 claim_id, summary, graph,
-                ("candidate-source", "installed-runtime", "native-helper")) \
+                ("candidate-source", "installed-runtime", "native-helper"),
+                support_status=support_status) \
                 if graph else _legacy_claim(
-                    claim_id, default, summary, legacy_receipts)
+                    claim_id, default, summary, legacy_receipts,
+                    support_status=support_status)
             claims.append(_truth_clamp(claim, truth_report))
     for platform_id in ("windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
                         "linux-x64", "linux-arm64"):
         claim_id = f"platform.{platform_id}"
         summary = "Native platform support requires a current exact-helper receipt."
         claim = _typed_claim(
-            claim_id, summary, graph, ("native-helper",)) \
+            claim_id, summary, graph, ("native-helper",),
+            support_status="supported") \
             if graph else _legacy_claim(
-                claim_id, "unverified", summary, legacy_receipts)
+                claim_id, "unverified", summary, legacy_receipts,
+                support_status="supported")
         claims.append(_truth_clamp(claim, truth_report))
     for claim_id, summary in (
             ("release.exact-cut", "Exact public bytes passed their embedded suite and firewall."),
@@ -327,12 +350,17 @@ def generate(*, version, release_subject=None, evidence=None,
             "plugin-zip", "native-helper",
         )
         claim = _typed_claim(
-            claim_id, summary, graph, required_kinds) \
+            claim_id, summary, graph, required_kinds,
+            support_status="supported") \
             if graph else _legacy_claim(
-                claim_id, "unverified", summary, legacy_receipts)
+                claim_id, "unverified", summary, legacy_receipts,
+                support_status="supported")
         claims.append(_truth_clamp(claim, truth_report))
     counts = {status: sum(item["status"] == status for item in claims)
               for status in sorted(STATUSES)}
+    support_counts = {
+        status: sum(item["support_status"] == status for item in claims)
+        for status in sorted(SUPPORT_STATUSES)}
     blockers = [item["id"] for item in claims
                 if item["required"] and item["status"] not in {"supported", "not_applicable"}]
     host_contract_raw = loom_host_registry.CONTRACT_PATH.read_bytes()
@@ -349,7 +377,9 @@ def generate(*, version, release_subject=None, evidence=None,
     next_invalidation = graph["next_invalidation_at"] if graph else min(
         (claim["valid_until"] for claim in claims
          if claim["valid_until"] is not None), default=None)
-    return {"schema_version": 2, "version": version,
+    return {"schema_version": 3, "report_kind": report_kind,
+            "version": version,
+            "release_subject_sha256": release_subject_sha256,
             "evaluated_at": epoch, "next_invalidation_at": next_invalidation,
             "expected_subjects_sha256": (
                 graph["expected_subjects_sha256"] if graph else None),
@@ -358,20 +388,26 @@ def generate(*, version, release_subject=None, evidence=None,
             "registry_sha256": registry_digest,
             "overall": "ready" if not blockers else "not-ready",
             "claims": sorted(claims, key=lambda item: item["id"]),
-            "counts": counts, "promotion_blockers": blockers}
+            "counts": counts, "support_counts": support_counts,
+            "promotion_blockers": blockers}
 
 
 def render_markdown(value):
-    lines = ["# Loom release readiness", "", f"Version: `{value['version']}`",
+    title = ("Loom release readiness" if value.get("report_kind") == "release"
+             else "Loom source-tree readiness")
+    lines = [f"# {title}", "", f"Version: `{value['version']}`",
              f"Overall: **{value['overall'].upper()}**", "",
              f"Evaluated at: `{value['evaluated_at']}`",
              f"Next invalidation: `{value['next_invalidation_at'] or 'none'}`", "",
              "This page is generated from versioned host contracts and exact evidence receipts. ",
              "Missing evidence remains unverified; it is never converted into a pass.", "",
-             "| Claim | Status | Evidence |", "| --- | --- | --- |"]
+             "| Claim | Support | Evidence | Receipts |",
+             "| --- | --- | --- | --- |"]
     for item in value["claims"]:
         evidence = ", ".join(item["receipt_ids"]) if item["receipt_ids"] else "none"
-        lines.append(f"| `{item['id']}` | {item['status']} | {evidence} |")
+        lines.append(
+            f"| `{item['id']}` | {item['support_status']} | "
+            f"{item['evidence_status']} | {evidence} |")
     lines.extend(["", f"Registry digest: `{value['registry_sha256']}`", ""])
     return "\n".join(lines)
 
