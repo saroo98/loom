@@ -30,7 +30,8 @@ class ReleaseWorkflowPassportTests(unittest.TestCase):
         for expected in (
                 "RELEASE-READINESS.json", "RELEASE-EVIDENCE-SUBJECT.json",
                 "RELEASE-EVIDENCE-ATTESTATION.json", "loom_release_passport.py",
-                "loom_release_rollback.py", "subject-checksums:"):
+                "loom_release_rollback.py", "CODEX-APP-EVIDENCE.json",
+                "--codex-observation", "subject-checksums:"):
             self.assertIn(expected, text)
         self.assertIn('gh release upload "$RELEASE_TAG"', text)
 

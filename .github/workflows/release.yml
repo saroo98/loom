@@ -132,6 +132,7 @@ jobs:
           python -B loom_release_subject_verify.py "../release-assets/RELEASE-SUBJECT.json" \
             --plugin "../release-assets/loom-plugin-${RELEASE_TAG}.zip" \
             --commit "${GITHUB_SHA}" --tag "$RELEASE_TAG"
+          test -f ../release-assets/CODEX-APP-EVIDENCE.json
       - name: Expand exact native release evidence
         shell: bash
         run: |
@@ -164,6 +165,7 @@ jobs:
               "cut_receipt": root / "cut-receipt.json",
               "suite_report": root / "full-suite.json",
               "rollback_report": root / "rollback.json",
+              "codex_app_observation": assets / "CODEX-APP-EVIDENCE.json",
           }
           for platform in (
                   "windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
@@ -242,6 +244,7 @@ jobs:
             --suite-report "$RUNNER_TEMP/full-suite.json" \
             --rollback-report "$RUNNER_TEMP/rollback.json" \
             --ci-authority "$RUNNER_TEMP/ci-authority.json" \
+            --codex-observation release-assets/CODEX-APP-EVIDENCE.json \
             --evaluation-epoch "$NOW" --output "$RUNNER_TEMP/release-passport" \
             "${ARGS[@]}"
           test -f "$RUNNER_TEMP/release-passport/RELEASE-READINESS.json"

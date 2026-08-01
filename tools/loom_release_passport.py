@@ -247,6 +247,38 @@ def _native_evidence(values, subjects):
     return payload
 
 
+def _codex_observation(value, *, release_subject_sha256):
+    fields = {
+        "schema_version", "host", "surface", "status", "evidence_class",
+        "release_subject_sha256", "installed_runtime_subject", "request_sha256",
+        "response_sha256", "task_sha256", "observed_at", "route", "result",
+        "fresh_task", "disposable_project", "privacy", "observation_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 or value.get("host") != "codex-app" \
+            or value.get("surface") != "app" or value.get("status") != "passed" \
+            or value.get("evidence_class") != "host-observed" \
+            or value.get("release_subject_sha256") != release_subject_sha256 \
+            or value.get("fresh_task") is not True \
+            or value.get("disposable_project") is not True \
+            or value.get("observation_sha256") != _digest({
+                key: item for key, item in value.items()
+                if key != "observation_sha256"}):
+        raise ReleasePassportError("Codex App observation is invalid or wrong-release")
+    privacy = value.get("privacy")
+    if not isinstance(privacy, dict) or any(privacy.values()):
+        raise ReleasePassportError("Codex App observation contains public identity material")
+    try:
+        installed = loom_subject_identity.validate_subject(
+            value["installed_runtime_subject"])
+    except loom_subject_identity.SubjectIdentityError as exc:
+        raise ReleasePassportError(str(exc)) from exc
+    if installed["kind"] != "installed-runtime":
+        raise ReleasePassportError("Codex App observation lacks an installed runtime subject")
+    _public_value(value, "Codex App observation")
+    return installed
+
+
 def _envelope(*, evidence_id, predicate, bindings, payload, authority,
               producer_digest, dependencies=()):
     body = {
@@ -276,7 +308,7 @@ def _envelope(*, evidence_id, predicate, bindings, payload, authority,
 
 def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
                      suite_report, rollback_report, native_evidence,
-                     ci_authority, evaluation_epoch):
+                     ci_authority, evaluation_epoch, codex_observation=None):
     subjects = _subject_bundle(subject)
     try:
         verification = loom_release_subject_verify.verify(
@@ -303,10 +335,23 @@ def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
     _passed_rollback(rollback_report, commit=candidate["commit"],
                      root_sha256=cut_receipt["root_sha256"])
     native_payload = _native_evidence(native_evidence, subjects)
+    release_subjects = dict(subjects)
+    installed = (_codex_observation(
+        codex_observation, release_subject_sha256=verification["bundle_sha256"])
+        if codex_observation is not None else None)
+    expected_subjects = dict(subjects)
+    if installed is not None:
+        release_tag = next(item for (kind, _), item in subjects.items()
+                           if kind == "release-tag")
+        if installed["version"] != release_tag["tag"].removeprefix("v") \
+                or installed["release_sequence"] != subject["release_sequence"]:
+            raise ReleasePassportError(
+                "Codex App observation names the wrong installed runtime version")
+        expected_subjects[(installed["kind"], installed["subject_id"])] = installed
     expectation, _attestation_bundle = _ci_authority(
-        ci_authority, evaluation_epoch=evaluation_epoch, subjects=subjects)
+        ci_authority, evaluation_epoch=evaluation_epoch, subjects=expected_subjects)
     all_bindings = [_binding(item) for item in sorted(
-        subjects.values(), key=lambda item: (item["kind"], item["subject_id"]))]
+        release_subjects.values(), key=lambda item: (item["kind"], item["subject_id"]))]
     producer_digest = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     payloads = {
         "exact_cut": {"cut": cut_receipt, "suite": suite_report},
@@ -332,6 +377,31 @@ def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
             evidence_id=f"ev-platform-{platform}", predicate=f"platform.{platform}",
             bindings=[_binding(helper)], payload=row, authority=ci_authority,
             producer_digest=producer_digest))
+    if installed is not None:
+        candidate_binding = _binding(release_subjects[("candidate-source", "candidate")])
+        plugin_subject = next(item for (kind, _), item in release_subjects.items()
+                              if kind == "plugin-zip")
+        envelopes.append(loom_evidence_graph.seal_envelope({
+            "schema_version": 2, "evidence_id": "ev-host-codex-app-observed",
+            "subject_bindings": [candidate_binding, _binding(plugin_subject),
+                                 _binding(installed)],
+            "predicate_type": "host.codex.app.observed",
+            "producer": {"id": "loom-codex-release-evidence", "version": "1",
+                         "digest": producer_digest},
+            "evidence_class": "host-observed",
+            "environment": {"host": "codex-app", "surface": "app"},
+            "issued_at": codex_observation["observed_at"],
+            "expires_at": ci_authority["expires_at"],
+            "payload_sha256": codex_observation["observation_sha256"],
+            "limitations": [
+                "Host-observed evidence is not provider-native or independent certification."],
+            "signer": {"authority": "local-observer", "key_id": None,
+                       "algorithm": "none", "signature": None},
+            "verifier": {"id": "codex-app-task-observer",
+                         "verified_at": codex_observation["observed_at"],
+                         "status": "passed"},
+            "depends_on": [], "revoked": False, "stale": False,
+        }))
     expected_digest = loom_subject_identity.digest({
         "schema_version": 1,
         "subjects": sorted(expectation["subjects"], key=lambda item: (
@@ -405,6 +475,7 @@ def main(argv=None):
     parser.add_argument("--native-sbom", action="append", default=[])
     parser.add_argument("--native-provenance", action="append", default=[])
     parser.add_argument("--ci-authority", required=True)
+    parser.add_argument("--codex-observation")
     parser.add_argument("--evaluation-epoch", required=True)
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
@@ -424,7 +495,10 @@ def main(argv=None):
             rollback_report=_read_json(args.rollback_report, "rollback report"),
             native_evidence=native,
             ci_authority=_read_json(args.ci_authority, "CI authority"),
-            evaluation_epoch=args.evaluation_epoch)
+            evaluation_epoch=args.evaluation_epoch,
+            codex_observation=(
+                _read_json(args.codex_observation, "Codex App observation")
+                if args.codex_observation else None))
         written = write_outputs(args.output, result)
     except (ReleasePassportError, loom_evidence_graph.EvidenceGraphError,
             loom_readiness.ReadinessError) as exc:

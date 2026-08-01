@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/codex-release-observation.schema.json",
+  "title": "Privacy-safe exact Codex App release observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "host", "surface", "status", "evidence_class",
+    "release_subject_sha256", "installed_runtime_subject", "request_sha256",
+    "response_sha256", "task_sha256", "observed_at", "route", "result",
+    "fresh_task", "disposable_project", "privacy", "observation_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "host": {"const": "codex-app"},
+    "surface": {"const": "app"},
+    "status": {"const": "passed"},
+    "evidence_class": {"const": "host-observed"},
+    "release_subject_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "installed_runtime_subject": {"$ref": "subject-identity.schema.json#/$defs/installedRuntime"},
+    "request_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "response_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "task_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "observed_at": {"type": "string", "format": "date-time"},
+    "route": {"enum": ["plugin-mcp", "verified-hook"]},
+    "result": {"enum": ["sealed-plan", "terminal-receipt"]},
+    "fresh_task": {"const": true},
+    "disposable_project": {"const": true},
+    "privacy": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "request_text_included", "response_text_included", "task_identity_included",
+        "project_identity_included", "absolute_paths_included"
+      ],
+      "properties": {
+        "request_text_included": {"const": false},
+        "response_text_included": {"const": false},
+        "task_identity_included": {"const": false},
+        "project_identity_included": {"const": false},
+        "absolute_paths_included": {"const": false}
+      }
+    },
+    "observation_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

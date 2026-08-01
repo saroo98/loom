@@ -241,6 +241,16 @@ and deterministic repair codes. Regeneration never changes the underlying observ
 decisions. Subject, runner, evidence class, freshness, and controller or CI expectation bindings
 are evaluated from the same closed authority registry.
 
+The checked-in readiness projection is explicitly a `source-tree` report. It describes the
+repository without pretending that release artifacts already exist. After the canonical plugin,
+reproduced plugin, native helpers, SBOMs, provenance, exact-cut result, full matrix result,
+rollback result, and exact Codex App observation exist, `tools/loom_release_passport.py` produces
+the distinct `release` report. The passport binds every result to typed subjects and publishes
+only bounded digests and validated envelopes. Support classification and evidence state remain
+separate, so a supported target without current qualifying evidence is not relabeled unsupported.
+The release workflow rejects public passport inputs containing owner paths, prompt or response
+bodies, task or project identities, environment values, vault data, or raw logs.
+
 `tools/loom_adaptation_eval.py` runs disposable, deterministic longitudinal scenarios for domain
 switches, aging, project alternation, preference drift, scale bounds, interruption, concurrency,
 corruption, identity errors, disabled memory, application-level forgetting, and domain coverage. Its

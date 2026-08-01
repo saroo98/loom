@@ -11,6 +11,7 @@ from unittest import mock
 import loom_release_passport
 import loom_release_subject
 import loom_subject_identity
+import loom_codex_release_evidence
 
 
 class ReleasePassportTests(unittest.TestCase):
@@ -123,6 +124,31 @@ class ReleasePassportTests(unittest.TestCase):
                     loom_release_passport.ReleasePassportError,
                     "does not match"):
                 loom_release_passport.compile_passport(**fixture)
+
+    def test_codex_observation_is_bound_without_overstating_support(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(Path(temporary))
+            installed = loom_subject_identity.installed_runtime(
+                version="1.9.0", release_sequence=1, payload_sha256="1" * 64,
+                install_receipt_sha256="2" * 64,
+                activation_receipt_sha256="3" * 64)
+            fixture["codex_observation"] = loom_codex_release_evidence.create(
+                release_subject_sha256=fixture["subject"]["bundle_sha256"],
+                installed_runtime_subject=installed, request_sha256="4" * 64,
+                response_sha256="5" * 64, task_sha256="6" * 64,
+                observed_at=self.EPOCH)
+            with mock.patch.object(
+                    loom_release_passport.loom_release_subject_verify, "verify",
+                    return_value={"status": "verified",
+                                  "bundle_sha256": fixture["subject"]["bundle_sha256"]}):
+                value = loom_release_passport.compile_passport(**fixture)
+            predicates = {item["predicate_type"] for item in
+                          value["evidence_bundle"]["envelopes"]}
+            self.assertIn("host.codex.app.observed", predicates)
+            codex = next(item for item in value["readiness"]["claims"]
+                         if item["id"] == "host.codex.app")
+            self.assertEqual("supported", codex["support_status"])
+            self.assertEqual("unverified", codex["evidence_status"])
 
     def test_public_output_rejects_paths_prompts_and_owner_fields(self):
         for value in (
