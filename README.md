@@ -65,14 +65,14 @@ Loom can:
 
 ## Current release
 
-Loom **1.8.29** is the current signed public release.
+Loom **1.8.30** is the current signed public release.
 
 | Item | Value |
 |---|---|
-| Release | [`v1.8.29`](https://github.com/saroo98/loom/releases/tag/v1.8.29) |
-| Source | [`v1.8.29`](https://github.com/saroo98/loom/tree/v1.8.29) |
-| Canonical plugin | [`loom-plugin-v1.8.29.zip`](https://github.com/saroo98/loom/releases/download/v1.8.29/loom-plugin-v1.8.29.zip) |
-| Plugin SHA-256 | Published in the release's signed [`SHA256SUMS`](https://github.com/saroo98/loom/releases/download/v1.8.29/SHA256SUMS) |
+| Release | [`v1.8.30`](https://github.com/saroo98/loom/releases/tag/v1.8.30) |
+| Source | [`v1.8.30`](https://github.com/saroo98/loom/tree/v1.8.30) |
+| Canonical plugin | [`loom-plugin-v1.8.30.zip`](https://github.com/saroo98/loom/releases/download/v1.8.30/loom-plugin-v1.8.30.zip) |
+| Plugin SHA-256 | Published in the release's signed [`SHA256SUMS`](https://github.com/saroo98/loom/releases/download/v1.8.30/SHA256SUMS) |
 | Licence | Apache-2.0 |
 | Runtime | Python 3.10+ |
 
@@ -145,16 +145,16 @@ actually changed and how the requested outcome was checked.
 
 Download the signed release:
 
-[`loom-plugin-v1.8.29.zip`](https://github.com/saroo98/loom/releases/download/v1.8.29/loom-plugin-v1.8.29.zip)
+[`loom-plugin-v1.8.30.zip`](https://github.com/saroo98/loom/releases/download/v1.8.30/loom-plugin-v1.8.30.zip)
 
 Verify its SHA-256:
 
 ```powershell
-(Get-FileHash .\loom-plugin-v1.8.29.zip -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash .\loom-plugin-v1.8.30.zip -Algorithm SHA256).Hash.ToLower()
 ```
 
 Compare the result with the plugin entry in the release's signed
-[`SHA256SUMS`](https://github.com/saroo98/loom/releases/download/v1.8.29/SHA256SUMS).
+[`SHA256SUMS`](https://github.com/saroo98/loom/releases/download/v1.8.30/SHA256SUMS).
 
 The release includes `SHA256SUMS`, `RELEASE-SUBJECT.json`, signature metadata, and installation
 instructions. Continue with the [start guide](./docs/start.md).
