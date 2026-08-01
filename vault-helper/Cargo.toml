@@ -9,7 +9,7 @@ description = "Narrow cryptographic helper for the Loom owner vault"
 argon2 = "0.5.3"
 base64 = "0.22.1"
 bip39 = { version = "2.2.0", features = ["rand"] }
-chacha20poly1305 = "0.10.1"
+chacha20poly1305 = "0.11.0"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core", "zeroize"] }
 hex = "0.4.3"
 hkdf = "0.12.4"
