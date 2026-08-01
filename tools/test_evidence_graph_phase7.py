@@ -196,6 +196,17 @@ class EvidenceGraphPhase7Tests(unittest.TestCase):
                 self.typed_bundle(subject, envelope_value),
                 expected_receipt=self.expected_receipt(subject))
 
+    def test_typed_signature_bundle_is_bounded(self):
+        subject = self.typed_subject()
+        envelope_value = self.typed_envelope(subject)
+        envelope_value["signer"]["signature"] = "x" * 262145
+        envelope_value = loom_evidence_graph.seal_envelope(envelope_value)
+        with self.assertRaisesRegex(
+                loom_evidence_graph.EvidenceGraphError, "signer"):
+            loom_evidence_graph.evaluate(
+                self.typed_bundle(subject, envelope_value),
+                expected_receipt=self.expected_receipt(subject))
+
 
 if __name__ == "__main__":
     unittest.main()

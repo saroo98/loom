@@ -112,7 +112,8 @@ jobs:
           for report in "${REPORTS[@]}"; do ARGS+=(--matrix-report "$report"); done
           python -B loom_release_suite.py "${ARGS[@]}" --commit "$LOOM_SOURCE_SHA" \
             --public-root "$PUBLIC_ROOT" --output "$RUNNER_TEMP/full-suite.json"
-          python -B -m unittest -v test_loom_update_v11.py test_loom_crash_recovery.py test_release_asset.py
+          python -B loom_release_rollback.py . --commit "$LOOM_SOURCE_SHA" \
+            --public-root "$PUBLIC_ROOT" --output "$RUNNER_TEMP/rollback.json"
           python -B loom_current_facts.py ../contracts/current-facts-v1.json
       - name: Download existing draft assets without publishing
         env:
@@ -131,12 +132,155 @@ jobs:
           python -B loom_release_subject_verify.py "../release-assets/RELEASE-SUBJECT.json" \
             --plugin "../release-assets/loom-plugin-${RELEASE_TAG}.zip" \
             --commit "${GITHUB_SHA}" --tag "$RELEASE_TAG"
+          test -f ../release-assets/CODEX-APP-EVIDENCE.json
+      - name: Expand exact native release evidence
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/native"
+          for platform in windows-x64 windows-arm64 macos-x64 macos-arm64 linux-x64 linux-arm64; do
+            archive="release-assets/native-evidence-${platform}.zip"
+            test -f "$archive"
+            mkdir "$RUNNER_TEMP/native/$platform"
+            unzip -q "$archive" -d "$RUNNER_TEMP/native/$platform"
+            test "$(find "$RUNNER_TEMP/native/$platform" -type f | wc -l)" -ge 3
+          done
+      - name: Build the bounded attestation subject
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          LOOM_SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          python -B - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          root = Path(os.environ["RUNNER_TEMP"])
+          assets = Path("release-assets")
+          named = {
+              "release_subject": assets / "RELEASE-SUBJECT.json",
+              "canonical_plugin": assets / f"loom-plugin-{os.environ['RELEASE_TAG']}.zip",
+              "reproduced_plugin": assets / f"loom-plugin-{os.environ['RELEASE_TAG']}-repro.zip",
+              "cut_receipt": root / "cut-receipt.json",
+              "suite_report": root / "full-suite.json",
+              "rollback_report": root / "rollback.json",
+              "codex_app_observation": assets / "CODEX-APP-EVIDENCE.json",
+          }
+          for platform in (
+                  "windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
+                  "linux-x64", "linux-arm64"):
+              directory = root / "native" / platform
+              binary = directory / ("loom-vault.exe" if platform.startswith("windows") else "loom-vault")
+              named[f"{platform}.binary"] = binary
+              named[f"{platform}.sbom"] = directory / "loom-vault.spdx.json"
+              named[f"{platform}.provenance"] = directory / "provenance.json"
+          rows = []
+          for name, path in sorted(named.items()):
+              raw = path.read_bytes()
+              rows.append({"name": name, "bytes": len(raw),
+                           "sha256": hashlib.sha256(raw).hexdigest()})
+          value = {"schema_version": 1,
+                   "repository": "https://github.com/saroo98/loom",
+                   "commit": os.environ["LOOM_SOURCE_SHA"],
+                   "tag": os.environ["RELEASE_TAG"], "artifacts": rows}
+          (root / "release-evidence-subject.json").write_text(
+              json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8")
+          PY
+      - id: attest-evidence-subject
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ runner.temp }}/release-evidence-subject.json
+      - name: Verify attestation and compile the exact release passport
+        env:
+          ATTESTATION_BUNDLE: ${{ steps.attest-evidence-subject.outputs.bundle-path }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          LOOM_SOURCE_SHA: ${{ github.sha }}
+        shell: bash
+        run: |
+          gh attestation verify "$RUNNER_TEMP/release-evidence-subject.json" \
+            -R "${GITHUB_REPOSITORY}" --bundle "$ATTESTATION_BUNDLE" \
+            > "$RUNNER_TEMP/attestation-verification.json"
+          export NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          export EXPIRES="$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)"
+          export WORKFLOW_DIGEST="$(sha256sum .github/workflows/release.yml | cut -d' ' -f1)"
+          python -B - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          bundle = Path(os.environ["ATTESTATION_BUNDLE"]).read_bytes()
+          value = {
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "job_id": "release",
+              "runner": os.environ["RUNNER_NAME"],
+              "workflow_digest": os.environ["WORKFLOW_DIGEST"],
+              "attestation_sha256": hashlib.sha256(bundle).hexdigest(),
+              "attestation_bundle": base64.b64encode(bundle).decode("ascii"),
+              "issued_at": os.environ["NOW"], "verified_at": os.environ["NOW"],
+              "expires_at": os.environ["EXPIRES"],
+          }
+          Path(os.environ["RUNNER_TEMP"], "ci-authority.json").write_text(
+              json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8")
+          PY
+          ARGS=()
+          for platform in windows-x64 windows-arm64 macos-x64 macos-arm64 linux-x64 linux-arm64; do
+            directory="$RUNNER_TEMP/native/$platform"
+            binary="loom-vault"
+            [[ "$platform" == windows-* ]] && binary="loom-vault.exe"
+            ARGS+=(--native-binary "$platform=$directory/$binary")
+            ARGS+=(--native-sbom "$platform=$directory/loom-vault.spdx.json")
+            ARGS+=(--native-provenance "$platform=$directory/provenance.json")
+          done
+          python -B tools/loom_release_passport.py \
+            --subject release-assets/RELEASE-SUBJECT.json \
+            --plugin "release-assets/loom-plugin-${RELEASE_TAG}.zip" \
+            --reproduced-plugin "release-assets/loom-plugin-${RELEASE_TAG}-repro.zip" \
+            --cut-receipt "$RUNNER_TEMP/cut-receipt.json" \
+            --suite-report "$RUNNER_TEMP/full-suite.json" \
+            --rollback-report "$RUNNER_TEMP/rollback.json" \
+            --ci-authority "$RUNNER_TEMP/ci-authority.json" \
+            --codex-observation release-assets/CODEX-APP-EVIDENCE.json \
+            --evaluation-epoch "$NOW" --output "$RUNNER_TEMP/release-passport" \
+            "${ARGS[@]}"
+          test -f "$RUNNER_TEMP/release-passport/RELEASE-READINESS.json"
+          test -f "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE.json"
+          test -f "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE-GRAPH.json"
+          cp "$RUNNER_TEMP/release-evidence-subject.json" \
+            "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE-SUBJECT.json"
+          cp "$ATTESTATION_BUNDLE" \
+            "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE-ATTESTATION.json"
+      - name: Publish exact release passport assets to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          python -B - <<'PY'
+          import hashlib
+          from pathlib import Path
+          assets = Path("release-assets")
+          passport = Path(__import__("os").environ["RUNNER_TEMP"]) / "release-passport"
+          published = [
+              path for path in assets.iterdir()
+              if path.is_file() and path.name != "SHA256SUMS"
+          ] + [path for path in passport.iterdir()
+               if path.is_file() and path.name != "SHA256SUMS"]
+          lines = [f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}\n"
+                   for path in sorted(published, key=lambda item: item.name)]
+          (passport / "SHA256SUMS").write_text("".join(lines), encoding="utf-8")
+          PY
+          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/release-passport"/* --clobber
       - name: Verify generated operational truth is current
         working-directory: tools
         run: python -B loom_readiness.py .. --check
       - uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
-          subject-checksums: release-assets/SHA256SUMS
+          subject-checksums: ${{ runner.temp }}/release-passport/SHA256SUMS
       - name: Prove the release is still a draft
         env:
           GH_TOKEN: ${{ github.token }}

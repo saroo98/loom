@@ -42,7 +42,7 @@
         "authority": {"type": "string", "minLength": 1, "maxLength": 128},
         "key_id": {"type": ["string", "null"], "maxLength": 128},
         "algorithm": {"enum": ["none", "rsa-pkcs1v15-sha256", "ed25519", "sigstore-bundle"]},
-        "signature": {"type": ["string", "null"], "maxLength": 16384}
+        "signature": {"type": ["string", "null"], "maxLength": 262144}
       }
     },
     "verifier": {

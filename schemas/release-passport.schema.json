@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-passport.schema.json",
+  "title": "Exact Loom release passport outputs",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["evidence_bundle", "evidence_graph", "readiness"],
+  "properties": {
+    "evidence_bundle": {
+      "type": "object",
+      "required": ["schema_version", "policy_id", "expected_subjects_sha256", "evaluation_epoch", "envelopes"]
+    },
+    "evidence_graph": {
+      "type": "object",
+      "required": ["schema_version", "policy_id", "expected_subjects_sha256", "graph_sha256"]
+    },
+    "readiness": {"$ref": "release-readiness.schema.json#/$defs/v3"}
+  }
+}

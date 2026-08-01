@@ -1,10 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "loom/schemas/release-readiness.schema.json",
-  "title": "Evidence-generated Loom release readiness v2",
+  "title": "Evidence-generated Loom source and release readiness v3",
   "oneOf": [
     {"$ref": "#/$defs/v1"},
-    {"$ref": "#/$defs/v2"}
+    {"$ref": "#/$defs/v2"},
+    {"$ref": "#/$defs/v3"}
   ],
   "$defs": {
     "binding": {
@@ -146,6 +147,81 @@
           "items": {"type": "string"}
         }
       }
+    },
+    "v3Claim": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "status", "support_status", "evidence_status", "required",
+        "reason_codes", "receipt_ids", "subject_bindings",
+        "legacy_release_subject", "valid_until", "public_summary"
+      ],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "status": {
+          "enum": [
+            "supported", "experimental", "failed", "skipped", "expired",
+            "stale", "unverified", "unsupported", "not_applicable", "revoked"
+          ]
+        },
+        "support_status": {
+          "enum": ["supported", "experimental", "stale", "unsupported", "not_applicable"]
+        },
+        "evidence_status": {
+          "enum": [
+            "supported", "experimental", "failed", "skipped", "expired",
+            "stale", "unverified", "unsupported", "not_applicable", "revoked"
+          ]
+        },
+        "required": {"type": "boolean"},
+        "reason_codes": {
+          "type": "array", "uniqueItems": true, "items": {"type": "string"}
+        },
+        "receipt_ids": {
+          "type": "array", "uniqueItems": true, "items": {"type": "string"}
+        },
+        "subject_bindings": {
+          "type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/binding"}
+        },
+        "legacy_release_subject": {
+          "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"
+        },
+        "valid_until": {"type": ["string", "null"], "format": "date-time"},
+        "public_summary": {"type": "string", "minLength": 1}
+      }
+    },
+    "v3": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "report_kind", "version", "release_subject_sha256",
+        "evaluated_at", "next_invalidation_at", "expected_subjects_sha256",
+        "subject_bindings", "legacy_release_subject", "registry_sha256", "overall",
+        "claims", "counts", "support_counts", "promotion_blockers"
+      ],
+      "properties": {
+        "schema_version": {"const": 3},
+        "report_kind": {"enum": ["source-tree", "release"]},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "release_subject_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "evaluated_at": {"type": "string", "format": "date-time"},
+        "next_invalidation_at": {"type": ["string", "null"], "format": "date-time"},
+        "expected_subjects_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "subject_bindings": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/binding"}},
+        "legacy_release_subject": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "registry_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "overall": {"enum": ["ready", "not-ready"]},
+        "claims": {"type": "array", "items": {"$ref": "#/$defs/v3Claim"}},
+        "counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "support_counts": {"type": "object", "additionalProperties": {"type": "integer", "minimum": 0}},
+        "promotion_blockers": {"type": "array", "uniqueItems": true, "items": {"type": "string"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"report_kind": {"const": "source-tree"}}},
+         "then": {"properties": {"release_subject_sha256": {"type": "null"}}}},
+        {"if": {"properties": {"report_kind": {"const": "release"}}},
+         "then": {"properties": {"release_subject_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}}}
+      ]
     },
     "v1": {
       "type": "object",
