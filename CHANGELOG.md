@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+## 1.8.30
+
+- Separate conservative source-tree readiness from exact finished-release readiness.
+- Compile validated release evidence for exact-cut, CI, native helpers, SBOM, provenance,
+  privacy, reproducibility, rollback, and a fresh Codex App observation.
+- Publish a privacy-bounded, subject-bound release passport without changing Loom's planner or
+  lifecycle behavior.
+
 ## 1.8.29
 
 - Regenerate the correct planning lifecycle when an exact bound plan revision changes
