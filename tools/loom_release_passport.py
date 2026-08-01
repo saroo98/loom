@@ -209,13 +209,14 @@ def _passed_suite(value, *, commit, root_sha256):
 
 def _passed_rollback(value, *, commit, root_sha256):
     fields = {"schema_version", "status", "commit", "public_root_sha256",
-              "tests", "result_sha256"}
+              "tests", "transcript_sha256", "result_sha256"}
     if not isinstance(value, dict) or set(value) != fields \
             or value.get("schema_version") != 1 or value.get("status") != "passed" \
             or value.get("commit") != commit \
             or value.get("public_root_sha256") != root_sha256 \
             or not isinstance(value.get("tests"), list) or not value["tests"] \
             or any(not isinstance(item, str) or not item for item in value["tests"]) \
+            or not SHA.fullmatch(str(value.get("transcript_sha256", ""))) \
             or value.get("result_sha256") != _digest({
                 key: item for key, item in value.items() if key != "result_sha256"}):
         raise ReleasePassportError("rollback evidence is invalid or wrong-subject")

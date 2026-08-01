@@ -76,7 +76,8 @@ class ReleasePassportTests(unittest.TestCase):
                  "subject": {"source_commit": commit, "public_root_sha256": tree}}
         rollback_body = {"schema_version": 1, "status": "passed", "commit": commit,
                          "public_root_sha256": tree,
-                         "tests": ["test_update", "test_recovery"]}
+                         "tests": ["test_update", "test_recovery"],
+                         "transcript_sha256": "f" * 64}
         rollback = {**rollback_body,
                     "result_sha256": loom_release_passport._digest(rollback_body)}
         attestation = b'{"verification":"passed"}'

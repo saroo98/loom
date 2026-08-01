@@ -270,7 +270,8 @@ def _validate_v2_envelope(value):
                 signer["key_id"] is not None or signer["signature"] is not None)) \
             or (signer["algorithm"] != "none" and (
                 not isinstance(signer["key_id"], str) or not signer["key_id"]
-                or not isinstance(signer["signature"], str) or not signer["signature"])):
+                or not isinstance(signer["signature"], str) or not signer["signature"]
+                or len(signer["signature"]) > 262144)):
         raise EvidenceGraphError("typed evidence signer is invalid")
     if value["evidence_class"] not in {"mechanical-local", "host-observed"} \
             and signer["algorithm"] == "none":
