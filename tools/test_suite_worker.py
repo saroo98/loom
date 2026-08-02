@@ -2,6 +2,7 @@
 
 import hashlib
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -86,6 +87,30 @@ class SuiteWorkerTests(unittest.TestCase):
         return cut, inventory, plan, output
 
     def test_worker_runs_real_tests_in_an_isolated_copy_and_drops_secrets(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary) / "temp-base"
+            base.mkdir()
+            real_mkdtemp = tempfile.mkdtemp
+
+            def create(*, prefix, dir):
+                self.assertEqual(base.resolve(), Path(dir))
+                return real_mkdtemp(prefix=prefix, dir=dir)
+
+            with mock.patch.object(
+                    loom_suite_worker.tempfile, "gettempdir",
+                    return_value=str(base)), mock.patch.object(
+                    loom_suite_worker.tempfile, "mkdtemp", side_effect=create):
+                environment, runtime_root = \
+                    loom_suite_worker._isolated_environment(
+                        Path(temporary) / "worker", "general-000")
+            try:
+                self.assertEqual(runtime_root, runtime_root.resolve())
+                self.assertTrue(all(Path(value).is_absolute()
+                                    for value in environment.values()
+                                    if value != "general-000"))
+            finally:
+                shutil.rmtree(runtime_root)
+
         source = (
             "import os,sys,unittest\n"
             "from pathlib import Path\n"

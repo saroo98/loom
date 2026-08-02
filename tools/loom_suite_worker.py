@@ -270,7 +270,12 @@ def _isolated_environment(worker_root, shard_id):
     # Keep runtime paths short on every platform. In particular, macOS Unix
     # sockets have a small pathname limit, and a worker root nested below an
     # Actions checkout is already too deep for several clean-host fixtures.
-    external_runtime_root = Path(tempfile.mkdtemp(prefix="loom-sw-"))
+    # macOS commonly exposes its temporary directory through /var while the
+    # canonical path is /private/var. Resolve the base before creating any
+    # test-visible path so redirect-sensitive tests see one stable identity.
+    temporary_base = Path(tempfile.gettempdir()).resolve()
+    external_runtime_root = Path(tempfile.mkdtemp(
+        prefix="loom-sw-", dir=temporary_base)).resolve()
     home = external_runtime_root / "home"
     temp = external_runtime_root / "temp"
     cache_root = external_runtime_root

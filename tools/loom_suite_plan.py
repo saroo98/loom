@@ -286,6 +286,11 @@ def plan(inventory_value, *, timing_profile, policy, logical_cpus=None):
             key=lambda row: (row["estimated_microseconds"], row["shard_id"]))
         target["modules"].append(module)
         target["estimated_microseconds"] += estimates[module]
+    # LPT determines membership and load only. Execute each shard in the same
+    # canonical module order as the serial unittest discovery so process-global
+    # fixtures cannot observe an arbitrary timing-profile order.
+    for shard in general_shards:
+        shard["modules"].sort()
     shards.extend(general_shards)
     body = {
         "schema_version": 1,

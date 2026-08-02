@@ -76,7 +76,8 @@ class SuitePlanTests(unittest.TestCase):
                 {"module": "test_loom_mutation", "tests": [
                     "test_loom_mutation.T.test_mutation"]},
                 {"module": "test_unknown", "tests": ["test_unknown.T.test_u"]},
-                {"module": "test_zeta", "tests": ["test_zeta.T.test_z"]},
+                {"module": "test_aardvark", "tests": [
+                    "test_aardvark.T.test_z"]},
             ],
             "module_count": 4,
             "test_count": 4,
@@ -87,7 +88,7 @@ class SuitePlanTests(unittest.TestCase):
             "module_microseconds": {
                 "test_alpha": 900,
                 "test_loom_mutation": 800,
-                "test_zeta": 200,
+                "test_aardvark": 200,
             },
         })
         policy = loom_suite_plan.seal_policy({
@@ -112,8 +113,10 @@ class SuitePlanTests(unittest.TestCase):
         self.assertEqual(
             ["test_alpha"], general[0]["modules"])
         self.assertEqual(
-            ["test_unknown", "test_zeta"], general[1]["modules"])
+            ["test_aardvark", "test_unknown"], general[1]["modules"])
         self.assertEqual(700, general[1]["estimated_microseconds"])
+        self.assertEqual(
+            sorted(general[1]["modules"]), general[1]["modules"])
         self.assertEqual(64, len(first["plan_sha256"]))
 
     def test_dynamic_budget_never_commits_an_os_specific_worker_count(self):
