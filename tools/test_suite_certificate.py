@@ -127,6 +127,11 @@ class SuiteCertificateTests(unittest.TestCase):
             loom_suite_certificate.compile_cell(
                 inventory, plan, failed, policy=policy)
         self.assertEqual("TEST_FAILURE", raised.exception.primary_reason)
+        self.assertEqual(
+            [failed[0]["observed_tests"][0]["test"]],
+            raised.exception.public_details["failed_tests"])
+        self.assertEqual([], raised.exception.public_details["missing_tests"])
+        self.assertEqual([], raised.exception.public_details["unexpected_tests"])
 
     def test_fail_closed_precedence_prefers_subject_over_later_test_failure(self):
         inventory, _profile, policy, plan, receipts = self.fixture()

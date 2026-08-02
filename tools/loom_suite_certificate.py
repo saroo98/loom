@@ -109,10 +109,23 @@ WORKER_FAILURE_CODES = {
 
 
 class CertificateError(RuntimeError):
-    def __init__(self, message, findings):
+    def __init__(self, message, findings, public_details=None):
         unique = sorted(set(findings), key=lambda item: PRECEDENCE.index(item))
         self.findings = unique
         self.primary_reason = unique[0] if unique else "SCHEMA"
+        self.public_details = public_details or {
+            "failed_tests": [], "missing_tests": [], "unexpected_tests": [],
+        }
+        if set(self.public_details) != {
+                "failed_tests", "missing_tests", "unexpected_tests"} \
+                or any(not isinstance(values, list)
+                       or values != sorted(set(values))
+                       or any(not isinstance(test_id, str)
+                              or not 3 <= len(test_id) <= 512
+                              for test_id in values)
+                       for values in self.public_details.values()) \
+                or not loom_suite_worker._privacy_clean(self.public_details):
+            raise ValueError("certificate public failure details are invalid")
         super().__init__(f"{message}: {self.primary_reason}")
 
 
@@ -134,9 +147,9 @@ def _shadow_failure_code(exc):
     return "OS_OPERATION"
 
 
-def _raise(findings, message="suite certificate refused"):
+def _raise(findings, message="suite certificate refused", public_details=None):
     if findings:
-        raise CertificateError(message, findings)
+        raise CertificateError(message, findings, public_details)
 
 
 def _primary(findings):
@@ -258,7 +271,13 @@ def compile_cell(inventory, plan, receipts, *, policy):
     if sorted(observed_ids) != expected_all or len(observed_ids) != len(
             set(observed_ids)):
         findings.append("INVENTORY_MISMATCH")
-    _raise(findings)
+    _raise(findings, public_details={
+        "failed_tests": sorted(
+            row["test"] for row in outcomes
+            if row.get("status") in {"failed", "error"}),
+        "missing_tests": sorted(set(expected_all) - set(observed_ids)),
+        "unexpected_tests": sorted(set(observed_ids) - set(expected_all)),
+    })
     outcomes.sort(key=lambda row: row["test"])
     body = {
         "schema_version": 1, "status": "certified",
@@ -864,6 +883,8 @@ def run_shadow_cell(cut, test_root, exact_receipt, serial_report, policy,
         body = {"schema_version": 1, "status": "mismatched",
                 "primary_reason": primary, "findings": sorted(set(findings)),
                 "failure_code": _shadow_failure_code(exc)}
+        if isinstance(exc, CertificateError):
+            body["failure_details"] = exc.public_details
         result = {**body, "comparison_sha256": loom_suite_plan.digest(body)}
         _write(output_root / "shadow-comparison.json", result)
         return result
