@@ -242,6 +242,11 @@ def _validate_inputs(cut, inventory, plan, shard_id):
             or manifest_sha256 != inventory["subject"]["public_manifest_sha256"] \
             or len(manifest["files"]) + 1 != inventory["subject"]["public_file_count"]:
         raise SuiteWorkerError("worker public-cut subject is invalid")
+    worker_program = cut / "tools" / "loom_suite_worker.py"
+    if not worker_program.is_file() or worker_program.is_symlink() \
+            or hashlib.sha256(worker_program.read_bytes()).hexdigest() != \
+            inventory["harness_sha256"]:
+        raise SuiteWorkerError("worker harness subject is invalid")
     return cut, inventory, plan, matches[0]
 
 
@@ -319,8 +324,9 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
     try:
         operation_result = loom_operation_supervisor.run(
             operation_class="release-suite-worker",
-            command=[sys.executable, "-B", str(Path(__file__).resolve()), "_child",
-                     str(request_path), str(report_path)],
+            command=[sys.executable, "-B",
+                     str((candidate / "tools" / "loom_suite_worker.py").resolve()),
+                     "_child", str(request_path), str(report_path)],
             cwd=(candidate / "tools").resolve(), timeout=timeout,
             environment=environment, allowed_roots=[worker_root],
             protected_roots=[cut, *protected_roots],

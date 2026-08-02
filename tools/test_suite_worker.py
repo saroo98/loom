@@ -34,12 +34,21 @@ class SuiteWorkerTests(unittest.TestCase):
         cut = root / "cut"
         tools = cut / "tools"
         tools.mkdir(parents=True)
+        source_tools = Path(loom_suite_worker.__file__).resolve().parent
+        (tools / "loom_suite_worker.py").write_text(
+            "import sys\n"
+            f"sys.path.insert(0, {str(source_tools)!r})\n"
+            "import loom_suite_worker as implementation\n"
+            "raise SystemExit(implementation.main())\n",
+            encoding="utf-8")
         (tools / "test_worker_fixture.py").write_text(source, encoding="utf-8")
-        raw = (tools / "test_worker_fixture.py").read_bytes()
-        files = [{
-            "path": "tools/test_worker_fixture.py", "bytes": len(raw),
-            "sha256": hashlib.sha256(raw).hexdigest(),
-        }]
+        files = []
+        for item in sorted(tools.iterdir(), key=lambda path: path.name):
+            raw = item.read_bytes()
+            files.append({
+                "path": f"tools/{item.name}", "bytes": len(raw),
+                "sha256": hashlib.sha256(raw).hexdigest(),
+            })
         body = {"schema_version": 1, "files": files}
         manifest = {**body, "root_sha256": loom_release._canonical_hash(body)}
         manifest_path = cut / loom_release.MANIFEST
@@ -54,10 +63,10 @@ class SuiteWorkerTests(unittest.TestCase):
             "public_root_sha256": public_root,
             "public_manifest_sha256": hashlib.sha256(
                 manifest_path.read_bytes()).hexdigest(),
-            "public_file_count": 2,
+            "public_file_count": len(files) + 1,
         }
         harness = hashlib.sha256(
-            Path(loom_suite_worker.__file__).read_bytes()).hexdigest()
+            (tools / "loom_suite_worker.py").read_bytes()).hexdigest()
         inventory = loom_suite_plan.inventory(
             tools, subject=subject, environment=ENVIRONMENT,
             harness_sha256=harness)
@@ -78,7 +87,7 @@ class SuiteWorkerTests(unittest.TestCase):
 
     def test_worker_runs_real_tests_in_an_isolated_copy_and_drops_secrets(self):
         source = (
-            "import os,unittest\n"
+            "import os,sys,unittest\n"
             "from pathlib import Path\n"
             "class WorkerFixture(unittest.TestCase):\n"
             "    def test_isolated(self):\n"
@@ -89,6 +98,7 @@ class SuiteWorkerTests(unittest.TestCase):
             "        self.assertTrue(all(os.environ.get(key) for key in keys))\n"
             "        self.assertNotIn('LOOM_TEST_API_KEY', os.environ)\n"
             "        self.assertEqual('candidate', Path(__file__).resolve().parents[1].name)\n"
+            "        self.assertEqual('candidate', Path(sys.argv[0]).resolve().parents[1].name)\n"
         )
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
@@ -104,6 +114,25 @@ class SuiteWorkerTests(unittest.TestCase):
                     os.environ.pop("LOOM_TEST_API_KEY", None)
                 else:
                     os.environ["LOOM_TEST_API_KEY"] = old
+            inventory_body = {
+                key: value for key, value in inventory.items()
+                if key != "inventory_sha256"
+            }
+            inventory_body["harness_sha256"] = "f" * 64
+            forged_inventory = loom_suite_plan.seal_inventory(inventory_body)
+            plan_body = {
+                key: value for key, value in plan.items() if key != "plan_sha256"
+            }
+            plan_body["inventory_sha256"] = forged_inventory["inventory_sha256"]
+            forged_plan = {
+                **plan_body, "plan_sha256": loom_suite_plan.digest(plan_body),
+            }
+            with self.assertRaisesRegex(
+                    loom_suite_worker.SuiteWorkerError,
+                    "worker harness subject is invalid"):
+                loom_suite_worker.execute_shard(
+                    cut, forged_inventory, forged_plan, "general-000", output,
+                    timeout=10)
         self.assertEqual("passed", receipt["status"])
         self.assertEqual(1, receipt["test_count"])
         self.assertTrue(receipt["mutation_clean"])
