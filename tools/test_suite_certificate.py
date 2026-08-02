@@ -113,6 +113,20 @@ class SuiteCertificateTests(unittest.TestCase):
             report, "cell-certificate", certificate,
             "suite-cell-certificate-v1.schema.json")
         self.assertEqual([], report.errors)
+        failed = copy.deepcopy(receipts)
+        failed[0]["status"] = "failed"
+        failed[0]["primary_reason"] = "TEST_FAILURE"
+        failed[0]["findings"] = ["TEST_FAILURE"]
+        failed[0]["observed_tests"][0]["status"] = "failed"
+        failed[0]["failure_count"] = 1
+        failed[0]["operation"]["status"] = "failed"
+        failed[0]["operation"]["returncode"] = 1
+        failed[0]["operation"]["primary_failure"] = "nonzero-exit"
+        failed[0] = self.reseal(failed[0])
+        with self.assertRaises(loom_suite_certificate.CertificateError) as raised:
+            loom_suite_certificate.compile_cell(
+                inventory, plan, failed, policy=policy)
+        self.assertEqual("TEST_FAILURE", raised.exception.primary_reason)
 
     def test_fail_closed_precedence_prefers_subject_over_later_test_failure(self):
         inventory, _profile, policy, plan, receipts = self.fixture()

@@ -216,10 +216,13 @@ def compile_cell(inventory, plan, receipts, *, policy):
                 or receipt["plan_sha256"] != plan["plan_sha256"]:
             findings.append("WRONG_POLICY")
         operation = receipt["operation"]
-        if operation.get("status") != "passed" \
-                or operation.get("returncode") != 0 \
-                or operation.get("survivors_confirmed_zero") is not True \
-                or operation.get("protected_roots_unchanged") is not True:
+        operation_terminal = operation.get("survivors_confirmed_zero") is True \
+            and operation.get("protected_roots_unchanged") is True \
+            and (operation.get("status") == "passed" or (
+                operation.get("returncode") == 1
+                and operation.get("primary_failure") == "nonzero-exit"
+                and "TEST_FAILURE" in receipt["findings"]))
+        if not operation_terminal:
             findings.append("WORKER_NOT_TERMINAL")
         if receipt["mutation_clean"] is not True \
                 or receipt["pre_manifest_sha256"] != \

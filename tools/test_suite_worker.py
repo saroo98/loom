@@ -183,6 +183,21 @@ class SuiteWorkerTests(unittest.TestCase):
         self.assertEqual("UNAUTHORIZED_SKIP", receipt["primary_reason"])
         self.assertEqual(
             "unclassified", receipt["observed_tests"][0]["skip_reason_code"])
+        subtest_source = (
+            "import unittest\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    def test_subtest_failure(self):\n"
+            "        with self.subTest(case='fixture'): self.fail('fixture')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cut, inventory, plan, output = self.fixture(root, subtest_source)
+            failed = loom_suite_worker.execute_shard(
+                cut, inventory, plan, "general-000", output, timeout=10)
+        self.assertEqual("failed", failed["status"])
+        self.assertEqual("TEST_FAILURE", failed["primary_reason"])
+        self.assertEqual(1, failed["failure_count"])
+        self.assertTrue(failed["operation"]["survivors_confirmed_zero"])
 
     def test_worker_timeout_is_terminal_and_confirms_no_survivors(self):
         source = (

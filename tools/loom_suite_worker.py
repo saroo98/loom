@@ -263,8 +263,7 @@ def _child(request_path, output_path):
     report = loom_test.run_modules(
         request["modules"], start_dir=request["test_root"], verbosity=0)
     loom_reliability.atomic_write_json(Path(output_path), report)
-    return 0 if not report["failures"] and not report["errors"] \
-        and report["within_budget"] else 1
+    return 0 if report["status"] != "failed" and report["within_budget"] else 1
 
 
 def _isolated_environment(worker_root, shard_id):
@@ -367,6 +366,7 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
         if row["module"] in set(expected_modules) for test_id in row["tests"])
     observed = []
     failure_count = error_count = skip_count = 0
+    raw_failure_count = raw_error_count = 0
     if isinstance(report, dict):
         skip_hashes = {
             row["test"]: hashlib.sha256(
@@ -389,10 +389,13 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
                 outcome["skip_reason_sha256"] = skip_hashes.get(
                     row["test"], hashlib.sha256(b"").hexdigest())
             observed.append(outcome)
-        failure_count = int(report.get("failures", 0))
-        error_count = int(report.get("errors", 0))
-        skip_count = int(report.get("skipped", 0))
     observed.sort(key=lambda row: row["test"])
+    failure_count = sum(row["status"] == "failed" for row in observed)
+    error_count = sum(row["status"] == "error" for row in observed)
+    skip_count = sum(row["status"] == "skipped" for row in observed)
+    if isinstance(report, dict):
+        raw_failure_count = int(report.get("failures", 0))
+        raw_error_count = int(report.get("errors", 0))
     operation_public = {
         key: operation.get(key) for key in (
             "status", "returncode", "primary_failure",
@@ -401,15 +404,21 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
     }
     observed_ids = [row["test"] for row in observed]
     findings = []
-    if operation.get("status") != "passed" or report is None \
-            or not runtime_roots_clean:
+    operation_terminal = isinstance(report, dict) and runtime_roots_clean \
+        and operation.get("survivors_confirmed_zero") is True \
+        and operation.get("protected_roots_unchanged") is True \
+        and (operation.get("status") == "passed" or (
+            operation.get("returncode") == 1
+            and operation.get("primary_failure") == "nonzero-exit"))
+    if not operation_terminal:
         findings.append("WORKER_NOT_TERMINAL")
     if not mutation_clean:
         findings.append("CANDIDATE_MUTATION")
     if observed_ids != expected_tests or not isinstance(report, dict) \
             or report.get("selected_modules") != expected_modules:
         findings.append("INVENTORY_MISMATCH")
-    if failure_count or error_count:
+    if failure_count or error_count or raw_failure_count or raw_error_count \
+            or (isinstance(report, dict) and report.get("status") == "failed"):
         findings.append("TEST_FAILURE")
     if any(row.get("skip_reason_code") not in
            loom_test.AUTHORIZED_SKIP_REASON_CODES for row in observed

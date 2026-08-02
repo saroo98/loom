@@ -141,6 +141,18 @@ class TimingResult(unittest.TextTestResult):
         self._statuses[test.id()] = "error"
         super().addError(test, err)
 
+    def addSubTest(self, test, subtest, err):
+        if err is not None:
+            status = ("failed" if issubclass(err[0], test.failureException)
+                      else "error")
+            if self._statuses.get(test.id()) != "error":
+                self._statuses[test.id()] = status
+        super().addSubTest(test, subtest, err)
+
+    def addUnexpectedSuccess(self, test):
+        self._statuses[test.id()] = "failed"
+        super().addUnexpectedSuccess(test)
+
     def addSkip(self, test, reason):
         self._statuses[test.id()] = "skipped"
         super().addSkip(test, reason)
