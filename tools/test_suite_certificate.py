@@ -226,6 +226,15 @@ class SuiteCertificateTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 loom_suite_certificate.CertificateError, "shadow parity"):
             loom_suite_certificate.compare_shadow(mismatch, certificate)
+        self.assertEqual(
+            "WORKER_RECEIPT_COUNTS",
+            loom_suite_certificate._shadow_failure_code(
+                loom_suite_worker.SuiteWorkerError(
+                    "worker receipt outcome counts are invalid")))
+        self.assertEqual(
+            "OS_OPERATION",
+            loom_suite_certificate._shadow_failure_code(
+                OSError("private path must not cross the public projection")))
 
     def test_release_consumers_require_the_exact_fifteen_cell_topology(self):
         inventory, _profile, policy, plan, receipts = self.fixture()

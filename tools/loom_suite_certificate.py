@@ -82,6 +82,30 @@ WINDOWS_FAULT_TESTS = {
     "windows-runtime-root-cleanup": "test_suite_worker.SuiteWorkerTests."
                                     "test_windows_external_runtime_root_is_cleaned_if_supervisor_raises",
 }
+WORKER_FAILURE_CODES = {
+    "shard execution lanes are invalid": "WORKER_LANES",
+    "shard identity is invalid": "WORKER_SHARD_IDENTITY",
+    "shard plan is invalid": "WORKER_PLAN",
+    "worker harness subject is invalid": "WORKER_HARNESS_SUBJECT",
+    "worker operation receipt is invalid": "WORKER_OPERATION_RECEIPT",
+    "worker output already exists": "WORKER_OUTPUT_EXISTS",
+    "worker output root is invalid": "WORKER_OUTPUT_ROOT",
+    "worker public-cut subject is invalid": "WORKER_PUBLIC_CUT_SUBJECT",
+    "worker receipt cannot claim success": "WORKER_SUCCESS_CLAIM",
+    "worker receipt contains private evidence": "WORKER_PRIVATE_EVIDENCE",
+    "worker receipt digest is invalid": "WORKER_RECEIPT_DIGEST",
+    "worker receipt duration is invalid": "WORKER_RECEIPT_DURATION",
+    "worker receipt fields are invalid": "WORKER_RECEIPT_FIELDS",
+    "worker receipt identity is invalid": "WORKER_RECEIPT_IDENTITY",
+    "worker receipt inventory is invalid": "WORKER_RECEIPT_INVENTORY",
+    "worker receipt is already sealed": "WORKER_RECEIPT_EXISTS",
+    "worker receipt is invalid": "WORKER_RECEIPT_JSON",
+    "worker receipt outcome counts are invalid": "WORKER_RECEIPT_COUNTS",
+    "worker receipt outcome is invalid": "WORKER_RECEIPT_OUTCOME",
+    "worker receipt terminal state is invalid": "WORKER_RECEIPT_TERMINAL",
+    "worker request fields are invalid": "WORKER_REQUEST_FIELDS",
+    "worker skip authorization state is invalid": "WORKER_SKIP_AUTHORIZATION",
+}
 
 
 class CertificateError(RuntimeError):
@@ -90,6 +114,24 @@ class CertificateError(RuntimeError):
         self.findings = unique
         self.primary_reason = unique[0] if unique else "SCHEMA"
         super().__init__(f"{message}: {self.primary_reason}")
+
+
+def _shadow_failure_code(exc):
+    """Project an internal exception onto a closed, content-free public code."""
+    if isinstance(exc, CertificateError):
+        return "CERTIFICATE_" + exc.primary_reason
+    if isinstance(exc, loom_suite_worker.SuiteWorkerError):
+        message = str(exc)
+        if message in WORKER_FAILURE_CODES:
+            return WORKER_FAILURE_CODES[message]
+        if message.endswith(" is unsafe"):
+            return "WORKER_INPUT_UNSAFE"
+        if message.endswith(" is unreadable"):
+            return "WORKER_INPUT_UNREADABLE"
+        return "WORKER_INTERNAL"
+    if isinstance(exc, loom_suite_plan.SuitePlanError):
+        return "PLAN_VALIDATION"
+    return "OS_OPERATION"
 
 
 def _raise(findings, message="suite certificate refused"):
@@ -817,7 +859,8 @@ def run_shadow_cell(cut, test_root, exact_receipt, serial_report, policy,
         findings = list(getattr(exc, "findings", None) or ["SCHEMA"])
         primary = _primary(findings)
         body = {"schema_version": 1, "status": "mismatched",
-                "primary_reason": primary, "findings": sorted(set(findings))}
+                "primary_reason": primary, "findings": sorted(set(findings)),
+                "failure_code": _shadow_failure_code(exc)}
         result = {**body, "comparison_sha256": loom_suite_plan.digest(body)}
         _write(output_root / "shadow-comparison.json", result)
         return result
