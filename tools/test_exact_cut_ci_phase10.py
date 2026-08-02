@@ -88,6 +88,26 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             loom_lint.validate_schema(
                 report, __file__, result, "exact-cut-ci-receipt-v2.schema.json")
             self.assertEqual([], report.errors)
+            skip_only = dict(verified["suite"])
+            skip_only.update({
+                "capability_complete": False,
+                "capability_status": "requires-matrix",
+                "returncode": 1,
+                "primary_failure": "operation returned nonzero",
+                "tests_run": 1,
+                "skip_receipts": [{
+                    "test": "tests.Example.test_platform",
+                    "reason": "Windows-only platform boundary",
+                }],
+                "timings": [{
+                    "test": "tests.Example.test_platform",
+                    "status": "skipped", "seconds": 0.01,
+                }],
+            })
+            projected = loom_exact_cut_ci._public_suite(skip_only)
+            self.assertIsNone(projected["primary_failure_sha256"])
+            self.assertEqual(1, projected["returncode"])
+            self.assertEqual("requires-matrix", projected["capability_status"])
             envelope = loom_operation_envelope.read(
                 cut.parent / ".loom-operations" / f"{result['operation_id']}.json")
             self.assertEqual("passed", envelope["events"][-1]["phase"])

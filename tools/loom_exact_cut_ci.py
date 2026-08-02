@@ -86,7 +86,15 @@ def _public_suite(value, *, binding=None):
         if isinstance(row, dict) and isinstance(row.get("test"), str) \
                 and row.get("status") in {"failed", "error"}:
             failures.append({"test": row["test"], "status": row["status"]})
-    primary = value.get("primary_failure")
+    skip_only_incomplete = value.get("passed") is True \
+        and value.get("capability_complete") is False \
+        and value.get("capability_status") == "requires-matrix" \
+        and value.get("returncode") == 1 \
+        and value.get("failure_count") == 0 \
+        and value.get("error_count") == 0 \
+        and value.get("failed_tests") == [] \
+        and bool(skips)
+    primary = None if skip_only_incomplete else value.get("primary_failure")
     body = {
         "schema_version": 2,
         "passed": value.get("passed") is True,
