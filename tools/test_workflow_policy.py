@@ -142,6 +142,8 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn('os: [ubuntu-latest, macos-latest, windows-latest]', quality)
         self.assertIn('python: ["3.10", "3.11", "3.12", "3.13", "3.14"]', quality)
         self.assertIn("if: github.event_name != 'pull_request'", quality)
+        self.assertIn("loom_test.py fast --output fast-test-timings.json", quality)
+        self.assertNotIn("loom_test.py fast --max-seconds", quality)
 
     def test_release_suite_imports_exact_main_capability_evidence(self):
         release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")

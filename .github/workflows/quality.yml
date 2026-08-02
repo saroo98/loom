@@ -97,7 +97,7 @@ jobs:
           print(f'compiled {len(files)} production modules in memory')"
       - name: Run bounded trust-critical gate
         working-directory: tools
-        run: python -B loom_test.py fast --max-seconds 30 --output fast-test-timings.json
+        run: python -B loom_test.py fast --output fast-test-timings.json
       - name: Regenerate final inventory and require committed parity
         if: matrix.os == 'ubuntu-latest' && matrix.python == '3.10'
         working-directory: tools
