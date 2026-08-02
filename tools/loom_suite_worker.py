@@ -243,9 +243,14 @@ def _validate_inputs(cut, inventory, plan, shard_id):
             or len(manifest["files"]) + 1 != inventory["subject"]["public_file_count"]:
         raise SuiteWorkerError("worker public-cut subject is invalid")
     worker_program = cut / "tools" / "loom_suite_worker.py"
+    worker_entries = [
+        row for row in manifest["files"]
+        if row.get("path") == "tools/loom_suite_worker.py"
+    ]
     if not worker_program.is_file() or worker_program.is_symlink() \
+            or len(worker_entries) != 1 \
             or hashlib.sha256(worker_program.read_bytes()).hexdigest() != \
-            inventory["harness_sha256"]:
+            worker_entries[0].get("sha256"):
         raise SuiteWorkerError("worker harness subject is invalid")
     return cut, inventory, plan, matches[0]
 

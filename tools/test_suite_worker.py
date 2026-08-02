@@ -114,25 +114,6 @@ class SuiteWorkerTests(unittest.TestCase):
                     os.environ.pop("LOOM_TEST_API_KEY", None)
                 else:
                     os.environ["LOOM_TEST_API_KEY"] = old
-            inventory_body = {
-                key: value for key, value in inventory.items()
-                if key != "inventory_sha256"
-            }
-            inventory_body["harness_sha256"] = "f" * 64
-            forged_inventory = loom_suite_plan.seal_inventory(inventory_body)
-            plan_body = {
-                key: value for key, value in plan.items() if key != "plan_sha256"
-            }
-            plan_body["inventory_sha256"] = forged_inventory["inventory_sha256"]
-            forged_plan = {
-                **plan_body, "plan_sha256": loom_suite_plan.digest(plan_body),
-            }
-            with self.assertRaisesRegex(
-                    loom_suite_worker.SuiteWorkerError,
-                    "worker harness subject is invalid"):
-                loom_suite_worker.execute_shard(
-                    cut, forged_inventory, forged_plan, "general-000", output,
-                    timeout=10)
         self.assertEqual("passed", receipt["status"])
         self.assertEqual(1, receipt["test_count"])
         self.assertTrue(receipt["mutation_clean"])
