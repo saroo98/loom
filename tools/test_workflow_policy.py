@@ -86,11 +86,19 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_compatibility_matrix_builds_and_serially_verifies_one_exact_cut(self):
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
+        quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         verify = 'ARGS=(.. "${{ runner.temp }}/loom-public-cut" --output exact-cut-ci.json)'
         self.assertIn(verify, compatibility)
         self.assertNotIn("loom_release.py verify-cut ..", compatibility)
         self.assertIn("--serial-suite full-test-timings.json", compatibility)
         self.assertIn("loom_suite_certificate.py shadow-cell", compatibility)
+        for workflow in (quality, compatibility):
+            self.assertIn("tools/suite-shadow/cell-certificate.json", workflow)
+            self.assertIn("tools/suite-shadow/shadow-comparison.json", workflow)
+            self.assertNotIn("            tools/suite-shadow/\n", workflow)
+            self.assertIn("SHADOW_OK=1", workflow)
+            self.assertIn('test "$SHADOW_OK" -eq 1', workflow)
+            self.assertIn('["status"])\' "$comparison")" = matched', workflow)
 
     def test_native_reproducibility_rebuilds_at_one_private_path(self):
         helper = (WORKFLOWS / "build-helper.yml").read_text(encoding="utf-8")

@@ -210,7 +210,8 @@ jobs:
           path: |
             tools/exact-cut-ci.json
             tools/full-test-timings.json
-            tools/suite-shadow/
+            tools/suite-shadow/cell-certificate.json
+            tools/suite-shadow/shadow-comparison.json
           retention-days: 7
           if-no-files-found: error
 
@@ -246,7 +247,18 @@ jobs:
         shell: bash
         run: |
           mapfile -t CERTS < <(find ../suite-shadow-reports -name cell-certificate.json -type f | sort)
-          if test "${#CERTS[@]}" -eq 15; then
+          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          SHADOW_OK=1
+          if test "$MODE" = serial; then
+            mapfile -t COMPARISONS < <(find ../suite-shadow-reports -name shadow-comparison.json -type f | sort)
+            test "${#COMPARISONS[@]}" -eq 15 || SHADOW_OK=0
+            for comparison in "${COMPARISONS[@]}"; do
+              if ! test "$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "$comparison")" = matched; then
+                SHADOW_OK=0
+              fi
+            done
+          fi
+          if test "${#CERTS[@]}" -eq 15 && test "$SHADOW_OK" -eq 1; then
             ARGS=()
             for certificate in "${CERTS[@]}"; do
               environment="$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["environment_sha256"])' "$certificate")"
@@ -256,7 +268,7 @@ jobs:
               "${ARGS[@]}" --output quality-matrix-certificate.json
           else
             python -B -c 'import json; json.dump({"schema_version":1,"status":"mismatched","primary_reason":"INVENTORY_MISMATCH"}, open("quality-matrix-certificate.json","w",encoding="utf-8"), sort_keys=True)'
-            test "$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')" = serial
+            test "$MODE" = serial
           fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
