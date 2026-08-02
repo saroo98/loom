@@ -6,7 +6,6 @@
     "main-source",
     "candidate-source",
     "release-tag",
-    "public-cut",
     "plugin-zip",
     "native-helper",
     "installed-runtime"

@@ -1,4 +1,5 @@
 import hashlib
+import json
 import unittest
 from pathlib import Path
 
@@ -12,6 +13,11 @@ REGISTRY = ROOT / "contracts" / "truth-authorities-v1.json"
 
 class TruthShadowCorpusPhase4Tests(unittest.TestCase):
     def test_locked_corpus_meets_every_promotion_threshold(self):
+        value = json.loads(CORPUS.read_text(encoding="utf-8"))
+        self.assertEqual(
+            loom_truth_shadow.STABLE_CORPUS_SUBJECT_KINDS,
+            value["subject_kinds"])
+        self.assertNotIn("public-cut", value["subject_kinds"])
         expected = hashlib.sha256(CORPUS.read_bytes()).hexdigest()
         first = loom_truth_shadow.run(
             CORPUS, REGISTRY, expected_corpus_sha256=expected)

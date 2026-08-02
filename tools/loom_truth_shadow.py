@@ -14,6 +14,10 @@ import loom_truth
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MAX_CORPUS_BYTES = 1024 * 1024
+STABLE_CORPUS_SUBJECT_KINDS = [
+    "main-source", "candidate-source", "release-tag", "plugin-zip",
+    "native-helper", "installed-runtime",
+]
 
 
 class ShadowCorpusError(RuntimeError):
@@ -169,13 +173,7 @@ def _validate_corpus(value):
     if not isinstance(value, dict) or set(value) != required \
             or value.get("schema_version") != 1 \
             or value.get("policy_id") != "loom-truth-shadow-corpus-v1" \
-            or value.get("subject_kinds") != list(
-                sorted(loom_subject_identity.SUBJECT_KINDS,
-                       key=lambda kind: [
-                           "main-source", "candidate-source", "release-tag",
-                           "public-cut",
-                           "plugin-zip", "native-helper",
-                           "installed-runtime"].index(kind))) \
+            or value.get("subject_kinds") != STABLE_CORPUS_SUBJECT_KINDS \
             or value.get("fact_classes") != list(loom_truth.FACT_CLASSES):
         raise ShadowCorpusError("shadow corpus contract is invalid")
     if set(value.get("unsafe_states", [])) != {
