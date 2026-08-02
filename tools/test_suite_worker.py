@@ -114,6 +114,8 @@ class SuiteWorkerTests(unittest.TestCase):
                     os.environ.pop("LOOM_TEST_API_KEY", None)
                 else:
                     os.environ["LOOM_TEST_API_KEY"] = old
+            self.assertFalse((output / "general-000" / "home").exists())
+            self.assertFalse((output / "general-000" / "temp").exists())
         self.assertEqual("passed", receipt["status"])
         self.assertEqual(1, receipt["test_count"])
         self.assertTrue(receipt["mutation_clean"])

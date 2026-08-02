@@ -267,13 +267,13 @@ def _child(request_path, output_path):
 
 
 def _isolated_environment(worker_root, shard_id):
-    home = worker_root / "home"
-    temp = worker_root / "temp"
-    external_runtime_root = None
-    cache_root = worker_root
-    if os.name == "nt":
-        external_runtime_root = Path(tempfile.mkdtemp(prefix="loom-sw-"))
-        cache_root = external_runtime_root
+    # Keep runtime paths short on every platform. In particular, macOS Unix
+    # sockets have a small pathname limit, and a worker root nested below an
+    # Actions checkout is already too deep for several clean-host fixtures.
+    external_runtime_root = Path(tempfile.mkdtemp(prefix="loom-sw-"))
+    home = external_runtime_root / "home"
+    temp = external_runtime_root / "temp"
+    cache_root = external_runtime_root
     paths = {
         "HOME": home,
         "USERPROFILE": home,
@@ -291,8 +291,15 @@ def _isolated_environment(worker_root, shard_id):
         "CARGO_HOME": cache_root / "cargo-home",
         "CARGO_TARGET_DIR": cache_root / "cargo-target",
     }
-    for path in paths.values():
-        path.mkdir(parents=True, exist_ok=True)
+    try:
+        for path in paths.values():
+            path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        try:
+            shutil.rmtree(external_runtime_root)
+        except OSError:
+            pass
+        raise
     environment = {key: str(path) for key, path in paths.items()}
     environment["LOOM_TEST_RESOURCE_PREFIX"] = shard_id
     rustup = Path(os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")))
