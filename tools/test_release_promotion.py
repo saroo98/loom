@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 
 import json
-import jsonschema
 
+import loom_lint
 import loom_release_promotion
 
 
@@ -34,10 +34,11 @@ class ReleasePromotionTests(unittest.TestCase):
             prefixed["release_asset_sha256"] = "sha256:" + digest
             normalized = loom_release_promotion.verify_draft(asset, prefixed)
             self.assertEqual(digest, normalized["gate"]["release_asset_sha256"])
-            schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
-                                 "release-promotion-receipt-v1.schema.json").read_text(
-                                     encoding="utf-8"))
-            jsonschema.Draft202012Validator(schema).validate(result)
+            report = loom_lint.Report()
+            loom_lint.validate_schema(
+                report, __file__, result,
+                "release-promotion-receipt-v1.schema.json")
+            self.assertEqual([], report.errors)
 
             gate = self._gate(digest)
             gate["rollback_verified"] = False

@@ -4,9 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-import jsonschema
-
 import loom_exact_cut_ci
+import loom_lint
 import loom_operation_envelope
 
 
@@ -85,10 +84,10 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             self.assertIn("requested_label", suite["binding"]["environment"])
             self.assertEqual(result["receipt_sha256"], json.loads(
                 output.read_text(encoding="utf-8"))["receipt_sha256"])
-            schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
-                                 "exact-cut-ci-receipt-v2.schema.json").read_text(
-                                     encoding="utf-8"))
-            jsonschema.Draft202012Validator(schema).validate(result)
+            report = loom_lint.Report()
+            loom_lint.validate_schema(
+                report, __file__, result, "exact-cut-ci-receipt-v2.schema.json")
+            self.assertEqual([], report.errors)
             envelope = loom_operation_envelope.read(
                 cut.parent / ".loom-operations" / f"{result['operation_id']}.json")
             self.assertEqual("passed", envelope["events"][-1]["phase"])

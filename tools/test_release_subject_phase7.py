@@ -4,9 +4,8 @@ from unittest import mock
 from pathlib import Path
 
 import json
-import jsonschema
-import referencing
 
+import loom_lint
 import loom_release_subject
 import loom_subject_identity
 
@@ -90,14 +89,10 @@ class ReleaseSubjectPhase7Tests(unittest.TestCase):
                                 if item["relation"] == "contains-native-helper"]))
         self.assertEqual(1, len([item for item in result["relations"]
                                 if item["relation"] == "embeds-public-cut"]))
-        schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
-                             "release-subject-v4.schema.json").read_text(encoding="utf-8"))
-        subject_schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
-                                     "subject-identity.schema.json").read_text(
-                                         encoding="utf-8"))
-        registry = referencing.Registry().with_resource(
-            subject_schema["$id"], referencing.Resource.from_contents(subject_schema))
-        jsonschema.Draft202012Validator(schema, registry=registry).validate(result)
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, __file__, result, "release-subject-v4.schema.json")
+        self.assertEqual([], report.errors)
 
     def test_one_byte_change_changes_unified_subject(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -7,8 +7,7 @@ import zipfile
 from pathlib import Path
 from unittest import mock
 
-import jsonschema
-
+import loom_lint
 import loom_plugin_package
 import loom_release_candidate
 
@@ -163,10 +162,11 @@ class ReleaseCandidateTests(unittest.TestCase):
                              result["candidate_b"]["sha256"])
             self.assertEqual(expected, result["public_cut"]["root_sha256"])
             self.assertRegex(result["receipt_sha256"], r"^[0-9a-f]{64}$")
-            schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
-                                 "release-reproducibility-receipt-v1.schema.json").read_text(
-                                     encoding="utf-8"))
-            jsonschema.Draft202012Validator(schema).validate(result)
+            report = loom_lint.Report()
+            loom_lint.validate_schema(
+                report, __file__, result,
+                "release-reproducibility-receipt-v1.schema.json")
+            self.assertEqual([], report.errors)
 
     def test_mismatched_candidate_is_rejected(self):
         with tempfile.TemporaryDirectory() as temporary:
