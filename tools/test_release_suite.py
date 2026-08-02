@@ -101,7 +101,22 @@ class ReleaseSuiteTests(unittest.TestCase):
                     "event_name": "push", "run_id": minor.replace(".", ""),
                     "run_attempt": "1",
                 }
-                outcomes = [{"test": TEST_ID, "status": "passed"}]
+                fault_tests = set(loom_suite_certificate.FAULT_TESTS.values())
+                fault_tests.update(
+                    loom_suite_certificate.WINDOWS_FAULT_TESTS.values())
+                outcomes = []
+                for test_id in sorted({TEST_ID, *fault_tests}):
+                    if test_id in loom_suite_certificate.WINDOWS_FAULT_TESTS.values() \
+                            and os_name != "windows":
+                        outcomes.append({
+                            "test": test_id, "status": "skipped",
+                            "skip_reason_code": "platform-boundary",
+                            "skip_reason_sha256": "7" * 64,
+                        })
+                    else:
+                        outcomes.append({"test": test_id, "status": "passed"})
+                skipped_count = sum(
+                    row["status"] == "skipped" for row in outcomes)
                 cell_body = {
                     "schema_version": 1, "status": "certified", "subject": subject,
                     "environment": environment,
@@ -116,8 +131,10 @@ class ReleaseSuiteTests(unittest.TestCase):
                     "execution_microseconds": 1000,
                     "outcomes": outcomes,
                     "outcomes_sha256": loom_suite_plan.digest(outcomes),
-                    "test_count": 1, "passed_count": 1, "failure_count": 0,
-                    "error_count": 0, "skip_count": 0,
+                    "test_count": len(outcomes),
+                    "passed_count": len(outcomes) - skipped_count,
+                    "failure_count": 0,
+                    "error_count": 0, "skip_count": skipped_count,
                 }
                 cells.append({
                     **cell_body,
@@ -186,9 +203,8 @@ class ReleaseSuiteTests(unittest.TestCase):
             "certificate_policy_sha256": policy["policy_sha256"],
             "bound_inputs": bound, "bound_inputs_sha256": loom_suite_plan.digest(bound),
             "families": families,
-            "fault_injection_receipts": {"linux": "1" * 64,
-                                           "windows": "2" * 64,
-                                           "macos": "3" * 64},
+            "fault_injection_receipts": (
+                loom_suite_certificate.fault_injection_receipts(matrices)),
             "reproducibility_receipt_sha256s": ["4" * 64, "5" * 64],
             "rollback_receipt_sha256": "6" * 64,
             "workflow_critical_path_improved": True,
@@ -216,6 +232,19 @@ class ReleaseSuiteTests(unittest.TestCase):
         self.assertEqual(
             ["compatibility", "quality"],
             [row["consumer"] for row in result["matrices"]])
+        forged = dict(qualification)
+        forged_body = {key: value for key, value in forged.items()
+                       if key != "qualification_sha256"}
+        forged_body["fault_injection_receipts"] = {
+            **forged_body["fault_injection_receipts"], "linux": "0" * 64}
+        forged = {**forged_body,
+                  "qualification_sha256": loom_suite_plan.digest(forged_body)}
+        with self.assertRaisesRegex(
+                loom_release_suite.ReleaseSuiteError,
+                "qualification gates are incomplete"):
+            loom_release_suite.certify_certificates(
+                matrices, qualification=forged, policy=policy,
+                expected_commit=COMMIT, expected_root=ROOT)
 
     def test_serial_cell_evidence_compiles_without_a_release_host_suite(self):
         policy = loom_suite_plan.seal_policy({

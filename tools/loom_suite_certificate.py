@@ -46,6 +46,42 @@ QUALIFICATION_CODE_PATHS = (
     "schemas/suite-matrix-certificate-v1.schema.json",
     "schemas/suite-qualification-v1.schema.json",
 )
+FAULT_TESTS = {
+    "malformed-evidence": "test_release_candidate.ReleaseCandidateTests."
+                          "test_public_json_inputs_reject_duplicate_keys_and_non_finite_numbers",
+    "corrupt-canonical-receipt": "test_suite_certificate.SuiteCertificateTests."
+                                 "test_corrupt_receipt_digest_is_distinct_from_semantic_failure",
+    "mixed-runs": "test_suite_certificate.SuiteCertificateTests."
+                  "test_fail_closed_precedence_prefers_subject_over_later_test_failure",
+    "wrong-subjects": "test_suite_certificate.SuiteCertificateTests."
+                      "test_fail_closed_precedence_prefers_subject_over_later_test_failure",
+    "candidate-mutation": "test_suite_worker.SuiteWorkerTests."
+                          "test_worker_fails_closed_when_the_candidate_copy_changes",
+    "privacy-leakage": "test_suite_certificate.SuiteCertificateTests."
+                       "test_missing_duplicate_mutated_and_private_receipts_refuse",
+    "timeouts": "test_suite_worker.SuiteWorkerTests."
+                "test_worker_timeout_is_terminal_and_confirms_no_survivors",
+    "survivor-cleanup": "test_suite_worker.SuiteWorkerTests."
+                        "test_worker_timeout_is_terminal_and_confirms_no_survivors",
+    "missing-tests": "test_suite_certificate.SuiteCertificateTests."
+                     "test_missing_duplicate_mutated_and_private_receipts_refuse",
+    "unexpected-tests": "test_suite_certificate.SuiteCertificateTests."
+                        "test_cell_verifier_refuses_unknown_nested_fields_and_duplicate_tests",
+    "unauthorized-skips": "test_suite_worker.SuiteWorkerTests."
+                          "test_unclassified_skip_fails_closed_with_a_terminal_receipt",
+    "uncovered-skips": "test_suite_certificate.SuiteCertificateTests."
+                       "test_cell_records_skips_and_matrix_rejects_uncovered_skip",
+    "altered-archives": "test_release_candidate.ReleaseCandidateTests."
+                        "test_mismatched_candidate_is_rejected",
+    "asset-overwrite": "test_release_candidate.ReleaseCandidateTests."
+                       "test_immutable_staging_never_overwrites",
+    "malformed-promotion-gate": "test_release_promotion.ReleasePromotionTests."
+                                "test_gate_loader_rejects_duplicate_keys",
+}
+WINDOWS_FAULT_TESTS = {
+    "windows-runtime-root-cleanup": "test_suite_worker.SuiteWorkerTests."
+                                    "test_windows_external_runtime_root_is_cleaned_if_supervisor_raises",
+}
 
 
 class CertificateError(RuntimeError):
@@ -476,6 +512,51 @@ def _family(cell, consumer):
     return {**body, "family_id": loom_suite_plan.digest(body)}
 
 
+def fault_injection_receipts(matrices):
+    """Bind cross-platform fault qualification to exact certified outcomes."""
+    matrices = [verify_matrix(value) for value in matrices]
+    result = {}
+    for platform_id in ("linux", "windows", "macos"):
+        required_faults = dict(FAULT_TESTS)
+        if platform_id == "windows":
+            required_faults.update(WINDOWS_FAULT_TESTS)
+        required_tests = set(required_faults.values())
+
+        def normalized_platform(cell):
+            system = str(cell["environment"]["os"]).lower()
+            return "macos" if system in {"darwin", "macos"} else system
+
+        cells = [
+            (matrix["consumer"], cell)
+            for matrix in matrices for cell in matrix["cells"]
+            if normalized_platform(cell) == platform_id
+        ]
+        if not cells:
+            raise CertificateError("fault qualification platform is missing",
+                                   ["INVENTORY_MISMATCH"])
+        projection = []
+        for consumer, cell in cells:
+            outcomes = {row["test"]: row["status"] for row in cell["outcomes"]}
+            if any(outcomes.get(test_id) != "passed" for test_id in required_tests):
+                raise CertificateError("fault qualification is incomplete",
+                                       ["TEST_FAILURE"])
+            projection.append({
+                "consumer": consumer,
+                "cell_certificate_sha256": cell["cell_certificate_sha256"],
+                "faults": [{"fault": fault_id, "test": test_id,
+                            "status": outcomes[test_id]}
+                           for fault_id, test_id in sorted(
+                               required_faults.items())],
+            })
+        result[platform_id] = loom_suite_plan.digest({
+            "schema_version": 1,
+            "platform": platform_id,
+            "cells": sorted(projection, key=lambda item: (
+                item["consumer"], item["cell_certificate_sha256"])),
+        })
+    return result
+
+
 def verify_qualification(value, matrices, *, policy, root=None):
     """Require sealed ten-run qualification before certificate authority."""
     try:
@@ -526,6 +607,7 @@ def verify_qualification(value, matrices, *, policy, root=None):
                        for item in mapping.values()):
             raise CertificateError("qualification input binding is invalid",
                                    ["WRONG_POLICY"])
+    matrices = [verify_matrix(matrix) for matrix in matrices]
     global_true = (
         "workflow_critical_path_improved", "archive_subjects_agree",
         "privacy_clean", "mutation_clean", "worker_cleanup_verified",
@@ -535,8 +617,7 @@ def verify_qualification(value, matrices, *, policy, root=None):
     if any(body.get(field) is not True for field in global_true) \
             or not isinstance(faults, dict) or set(faults) != {
                 "linux", "windows", "macos"} \
-            or any(loom_suite_plan.HEX64.fullmatch(str(item)) is None
-                   for item in faults.values()) \
+            or faults != fault_injection_receipts(matrices) \
             or not isinstance(repro, list) or len(repro) < 2 \
             or len(repro) != len(set(repro)) \
             or any(loom_suite_plan.HEX64.fullmatch(str(item)) is None for item in repro) \
@@ -584,7 +665,6 @@ def verify_qualification(value, matrices, *, policy, root=None):
                 or row.get("parity_verified") is not True:
             raise CertificateError("qualification family is invalid", ["SCHEMA"])
         by_family[row["family_id"]] = row
-    matrices = [verify_matrix(matrix) for matrix in matrices]
     clean_room_cells = [cell for matrix in matrices
                         if matrix["consumer"] == "compatibility"
                         for cell in matrix["cells"]

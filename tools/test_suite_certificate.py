@@ -129,6 +129,13 @@ class SuiteCertificateTests(unittest.TestCase):
                 inventory, plan, invalid, policy=policy)
         self.assertEqual("WRONG_SUBJECT", raised.exception.primary_reason)
         self.assertIn("TEST_FAILURE", raised.exception.findings)
+        mixed = copy.deepcopy(receipts)
+        mixed[0]["environment"]["run_id"] = "2"
+        mixed[0] = self.reseal(mixed[0])
+        with self.assertRaises(loom_suite_certificate.CertificateError) as raised:
+            loom_suite_certificate.compile_cell(
+                inventory, plan, mixed, policy=policy)
+        self.assertEqual("WRONG_ENVIRONMENT", raised.exception.primary_reason)
 
     def test_missing_duplicate_mutated_and_private_receipts_refuse(self):
         inventory, _profile, policy, plan, receipts = self.fixture()
