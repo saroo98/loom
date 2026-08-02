@@ -256,7 +256,7 @@ class SuiteWorkerTests(unittest.TestCase):
         release = __import__("threading").Event()
 
         def execute(_cut, _inventory, _plan, shard_id, _root, **_kwargs):
-            if shard_id == "exclusive":
+            if shard_id == "exclusive" and _plan["max_parallel_workers"] > 2:
                 release.wait(timeout=1)
             else:
                 release.set()
@@ -270,6 +270,21 @@ class SuiteWorkerTests(unittest.TestCase):
         self.assertNotEqual("exclusive", order[0])
         self.assertEqual(
             ["exclusive", "general-000", "general-001"],
+            [row["shard_id"] for row in receipts])
+        constrained = {
+            **plan, "max_parallel_workers": 2,
+            "shards": plan["shards"][:2],
+        }
+        order.clear()
+        release.clear()
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+                loom_suite_worker, "execute_shard", side_effect=execute):
+            receipts = loom_suite_worker.run_plan(
+                Path(temporary) / "cut", {}, constrained, Path(temporary),
+                timeout=1)
+        self.assertEqual(["exclusive", "general-000"], order)
+        self.assertEqual(
+            ["exclusive", "general-000"],
             [row["shard_id"] for row in receipts])
 
 
