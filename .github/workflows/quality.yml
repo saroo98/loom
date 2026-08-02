@@ -5,6 +5,7 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -144,8 +145,8 @@ jobs:
           if-no-files-found: ignore
 
   full-release-suite:
-    if: github.event_name == 'push'
-    timeout-minutes: 55
+    if: github.event_name != 'pull_request'
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -171,10 +172,37 @@ jobs:
         run: python loom_privacy.py offline-audit .
       - name: Build and verify the exact public cut
         working-directory: tools
-        run: >-
-          python -B loom_exact_cut_ci.py .. "${{ runner.temp }}/loom-public-cut"
-          --forbidden-token "loom-ci-${{ github.sha }}"
-          --output exact-cut-ci.json --suite-output full-test-timings.json
+        shell: bash
+        env:
+          LOOM_REQUESTED_RUNNER_LABEL: ${{ matrix.os }}
+          LOOM_WORKFLOW_PATH: .github/workflows/quality.yml
+        run: |
+          export LOOM_WORKFLOW_DIGEST="$(sha256sum ../.github/workflows/quality.yml | cut -d' ' -f1)"
+          export LOOM_ACTION_MANIFEST_DIGEST="$(printf '%s\n' \
+            'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+            'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
+            'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
+          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          ARGS=(.. "${{ runner.temp }}/loom-public-cut" --forbidden-token "loom-ci-${{ github.sha }}" --output exact-cut-ci.json)
+          if test "$MODE" = serial; then
+            ARGS+=(--suite-output full-test-timings.json)
+          else
+            ARGS+=(--static-only)
+          fi
+          python -B loom_exact_cut_ci.py "${ARGS[@]}"
+      - name: Run isolated sharded shadow or certificate authority
+        working-directory: tools
+        shell: bash
+        run: |
+          SOURCE_TREE="$(python -B -c 'import os; import loom_subject_identity as s; print(s.git_tree_inventory("..", os.environ["GITHUB_SHA"])["tree_sha256"])')"
+          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          ARGS=(--cut "${{ runner.temp }}/loom-public-cut" --test-root "${{ runner.temp }}/loom-public-cut/tools" --exact-receipt exact-cut-ci.json --policy ../contracts/release-suite-policy-v1.json --timing-profile ../contracts/release-suite-timing-profile-v1.json --source-tree-sha256 "$SOURCE_TREE" --output-root suite-shadow)
+          if test "$MODE" = serial; then
+            python -B loom_suite_certificate.py shadow-cell "${ARGS[@]}" \
+              --serial-report full-test-timings.json
+          else
+            python -B loom_suite_certificate.py run-cell "${ARGS[@]}"
+          fi
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
         with:
@@ -182,11 +210,12 @@ jobs:
           path: |
             tools/exact-cut-ci.json
             tools/full-test-timings.json
+            tools/suite-shadow/
           retention-days: 7
           if-no-files-found: error
 
   aggregate-capability-coverage:
-    if: github.event_name == 'push'
+    if: github.event_name != 'pull_request'
     needs: full-release-suite
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -199,10 +228,42 @@ jobs:
           pattern: full-test-timings-*
           path: capability-reports
           merge-multiple: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: full-test-timings-*
+          path: suite-shadow-reports
+          merge-multiple: false
       - name: Require every skipped capability to pass in another bound job
         working-directory: tools
         shell: bash
-        run: python -B loom_capability.py ../capability-reports/*/full-test-timings.json
+        run: |
+          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$MODE" = serial; then
+            python -B loom_capability.py ../capability-reports/*/full-test-timings.json
+          fi
+      - name: Compile non-authoritative quality matrix certificate
+        working-directory: tools
+        shell: bash
+        run: |
+          mapfile -t CERTS < <(find ../suite-shadow-reports -name cell-certificate.json -type f | sort)
+          if test "${#CERTS[@]}" -eq 15; then
+            ARGS=()
+            for certificate in "${CERTS[@]}"; do
+              environment="$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["environment_sha256"])' "$certificate")"
+              ARGS+=(--cell-certificate "$certificate" --required-environment "$environment")
+            done
+            python -B loom_suite_certificate.py matrix --consumer quality \
+              "${ARGS[@]}" --output quality-matrix-certificate.json
+          else
+            python -B -c 'import json; json.dump({"schema_version":1,"status":"mismatched","primary_reason":"INVENTORY_MISMATCH"}, open("quality-matrix-certificate.json","w",encoding="utf-8"), sort_keys=True)'
+            test "$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')" = serial
+          fi
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: quality-matrix-certificate
+          path: tools/quality-matrix-certificate.json
+          retention-days: 7
+          if-no-files-found: error
 
   loom-11-vault-and-upgrade:
     timeout-minutes: 25

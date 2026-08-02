@@ -111,6 +111,34 @@ class PluginPackageTests(unittest.TestCase):
                     version="1.1.0", release_sequence=2,
                     source_commit=package_source_commit(ROOT))
 
+    def test_exact_native_receipts_are_self_bound_and_legacy_receipts_still_read(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            helpers, legacy, evidence = package_evidence(
+                ROOT, temp / "evidence", loom_plugin_package.PLATFORMS)
+            commit = package_source_commit(ROOT)
+            exact = {}
+            for platform_id, receipt in legacy.items():
+                body = {
+                    **receipt, "schema_version": 2, "source_commit": commit,
+                    "environment_sha256": "a" * 64,
+                    "workflow_digest": "b" * 64,
+                    "action_manifest_digest": "c" * 64,
+                }
+                exact[platform_id] = {**body, "receipt_sha256": hashlib.sha256(
+                    json.dumps(body, sort_keys=True, separators=(",", ":"),
+                               ensure_ascii=False).encode("utf-8")).hexdigest()}
+            loom_plugin_package.build(
+                ROOT, temp / "exact", helpers, exact, evidence,
+                version="1.1.0", release_sequence=2, source_commit=commit)
+            forged = {key: dict(value) for key, value in exact.items()}
+            forged["linux-x64"]["workflow_digest"] = "d" * 64
+            with self.assertRaisesRegex(
+                    loom_plugin_package.PackageError, "exact CI identity"):
+                loom_plugin_package.build(
+                    ROOT, temp / "forged", helpers, forged, evidence,
+                    version="1.1.0", release_sequence=2, source_commit=commit)
+
     def test_package_rejects_hash_valid_but_semantically_incomplete_sbom(self):
         with tempfile.TemporaryDirectory() as temporary:
             temp = Path(temporary)

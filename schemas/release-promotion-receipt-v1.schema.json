@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-promotion-receipt-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "asset_sha256", "asset_bytes", "gate", "receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["verified-draft", "verified-public"]},
+    "asset_sha256": {"$ref": "#/$defs/digest"},
+    "asset_bytes": {"type": "integer", "minimum": 1},
+    "gate": {"type": "object", "additionalProperties": false, "required": ["signed_tag_verified", "passport_verified", "matrix_certificate_verified", "native_evidence_verified", "rollback_verified", "attestation_verified", "expected_sha256", "release_asset_sha256"], "properties": {"signed_tag_verified": {"const": true}, "passport_verified": {"const": true}, "matrix_certificate_verified": {"const": true}, "native_evidence_verified": {"const": true}, "rollback_verified": {"const": true}, "attestation_verified": {"const": true}, "expected_sha256": {"$ref": "#/$defs/digest"}, "release_asset_sha256": {"$ref": "#/$defs/digest"}}},
+    "installed_subject_sha256": {"$ref": "#/$defs/digest"},
+    "represented_installed_subjects": {"type": "array", "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
+    "behavior_rerun_required": {"type": "boolean"},
+    "receipt_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [{"if": {"properties": {"status": {"const": "verified-public"}}}, "then": {"required": ["installed_subject_sha256", "represented_installed_subjects", "behavior_rerun_required"]}, "else": {"not": {"anyOf": [{"required": ["installed_subject_sha256"]}, {"required": ["represented_installed_subjects"]}, {"required": ["behavior_rerun_required"]}]}}}],
+  "$defs": {"digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
+}

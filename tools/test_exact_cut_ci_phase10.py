@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import jsonschema
+
 import loom_exact_cut_ci
 import loom_operation_envelope
 
@@ -26,8 +28,11 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             self.assertEqual("failed", result["status"])
             self.assertEqual("RuntimeError", result["error_type"])
             self.assertRegex(result["error_sha256"], r"^[0-9a-f]{64}$")
-            self.assertNotIn(str(root), "".join(result["traceback_tail"]))
+            self.assertNotIn("traceback_tail", result)
+            self.assertNotIn("forced verifier failure", str(result))
             self.assertEqual(result, json.loads(output.read_text(encoding="utf-8")))
+            self.assertEqual(2, result["schema_version"])
+            self.assertRegex(result["receipt_sha256"], r"^[0-9a-f]{64}$")
             envelope = loom_operation_envelope.read(
                 cut.parent / ".loom-operations" / f"{result['operation_id']}.json")
             self.assertEqual("failed", envelope["events"][-1]["phase"])
@@ -41,7 +46,24 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             cut.parent.mkdir()
             output = root / "receipt.json"
             suite_output = root / "suite.json"
-            verified = {"root_sha256": "a" * 64, "suite": {"tests": 7}}
+            verified = {
+                "root_sha256": "a" * 64,
+                "manifest_sha256": "b" * 64,
+                "files_verified": 8,
+                "suite": {
+                    "passed": True, "capability_complete": True,
+                    "capability_status": "complete", "returncode": 0,
+                    "primary_failure": None,
+                    "operation_receipt_sha256": "c" * 64,
+                    "elapsed_seconds": 0.25, "tests_run": 7,
+                    "failure_count": 0, "error_count": 0,
+                    "failed_tests": [], "skip_receipts": [],
+                    "timings": [{"test": f"tests.Example.test_{index}",
+                                 "status": "passed", "seconds": 0.01}
+                                for index in range(7)],
+                    "output": "private raw stderr must not escape",
+                },
+            }
             with mock.patch.object(
                     loom_exact_cut_ci.loom_release, "build_public",
                     return_value={"root_sha256": "a" * 64}), mock.patch.object(
@@ -51,13 +73,52 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
                     source, cut, output, suite_output=suite_output)
             self.assertEqual("verified", result["status"])
             self.assertEqual(result["build_root_sha256"], result["verified_root_sha256"])
+            self.assertIn("public_manifest_sha256", result)
+            self.assertIn("public_file_count", result)
             suite = json.loads(suite_output.read_text(encoding="utf-8"))
-            self.assertEqual(7, suite["tests"])
+            self.assertEqual(7, suite["tests_run"])
+            self.assertNotIn("output", suite)
+            self.assertNotIn("private raw stderr", json.dumps(suite))
             self.assertEqual("a" * 64, suite["binding"]["public_root_sha256"])
+            self.assertEqual(suite["binding"]["environment"]["environment_sha256"],
+                             suite["binding"]["runner"])
+            self.assertIn("requested_label", suite["binding"]["environment"])
+            self.assertEqual(result["receipt_sha256"], json.loads(
+                output.read_text(encoding="utf-8"))["receipt_sha256"])
+            schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
+                                 "exact-cut-ci-receipt-v2.schema.json").read_text(
+                                     encoding="utf-8"))
+            jsonschema.Draft202012Validator(schema).validate(result)
             envelope = loom_operation_envelope.read(
                 cut.parent / ".loom-operations" / f"{result['operation_id']}.json")
             self.assertEqual("passed", envelope["events"][-1]["phase"])
             self.assertFalse((source / ".loom-operations").exists())
+
+    def test_static_only_receipt_never_executes_the_serial_suite(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            cut = root / "build" / "cut"
+            cut.parent.mkdir()
+            output = root / "receipt.json"
+            verified = {
+                "root_sha256": "a" * 64, "manifest_sha256": "b" * 64,
+                "files_verified": 7,
+            }
+            with mock.patch.object(
+                    loom_exact_cut_ci.loom_release, "build_public",
+                    return_value={"root_sha256": "a" * 64}), mock.patch.object(
+                        loom_exact_cut_ci.loom_release, "verify_cut_static",
+                        return_value=verified), mock.patch.object(
+                            loom_exact_cut_ci.loom_release, "verify_cut",
+                            side_effect=AssertionError("serial suite must not run")):
+                result = loom_exact_cut_ci.run(
+                    source, cut, output, static_only=True)
+            self.assertEqual("verified", result["status"])
+            self.assertIsNone(result["suite"])
+            self.assertEqual("b" * 64, result["public_manifest_sha256"])
+            self.assertEqual(7, result["public_file_count"])
 
     def test_suite_failure_preserves_failed_test_identity(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -159,6 +159,62 @@ def create_typed(*, subjects, release_sequence, previous_bundle_sha256=None):
     }
 
 
+def create_evidence_v4(*, subjects, release_sequence,
+                       reproducibility_receipt_sha256,
+                       matrix_certificate_sha256, promotion_policy_sha256,
+                       previous_bundle_sha256=None):
+    """Create a v4 bundle with exact public-cut, plugin, and native relations."""
+    digests = (reproducibility_receipt_sha256, matrix_certificate_sha256,
+               promotion_policy_sha256)
+    if type(release_sequence) is not int or release_sequence < 1 \
+            or any(not re.fullmatch(r"[0-9a-f]{64}", str(value)) for value in digests) \
+            or previous_bundle_sha256 is not None \
+            and not re.fullmatch(r"[0-9a-f]{64}", str(previous_bundle_sha256)):
+        raise ReleaseSubjectError("v4 release evidence identity is invalid")
+    try:
+        mapped = loom_subject_identity.subject_map(subjects)
+    except loom_subject_identity.SubjectIdentityError as exc:
+        raise ReleaseSubjectError(str(exc)) from exc
+    by_kind = {}
+    for (kind, _subject_id), subject in mapped.items():
+        by_kind.setdefault(kind, []).append(subject)
+    if any(len(by_kind.get(kind, [])) != 1 for kind in (
+            "main-source", "candidate-source", "release-tag", "plugin-zip",
+            "public-cut")) \
+            or {item["platform"] for item in by_kind.get("native-helper", [])} \
+            != loom_subject_identity.PLATFORMS:
+        raise ReleaseSubjectError("v4 release evidence subjects are incomplete")
+    normalized = sorted(mapped.values(), key=lambda item: (
+        item["kind"], item["subject_id"], item["subject_digest"]))
+    plugin = by_kind["plugin-zip"][0]
+    public_cut = by_kind["public-cut"][0]
+    relations = [{
+        "relation": "component", "subject_kind": item["kind"],
+        "subject_id": item["subject_id"], "subject_digest": item["subject_digest"],
+    } for item in normalized]
+    relations.append({
+        "relation": "embeds-public-cut",
+        "plugin_subject_digest": plugin["subject_digest"],
+        "public_cut_subject_digest": public_cut["subject_digest"],
+    })
+    relations.extend({
+        "relation": "contains-native-helper",
+        "plugin_subject_digest": plugin["subject_digest"],
+        "platform": helper["platform"],
+        "native_subject_digest": helper["subject_digest"],
+    } for helper in sorted(by_kind["native-helper"], key=lambda item: item["platform"]))
+    body = {
+        "schema_version": 4, "repository": loom_subject_identity.REPOSITORY,
+        "release_sequence": release_sequence,
+        "previous_bundle_sha256": previous_bundle_sha256,
+        "subjects": normalized, "relations": relations,
+        "reproducibility_receipt_sha256": reproducibility_receipt_sha256,
+        "matrix_certificate_sha256": matrix_certificate_sha256,
+        "promotion_policy_sha256": promotion_policy_sha256,
+    }
+    return {**body, "bundle_sha256": hashlib.sha256(_canonical(body)).hexdigest()}
+
+
 def _mapping(values):
     result = {}
     for value in values:
@@ -176,16 +232,29 @@ def main(argv=None):
     parser.add_argument("--subjects", required=True)
     parser.add_argument("--release-sequence", required=True, type=int)
     parser.add_argument("--previous-bundle")
+    parser.add_argument("--reproducibility-receipt-sha256")
+    parser.add_argument("--matrix-certificate-sha256")
+    parser.add_argument("--promotion-policy-sha256")
+    parser.add_argument("--legacy-v3", action="store_true")
     parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
     try:
         subject_set = json.loads(
             Path(args.subjects).read_text(encoding="utf-8"))
-        result = create_typed(
-            subjects=subject_set.get("subjects")
-            if isinstance(subject_set, dict) else None,
-            release_sequence=args.release_sequence,
-            previous_bundle_sha256=args.previous_bundle)
+        subjects = (subject_set.get("subjects")
+                    if isinstance(subject_set, dict) else None)
+        if args.legacy_v3:
+            result = create_typed(
+                subjects=subjects, release_sequence=args.release_sequence,
+                previous_bundle_sha256=args.previous_bundle)
+        else:
+            result = create_evidence_v4(
+                subjects=subjects, release_sequence=args.release_sequence,
+                previous_bundle_sha256=args.previous_bundle,
+                reproducibility_receipt_sha256=(
+                    args.reproducibility_receipt_sha256),
+                matrix_certificate_sha256=args.matrix_certificate_sha256,
+                promotion_policy_sha256=args.promotion_policy_sha256)
     except (
             OSError, UnicodeError, json.JSONDecodeError,
             ReleaseSubjectError) as exc:

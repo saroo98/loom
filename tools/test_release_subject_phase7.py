@@ -3,6 +3,10 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
+import json
+import jsonschema
+import referencing
+
 import loom_release_subject
 import loom_subject_identity
 
@@ -63,6 +67,37 @@ class ReleaseSubjectPhase7Tests(unittest.TestCase):
                 loom_release_subject.ReleaseSubjectError, "incomplete"):
             loom_release_subject.create_typed(
                 subjects=subjects[:-1], release_sequence=16)
+
+    def test_v4_bundle_closes_public_cut_plugin_and_all_native_relations(self):
+        subjects = self.typed_subjects()[:-1]
+        subjects.append(loom_subject_identity.public_cut(
+            root_sha256="a" * 64, manifest_sha256="b" * 64, file_count=10))
+        for index, platform in enumerate(sorted(loom_subject_identity.PLATFORMS)):
+            subjects.append(loom_subject_identity.seal_subject({
+                "schema_version": 1, "kind": "native-helper",
+                "subject_id": platform, "platform": platform,
+                "filename": "loom-vault.exe" if platform.startswith("windows") else "loom-vault",
+                "bytes": index + 1, "sha256": f"{index + 1:x}" * 64,
+                "sbom_sha256": "c" * 64, "provenance_sha256": "d" * 64,
+            }))
+        result = loom_release_subject.create_evidence_v4(
+            subjects=subjects, release_sequence=19,
+            reproducibility_receipt_sha256="e" * 64,
+            matrix_certificate_sha256="f" * 64,
+            promotion_policy_sha256="1" * 64)
+        self.assertEqual(4, result["schema_version"])
+        self.assertEqual(6, len([item for item in result["relations"]
+                                if item["relation"] == "contains-native-helper"]))
+        self.assertEqual(1, len([item for item in result["relations"]
+                                if item["relation"] == "embeds-public-cut"]))
+        schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
+                             "release-subject-v4.schema.json").read_text(encoding="utf-8"))
+        subject_schema = json.loads((Path(__file__).resolve().parents[1] / "schemas" /
+                                     "subject-identity.schema.json").read_text(
+                                         encoding="utf-8"))
+        registry = referencing.Registry().with_resource(
+            subject_schema["$id"], referencing.Resource.from_contents(subject_schema))
+        jsonschema.Draft202012Validator(schema, registry=registry).validate(result)
 
     def test_one_byte_change_changes_unified_subject(self):
         with tempfile.TemporaryDirectory() as temporary:

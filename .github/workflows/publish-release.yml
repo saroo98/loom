@@ -1,0 +1,125 @@
+name: publish-verified-same-byte-release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing verified draft tag
+        required: true
+        type: string
+      confirm_publish:
+        description: Type PUBLISH-SAME-BYTES
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: loom-publish-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: inputs.confirm_publish == 'PUBLISH-SAME-BYTES'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: loom-release-publish
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Verify signed tag, immutable-release policy, and draft state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          LOOM_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.LOOM_RELEASE_SIGNING_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" != "v1.8.30"
+          test "$RELEASE_TAG" = "v$(cat VERSION)"
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
+          git branch -r --contains "$GITHUB_SHA" | grep -q 'origin/main'
+          [[ "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]]
+          printf 'loom-release@users.noreply.github.com %s\n' "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" > "$RUNNER_TEMP/allowed-signers"
+          git config gpg.format ssh
+          git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/allowed-signers"
+          git verify-tag "$RELEASE_TAG"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')" = "true"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"
+          gh release download "$RELEASE_TAG" --dir release-assets
+      - name: Verify all draft authority and exact asset evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum --check SHA256SUMS
+          cd ..
+          ASSET="release-assets/loom-plugin-${RELEASE_TAG}.zip"
+          python -B tools/loom_release_verify.py "$ASSET"
+          python -B tools/loom_release_subject_verify.py release-assets/RELEASE-SUBJECT.json \
+            --plugin "$ASSET" --commit "$GITHUB_SHA" --tag "$RELEASE_TAG"
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json; print(json.load(open("release-assets/cut-receipt.json",encoding="utf-8"))["root_sha256"])')"
+          python -B tools/loom_suite_certificate.py verify release-assets/quality-matrix-certificate.json
+          python -B tools/loom_suite_certificate.py verify release-assets/compatibility-matrix-certificate.json
+          python -B tools/loom_release_suite.py --verify release-assets/full-suite.json \
+            --policy contracts/release-suite-policy-v1.json --commit "$GITHUB_SHA" \
+            --public-root "$PUBLIC_ROOT"
+          if test "$MODE" = serial; then
+            test ! -f contracts/release-suite-qualification-v1.json
+          else
+            python -B tools/loom_suite_certificate.py verify-qualification \
+              --qualification contracts/release-suite-qualification-v1.json \
+              --policy contracts/release-suite-policy-v1.json \
+              --matrix-certificate release-assets/quality-matrix-certificate.json \
+              --matrix-certificate release-assets/compatibility-matrix-certificate.json
+          fi
+          python -B -c 'import json; assert json.load(open("release-assets/RELEASE-READINESS.json", encoding="utf-8"))["status"] == "ready"'
+          python -B -c 'import json; assert json.load(open("release-assets/rollback.json", encoding="utf-8"))["status"] == "passed"'
+          test "$(find release-assets -name 'native-evidence-*.zip' -type f | wc -l)" -eq 6
+          gh attestation verify "$ASSET" -R "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/attestation.json"
+          gh attestation verify release-assets/SHA256SUMS \
+            -R "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/checksums-attestation.json"
+          EXPECTED="$(sha256sum "$ASSET" | cut -d' ' -f1)"
+          API_DIGEST="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | select(.name == "loom-plugin-'"$RELEASE_TAG"'.zip") | .digest')"
+          python -B - "$EXPECTED" "$API_DIGEST" <<'PY'
+          import json,sys
+          fields = {
+              "signed_tag_verified": True, "passport_verified": True,
+              "matrix_certificate_verified": True, "native_evidence_verified": True,
+              "rollback_verified": True, "attestation_verified": True,
+              "expected_sha256": sys.argv[1], "release_asset_sha256": sys.argv[2],
+          }
+          json.dump(fields, open("promotion-gate.json", "w", encoding="utf-8"),
+                    sort_keys=True, separators=(",", ":"))
+          PY
+          python -B tools/loom_release_promotion.py verify-draft "$ASSET" \
+            --gate promotion-gate.json --output draft-promotion-receipt.json
+      - name: Publish the already-verified draft without changing assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --draft=false
+      - name: Reverify same public bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "false"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.immutable')" = "true"
+          rm -f "release-assets/loom-plugin-${RELEASE_TAG}.zip"
+          gh release download "$RELEASE_TAG" --pattern "loom-plugin-${RELEASE_TAG}.zip" --dir release-assets
+          python -B tools/loom_release_promotion.py verify-public \
+            "release-assets/loom-plugin-${RELEASE_TAG}.zip" --gate promotion-gate.json \
+            --output public-promotion-receipt.json

@@ -28,6 +28,25 @@ class VerifyError(RuntimeError):
     pass
 
 
+def _strict_object(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key")
+        result[key] = value
+    return result
+
+
+def _strict_json(raw, label):
+    try:
+        return json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_strict_object,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                ValueError("non-finite JSON number")))
+    except (UnicodeError, ValueError) as exc:
+        raise VerifyError(f"{label} is invalid") from exc
+
+
 def _redirect(path):
     path = Path(path)
     try:
@@ -165,9 +184,10 @@ def verify(path, *, forbidden_tokens=()):
             raise VerifyError(f"canonical plugin ZIP is invalid: {exc}") from exc
 
         try:
-            receipt = json.loads((root / "FINAL-PACKAGE-RECEIPT.json").read_text(
-                encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+            receipt = _strict_json(
+                (root / "FINAL-PACKAGE-RECEIPT.json").read_bytes(),
+                "final package receipt")
+        except (OSError, VerifyError) as exc:
             raise VerifyError(f"final package receipt is invalid: {exc}") from exc
         if not isinstance(receipt, dict) or set(receipt) != {
                 "schema_version", "version", "release_sequence", "files"} \
@@ -182,6 +202,26 @@ def verify(path, *, forbidden_tokens=()):
         if "release/metadata.json" not in expected or "release/trusted-root.json" not in expected \
                 or "release/unsigned-manifest.json" in expected:
             raise VerifyError("archive is unsigned, incomplete, or contains draft metadata")
+        try:
+            manifest_raw = root.joinpath("BUILD-MANIFEST.json").read_bytes()
+            public_manifest = _strict_json(manifest_raw, "embedded public-cut manifest")
+        except (OSError, VerifyError) as exc:
+            raise VerifyError(f"embedded public-cut manifest is invalid: {exc}") from exc
+        if not isinstance(public_manifest, dict) or set(public_manifest) != {
+                "schema_version", "files", "root_sha256"} \
+                or public_manifest.get("schema_version") != 1 \
+                or not isinstance(public_manifest.get("files"), list):
+            raise VerifyError("embedded public-cut manifest contract is invalid")
+        manifest_body = {"schema_version": 1, "files": public_manifest["files"]}
+        canonical_root = hashlib.sha256(json.dumps(
+            manifest_body, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode("utf-8")).hexdigest()
+        if canonical_root != public_manifest["root_sha256"]:
+            raise VerifyError("embedded public-cut root is invalid")
+        for item in public_manifest["files"]:
+            if not isinstance(item, dict) or set(item) != {"path", "bytes", "sha256"} \
+                    or observed.get(item.get("path")) != item:
+                raise VerifyError("embedded public-cut inventory disagrees with plugin bytes")
         tokens = [item for item in forbidden_tokens if item]
         folded_tokens = [item.casefold().encode("utf-8") for item in tokens]
         for name, item in observed.items():
@@ -195,6 +235,9 @@ def verify(path, *, forbidden_tokens=()):
         "status": "verified", "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
         "bytes": path.stat().st_size, "files": len(observed),
         "version": receipt["version"], "release_sequence": receipt["release_sequence"],
+        "public_cut": {"root_sha256": public_manifest["root_sha256"],
+                       "manifest_sha256": hashlib.sha256(manifest_raw).hexdigest(),
+                       "file_count": len(public_manifest["files"]) + 1},
     }
 
 

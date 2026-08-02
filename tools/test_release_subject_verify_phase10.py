@@ -62,6 +62,70 @@ class ReleaseSubjectVerifyPhase10Tests(unittest.TestCase):
                     "plugin bytes"):
                 loom_release_subject_verify.verify(bundle, plugin)
 
+    def test_v4_verifier_binds_embedded_public_cut_and_all_native_helpers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            plugin = Path(temporary) / "loom.zip"
+            plugin.write_bytes(b"plugin")
+            common = {"schema_version": 1,
+                      "repository": loom_subject_identity.REPOSITORY,
+                      "tree_sha256": "3" * 64}
+            subjects = [
+                loom_subject_identity.seal_subject({
+                    **common, "kind": "main-source", "subject_id": "main",
+                    "commit": "1" * 40}),
+                loom_subject_identity.seal_subject({
+                    **common, "kind": "candidate-source", "subject_id": "candidate",
+                    "base_commit": "1" * 40, "commit": "2" * 40,
+                    "overlay_sha256": loom_subject_identity.EMPTY_OVERLAY_SHA256,
+                    "dirty": False}),
+                loom_subject_identity.seal_subject({
+                    "schema_version": 1, "kind": "release-tag",
+                    "subject_id": "v1.9.0", "repository": loom_subject_identity.REPOSITORY,
+                    "tag": "v1.9.0", "tag_object_id": "4" * 40,
+                    "tag_object_sha256": "5" * 64, "peeled_commit": "2" * 40,
+                    "signature_state": "verified"}),
+                loom_subject_identity.artifact_subject("plugin-zip", plugin),
+                loom_subject_identity.public_cut(
+                    root_sha256="a" * 64, manifest_sha256="b" * 64,
+                    file_count=10),
+            ]
+            native = {}
+            for index, platform_id in enumerate(sorted(loom_subject_identity.PLATFORMS), 1):
+                digest = f"{index:x}" * 64
+                native[platform_id] = digest
+                subjects.append(loom_subject_identity.seal_subject({
+                    "schema_version": 1, "kind": "native-helper",
+                    "subject_id": platform_id, "platform": platform_id,
+                    "filename": ("loom-vault.exe" if platform_id.startswith("windows")
+                                 else "loom-vault"),
+                    "bytes": index, "sha256": digest,
+                    "sbom_sha256": "c" * 64, "provenance_sha256": "d" * 64,
+                }))
+            bundle = loom_release_subject.create_evidence_v4(
+                subjects=subjects, release_sequence=19,
+                reproducibility_receipt_sha256="e" * 64,
+                matrix_certificate_sha256="f" * 64,
+                promotion_policy_sha256="1" * 64)
+            archive = {"public_cut": {"root_sha256": "a" * 64,
+                                       "manifest_sha256": "b" * 64,
+                                       "file_count": 10},
+                       "native_binaries": native}
+            with mock.patch.object(
+                    loom_release_subject_verify.loom_release_candidate,
+                    "_archive_subject", return_value=archive):
+                result = loom_release_subject_verify.verify(
+                    bundle, plugin, commit="2" * 40, tag="v1.9.0")
+            self.assertEqual("verified", result["status"])
+            wrong = dict(archive)
+            wrong["native_binaries"] = {**native, "linux-x64": "0" * 64}
+            with mock.patch.object(
+                    loom_release_subject_verify.loom_release_candidate,
+                    "_archive_subject", return_value=wrong):
+                with self.assertRaisesRegex(
+                        loom_release_subject_verify.SubjectVerificationError,
+                        "native-helper"):
+                    loom_release_subject_verify.verify(bundle, plugin)
+
     def test_exact_plugin_and_subject_digest_are_required(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

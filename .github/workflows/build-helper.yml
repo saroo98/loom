@@ -29,14 +29,32 @@ jobs:
           python-version: "3.11"
       - name: Record native runner identity
         env:
-          LOOM_RUNNER_LABEL: ${{ inputs.runner }}
+          LOOM_REQUESTED_RUNNER_LABEL: ${{ inputs.runner }}
+          LOOM_WORKFLOW_PATH: .github/workflows/build-helper.yml
         shell: bash
         run: |
           mkdir -p native-evidence
+          export LOOM_WORKFLOW_DIGEST="$(sha256sum .github/workflows/build-helper.yml | cut -d' ' -f1)"
+          export LOOM_ACTION_MANIFEST_DIGEST="$(printf '%s\n' \
+            'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+            'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
+            'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
           python -B tools/loom_platform_probe.py \
-            --runner "$LOOM_RUNNER_LABEL" \
-            --workflow-digest "$(sha256sum .github/workflows/build-helper.yml | cut -d' ' -f1)" \
+            --runner "$LOOM_REQUESTED_RUNNER_LABEL" \
+            --workflow-digest "$LOOM_WORKFLOW_DIGEST" \
             --output native-evidence/runner.json
+          python -B - <<'PY'
+          import json
+          import os
+          import sys
+          from pathlib import Path
+          sys.path.insert(0, str(Path("tools").resolve()))
+          import loom_platform_probe
+          value = loom_platform_probe.release_environment()
+          Path("native-evidence/environment.json").write_text(
+              json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n",
+              encoding="utf-8")
+          PY
       - name: Build locked native helper twice
         env:
           LOOM_BUILD_TARGET: ${{ runner.temp }}/loom-repro-build
@@ -116,15 +134,29 @@ jobs:
               json.dumps(provenance, sort_keys=True, separators=(",", ":")) + "\n",
               encoding="utf-8",
           )
-          receipt = {
+          body = {
+              "schema_version": 2,
               "platform": os.environ["LOOM_PLATFORM"],
+              "source_commit": os.environ["LOOM_SOURCE_SHA"],
               "binary_sha256": digest(binary),
               "rebuild_sha256": digest(rebuild),
               "source_sha256": source_digest,
               "cargo_lock_sha256": digest(lock),
               "sbom_sha256": digest(sbom),
               "provenance_sha256": digest(provenance_path),
+              "environment_sha256": json.loads(Path(
+                  "native-evidence/environment.json").read_text(
+                      encoding="utf-8"))["environment_sha256"],
+              "workflow_digest": json.loads(Path(
+                  "native-evidence/environment.json").read_text(
+                      encoding="utf-8"))["workflow_digest"],
+              "action_manifest_digest": json.loads(Path(
+                  "native-evidence/environment.json").read_text(
+                      encoding="utf-8"))["action_manifest_digest"],
           }
+          receipt = {**body, "receipt_sha256": hashlib.sha256(json.dumps(
+              body, sort_keys=True, separators=(",", ":"),
+              ensure_ascii=False).encode("utf-8")).hexdigest()}
           Path("native-evidence/receipt.json").write_text(
               json.dumps(receipt, sort_keys=True, separators=(",", ":")) + "\n",
               encoding="utf-8",

@@ -8,18 +8,29 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ReleaseWorkflowPassportTests(unittest.TestCase):
+    def test_candidates_are_reproduced_in_two_independent_clean_jobs(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8")
+        self.assertIn("reproduce-candidates:", text)
+        self.assertIn("candidate: A", text)
+        self.assertIn("candidate: B", text)
+        self.assertIn("needs: reproduce-candidates", text)
+        self.assertIn("loom_release_candidate.py compare", text)
+
     def test_passport_is_generated_only_after_exact_artifacts_and_attestation(self):
         text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
             encoding="utf-8")
         order = [
-            "Run exact source suite and rollback battery",
+            "Compile existing serial authority and run rollback battery",
             "Download existing draft assets without publishing",
             "Verify canonical archive and checksums",
             "Expand exact native release evidence",
             "Build the bounded attestation subject",
             "attest-evidence-subject",
             "Verify attestation and compile the exact release passport",
-            "Publish exact release passport assets to the draft",
+            "Prepare exact release passport assets for protected staging",
+            "stage-draft-assets:",
+            "Revalidate and stage exact assets without overwrite",
         ]
         offsets = [text.index(item) for item in order]
         self.assertEqual(sorted(offsets), offsets)
@@ -33,7 +44,8 @@ class ReleaseWorkflowPassportTests(unittest.TestCase):
                 "loom_release_rollback.py", "CODEX-APP-EVIDENCE.json",
                 "--codex-observation", "subject-checksums:"):
             self.assertIn(expected, text)
-        self.assertIn('gh release upload "$RELEASE_TAG"', text)
+        self.assertIn('gh release upload "$RELEASE_TAG" "$asset"', text)
+        self.assertNotIn("--clobber", text)
 
 
 if __name__ == "__main__":

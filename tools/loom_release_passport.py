@@ -11,6 +11,8 @@ from pathlib import Path
 
 import loom_evidence_graph
 import loom_readiness
+import loom_release
+import loom_release_suite
 import loom_release_subject_verify
 import loom_reliability
 import loom_subject_identity
@@ -107,7 +109,7 @@ def _public_value(value, label):
 
 
 def _subject_bundle(value):
-    if not isinstance(value, dict) or value.get("schema_version") != 3 \
+    if not isinstance(value, dict) or value.get("schema_version") not in {3, 4} \
             or value.get("repository") != loom_subject_identity.REPOSITORY \
             or not SHA.fullmatch(str(value.get("bundle_sha256", ""))) \
             or value["bundle_sha256"] != _digest({
@@ -118,8 +120,13 @@ def _subject_bundle(value):
     except loom_subject_identity.SubjectIdentityError as exc:
         raise ReleasePassportError(str(exc)) from exc
     required = {"main-source", "candidate-source", "release-tag", "plugin-zip"}
+    if value["schema_version"] == 4:
+        required.add("public-cut")
+    native_count = len([1 for kind, _subject_id in subjects
+                        if kind == "native-helper"])
     if not required <= {kind for kind, _subject_id in subjects} \
-            or not any(kind == "native-helper" for kind, _subject_id in subjects):
+            or value["schema_version"] == 4 and native_count != 6 \
+            or value["schema_version"] == 3 and native_count < 1:
         raise ReleasePassportError("release subject bundle is incomplete")
     return subjects
 
@@ -190,21 +197,39 @@ def _ci_authority(value, *, evaluation_epoch, subjects):
 
 
 def _passed_cut(value):
-    if not isinstance(value, dict) or value.get("status") != "verified" \
+    if not isinstance(value, dict) or value.get("status") not in {
+            "verified", "verified-static"} \
             or not SHA.fullmatch(str(value.get("root_sha256", ""))) \
             or not isinstance(value.get("firewall"), dict) \
             or value["firewall"].get("clean") is not True \
             or not isinstance(value.get("offline"), dict) \
             or value["offline"].get("offline") is not True:
         raise ReleasePassportError("exact-cut verification is not a passing exact result")
+    if value["status"] == "verified-static":
+        try:
+            loom_release.verify_static_receipt(value)
+        except loom_release.ReleaseError as exc:
+            raise ReleasePassportError(
+                f"static cut receipt is invalid: {exc}") from exc
 
 
 def _passed_suite(value, *, commit, root_sha256):
-    if not isinstance(value, dict) or value.get("schema_version") != 1 \
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
             or value.get("status") != "certified" \
             or value.get("subject") != {
                 "source_commit": commit, "public_root_sha256": root_sha256}:
         raise ReleasePassportError("release suite is not certified for the exact subject")
+    if value["schema_version"] == 2:
+        try:
+            policy = _read_json(
+                Path(__file__).resolve().parents[1] / "contracts" /
+                "release-suite-policy-v1.json", "release suite policy")
+            loom_release_suite.verify_compiled(
+                value, policy=policy, expected_commit=commit,
+                expected_root=root_sha256)
+        except (ReleasePassportError, loom_release_suite.ReleaseSuiteError) as exc:
+            raise ReleasePassportError(
+                f"release suite certificate is invalid: {exc}") from exc
 
 
 def _passed_rollback(value, *, commit, root_sha256):

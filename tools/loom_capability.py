@@ -37,12 +37,18 @@ def aggregate(paths):
         if not isinstance(value, dict) or not isinstance(value.get("timings"), list) \
                 or not isinstance(value.get("skip_receipts"), list) \
                 or not isinstance(value.get("binding"), dict) \
-                or set(value["binding"]) != {
+                or set(value["binding"]) not in ({
                     "source_commit", "public_root_sha256", "platform", "architecture",
-                    "python", "runner"} \
+                    "python", "runner"}, {
+                    "source_commit", "public_root_sha256", "platform", "architecture",
+                    "python", "runner", "environment"}) \
                 or not re.fullmatch(r"[0-9a-f]{40}", str(value["binding"]["source_commit"])) \
                 or not re.fullmatch(
-                    r"[0-9a-f]{64}", str(value["binding"]["public_root_sha256"])):
+                    r"[0-9a-f]{64}", str(value["binding"]["public_root_sha256"])) \
+                or "environment" in value["binding"] and (
+                    not isinstance(value["binding"]["environment"], dict)
+                    or value["binding"]["environment"].get("environment_sha256")
+                    != value["binding"]["runner"]):
             raise CapabilityError("capability report contract is invalid")
         reports.append(value)
     if not reports:

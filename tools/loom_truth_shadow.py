@@ -64,6 +64,13 @@ def _subject(kind, variant=0):
             "tag_object_sha256": digit * 64,
             "peeled_commit": digit * 40, "signature_state": "verified",
         }
+    elif kind == "public-cut":
+        body = {
+            "schema_version": 1, "kind": kind, "subject_id": "public-cut",
+            "root_sha256": digit * 64,
+            "manifest_sha256": str(variant + 2) * 64,
+            "file_count": variant + 1,
+        }
     elif kind == "plugin-zip":
         filename = f"loom-{variant}.zip"
         body = {
@@ -103,6 +110,8 @@ def _wrong_digest(subject):
         body["tag_object_sha256"] = "f" * 64
     elif kind in {"plugin-zip", "native-helper"}:
         body["sha256"] = "f" * 64
+    elif kind == "public-cut":
+        body["root_sha256"] = "f" * 64
     else:
         body["payload_sha256"] = "f" * 64
     return loom_subject_identity.seal_subject(body)
@@ -164,6 +173,7 @@ def _validate_corpus(value):
                 sorted(loom_subject_identity.SUBJECT_KINDS,
                        key=lambda kind: [
                            "main-source", "candidate-source", "release-tag",
+                           "public-cut",
                            "plugin-zip", "native-helper",
                            "installed-runtime"].index(kind))) \
             or value.get("fact_classes") != list(loom_truth.FACT_CLASSES):

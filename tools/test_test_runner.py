@@ -12,6 +12,47 @@ import loom_test
 
 
 class TestRunnerTests(unittest.TestCase):
+    def test_exact_module_selection_runs_only_the_declared_real_modules(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_alpha.py").write_text(
+                "import unittest\n"
+                "class Alpha(unittest.TestCase):\n"
+                "    def test_passes(self): pass\n",
+                encoding="utf-8")
+            (root / "test_beta.py").write_text(
+                "import unittest\n"
+                "class Beta(unittest.TestCase):\n"
+                "    def test_fails(self): self.fail('must not run')\n",
+                encoding="utf-8")
+            report = loom_test.run_modules(
+                ["test_alpha"], start_dir=root, verbosity=0)
+        self.assertEqual("modules", report["mode"])
+        self.assertEqual(["test_alpha"], report["selected_modules"])
+        self.assertEqual(1, report["tests_run"])
+        self.assertTrue(report["successful"])
+
+    def test_exact_module_selection_rejects_duplicates_and_unsafe_names(self):
+        with self.assertRaisesRegex(ValueError, "module inventory"):
+            loom_test.run_modules(["test_alpha", "test_alpha"], verbosity=0)
+        with self.assertRaisesRegex(ValueError, "module inventory"):
+            loom_test.run_modules(["../test_alpha"], verbosity=0)
+
+    def test_class_setup_error_is_recorded_without_runner_crash(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_setup_error.py").write_text(
+                "import unittest\n"
+                "class SetupError(unittest.TestCase):\n"
+                "    @classmethod\n"
+                "    def setUpClass(cls): raise RuntimeError('fixture')\n"
+                "    def test_never_runs(self): pass\n",
+                encoding="utf-8")
+            report = loom_test.run_modules(
+                ["test_setup_error"], start_dir=root, verbosity=0)
+        self.assertEqual(1, report["errors"])
+        self.assertEqual("failed", report["status"])
+
     def test_fast_gate_inventory_is_real_bounded_and_has_no_loader_errors(self):
         # The full suite executes every selected test once, while the dedicated CI
         # fast-gate job executes this exact inventory under a bounded host-aware wall clock.
@@ -94,8 +135,9 @@ class TestRunnerTests(unittest.TestCase):
                 "def test_second():\n    pass\n", encoding="utf-8")
 
             refreshed = loom_test.refresh_final_evidence(root, {
-                "mode": "full", "successful": False, "tests_run": 2,
-                "failures": 0, "errors": 0, "within_budget": True})
+                "mode": "full", "successful": True, "tests_run": 2,
+                "failures": 0, "errors": 0, "skipped": 0,
+                "capability_complete": True, "within_budget": True})
             observed = json.loads((
                 root / "docs" / "generated-evidence.json").read_text(encoding="utf-8"))
 
@@ -132,6 +174,38 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(0, code)
         self.assertEqual(["bind", "suite", "certify"], order)
 
+    def test_failed_full_refresh_transaction_restores_previous_evidence(self):
+        failed = {
+            "schema_version": 1, "mode": "full", "tests_run": 1,
+            "failures": 1, "errors": 0, "skipped": 0,
+            "elapsed_seconds": 0.1, "suppressed_stdout_chars": 0,
+            "max_seconds": None, "within_budget": True,
+            "capability_complete": True, "status": "failed",
+            "successful": False, "skip_receipts": [], "timings": [],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tools").mkdir()
+            (root / "docs").mkdir()
+            evidence = root / "docs" / "generated-evidence.json"
+            evidence.write_text('{"old":true}\n', encoding="utf-8")
+
+            def bind(target):
+                (Path(target) / "docs" / "generated-evidence.json").write_text(
+                    '{"new":true}\n', encoding="utf-8")
+
+            output = root / "report.json"
+            with mock.patch.object(
+                    loom_test, "__file__", str(root / "tools" / "loom_test.py")), \
+                    mock.patch.object(loom_test, "run", return_value=dict(failed)), \
+                    mock.patch.object(loom_test.loom_docs, "refresh_evidence",
+                                      side_effect=bind):
+                code = loom_test.main([
+                    "full", "--quiet", "--refresh-generated-evidence",
+                    "--output", str(output)])
+            self.assertEqual(1, code)
+            self.assertEqual('{"old":true}\n', evidence.read_text(encoding="utf-8"))
+
     def test_quiet_file_output_keeps_stdout_bounded(self):
         report = {
             "schema_version": 1, "mode": "full", "tests_run": 5000,
@@ -165,7 +239,14 @@ class TestRunnerTests(unittest.TestCase):
                 loom_test.loom_docs.DocsError, "correctness-clean complete"):
             loom_test.refresh_final_evidence(Path.cwd(), {
                 "mode": "full", "successful": False, "tests_run": 1,
-                "failures": 1, "errors": 0, "within_budget": True})
+                "failures": 1, "errors": 0, "skipped": 0,
+                "capability_complete": True, "within_budget": True})
+        with self.assertRaisesRegex(
+                loom_test.loom_docs.DocsError, "correctness-clean complete"):
+            loom_test.refresh_final_evidence(Path.cwd(), {
+                "mode": "full", "successful": False, "tests_run": 1,
+                "failures": 0, "errors": 0, "skipped": 1,
+                "capability_complete": False, "within_budget": True})
 
     def test_missing_output_parent_fails_before_running_any_tests(self):
         with tempfile.TemporaryDirectory() as temp, mock.patch.object(

@@ -19,6 +19,7 @@ import loom_install
 import loom_docs
 import loom_release
 import loom_reliability
+import loom_lint
 
 
 TEST_RSA_N = int(
@@ -78,8 +79,8 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertEqual(2700, loom_release.FULL_SUITE_MAX_SECONDS)
         root = Path(__file__).resolve().parents[1]
         workflow_timeouts = {
-            "quality.yml": 55,
-            "compatibility.yml": 55,
+            "quality.yml": 90,
+            "compatibility.yml": 90,
             "release.yml": 65,
         }
         for name, minutes in workflow_timeouts.items():
@@ -492,6 +493,28 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertTrue(result["firewall"]["clean"])
         self.assertEqual("passed", result["docs"]["status"])
         self.assertTrue(result["offline"]["offline"])
+
+    def test_static_cut_verification_never_executes_behavior(self):
+        source = self._source()
+        built = self.root / "static-cut"
+        build = loom_release.build_public(
+            source, built, forbidden_tokens=["scan-only-token"],
+            source_classification="public-release")
+        with mock.patch.object(
+                loom_release, "_suite",
+                side_effect=AssertionError("behavior must not run")):
+            result = loom_release.verify_cut_static(
+                built, forbidden_tokens=["scan-only-token"])
+        self.assertEqual("verified-static", result["status"])
+        self.assertEqual(1, result["schema_version"])
+        self.assertEqual(64, len(result["receipt_sha256"]))
+        self.assertEqual(build["root_sha256"], result["root_sha256"])
+        self.assertTrue(result["firewall"]["clean"])
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "static-receipt", result,
+            "release-static-receipt-v1.schema.json")
+        self.assertEqual([], report.errors)
 
     def test_public_cut_verifier_rejects_undeclared_post_build_bytecode(self):
         source = self._source()

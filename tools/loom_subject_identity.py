@@ -20,7 +20,7 @@ from pathlib import Path, PurePosixPath
 REPOSITORY = "https://github.com/saroo98/loom"
 SUBJECT_KINDS = {
     "main-source", "candidate-source", "release-tag", "plugin-zip",
-    "native-helper", "installed-runtime",
+    "native-helper", "installed-runtime", "public-cut",
 }
 PLATFORMS = {
     "windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
@@ -329,6 +329,13 @@ def validate_subject(value):
             and type(value.get("bytes")) is int and value["bytes"] > 0 \
             and all(HEX64.fullmatch(str(value.get(field, ""))) is not None
                     for field in ("sha256", "sbom_sha256", "provenance_sha256"))
+    elif kind == "public-cut":
+        fields = common | {"root_sha256", "manifest_sha256", "file_count"}
+        valid = value.get("subject_id") == "public-cut" \
+            and HEX64.fullmatch(str(value.get("root_sha256", ""))) is not None \
+            and HEX64.fullmatch(str(value.get("manifest_sha256", ""))) is not None \
+            and type(value.get("file_count")) is int \
+            and 1 <= value["file_count"] <= MAX_GIT_ENTRIES
     else:
         fields = common | {
             "version", "release_sequence", "payload_sha256",
@@ -422,6 +429,14 @@ def installed_runtime(*, version, release_sequence, payload_sha256,
         "release_sequence": release_sequence, "payload_sha256": payload_sha256,
         "install_receipt_sha256": install_receipt_sha256,
         "activation_receipt_sha256": activation_receipt_sha256,
+    })
+
+
+def public_cut(*, root_sha256, manifest_sha256, file_count):
+    return seal_subject({
+        "schema_version": 1, "kind": "public-cut",
+        "subject_id": "public-cut", "root_sha256": root_sha256,
+        "manifest_sha256": manifest_sha256, "file_count": file_count,
     })
 
 

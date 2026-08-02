@@ -1,0 +1,15 @@
+{
+  "authority_mode": "serial",
+  "exclusive_modules": [
+    "test_loom_bootstrap_v11",
+    "test_loom_crypto_v11",
+    "test_loom_mutation",
+    "test_loom_owner_v11",
+    "test_loom_plugin_package_v11",
+    "test_loom_release_sign_v11",
+    "test_loom_transfer_v11",
+    "test_recovery_contract_schemas"
+  ],
+  "policy_sha256": "4f93a809e70c11116febc00dac5a1cb08d46990dd1e2b11e35a8561272c11d08",
+  "schema_version": 1
+}

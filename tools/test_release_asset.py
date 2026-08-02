@@ -19,7 +19,15 @@ class CanonicalReleaseAssetTests(unittest.TestCase):
         (package / "release" / "metadata.json").write_text("{}", encoding="utf-8")
         (package / "release" / "trusted-root.json").write_text("{}", encoding="utf-8")
         (package / "skills").mkdir()
-        (package / "skills" / "SKILL.md").write_text("public fixture\n", encoding="utf-8")
+        (package / "skills" / "SKILL.md").write_bytes(b"public fixture\n")
+        manifest_body = {"schema_version": 1, "files": [{
+            "path": "skills/SKILL.md", "bytes": len(b"public fixture\n"),
+            "sha256": __import__("hashlib").sha256(b"public fixture\n").hexdigest()}]}
+        (package / "BUILD-MANIFEST.json").write_text(json.dumps({
+            **manifest_body, "root_sha256": __import__("hashlib").sha256(json.dumps(
+                manifest_body, sort_keys=True, separators=(",", ":")
+            ).encode("utf-8")).hexdigest()}, sort_keys=True, separators=(",", ":")),
+            encoding="utf-8")
         files = []
         for path in sorted(item for item in package.rglob("*") if item.is_file()):
             raw = path.read_bytes()
@@ -39,7 +47,9 @@ class CanonicalReleaseAssetTests(unittest.TestCase):
             first = loom_plugin_package.archive_finalized(package, root / "first.zip")
             second = loom_plugin_package.archive_finalized(package, root / "second.zip")
             self.assertEqual(first["sha256"], second["sha256"])
-            self.assertEqual("verified", loom_release_verify.verify(root / "first.zip")["status"])
+            verified = loom_release_verify.verify(root / "first.zip")
+            self.assertEqual("verified", verified["status"])
+            self.assertRegex(verified["public_cut"]["root_sha256"], r"^[0-9a-f]{64}$")
 
     def test_extra_member_and_case_alias_fail_closed(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -74,6 +84,25 @@ class CanonicalReleaseAssetTests(unittest.TestCase):
             with self.assertRaisesRegex(loom_release_verify.VerifyError, "nested"):
                 loom_release_verify.verify(
                     archive, forbidden_tokens=["owner-only-project-name"])
+
+    def test_duplicate_receipt_json_key_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            package = self._finalized(root)
+            original = root / "original.zip"
+            mutated = root / "mutated.zip"
+            loom_plugin_package.archive_finalized(package, original)
+            with zipfile.ZipFile(original) as source, zipfile.ZipFile(
+                    mutated, "x", compression=zipfile.ZIP_DEFLATED) as output:
+                for entry in source.infolist():
+                    raw = source.read(entry)
+                    if entry.filename == "FINAL-PACKAGE-RECEIPT.json":
+                        raw = raw.replace(b'{"files":',
+                                          b'{"schema_version":1,"schema_version":1,"files":',
+                                          1)
+                    output.writestr(entry, raw)
+            with self.assertRaisesRegex(loom_release_verify.VerifyError, "receipt"):
+                loom_release_verify.verify(mutated)
 
     def test_redirected_archive_path_is_rejected_before_open(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/suite-qualification-v1.schema.json",
+  "title": "Sealed serial-shadow qualification record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "required_successes", "serial_policy_sha256", "certificate_policy_sha256", "bound_inputs", "bound_inputs_sha256", "families", "fault_injection_receipts", "reproducibility_receipt_sha256s", "rollback_receipt_sha256", "workflow_critical_path_improved", "archive_subjects_agree", "privacy_clean", "mutation_clean", "worker_cleanup_verified", "qualification_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "qualified"},
+    "required_successes": {"const": 10},
+    "serial_policy_sha256": {"$ref": "#/$defs/digest"},
+    "certificate_policy_sha256": {"$ref": "#/$defs/digest"},
+    "bound_inputs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["harness_sha256", "timing_profile_sha256", "workflow_digests", "action_manifest_digests", "qualification_code_sha256"],
+      "properties": {
+        "harness_sha256": {"$ref": "#/$defs/digest"},
+        "timing_profile_sha256": {"$ref": "#/$defs/digest"},
+        "workflow_digests": {"$ref": "#/$defs/consumerDigests"},
+        "action_manifest_digests": {"$ref": "#/$defs/consumerDigests"},
+        "qualification_code_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "bound_inputs_sha256": {"$ref": "#/$defs/digest"},
+    "families": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/family"}},
+    "fault_injection_receipts": {
+      "type": "object", "additionalProperties": false,
+      "required": ["linux", "windows", "macos"],
+      "properties": {"linux": {"$ref": "#/$defs/digest"}, "windows": {"$ref": "#/$defs/digest"}, "macos": {"$ref": "#/$defs/digest"}}
+    },
+    "reproducibility_receipt_sha256s": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
+    "rollback_receipt_sha256": {"$ref": "#/$defs/digest"},
+    "workflow_critical_path_improved": {"const": true},
+    "archive_subjects_agree": {"const": true},
+    "privacy_clean": {"const": true},
+    "mutation_clean": {"const": true},
+    "worker_cleanup_verified": {"const": true},
+    "qualification_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "consumerDigests": {"type": "object", "additionalProperties": false, "required": ["quality", "compatibility"], "properties": {"quality": {"$ref": "#/$defs/digest"}, "compatibility": {"$ref": "#/$defs/digest"}}},
+    "family": {
+      "type": "object", "additionalProperties": false,
+      "required": ["family_id", "consumer", "requested_label", "image_os", "architecture", "python_implementation", "python_minor", "successful_run_ids", "exact_image_versions", "python_patches", "serial_p50_microseconds", "serial_p95_microseconds", "sharded_p50_microseconds", "sharded_p95_microseconds", "parity_verified"],
+      "properties": {
+        "family_id": {"$ref": "#/$defs/digest"},
+        "consumer": {"enum": ["quality", "compatibility", "clean-room"]},
+        "requested_label": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_os": {"type": "string", "minLength": 1, "maxLength": 128},
+        "architecture": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_implementation": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_minor": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
+        "successful_run_ids": {"type": "array", "minItems": 10, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9]+$"}},
+        "exact_image_versions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
+        "python_patches": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].*)?$"}},
+        "serial_p50_microseconds": {"type": "integer", "minimum": 1},
+        "serial_p95_microseconds": {"type": "integer", "minimum": 1},
+        "sharded_p50_microseconds": {"type": "integer", "minimum": 1},
+        "sharded_p95_microseconds": {"type": "integer", "minimum": 1},
+        "parity_verified": {"const": true}
+      }
+    }
+  }
+}

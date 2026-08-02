@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 
 import loom_release_subject
+import loom_release_candidate
 import loom_reliability
 import loom_subject_identity
 
@@ -25,6 +26,12 @@ V2_FIELDS = {
 V3_FIELDS = {
     "schema_version", "repository", "release_sequence",
     "previous_bundle_sha256", "subjects", "relations", "bundle_sha256",
+}
+V4_FIELDS = {
+    "schema_version", "repository", "release_sequence",
+    "previous_bundle_sha256", "subjects", "relations",
+    "reproducibility_receipt_sha256", "matrix_certificate_sha256",
+    "promotion_policy_sha256", "bundle_sha256",
 }
 
 
@@ -118,7 +125,65 @@ def _verify_v3(value, plugin, *, commit=None, tag=None):
     }
 
 
+def _verify_v4(value, plugin, *, commit=None, tag=None):
+    if not isinstance(value, dict) or set(value) != V4_FIELDS \
+            or value.get("schema_version") != 4:
+        raise SubjectVerificationError("v4 release bundle identity is invalid")
+    try:
+        regenerated = loom_release_subject.create_evidence_v4(
+            subjects=value["subjects"], release_sequence=value["release_sequence"],
+            reproducibility_receipt_sha256=value["reproducibility_receipt_sha256"],
+            matrix_certificate_sha256=value["matrix_certificate_sha256"],
+            promotion_policy_sha256=value["promotion_policy_sha256"],
+            previous_bundle_sha256=value["previous_bundle_sha256"])
+    except (KeyError, loom_release_subject.ReleaseSubjectError) as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    if regenerated != value:
+        raise SubjectVerificationError("v4 release bundle digest or relations are invalid")
+    subjects = loom_subject_identity.subject_map(value["subjects"])
+    candidates = [item for (kind, _), item in subjects.items()
+                  if kind == "candidate-source"]
+    tags = [item for (kind, _), item in subjects.items() if kind == "release-tag"]
+    plugins = [item for (kind, _), item in subjects.items() if kind == "plugin-zip"]
+    if commit is not None and candidates[0]["commit"] != commit \
+            or tag is not None and tags[0]["tag"] != tag:
+        raise SubjectVerificationError("v4 release component identity is invalid")
+    try:
+        plugin = loom_reliability._absolute(plugin, "canonical plugin", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    raw = plugin.read_bytes()
+    if plugins[0]["bytes"] != len(raw) \
+            or plugins[0]["sha256"] != hashlib.sha256(raw).hexdigest():
+        raise SubjectVerificationError("canonical plugin bytes do not match the v4 subject")
+    public_cuts = [item for (kind, _), item in subjects.items()
+                   if kind == "public-cut"]
+    native_helpers = {item["platform"]: item for (kind, _), item in subjects.items()
+                      if kind == "native-helper"}
+    try:
+        archive = loom_release_candidate._archive_subject(plugin)
+    except loom_release_candidate.CandidateError as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    declared_cut = public_cuts[0]
+    if archive["public_cut"] != {
+            "root_sha256": declared_cut["root_sha256"],
+            "manifest_sha256": declared_cut["manifest_sha256"],
+            "file_count": declared_cut["file_count"]}:
+        raise SubjectVerificationError(
+            "canonical plugin embeds the wrong v4 public-cut subject")
+    if {platform: item["sha256"] for platform, item in native_helpers.items()} \
+            != archive["native_binaries"]:
+        raise SubjectVerificationError(
+            "canonical plugin embeds the wrong v4 native-helper subjects")
+    return {"status": "verified", "bundle_sha256": value["bundle_sha256"],
+            "plugin_subject_digest": plugins[0]["subject_digest"],
+            "plugin_sha256": plugins[0]["sha256"],
+            "release_sequence": value["release_sequence"]}
+
+
 def verify(value, plugin, *, commit=None, tag=None):
+    if isinstance(value, dict) and value.get("schema_version") == 4:
+        return _verify_v4(value, plugin, commit=commit, tag=tag)
     if isinstance(value, dict) and value.get("schema_version") == 3:
         return _verify_v3(value, plugin, commit=commit, tag=tag)
     return _verify_v2(value, plugin, commit=commit, tag=tag)

@@ -1,0 +1,252 @@
+name: post-release-same-byte-verification
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  verify-public-install-and-rollback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Download and verify public release evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          LOOM_RELEASE_SIGNING_PUBLIC_KEY: ${{ vars.LOOM_RELEASE_SIGNING_PUBLIC_KEY }}
+        shell: bash
+        run: |
+          printf 'loom-release@users.noreply.github.com %s\n' "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" > "$RUNNER_TEMP/allowed-signers"
+          [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$RELEASE_TAG" != "v1.8.30"
+          test "$RELEASE_TAG" = "v$(cat VERSION)"
+          [[ "$LOOM_RELEASE_SIGNING_PUBLIC_KEY" =~ ^ssh-ed25519\ [A-Za-z0-9+/]+={0,3}$ ]]
+          git config gpg.format ssh
+          git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/allowed-signers"
+          git verify-tag "$RELEASE_TAG"
+          gh release download "$RELEASE_TAG" --dir release-assets
+          cd release-assets
+          sha256sum --check SHA256SUMS
+          cd ..
+          ASSET="release-assets/loom-plugin-${RELEASE_TAG}.zip"
+          python -B tools/loom_release_verify.py "$ASSET"
+          python -B tools/loom_release_subject_verify.py release-assets/RELEASE-SUBJECT.json \
+            --plugin "$ASSET" --commit "$GITHUB_SHA" --tag "$RELEASE_TAG"
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json; print(json.load(open("release-assets/cut-receipt.json",encoding="utf-8"))["root_sha256"])')"
+          python -B tools/loom_suite_certificate.py verify release-assets/quality-matrix-certificate.json
+          python -B tools/loom_suite_certificate.py verify release-assets/compatibility-matrix-certificate.json
+          python -B tools/loom_release_suite.py --verify release-assets/full-suite.json \
+            --policy contracts/release-suite-policy-v1.json --commit "$GITHUB_SHA" \
+            --public-root "$PUBLIC_ROOT"
+          if test "$MODE" = serial; then
+            test ! -f contracts/release-suite-qualification-v1.json
+          else
+            python -B tools/loom_suite_certificate.py verify-qualification \
+              --qualification contracts/release-suite-qualification-v1.json \
+              --policy contracts/release-suite-policy-v1.json \
+              --matrix-certificate release-assets/quality-matrix-certificate.json \
+              --matrix-certificate release-assets/compatibility-matrix-certificate.json
+          fi
+          python -B tools/loom_release_rollback.py . --commit "$GITHUB_SHA" \
+            --public-root "$(python -B -c 'import json; print(json.load(open("release-assets/cut-receipt.json", encoding="utf-8"))["root_sha256"])')" \
+            --output "$RUNNER_TEMP/post-rollback.json"
+          gh attestation verify "$ASSET" -R "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/attestation.json"
+          gh attestation verify release-assets/SHA256SUMS \
+            -R "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/checksums-attestation.json"
+          EXPECTED="$(sha256sum "$ASSET" | cut -d' ' -f1)"
+          API_DIGEST="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | select(.name == "loom-plugin-'"$RELEASE_TAG"'.zip") | .digest')"
+          python -B - "$EXPECTED" "$API_DIGEST" <<'PY'
+          import json,sys
+          json.dump({"signed_tag_verified":True,"passport_verified":True,
+                     "matrix_certificate_verified":True,"native_evidence_verified":True,
+                     "rollback_verified":True,"attestation_verified":True,
+                     "expected_sha256":sys.argv[1],"release_asset_sha256":sys.argv[2]},
+                    open("promotion-gate.json","w",encoding="utf-8"),
+                    sort_keys=True,separators=(",", ":"))
+          PY
+      - name: Verify extracted bytes and perform an isolated signed installation
+        id: installed-subject
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        shell: bash
+        run: |
+          ASSET="release-assets/loom-plugin-${RELEASE_TAG}.zip"
+          mkdir installed
+          python -B - "$ASSET" <<'PY'
+          import hashlib,json,os,sys,zipfile
+          from pathlib import Path,PurePosixPath
+          sys.path.insert(0, str(Path("tools").resolve()))
+          import loom_release_verify
+          seen=set()
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              for entry in archive.infolist():
+                  parts=loom_release_verify._name(entry.filename, seen)
+                  target=Path("installed").joinpath(*parts)
+                  target.parent.mkdir(parents=True,exist_ok=True)
+                  descriptor=os.open(target,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                  with os.fdopen(descriptor,"wb") as output:
+                      output.write(archive.read(entry))
+          rows=[]
+          for path in sorted(p for p in Path("installed").rglob("*") if p.is_file()):
+              raw=path.read_bytes()
+              rows.append({"path":path.relative_to("installed").as_posix(),
+                           "bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest()})
+          digest=hashlib.sha256(json.dumps(rows,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
+          Path("installed-subject.txt").write_text(digest,encoding="ascii")
+          PY
+          export HOME="$RUNNER_TEMP/post-release-user"
+          export USERPROFILE="$HOME"
+          export APPDATA="$HOME/appdata"
+          export LOCALAPPDATA="$HOME/localappdata"
+          export CODEX_HOME="$HOME/codex"
+          export XDG_CONFIG_HOME="$HOME/xdg-config"
+          export XDG_CACHE_HOME="$HOME/xdg-cache"
+          export XDG_DATA_HOME="$HOME/xdg-data"
+          export LOOM_HOME="$RUNNER_TEMP/post-release-loom"
+          export TMP="$RUNNER_TEMP/post-release-tmp"
+          export TEMP="$TMP"
+          export TMPDIR="$TMP"
+          mkdir -p "$HOME" "$APPDATA" "$LOCALAPPDATA" "$CODEX_HOME" \
+            "$XDG_CONFIG_HOME" "$XDG_CACHE_HOME" "$XDG_DATA_HOME" "$LOOM_HOME" "$TMP"
+          python -B installed/scripts/loom_bootstrap.py --ensure \
+            --plugin-root "$PWD/installed" --home "$LOOM_HOME" > post-bootstrap.json
+          python -B - <<'PY'
+          import hashlib,json,os,subprocess,sys
+          from pathlib import Path
+
+          home=Path(os.environ["LOOM_HOME"]).resolve()
+          plugin=Path("installed").resolve()
+          bootstrap=json.loads(Path("post-bootstrap.json").read_text(encoding="utf-8"))
+          if bootstrap.get("status") not in {"activated","current"} \
+                  or bootstrap.get("delivery_authority") != "signed-release":
+              raise SystemExit("signed release bootstrap did not activate")
+          pointer=json.loads((home/"runtime"/"current.json").read_text(encoding="utf-8"))
+          if not isinstance(pointer.get("path"),str):
+              raise SystemExit("installed runtime pointer is invalid")
+          runtime=(home/"runtime"/"versions"/pointer["path"]).resolve()
+          if not runtime.is_relative_to((home/"runtime"/"versions").resolve()):
+              raise SystemExit("installed runtime escaped its version root")
+          manifest=json.loads((runtime/"RUNTIME-MANIFEST.json").read_text(encoding="utf-8"))
+          sys.path.insert(0,str(plugin/"tools"))
+          import loom_update
+          platform=loom_update.platform_id()
+          binary="loom-vault.exe" if platform.startswith("windows-") else "loom-vault"
+          if manifest.get("platform") != platform:
+              raise SystemExit("installed runtime selected the wrong platform payload")
+          active_helper=(runtime/"bin"/binary).read_bytes()
+          packaged_helper=(plugin/"crypto"/platform/binary).read_bytes()
+          if hashlib.sha256(active_helper).digest() != hashlib.sha256(packaged_helper).digest():
+              raise SystemExit("installed runtime selected the wrong native helper")
+          launcher=bootstrap.get("launcher",{}).get("python_launcher")
+          if not isinstance(launcher,str):
+              raise SystemExit("signed release bootstrap produced no launcher entry point")
+          completed=subprocess.run(
+              [sys.executable,"-B",launcher,"--home",str(home),
+               "codex-plugin-canonicalize","--approved"],
+              capture_output=True,text=True,timeout=30,check=False)
+          try:
+              routed=json.loads(completed.stdout)
+          except json.JSONDecodeError as exc:
+              raise SystemExit("installed launcher returned invalid output") from exc
+          if completed.returncode != 0 or routed.get("status") not in {"current","installed"}:
+              raise SystemExit("installed launcher entry point failed")
+          rows=[]
+          for path in sorted(p for p in runtime.rglob("*") if p.is_file()):
+              raw=path.read_bytes()
+              rows.append({"path":path.relative_to(runtime).as_posix(),
+                           "bytes":len(raw),"sha256":hashlib.sha256(raw).hexdigest()})
+          subject=hashlib.sha256(json.dumps(
+              rows,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
+          Path("installed-runtime-subject.txt").write_text(subject,encoding="ascii")
+          Path("installed-runtime-path.txt").write_text(str(runtime),encoding="utf-8")
+          body={"schema_version":1,"status":"verified-installed-runtime",
+                "platform":platform,"runtime_subject_sha256":subject,
+                "native_helper_sha256":hashlib.sha256(active_helper).hexdigest(),
+                "signed_delivery_verified":True,"launcher_entry_point_verified":True}
+          body["receipt_sha256"]=hashlib.sha256(json.dumps(
+              body,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
+          Path("post-install-verification.json").write_text(
+              json.dumps(body,sort_keys=True,separators=(",", ":"))+"\n",encoding="utf-8")
+          PY
+          INSTALLED="$(cat installed-runtime-subject.txt)"
+          python -B - > represented-installed-subjects.txt <<'PY'
+          import json
+          value=json.load(open("release-assets/installed-runtime-evidence.json",encoding="utf-8"))
+          if set(value) != {"schema_version","status","candidate_extracted_tree_sha256",
+                           "represented_installed_subjects",
+                           "source_reproducibility_receipt_sha256"} \
+                  or value["schema_version"] != 1 or value["status"] != "pre-installation" \
+                  or value["represented_installed_subjects"]:
+              raise SystemExit("pre-installation evidence contract is invalid")
+          for subject in value["represented_installed_subjects"]:
+              print(subject)
+          PY
+          mapfile -t REPRESENTED < represented-installed-subjects.txt
+          REPRESENTED_ARGS=()
+          for subject in "${REPRESENTED[@]}"; do
+            REPRESENTED_ARGS+=(--represented-installed-subject "$subject")
+          done
+          python -B tools/loom_release_promotion.py verify-public "$ASSET" \
+            --gate promotion-gate.json --installed-subject "$INSTALLED" \
+            "${REPRESENTED_ARGS[@]}" \
+            --output post-release-receipt.json
+          RERUN="$(python -B -c 'import json; print(str(json.load(open("post-release-receipt.json",encoding="utf-8"))["behavior_rerun_required"]).lower())')"
+          RUNTIME_PATH="$(cat installed-runtime-path.txt)"
+          echo "rerun_required=$RERUN" >> "$GITHUB_OUTPUT"
+          echo "runtime_tools=$RUNTIME_PATH/tools" >> "$GITHUB_OUTPUT"
+      - name: Rerun behavior only for an unrepresented transformed installation
+        if: steps.installed-subject.outputs.rerun_required == 'true'
+        working-directory: ${{ steps.installed-subject.outputs.runtime_tools }}
+        run: python -B loom_test.py full --output "$RUNNER_TEMP/post-install-suite.json"
+      - name: Seal privacy-safe post-release evidence
+        env:
+          RERUN_REQUIRED: ${{ steps.installed-subject.outputs.rerun_required }}
+        shell: bash
+        run: |
+          python -B - <<'PY'
+          import hashlib,json,os
+          from pathlib import Path
+          rerun=os.environ["RERUN_REQUIRED"] == "true"
+          suite=Path(os.environ["RUNNER_TEMP"])/"post-install-suite.json"
+          if rerun:
+              value=json.loads(suite.read_text(encoding="utf-8"))
+              if value.get("successful") is not True or value.get("capability_complete") is not True:
+                  raise SystemExit("transformed installed runtime behavior verification failed")
+              tests=value.get("tests_run")
+          else:
+              if suite.exists():
+                  raise SystemExit("unexpected installed runtime suite evidence")
+              tests=None
+          body={"schema_version":1,"status":"verified-post-release",
+                "behavior_evidence":"rerun-passed" if rerun else "exact-subject-reused",
+                "tests_run":tests,
+                "installation_receipt_sha256":json.load(open(
+                    "post-install-verification.json",encoding="utf-8"))["receipt_sha256"],
+                "promotion_receipt_sha256":json.load(open(
+                    "post-release-receipt.json",encoding="utf-8"))["receipt_sha256"]}
+          body["receipt_sha256"]=hashlib.sha256(json.dumps(
+              body,sort_keys=True,separators=(",", ":")).encode()).hexdigest()
+          Path("post-release-summary.json").write_text(
+              json.dumps(body,sort_keys=True,separators=(",", ":"))+"\n",encoding="utf-8")
+          PY
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: post-release-evidence-${{ github.event.release.tag_name }}
+          path: |
+            post-install-verification.json
+            post-release-receipt.json
+            post-release-summary.json
+          retention-days: 30
+          if-no-files-found: error
