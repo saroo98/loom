@@ -268,8 +268,9 @@ def verify_public(asset, gate, *, installed_subject_sha256=None,
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("verify-draft", "verify-public"):
-        verify = commands.add_parser(name)
+    verify_draft_parser = commands.add_parser("verify-draft")
+    verify_public_parser = commands.add_parser("verify-public")
+    for verify in (verify_draft_parser, verify_public_parser):
         verify.add_argument("asset")
         verify.add_argument("--gate", required=True)
         verify.add_argument("--installed-subject")
