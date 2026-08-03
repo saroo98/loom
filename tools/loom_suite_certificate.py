@@ -1085,8 +1085,19 @@ def _verify_release_evidence(reproducibility_receipts, rollback_receipt,
         "file_count": subject["public_file_count"],
     }
     digests = [receipt["receipt_sha256"] for receipt in verified]
+    candidate_identities = [{
+        "candidate_a": receipt["candidate_a"],
+        "candidate_b": receipt["candidate_b"],
+        "public_cut": receipt["public_cut"],
+        "native_binary_subjects": [{
+            "platform": row["platform"],
+            "binary_sha256": row["binary_sha256"],
+        } for row in receipt["native_subjects"]],
+    } for receipt in verified]
     if len(digests) != len(set(digests)) \
-            or any(receipt["public_cut"] != public_cut for receipt in verified):
+            or any(receipt["public_cut"] != public_cut for receipt in verified) \
+            or any(identity != candidate_identities[0]
+                   for identity in candidate_identities[1:]):
         raise CertificateError(
             "qualification release evidence is invalid", ["WRONG_SUBJECT"])
 

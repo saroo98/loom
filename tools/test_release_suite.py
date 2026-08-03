@@ -612,6 +612,31 @@ class ReleaseSuiteTests(unittest.TestCase):
                         self._reseal_qualification(candidate), matrices,
                         policy=policy)
 
+    def test_qualification_rejects_reproductions_of_different_archives(self):
+        subject = self._matrix("quality")["subject"]
+        receipts = self._reproducibility_receipts(subject)
+        changed = copy.deepcopy(receipts[1])
+        body = {
+            key: value for key, value in changed.items()
+            if key != "receipt_sha256"
+        }
+        for field in ("candidate_a", "candidate_b"):
+            body[field]["sha256"] = "9" * 64
+        receipts[1] = loom_release_candidate._seal(body)
+        for receipt in receipts:
+            self.assertEqual(
+                "reproduced",
+                loom_release_candidate.verify_reproducibility_receipt(
+                    receipt)["status"])
+
+        with self.assertRaisesRegex(
+                loom_suite_certificate.CertificateError,
+                "qualification release evidence is invalid") as refusal:
+            loom_suite_certificate._verify_release_evidence(
+                receipts, self._rollback_receipt(subject), subject)
+
+        self.assertIn("WRONG_SUBJECT", refusal.exception.findings)
+
     def test_certificate_authority_compiles_without_running_the_suite(self):
         policy = loom_suite_plan.seal_policy({
             "schema_version": 1, "authority_mode": "certificate",

@@ -136,6 +136,22 @@ class SuitePlanTests(unittest.TestCase):
                     root, subject=SUBJECT, environment=ENVIRONMENT,
                     harness_sha256="4" * 64)
 
+    def test_inventory_discovery_cannot_reuse_preloaded_controller_modules(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "test_preloaded_fallback.py").write_text(
+                "import loom_subject_identity\n"
+                "import unittest\n"
+                "class PreloadedFallback(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                    loom_suite_plan.SuitePlanError, "discovery failed"):
+                loom_suite_plan.inventory(
+                    root, subject=SUBJECT, environment=ENVIRONMENT,
+                    harness_sha256="4" * 64)
+
     def test_inventory_discovery_times_out_and_cleans_descendants(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

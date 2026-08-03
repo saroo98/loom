@@ -215,6 +215,16 @@ def _inventory_child(request_path, output_path):
             pass
         isolated_path.append(entry)
     sys.path[:] = isolated_path
+    for name, module in list(sys.modules.items()):
+        module_path = getattr(module, "__file__", None)
+        if name == "__main__" or not isinstance(module_path, str):
+            continue
+        try:
+            resolved = Path(module_path).resolve()
+        except OSError:
+            continue
+        if resolved == controller_root or controller_root in resolved.parents:
+            sys.modules.pop(name, None)
     value = _discover_inventory(
         request["test_root"], subject=request["subject"],
         environment=request["environment"],
