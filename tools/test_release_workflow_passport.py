@@ -63,6 +63,7 @@ class ReleaseWorkflowPassportTests(unittest.TestCase):
         self.assertEqual(1, text.count("create-asset-manifest"))
         self.assertEqual(1, text.count(
             'gh release upload "$RELEASE_TAG" release-passport/SHA256SUMS'))
+        self.assertEqual(1, text.count("--defer-checksum-manifest"))
 
     def test_v4_verification_runs_only_after_actual_evidence_exists(self):
         release = (ROOT / ".github" / "workflows" / "release.yml").read_text(

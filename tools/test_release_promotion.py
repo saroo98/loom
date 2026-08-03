@@ -6,6 +6,7 @@ from pathlib import Path
 import json
 
 import loom_lint
+import loom_release_passport
 import loom_release_promotion
 
 
@@ -154,6 +155,51 @@ class ReleasePromotionTests(unittest.TestCase):
         self.assertTrue(all(__import__("re").fullmatch(
             r"[0-9a-f]{64} \*[A-Za-z0-9][A-Za-z0-9._+-]{0,254}", line)
                             for line in lines))
+
+    def test_real_passport_outputs_feed_the_one_final_combined_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            base = root / "base"
+            passport = root / "passport"
+            base.mkdir()
+            (base / "loom-plugin-v1.9.0.zip").write_bytes(b"plugin")
+            loom_release_passport.write_outputs(
+                passport,
+                {
+                    "evidence_bundle": {"schema_version": 2},
+                    "evidence_graph": {"status": "passed"},
+                    "readiness": {
+                        "release_subject_sha256": "1" * 64,
+                        "status": "ready",
+                    },
+                },
+                defer_checksum_manifest=True)
+            expected_digests = {
+                path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                for asset_root in (base, passport)
+                for path in asset_root.iterdir()
+            }
+
+            result = loom_release_promotion.create_asset_manifest(
+                [base, passport], passport / "SHA256SUMS")
+            lines = (passport / "SHA256SUMS").read_text(
+                encoding="utf-8").splitlines()
+            manifest_digests = {
+                name: digest for digest, name in (
+                    line.split(" *", 1) for line in lines)
+            }
+
+        self.assertEqual("created-final-manifest", result["status"])
+        self.assertEqual(4, len(lines))
+        self.assertEqual(
+            [
+                "RELEASE-EVIDENCE-GRAPH.json",
+                "RELEASE-EVIDENCE.json",
+                "RELEASE-READINESS.json",
+                "loom-plugin-v1.9.0.zip",
+            ],
+            result["assets"])
+        self.assertEqual(expected_digests, manifest_digests)
 
     def test_exact_asset_set_accepts_local_manifest_and_api_digest_equality(self):
         verify = self._asset_set_verifier()

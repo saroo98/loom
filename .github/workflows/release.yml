@@ -425,6 +425,7 @@ jobs:
             --ci-authority "$RUNNER_TEMP/ci-authority.json" \
             --codex-observation release-assets/CODEX-APP-EVIDENCE.json \
             --evaluation-epoch "$NOW" --output "$RUNNER_TEMP/release-passport" \
+            --defer-checksum-manifest \
             "${ARGS[@]}"
           test -f "$RUNNER_TEMP/release-passport/RELEASE-READINESS.json"
           test -f "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE.json"

@@ -470,7 +470,7 @@ def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
     return outputs
 
 
-def write_outputs(output_directory, value):
+def write_outputs(output_directory, value, *, defer_checksum_manifest=False):
     try:
         output = loom_reliability._absolute(
             output_directory, "release passport output")
@@ -484,12 +484,16 @@ def write_outputs(output_directory, value):
             ("RELEASE-EVIDENCE-GRAPH.json", "evidence_graph"),
             ("RELEASE-READINESS.json", "readiness")):
         loom_reliability.atomic_write_json(output / name, value[key])
-    checksums = []
-    for path in sorted(output.iterdir(), key=lambda item: item.name):
-        checksums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}\n")
-    loom_reliability.atomic_write_text(output / "SHA256SUMS", "".join(checksums))
+    if not defer_checksum_manifest:
+        checksums = []
+        for path in sorted(output.iterdir(), key=lambda item: item.name):
+            checksums.append(
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}\n")
+        loom_reliability.atomic_write_text(
+            output / "SHA256SUMS", "".join(checksums))
     return {"status": "created", "release_subject_sha256":
-            value["readiness"]["release_subject_sha256"], "files": 4}
+            value["readiness"]["release_subject_sha256"],
+            "files": 3 if defer_checksum_manifest else 4}
 
 
 def _mapping(values, label):
@@ -523,6 +527,7 @@ def main(argv=None):
     parser.add_argument("--exact-cut-receipt")
     parser.add_argument("--evaluation-epoch", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--defer-checksum-manifest", action="store_true")
     args = parser.parse_args(argv)
     try:
         binaries = _mapping(args.native_binary, "native binary")
@@ -555,7 +560,9 @@ def main(argv=None):
             exact_cut_receipt=(
                 _read_json(args.exact_cut_receipt, "exact-cut receipt")
                 if args.exact_cut_receipt else None))
-        written = write_outputs(args.output, result)
+        written = write_outputs(
+            args.output, result,
+            defer_checksum_manifest=args.defer_checksum_manifest)
     except (ReleasePassportError, loom_evidence_graph.EvidenceGraphError,
             loom_readiness.ReadinessError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
