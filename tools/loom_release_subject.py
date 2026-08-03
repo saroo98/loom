@@ -178,12 +178,19 @@ def create_evidence_v4(*, subjects, release_sequence,
     by_kind = {}
     for (kind, _subject_id), subject in mapped.items():
         by_kind.setdefault(kind, []).append(subject)
-    if any(len(by_kind.get(kind, [])) != 1 for kind in (
+    expected_kinds = {
+        "main-source", "candidate-source", "release-tag", "plugin-zip",
+        "public-cut", "native-helper",
+    }
+    if set(by_kind) != expected_kinds or len(mapped) != 11 \
+            or any(len(by_kind.get(kind, [])) != 1 for kind in (
             "main-source", "candidate-source", "release-tag", "plugin-zip",
             "public-cut")) \
             or {item["platform"] for item in by_kind.get("native-helper", [])} \
-            != loom_subject_identity.PLATFORMS:
-        raise ReleaseSubjectError("v4 release evidence subjects are incomplete")
+            != loom_subject_identity.PLATFORMS \
+            or len(by_kind.get("native-helper", [])) != 6:
+        raise ReleaseSubjectError(
+            "v4 release evidence subjects are incomplete or invalid")
     normalized = sorted(mapped.values(), key=lambda item: (
         item["kind"], item["subject_id"], item["subject_digest"]))
     plugin = by_kind["plugin-zip"][0]

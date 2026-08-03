@@ -1,19 +1,33 @@
 """Release-suite certification bound to exact cross-platform capability evidence."""
 
+import base64
+import copy
+import gzip
+import hashlib
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import loom_exact_cut_ci
+import loom_lint
+import loom_release_candidate
+import loom_release_rollback
 import loom_release_suite
 import loom_suite_certificate
 import loom_suite_plan
+import loom_suite_worker
 
 
 COMMIT = "1" * 40
 ROOT = "2" * 64
 TEST_ID = "test_capability.ExampleTests.test_platform_capability"
+TIMING_PROFILE = loom_suite_plan.seal_timing_profile({
+    "schema_version": 1,
+    "default_p75_microseconds": 100,
+    "module_microseconds": {},
+})
 
 
 def report(platform, status, *, exact_environment=False):
@@ -123,7 +137,7 @@ class ReleaseSuiteTests(unittest.TestCase):
                     "environment_sha256": loom_suite_plan.digest(environment),
                     "inventory_sha256": "a" * 64, "harness_sha256": "b" * 64,
                     "policy_sha256": policy_sha,
-                    "timing_profile_sha256": "d" * 64,
+                    "timing_profile_sha256": TIMING_PROFILE["profile_sha256"],
                     "plan_sha256": "e" * 64,
                     "worker_receipts": [{"shard_id": "general-000",
                                          "worker_receipt_sha256": "f" * 64,
@@ -213,6 +227,391 @@ class ReleaseSuiteTests(unittest.TestCase):
         }
         return {**body, "qualification_sha256": loom_suite_plan.digest(body)}
 
+    @staticmethod
+    def _pair_evidence(cell, serial_policy, *, run_id, run_attempt="1"):
+        environment = {
+            **cell["environment"],
+            "run_id": str(run_id),
+            "run_attempt": str(run_attempt),
+        }
+        grouped = {}
+        for outcome in cell["outcomes"]:
+            module = outcome["test"].split(".", 1)[0]
+            grouped.setdefault(module, []).append(outcome["test"])
+        inventory = loom_suite_plan.seal_inventory({
+            "schema_version": 1,
+            "subject": copy.deepcopy(cell["subject"]),
+            "environment": environment,
+            "harness_sha256": cell["harness_sha256"],
+            "modules": [
+                {"module": module, "tests": sorted(tests)}
+                for module, tests in sorted(grouped.items())
+            ],
+            "module_count": len(grouped),
+            "test_count": len(cell["outcomes"]),
+        })
+        plan = loom_suite_plan.plan(
+            inventory, timing_profile=TIMING_PROFILE, policy=serial_policy,
+            logical_cpus=2)
+        shard = plan["shards"][0]
+        expected_tests = sorted(
+            test for module in shard["modules"] for test in grouped[module])
+        observed = sorted(
+            copy.deepcopy(cell["outcomes"]), key=lambda row: row["test"])
+        duration = 900 + int(str(run_id)[-2:])
+        worker = loom_suite_worker._seal({
+            "schema_version": 1, "status": "passed", "primary_reason": None,
+            "findings": [], "subject": copy.deepcopy(cell["subject"]),
+            "environment": environment,
+            "inventory_sha256": inventory["inventory_sha256"],
+            "policy_sha256": serial_policy["policy_sha256"],
+            "timing_profile_sha256": TIMING_PROFILE["profile_sha256"],
+            "plan_sha256": plan["plan_sha256"],
+            "shard_id": shard["shard_id"], "exclusive": shard["exclusive"],
+            "expected_modules": shard["modules"],
+            "expected_tests": expected_tests, "observed_tests": observed,
+            "test_count": len(observed), "failure_count": 0,
+            "error_count": 0,
+            "skip_count": sum(row["status"] == "skipped" for row in observed),
+            "duration_microseconds": duration,
+            "pre_manifest_sha256": cell["subject"]["public_manifest_sha256"],
+            "post_manifest_sha256": cell["subject"]["public_manifest_sha256"],
+            "mutation_clean": True, "privacy_clean": True,
+            "runtime_roots_clean": True,
+            "operation": {
+                "status": "passed", "returncode": 0,
+                "primary_failure": None, "survivors_confirmed_zero": True,
+                "protected_roots_unchanged": True,
+                "network_isolation_proven": False,
+                "containment_provider": "fixture",
+                "receipt_sha256": loom_suite_plan.digest({
+                    "run_id": run_id, "run_attempt": run_attempt}),
+            },
+        })
+        certificate = loom_suite_certificate.compile_cell(
+            inventory, plan, [worker], policy=serial_policy)
+        exact_environment = {
+            "evidence_class": "ci-reproduced", **environment}
+        exact_environment["environment_sha256"] = loom_suite_plan.digest(
+            exact_environment)
+        serial_suite = {
+            "schema_version": 2, "passed": True,
+            "capability_complete": not any(
+                row["status"] == "skipped" for row in observed),
+            "capability_status": (
+                "requires-matrix" if any(
+                    row["status"] == "skipped" for row in observed)
+                else "complete"),
+            "returncode": (1 if any(
+                row["status"] == "skipped" for row in observed) else 0),
+            "primary_failure_sha256": None,
+            "operation_receipt_sha256": loom_suite_plan.digest({
+                "serial_run_id": run_id, "serial_run_attempt": run_attempt}),
+            "elapsed_microseconds": duration + 1000,
+            "tests_run": len(observed), "failure_count": 0,
+            "error_count": 0, "failed_tests": [],
+            "skip_receipts": [{
+                "test": row["test"],
+                "reason_code": row["skip_reason_code"],
+                "reason_sha256": row["skip_reason_sha256"],
+            } for row in observed if row["status"] == "skipped"],
+            "timings": [{
+                "test": row["test"], "status": row["status"],
+                "duration_microseconds": 1,
+            } for row in observed],
+            "binding": {
+                "source_commit": cell["subject"]["source_commit"],
+                "public_root_sha256": cell["subject"]["public_root_sha256"],
+                "environment": exact_environment,
+                "platform": (environment["image_os"] + ":" +
+                             environment["image_version"]),
+                "architecture": environment["architecture"],
+                "python": environment["python_version"],
+                "runner": exact_environment["environment_sha256"],
+            },
+        }
+        exact_receipt = loom_exact_cut_ci._seal({
+            "schema_version": 2, "status": "verified",
+            "platform": environment["os"],
+            "architecture": environment["architecture"],
+            "python": environment["python_version"],
+            "source_commit": cell["subject"]["source_commit"],
+            "build_root_sha256": cell["subject"]["public_root_sha256"],
+            "verified_root_sha256": cell["subject"]["public_root_sha256"],
+            "public_manifest_sha256": cell["subject"][
+                "public_manifest_sha256"],
+            "public_file_count": cell["subject"]["public_file_count"],
+            "suite": serial_suite, "error_type": None, "error_sha256": None,
+            "operation_id": f"fixture-{run_id}-{run_attempt}",
+            "environment": exact_environment,
+        })
+        return {
+            "exact_cut_receipt": exact_receipt,
+            "serial_suite": copy.deepcopy(serial_suite),
+            "inventory": inventory, "timing_profile": TIMING_PROFILE,
+            "plan": plan,
+            "worker_receipts": [worker],
+            "cell_certificate": certificate,
+            "shadow_comparison": loom_suite_certificate.compare_shadow(
+                serial_suite, certificate),
+        }
+
+    @staticmethod
+    def _reproducibility_receipts(subject):
+        platforms = sorted(loom_release_candidate.NATIVE_PLATFORMS)
+        binaries = {
+            platform: loom_suite_plan.digest({"platform": platform})
+            for platform in platforms}
+        public_cut = {
+            "root_sha256": subject["public_root_sha256"],
+            "manifest_sha256": subject["public_manifest_sha256"],
+            "file_count": subject["public_file_count"],
+        }
+        candidate = {
+            "sha256": "1" * 64, "bytes": 1, "files": 1,
+            "extracted_tree_sha256": "2" * 64,
+            "installed_tree_sha256": "3" * 64,
+            "archive_metadata_sha256": "4" * 64,
+            "public_cut": public_cut, "native_binaries": binaries,
+        }
+        receipts = []
+        for witness in ("first", "second"):
+            body = {
+                "schema_version": 1, "status": "reproduced",
+                "candidate_a": candidate, "candidate_b": candidate,
+                "canonical_candidate": "A", "public_cut": public_cut,
+                "native_subjects": [{
+                    "platform": platform,
+                    "binary_sha256": binaries[platform],
+                    "sbom_sha256": loom_suite_plan.digest({
+                        "platform": platform, "witness": witness}),
+                    "provenance_sha256": loom_suite_plan.digest({
+                        "provenance": platform, "witness": witness}),
+                } for platform in platforms],
+            }
+            receipts.append(loom_release_candidate._seal(body))
+        return receipts
+
+    @staticmethod
+    def _rollback_receipt(subject):
+        body = {
+            "schema_version": 1, "status": "passed",
+            "commit": subject["source_commit"],
+            "public_root_sha256": subject["public_root_sha256"],
+            "tests": list(loom_release_rollback.TESTS),
+            "transcript_sha256": "7" * 64,
+        }
+        return {**body, "result_sha256": loom_suite_plan.digest(body)}
+
+    @staticmethod
+    def _reseal_pair(pair):
+        return loom_suite_certificate._qualification_pair_envelope(pair)
+
+    @staticmethod
+    def _reseal_qualification(qualification):
+        body = {key: value for key, value in qualification.items()
+                if key != "qualification_sha256"}
+        return {**body, "qualification_sha256": loom_suite_plan.digest(body)}
+
+    @classmethod
+    def _qualification_evidence(cls, matrices, policy):
+        serial_policy = loom_suite_plan.seal_policy({
+            "schema_version": 1, "authority_mode": "serial",
+            "exclusive_modules": policy["exclusive_modules"],
+        })
+        families = []
+        family_number = 0
+        for matrix in sorted(matrices, key=lambda row: row["consumer"]):
+            for cell in matrix["cells"]:
+                family_number += 1
+                families.append({
+                    "consumer": matrix["consumer"],
+                    "pairs": [cls._pair_evidence(
+                        cell, serial_policy,
+                        run_id=f"{family_number}{run_number:02d}")
+                        for run_number in range(1, 11)],
+                })
+        compiler = getattr(loom_suite_certificate, "compile_qualification", None)
+        if compiler is None:
+            return None
+        return compiler(
+            families, matrices, policy=policy,
+            reproducibility_receipts=cls._reproducibility_receipts(
+                matrices[0]["subject"]),
+            rollback_receipt=cls._rollback_receipt(matrices[0]["subject"]))
+
+    def test_claim_only_qualification_cannot_authorize_certificate_mode(self):
+        policy = loom_suite_plan.seal_policy({
+            "schema_version": 1, "authority_mode": "certificate",
+            "exclusive_modules": [],
+        })
+        matrices = [self._matrix(
+            "quality", policy_sha=policy["policy_sha256"]), self._matrix(
+            "compatibility", policy_sha=policy["policy_sha256"])]
+        fabricated = self._qualification(matrices, policy)
+        with self.assertRaisesRegex(
+                loom_suite_certificate.CertificateError,
+                "qualification record is invalid"):
+            loom_suite_certificate.verify_qualification(
+                fabricated, matrices, policy=policy)
+
+    def test_qualification_loaders_are_bounded_above_worker_receipt_limit(self):
+        release_loader = getattr(
+            loom_release_suite, "_read_qualification", None)
+        certificate_loader = getattr(
+            loom_suite_certificate, "_load_qualification", None)
+        self.assertIsNotNone(release_loader)
+        self.assertIsNotNone(certificate_loader)
+        if release_loader is None or certificate_loader is None:
+            return
+        value = {"padding": "x" * (4 * 1024 * 1024)}
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "qualification.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            self.assertEqual(value, release_loader(path))
+            self.assertEqual(value, certificate_loader(path))
+            with self.assertRaises(loom_release_suite.ReleaseSuiteError):
+                release_loader(path, max_bytes=1024)
+            with self.assertRaises(loom_suite_worker.SuiteWorkerError):
+                certificate_loader(path, max_bytes=1024)
+            path.write_text('{"duplicate":1,"duplicate":2}', encoding="utf-8")
+            with self.assertRaises(loom_release_suite.ReleaseSuiteError):
+                release_loader(path)
+            with self.assertRaises(loom_suite_worker.SuiteWorkerError):
+                certificate_loader(path)
+            path.write_text("[" * 2000 + "0" + "]" * 2000, encoding="utf-8")
+            with self.assertRaises(loom_release_suite.ReleaseSuiteError):
+                release_loader(path)
+            with self.assertRaises(loom_suite_worker.SuiteWorkerError):
+                certificate_loader(path)
+
+        deep = "[" * 2000 + "0" + "]" * 2000
+        raw = (
+            '{"exact_cut_receipt":' + deep
+            + ',"serial_suite":{},"inventory":{},"timing_profile":{},'
+            + '"plan":{},"worker_receipts":[],"cell_certificate":{},'
+            + '"shadow_comparison":{}}').encode("utf-8")
+        body = {
+            "encoding": "gzip-base64-json-v1",
+            "uncompressed_bytes": len(raw),
+            "payload_sha256": hashlib.sha256(raw).hexdigest(),
+            "payload_base64": base64.b64encode(
+                gzip.compress(raw, compresslevel=9, mtime=0)).decode("ascii"),
+        }
+        envelope = {
+            **body, "pair_sha256": loom_suite_plan.digest(body),
+        }
+        with self.assertRaises(loom_suite_certificate.CertificateError):
+            loom_suite_certificate._decode_qualification_pair(envelope)
+
+    def test_exactly_ten_full_pairs_derive_one_valid_qualification(self):
+        policy = loom_suite_plan.seal_policy({
+            "schema_version": 1, "authority_mode": "certificate",
+            "exclusive_modules": [],
+        })
+        matrices = [self._matrix(
+            "quality", policy_sha=policy["policy_sha256"]), self._matrix(
+            "compatibility", policy_sha=policy["policy_sha256"])]
+        qualification = self._qualification_evidence(matrices, policy)
+        self.assertIsNotNone(
+            qualification,
+            "compile_qualification must compile full pair evidence")
+        self.assertEqual(
+            qualification,
+            loom_suite_certificate.verify_qualification(
+                qualification, matrices, policy=policy))
+        self.assertEqual(30, len(qualification["families"]))
+        clean_room_family = next(
+            family for family in qualification["families"]
+            if family["family_id"] == qualification["clean_room_family_id"])
+        self.assertEqual("compatibility", clean_room_family["consumer"])
+        self.assertEqual("ubuntu-24.04", clean_room_family["requested_label"])
+        self.assertEqual("3.11", clean_room_family["python_minor"])
+        self.assertTrue(all(
+            len(family["pairs"]) == 10
+            and len(family["derived"]["successful_runs"]) == 10
+            and family["derived"]["workflow_critical_path_improved"] is True
+            for family in qualification["families"]))
+        schema_report = loom_lint.Report()
+        loom_lint.validate_schema(
+            schema_report, "suite-qualification", qualification,
+            "suite-qualification-v1.schema.json")
+        self.assertEqual([], schema_report.errors)
+
+    def test_qualification_rejects_missing_duplicate_and_forged_summaries(self):
+        policy = loom_suite_plan.seal_policy({
+            "schema_version": 1, "authority_mode": "certificate",
+            "exclusive_modules": [],
+        })
+        matrices = [self._matrix(
+            "quality", policy_sha=policy["policy_sha256"]), self._matrix(
+            "compatibility", policy_sha=policy["policy_sha256"])]
+        qualification = self._qualification_evidence(matrices, policy)
+        cases = []
+        missing = copy.deepcopy(qualification)
+        missing["families"][0]["pairs"].pop()
+        cases.append(missing)
+        duplicate = copy.deepcopy(qualification)
+        duplicate["families"][0]["pairs"][-1] = copy.deepcopy(
+            duplicate["families"][0]["pairs"][0])
+        cases.append(duplicate)
+        forged_timing = copy.deepcopy(qualification)
+        forged_timing["families"][0]["derived"][
+            "serial_p50_microseconds"] += 1
+        cases.append(forged_timing)
+        forged_boolean = copy.deepcopy(qualification)
+        forged_boolean["families"][0]["derived"]["privacy_clean"] = False
+        cases.append(forged_boolean)
+        for candidate in cases:
+            with self.subTest(case=len(candidate["families"][0]["pairs"])):
+                with self.assertRaises(loom_suite_certificate.CertificateError):
+                    loom_suite_certificate.verify_qualification(
+                        self._reseal_qualification(candidate), matrices,
+                        policy=policy)
+
+    def test_qualification_rejects_mixed_subject_stale_and_unresolved_evidence(self):
+        policy = loom_suite_plan.seal_policy({
+            "schema_version": 1, "authority_mode": "certificate",
+            "exclusive_modules": [],
+        })
+        matrices = [self._matrix(
+            "quality", policy_sha=policy["policy_sha256"]), self._matrix(
+            "compatibility", policy_sha=policy["policy_sha256"])]
+        qualification = self._qualification_evidence(matrices, policy)
+        mixed_subject = copy.deepcopy(qualification)
+        pair = loom_suite_certificate._decode_qualification_pair(
+            mixed_subject["families"][0]["pairs"][0])
+        exact_body = {key: value for key, value in pair[
+            "exact_cut_receipt"].items() if key != "receipt_sha256"}
+        exact_body["source_commit"] = "9" * 40
+        exact_body["suite"]["binding"]["source_commit"] = "9" * 40
+        pair["exact_cut_receipt"] = loom_exact_cut_ci._seal(exact_body)
+        pair["serial_suite"] = copy.deepcopy(exact_body["suite"])
+        mixed_subject["families"][0]["pairs"][0] = self._reseal_pair(pair)
+
+        stale_timing = copy.deepcopy(qualification)
+        pair = loom_suite_certificate._decode_qualification_pair(
+            stale_timing["families"][0]["pairs"][0])
+        profile_body = {key: value for key, value in pair[
+            "timing_profile"].items() if key != "profile_sha256"}
+        profile_body["default_p75_microseconds"] += 1
+        pair["timing_profile"] = loom_suite_plan.seal_timing_profile(profile_body)
+        stale_timing["families"][0]["pairs"][0] = self._reseal_pair(pair)
+
+        unresolved_repro = copy.deepcopy(qualification)
+        unresolved_repro["reproducibility_receipts"][0] = {
+            "receipt_sha256": "a" * 64}
+        forged_rollback = copy.deepcopy(qualification)
+        forged_rollback["rollback_receipt"]["transcript_sha256"] = "8" * 64
+
+        for candidate in (
+                mixed_subject, stale_timing, unresolved_repro, forged_rollback):
+            with self.subTest(candidate=list(candidate)):
+                with self.assertRaises(loom_suite_certificate.CertificateError):
+                    loom_suite_certificate.verify_qualification(
+                        self._reseal_qualification(candidate), matrices,
+                        policy=policy)
+
     def test_certificate_authority_compiles_without_running_the_suite(self):
         policy = loom_suite_plan.seal_policy({
             "schema_version": 1, "authority_mode": "certificate",
@@ -220,7 +619,7 @@ class ReleaseSuiteTests(unittest.TestCase):
         })
         matrices = [self._matrix("quality", policy_sha=policy["policy_sha256"]),
                     self._matrix("compatibility", policy_sha=policy["policy_sha256"])]
-        qualification = self._qualification(matrices, policy)
+        qualification = self._qualification_evidence(matrices, policy)
         with mock.patch.object(
                 loom_release_suite.loom_test, "run",
                 side_effect=AssertionError("broad suite must not run")):
@@ -232,16 +631,12 @@ class ReleaseSuiteTests(unittest.TestCase):
         self.assertEqual(
             ["compatibility", "quality"],
             [row["consumer"] for row in result["matrices"]])
-        forged = dict(qualification)
-        forged_body = {key: value for key, value in forged.items()
-                       if key != "qualification_sha256"}
-        forged_body["fault_injection_receipts"] = {
-            **forged_body["fault_injection_receipts"], "linux": "0" * 64}
-        forged = {**forged_body,
-                  "qualification_sha256": loom_suite_plan.digest(forged_body)}
+        forged = copy.deepcopy(qualification)
+        forged["families"][0]["derived"]["parity_verified"] = False
+        forged = self._reseal_qualification(forged)
         with self.assertRaisesRegex(
                 loom_release_suite.ReleaseSuiteError,
-                "qualification gates are incomplete"):
+                "qualification family is invalid"):
             loom_release_suite.certify_certificates(
                 matrices, qualification=forged, policy=policy,
                 expected_commit=COMMIT, expected_root=ROOT)
@@ -325,7 +720,7 @@ class ReleaseSuiteTests(unittest.TestCase):
         matrices = [self._matrix("quality", policy_sha=certificate["policy_sha256"]),
                     self._matrix("compatibility", policy_sha=certificate[
                         "policy_sha256"])]
-        qualification = self._qualification(matrices, certificate)
+        qualification = self._qualification_evidence(matrices, certificate)
         with self.assertRaisesRegex(
                 loom_release_suite.ReleaseSuiteError, "disabled"):
             loom_release_suite.certify_certificates(
@@ -334,11 +729,11 @@ class ReleaseSuiteTests(unittest.TestCase):
         wrong = [self._matrix("quality", policy_sha=certificate["policy_sha256"]),
                  self._matrix("compatibility", root="9" * 64,
                               policy_sha=certificate["policy_sha256"])]
-        wrong_qualification = self._qualification(wrong, certificate)
         with self.assertRaisesRegex(
-                loom_release_suite.ReleaseSuiteError, "release subject"):
+                loom_release_suite.ReleaseSuiteError,
+                "release subject|qualification matrices mix"):
             loom_release_suite.certify_certificates(
-                wrong, qualification=wrong_qualification, policy=certificate,
+                wrong, qualification=qualification, policy=certificate,
                 expected_commit=COMMIT, expected_root=ROOT)
 
     @staticmethod

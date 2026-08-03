@@ -25,6 +25,27 @@ MAX_MANIFEST_BYTES = 256 * 1024
 MAX_RELEASE_ASSETS = 256
 ASSET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,254}")
 FINAL_MANIFEST = "SHA256SUMS"
+RELEASE_TAG = re.compile(r"v[0-9]+\.[0-9]+\.[0-9]+")
+NATIVE_PLATFORMS = (
+    "windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
+    "linux-x64", "linux-arm64",
+)
+PASSPORT_ASSETS = frozenset({
+    "RELEASE-EVIDENCE-ATTESTATION.json",
+    "RELEASE-EVIDENCE-GRAPH.json",
+    "RELEASE-EVIDENCE-SUBJECT.json",
+    "RELEASE-EVIDENCE.json",
+    "RELEASE-READINESS.json",
+    "clean-room.json",
+    "compatibility-matrix-certificate.json",
+    "cut-receipt.json",
+    "exact-cut-ci.json",
+    "full-suite.json",
+    "installed-runtime-evidence.json",
+    "quality-matrix-certificate.json",
+    "reproducibility-receipt.json",
+    "rollback.json",
+})
 
 
 def _strict_object(pairs):
@@ -78,6 +99,34 @@ def _asset_name(value):
     return value
 
 
+def _release_tag(value):
+    if not isinstance(value, str) or RELEASE_TAG.fullmatch(value) is None:
+        raise PromotionError("release tag is invalid")
+    return value
+
+
+def expected_base_assets(tag):
+    """Return the one tag-bound draft inventory admitted to promotion."""
+    tag = _release_tag(tag)
+    return frozenset({
+        "CODEX-APP-EVIDENCE.json",
+        "RELEASE-SUBJECT.json",
+        f"loom-plugin-{tag}-repro.zip",
+        f"loom-plugin-{tag}.zip",
+        *(f"native-evidence-{platform}.zip" for platform in NATIVE_PLATFORMS),
+    })
+
+
+def expected_manifest_assets(tag):
+    """Return the exact non-manifest inventory for the immutable release."""
+    return expected_base_assets(tag) | PASSPORT_ASSETS
+
+
+def _require_exact_names(observed, expected, label):
+    if set(observed) != set(expected):
+        raise PromotionError(f"{label} is not the exact expected asset set")
+
+
 def _local_asset_digests(root):
     try:
         root = loom_reliability._absolute(
@@ -125,18 +174,21 @@ def _api_asset_digests(release):
     return result
 
 
-def verify_base_assets(asset_root, api_release):
+def verify_base_assets(asset_root, api_release, *, tag):
     """Verify the exact pre-passport draft bytes without a final manifest."""
     local = _local_asset_digests(asset_root)
     remote = _api_asset_digests(api_release)
+    expected = expected_base_assets(tag)
     if FINAL_MANIFEST in local or FINAL_MANIFEST in remote:
         raise PromotionError("preexisting draft already contains the final manifest")
+    _require_exact_names(local, expected, "downloaded base asset inventory")
+    _require_exact_names(remote, expected, "release API base asset inventory")
     if local != remote:
         raise PromotionError("downloaded base assets and release API bytes disagree")
     return {"status": "verified-base-assets", "assets": sorted(local)}
 
 
-def create_asset_manifest(asset_roots, manifest):
+def create_asset_manifest(asset_roots, manifest, *, tag):
     """Create the one final checksum manifest from disjoint flat asset roots."""
     if not isinstance(asset_roots, (list, tuple)) or not asset_roots:
         raise PromotionError("final asset roots are invalid")
@@ -156,6 +208,8 @@ def create_asset_manifest(asset_roots, manifest):
             if name == FINAL_MANIFEST or name in combined:
                 raise PromotionError("final release asset names are duplicated")
             combined[name] = digest
+    _require_exact_names(
+        combined, expected_manifest_assets(tag), "final manifest input inventory")
     lines = "".join(
         f"{digest} *{name}\n" for name, digest in sorted(combined.items()))
     try:
@@ -200,11 +254,13 @@ def _manifest_digests(manifest):
     return result, hashlib.sha256(raw).hexdigest()
 
 
-def verify_asset_set(asset_root, manifest, api_release, *, manifest_published):
+def verify_asset_set(asset_root, manifest, api_release, *, manifest_published, tag):
     """Require exact local, manifest, and GitHub API name/digest equality."""
     if type(manifest_published) is not bool:
         raise PromotionError("final manifest publication state is invalid")
     declared, manifest_digest = _manifest_digests(manifest)
+    expected_assets = expected_manifest_assets(tag)
+    _require_exact_names(declared, expected_assets, "final manifest inventory")
     local = _local_asset_digests(asset_root)
     expected = dict(declared)
     if manifest_published:
@@ -280,26 +336,31 @@ def main(argv=None):
     base = commands.add_parser("verify-base-assets")
     base.add_argument("asset_root")
     base.add_argument("--api-release", required=True)
+    base.add_argument("--tag", required=True)
     manifest = commands.add_parser("create-asset-manifest")
     manifest.add_argument("--asset-root", action="append", required=True)
     manifest.add_argument("--manifest", required=True)
+    manifest.add_argument("--tag", required=True)
     asset_set = commands.add_parser("verify-asset-set")
     asset_set.add_argument("asset_root")
     asset_set.add_argument("--manifest", required=True)
     asset_set.add_argument("--api-release", required=True)
     asset_set.add_argument("--manifest-published", action="store_true")
+    asset_set.add_argument("--tag", required=True)
     args = parser.parse_args(argv)
     try:
         if args.command == "verify-base-assets":
             result = verify_base_assets(
-                args.asset_root, _load_json(args.api_release, "release API response"))
+                args.asset_root, _load_json(args.api_release, "release API response"),
+                tag=args.tag)
         elif args.command == "create-asset-manifest":
-            result = create_asset_manifest(args.asset_root, args.manifest)
+            result = create_asset_manifest(
+                args.asset_root, args.manifest, tag=args.tag)
         elif args.command == "verify-asset-set":
             result = verify_asset_set(
                 args.asset_root, args.manifest,
                 _load_json(args.api_release, "release API response"),
-                manifest_published=args.manifest_published)
+                manifest_published=args.manifest_published, tag=args.tag)
         else:
             gate = _load_gate(args.gate)
             result = (verify_draft(args.asset, gate)

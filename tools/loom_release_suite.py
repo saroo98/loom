@@ -18,6 +18,9 @@ class ReleaseSuiteError(RuntimeError):
     pass
 
 
+MAX_QUALIFICATION_BYTES = 95_000_000
+
+
 def _strict_object(pairs):
     value = {}
     for key, item in pairs:
@@ -27,19 +30,26 @@ def _strict_object(pairs):
     return value
 
 
-def _read_json(path, label):
+def _read_json(path, label, *, max_bytes=4 * 1024 * 1024):
     try:
         path = Path(path)
         if not path.is_file() or path.is_symlink() \
-                or path.stat().st_size > 4 * 1024 * 1024:
+                or type(max_bytes) is not int or max_bytes < 1 \
+                or path.stat().st_size > max_bytes:
             raise ReleaseSuiteError(f"{label} is not a bounded regular file")
         return json.loads(
             path.read_text(encoding="utf-8", errors="strict"),
             object_pairs_hook=_strict_object,
             parse_constant=lambda value: (_ for _ in ()).throw(
                 ValueError(f"non-finite JSON number: {value}")))
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError,
+            RecursionError) as exc:
         raise ReleaseSuiteError(f"{label} is invalid: {exc}") from exc
+
+
+def _read_qualification(path, *, max_bytes=MAX_QUALIFICATION_BYTES):
+    return _read_json(
+        path, "suite qualification", max_bytes=max_bytes)
 
 
 def _read_reports(paths):
@@ -398,7 +408,7 @@ def main(argv=None):
                     "certificate mode requires matrix certificates and qualification")
             result = certify_certificates(
                 _read_reports(args.matrix_certificate),
-                qualification=_read_json(args.qualification, "suite qualification"),
+                qualification=_read_qualification(args.qualification),
                 policy=policy,
                 expected_commit=args.commit, expected_root=args.public_root)
             local = None

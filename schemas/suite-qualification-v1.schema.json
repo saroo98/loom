@@ -1,65 +1,241 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "loom/schemas/suite-qualification-v1.schema.json",
-  "title": "Sealed serial-shadow qualification record",
+  "title": "Resolved serial-shadow qualification record",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "status", "required_successes", "serial_policy_sha256", "certificate_policy_sha256", "bound_inputs", "bound_inputs_sha256", "families", "fault_injection_receipts", "reproducibility_receipt_sha256s", "rollback_receipt_sha256", "workflow_critical_path_improved", "archive_subjects_agree", "privacy_clean", "mutation_clean", "worker_cleanup_verified", "qualification_sha256"],
+  "required": [
+    "schema_version", "status", "subject", "serial_policy_sha256",
+    "certificate_policy_sha256", "qualification_code_sha256",
+    "clean_room_family_id", "families", "reproducibility_receipts",
+    "rollback_receipt", "qualification_sha256"
+  ],
   "properties": {
     "schema_version": {"const": 1},
     "status": {"const": "qualified"},
-    "required_successes": {"const": 10},
+    "subject": {"$ref": "#/$defs/subject"},
     "serial_policy_sha256": {"$ref": "#/$defs/digest"},
     "certificate_policy_sha256": {"$ref": "#/$defs/digest"},
-    "bound_inputs": {
-      "type": "object", "additionalProperties": false,
-      "required": ["harness_sha256", "timing_profile_sha256", "workflow_digests", "action_manifest_digests", "qualification_code_sha256"],
-      "properties": {
-        "harness_sha256": {"$ref": "#/$defs/digest"},
-        "timing_profile_sha256": {"$ref": "#/$defs/digest"},
-        "workflow_digests": {"$ref": "#/$defs/consumerDigests"},
-        "action_manifest_digests": {"$ref": "#/$defs/consumerDigests"},
-        "qualification_code_sha256": {"$ref": "#/$defs/digest"}
-      }
+    "qualification_code_sha256": {"$ref": "#/$defs/digest"},
+    "clean_room_family_id": {"$ref": "#/$defs/digest"},
+    "families": {
+      "type": "array", "minItems": 30, "maxItems": 30,
+      "uniqueItems": true, "items": {"$ref": "#/$defs/family"}
     },
-    "bound_inputs_sha256": {"$ref": "#/$defs/digest"},
-    "families": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "#/$defs/family"}},
-    "fault_injection_receipts": {
-      "type": "object", "additionalProperties": false,
-      "required": ["linux", "windows", "macos"],
-      "properties": {"linux": {"$ref": "#/$defs/digest"}, "windows": {"$ref": "#/$defs/digest"}, "macos": {"$ref": "#/$defs/digest"}}
+    "reproducibility_receipts": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "uniqueItems": true, "items": {"$ref": "#/$defs/reproducibility"}
     },
-    "reproducibility_receipt_sha256s": {"type": "array", "minItems": 2, "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}},
-    "rollback_receipt_sha256": {"$ref": "#/$defs/digest"},
-    "workflow_critical_path_improved": {"const": true},
-    "archive_subjects_agree": {"const": true},
-    "privacy_clean": {"const": true},
-    "mutation_clean": {"const": true},
-    "worker_cleanup_verified": {"const": true},
+    "rollback_receipt": {"$ref": "#/$defs/rollback"},
     "qualification_sha256": {"$ref": "#/$defs/digest"}
   },
   "$defs": {
     "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "consumerDigests": {"type": "object", "additionalProperties": false, "required": ["quality", "compatibility"], "properties": {"quality": {"$ref": "#/$defs/digest"}, "compatibility": {"$ref": "#/$defs/digest"}}},
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "repository", "source_commit", "source_tree_sha256",
+        "public_root_sha256", "public_manifest_sha256", "public_file_count"
+      ],
+      "properties": {
+        "repository": {"const": "https://github.com/saroo98/loom"},
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_tree_sha256": {"$ref": "#/$defs/digest"},
+        "public_root_sha256": {"$ref": "#/$defs/digest"},
+        "public_manifest_sha256": {"$ref": "#/$defs/digest"},
+        "public_file_count": {"type": "integer", "minimum": 1, "maximum": 8192}
+      }
+    },
     "family": {
       "type": "object", "additionalProperties": false,
-      "required": ["family_id", "consumer", "requested_label", "image_os", "architecture", "python_implementation", "python_minor", "successful_run_ids", "exact_image_versions", "python_patches", "serial_p50_microseconds", "serial_p95_microseconds", "sharded_p50_microseconds", "sharded_p95_microseconds", "parity_verified"],
+      "required": [
+        "family_id", "consumer", "requested_label", "image_os",
+        "architecture", "python_implementation", "python_minor", "derived",
+        "pairs"
+      ],
       "properties": {
         "family_id": {"$ref": "#/$defs/digest"},
-        "consumer": {"enum": ["quality", "compatibility", "clean-room"]},
+        "consumer": {"enum": ["quality", "compatibility"]},
         "requested_label": {"type": "string", "minLength": 1, "maxLength": 128},
         "image_os": {"type": "string", "minLength": 1, "maxLength": 128},
         "architecture": {"type": "string", "minLength": 1, "maxLength": 128},
         "python_implementation": {"type": "string", "minLength": 1, "maxLength": 128},
         "python_minor": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$"},
-        "successful_run_ids": {"type": "array", "minItems": 10, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9]+$"}},
-        "exact_image_versions": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1, "maxLength": 128}},
-        "python_patches": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].*)?$"}},
+        "derived": {"$ref": "#/$defs/derived"},
+        "pairs": {
+          "type": "array", "minItems": 10, "maxItems": 10,
+          "uniqueItems": true, "items": {"$ref": "#/$defs/pair"}
+        }
+      }
+    },
+    "derived": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "successful_runs", "resolved_operating_systems",
+        "exact_image_versions", "python_patches",
+        "serial_p50_microseconds", "serial_p95_microseconds",
+        "sharded_p50_microseconds", "sharded_p95_microseconds",
+        "parity_verified", "terminal_receipts_verified", "privacy_clean",
+        "mutation_clean", "worker_cleanup_verified",
+        "workflow_critical_path_improved"
+      ],
+      "properties": {
+        "successful_runs": {
+          "type": "array", "minItems": 10, "maxItems": 10,
+          "uniqueItems": true, "items": {"$ref": "#/$defs/run"}
+        },
+        "resolved_operating_systems": {
+          "type": "array", "minItems": 1, "maxItems": 10,
+          "uniqueItems": true, "items": {"$ref": "#/$defs/resolvedOs"}
+        },
+        "exact_image_versions": {
+          "type": "array", "minItems": 1, "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 128}
+        },
+        "python_patches": {
+          "type": "array", "minItems": 1, "maxItems": 10,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+].*)?$"}
+        },
         "serial_p50_microseconds": {"type": "integer", "minimum": 1},
         "serial_p95_microseconds": {"type": "integer", "minimum": 1},
         "sharded_p50_microseconds": {"type": "integer", "minimum": 1},
         "sharded_p95_microseconds": {"type": "integer", "minimum": 1},
-        "parity_verified": {"const": true}
+        "parity_verified": {"const": true},
+        "terminal_receipts_verified": {"const": true},
+        "privacy_clean": {"const": true},
+        "mutation_clean": {"const": true},
+        "worker_cleanup_verified": {"const": true},
+        "workflow_critical_path_improved": {"const": true}
+      }
+    },
+    "run": {
+      "type": "object", "additionalProperties": false,
+      "required": ["run_id", "run_attempt"],
+      "properties": {
+        "run_id": {"type": "string", "pattern": "^[0-9]+$", "maxLength": 128},
+        "run_attempt": {"type": "string", "pattern": "^[0-9]+$", "maxLength": 128}
+      }
+    },
+    "resolvedOs": {
+      "type": "object", "additionalProperties": false,
+      "required": ["os", "os_release", "os_version"],
+      "properties": {
+        "os": {"type": "string", "minLength": 1, "maxLength": 128},
+        "os_release": {"type": "string", "minLength": 1, "maxLength": 128},
+        "os_version": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "pair": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "encoding", "uncompressed_bytes", "payload_sha256",
+        "payload_base64", "pair_sha256"
+      ],
+      "properties": {
+        "encoding": {"const": "gzip-base64-json-v1"},
+        "uncompressed_bytes": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "payload_sha256": {"$ref": "#/$defs/digest"},
+        "payload_base64": {
+          "type": "string", "minLength": 4, "maxLength": 33554432,
+          "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+        },
+        "pair_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "publicCut": {
+      "type": "object", "additionalProperties": false,
+      "required": ["root_sha256", "manifest_sha256", "file_count"],
+      "properties": {
+        "root_sha256": {"$ref": "#/$defs/digest"},
+        "manifest_sha256": {"$ref": "#/$defs/digest"},
+        "file_count": {"type": "integer", "minimum": 1}
+      }
+    },
+    "candidate": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "sha256", "bytes", "files", "extracted_tree_sha256",
+        "installed_tree_sha256", "archive_metadata_sha256", "public_cut",
+        "native_binaries"
+      ],
+      "properties": {
+        "sha256": {"$ref": "#/$defs/digest"},
+        "bytes": {"type": "integer", "minimum": 1},
+        "files": {"type": "integer", "minimum": 1},
+        "extracted_tree_sha256": {"$ref": "#/$defs/digest"},
+        "installed_tree_sha256": {"$ref": "#/$defs/digest"},
+        "archive_metadata_sha256": {"$ref": "#/$defs/digest"},
+        "public_cut": {"$ref": "#/$defs/publicCut"},
+        "native_binaries": {"$ref": "#/$defs/nativeBinaries"}
+      }
+    },
+    "nativeBinaries": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
+        "linux-x64", "linux-arm64"
+      ],
+      "properties": {
+        "windows-x64": {"$ref": "#/$defs/digest"},
+        "windows-arm64": {"$ref": "#/$defs/digest"},
+        "macos-x64": {"$ref": "#/$defs/digest"},
+        "macos-arm64": {"$ref": "#/$defs/digest"},
+        "linux-x64": {"$ref": "#/$defs/digest"},
+        "linux-arm64": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "nativeSubject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["platform", "binary_sha256", "sbom_sha256", "provenance_sha256"],
+      "properties": {
+        "platform": {"enum": [
+          "windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
+          "linux-x64", "linux-arm64"
+        ]},
+        "binary_sha256": {"$ref": "#/$defs/digest"},
+        "sbom_sha256": {"$ref": "#/$defs/digest"},
+        "provenance_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "reproducibility": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "schema_version", "status", "candidate_a", "candidate_b",
+        "canonical_candidate", "public_cut", "native_subjects", "receipt_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "status": {"const": "reproduced"},
+        "candidate_a": {"$ref": "#/$defs/candidate"},
+        "candidate_b": {"$ref": "#/$defs/candidate"},
+        "canonical_candidate": {"const": "A"},
+        "public_cut": {"$ref": "#/$defs/publicCut"},
+        "native_subjects": {
+          "type": "array", "minItems": 6, "maxItems": 6,
+          "uniqueItems": true, "items": {"$ref": "#/$defs/nativeSubject"}
+        },
+        "receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "rollback": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "schema_version", "status", "commit", "public_root_sha256", "tests",
+        "transcript_sha256", "result_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "status": {"const": "passed"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "public_root_sha256": {"$ref": "#/$defs/digest"},
+        "tests": {
+          "type": "array", "minItems": 1, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^test_[A-Za-z0-9_]+\\.py$"}
+        },
+        "transcript_sha256": {"$ref": "#/$defs/digest"},
+        "result_sha256": {"$ref": "#/$defs/digest"}
       }
     }
   }

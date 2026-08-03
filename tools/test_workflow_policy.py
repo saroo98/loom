@@ -173,6 +173,19 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("gh attestation verify \"$asset\"", release)
         self.assertIn("immutable-releases", release)
 
+    def test_release_and_publication_require_exact_origin_main_ancestry(self):
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        publish = (WORKFLOWS / "publish-release.yml").read_text(encoding="utf-8")
+        combined = release + "\n" + publish
+        self.assertNotIn("git branch -r --contains", combined)
+        self.assertNotIn("grep -q 'origin/main'", combined)
+        self.assertEqual(
+            3,
+            combined.count(
+                'git merge-base --is-ancestor "$GITHUB_SHA" '
+                "refs/remotes/origin/main"))
+        self.assertNotIn("refs/remotes/origin/main-staging", combined)
+
     def test_serial_authority_and_shadow_topology_are_explicit(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")

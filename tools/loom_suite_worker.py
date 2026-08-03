@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 import loom_operation_supervisor
+import loom_privacy
 import loom_reliability
 import loom_release
 import loom_release_subject
@@ -24,7 +25,6 @@ import loom_test
 MAX_RECEIPT_BYTES = 4 * 1024 * 1024
 MAX_FAILURE_DIAGNOSTICS = 100000
 EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 ABSOLUTE_OWNER_PATH = re.compile(
     r"(?:[A-Za-z]:[\\/](?:Users|Documents|AppData)[\\/]|/(?:home|Users|root)/)",
     re.IGNORECASE)
@@ -239,7 +239,9 @@ def validate_failure_diagnostic(value, receipt):
                     row.get("exception_type", ""))) is None \
                 or ("error_code" in row and (
                     not isinstance(row["error_code"], str)
-                    or ERROR_CODE.fullmatch(row["error_code"]) is None)):
+                    or row["error_code"] not in
+                    loom_test.PUBLIC_ERROR_CODES | {
+                        loom_test.PUBLIC_ERROR_CODE_REDACTED})):
             raise SuiteWorkerError("failure diagnostic row is invalid")
         keys.append((row["test"], row["status"], row["exception_type"],
                      row.get("error_code", "")))
@@ -274,7 +276,15 @@ def _privacy_clean(value):
         elif isinstance(item, str) and ABSOLUTE_OWNER_PATH.search(item):
             return False
         return True
-    return walk(value)
+    if not walk(value):
+        return False
+    try:
+        content = json.dumps(
+            value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False, allow_nan=False).encode("utf-8")
+        return loom_privacy._isolated_secret_signature_match(content) is None
+    except (TypeError, ValueError, UnicodeError, loom_privacy.PrivacyError):
+        return False
 
 
 def _validate_inputs(cut, inventory, plan, shard_id):

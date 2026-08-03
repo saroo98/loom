@@ -26,7 +26,11 @@ FAST_GATE_MAX_SECONDS = 30.0
 WINDOWS_FAST_GATE_MAX_SECONDS = 45.0
 TEST_MODULE = re.compile(r"^test_[A-Za-z0-9_]+$")
 EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+PUBLIC_ERROR_CODES = frozenset({"HOST_UNVERIFIED"})
+PUBLIC_ERROR_CODE_REDACTED = "PUBLIC_ERROR_CODE_REDACTED"
+STATUS_SEVERITY = {
+    "passed": 0, "skipped": 1, "failed": 2, "error": 3,
+}
 FIXTURE_HOLDER = re.compile(
     r"^(setUpClass|tearDownClass|setUpModule|tearDownModule) "
     r"\(([A-Za-z_][A-Za-z0-9_.]*)\)$")
@@ -146,10 +150,13 @@ class TimingResult(unittest.TextTestResult):
             if not isinstance(exception_type, str) \
                     or EXCEPTION_TYPE.fullmatch(exception_type) is None:
                 exception_type = "UnknownException"
-            error_code = getattr(err[1], "code", None)
-            if not isinstance(error_code, str) \
-                    or ERROR_CODE.fullmatch(error_code) is None:
-                error_code = None
+            raw_error_code = getattr(err[1], "code", None)
+            error_code = (
+                raw_error_code
+                if type(raw_error_code) is str
+                and raw_error_code in PUBLIC_ERROR_CODES
+                else PUBLIC_ERROR_CODE_REDACTED
+                if raw_error_code is not None else None)
         test_id = self._test_id(test)
         key = (test_id, status, exception_type, error_code or "")
         if key in self._failure_diagnostic_keys:
@@ -162,9 +169,30 @@ class TimingResult(unittest.TextTestResult):
         if error_code is not None:
             row["error_code"] = error_code
         self.failure_diagnostics.append(row)
+        self._canonicalize_failure_diagnostics(test_id)
+
+    def _canonicalize_failure_diagnostics(self, test_id):
+        final_status = self._statuses.get(test_id)
+        if final_status in {"failed", "error"}:
+            self.failure_diagnostics = [
+                row for row in self.failure_diagnostics
+                if row["test"] != test_id or row["status"] == final_status
+            ]
+        self._failure_diagnostic_keys = {
+            (row["test"], row["status"], row["exception_type"],
+             row.get("error_code", ""))
+            for row in self.failure_diagnostics
+        }
         self.failure_diagnostics.sort(key=lambda item: (
             item["test"], item["status"], item["exception_type"],
             item.get("error_code", "")))
+
+    def _promote_status(self, test, status):
+        test_id = self._test_id(test)
+        current = self._statuses.get(test_id)
+        if current is None or STATUS_SEVERITY[status] > STATUS_SEVERITY[current]:
+            self._statuses[test_id] = status
+        return test_id
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
@@ -174,6 +202,7 @@ class TimingResult(unittest.TextTestResult):
     def stopTest(self, test):
         elapsed = time.perf_counter() - self._started_at
         test_id = self._test_id(test)
+        self._canonicalize_failure_diagnostics(test_id)
         self.timings.append({
             "test": test_id, "seconds": round(elapsed, 6),
             "status": self._statuses[test_id],
@@ -181,14 +210,14 @@ class TimingResult(unittest.TextTestResult):
         super().stopTest(test)
 
     def addFailure(self, test, err):
-        self._statuses[self._test_id(test)] = "failed"
+        self._promote_status(test, "failed")
         self._record_failure_diagnostic(test, "failed", err)
         super().addFailure(test, err)
 
     def addError(self, test, err):
         test_id = self._test_id(test)
         synthetic = test_id not in self._statuses
-        self._statuses[test_id] = "error"
+        self._promote_status(test, "error")
         self._record_failure_diagnostic(test, "error", err)
         if synthetic:
             self.timings.append({
@@ -200,20 +229,18 @@ class TimingResult(unittest.TextTestResult):
         if err is not None:
             status = ("failed" if issubclass(err[0], test.failureException)
                       else "error")
-            test_id = self._test_id(test)
-            if self._statuses.get(test_id) != "error":
-                self._statuses[test_id] = status
+            self._promote_status(test, status)
             self._record_failure_diagnostic(test, status, err)
         super().addSubTest(test, subtest, err)
 
     def addUnexpectedSuccess(self, test):
-        self._statuses[self._test_id(test)] = "failed"
+        self._promote_status(test, "failed")
         self._record_failure_diagnostic(
             test, "failed", unexpected_success=True)
         super().addUnexpectedSuccess(test)
 
     def addSkip(self, test, reason):
-        self._statuses[self._test_id(test)] = "skipped"
+        self._promote_status(test, "skipped")
         super().addSkip(test, reason)
 
 

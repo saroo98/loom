@@ -10,6 +10,38 @@ import loom_release_passport
 import loom_release_promotion
 
 
+TAG = "v1.9.0"
+BASE_ASSET_NAMES = (
+    "CODEX-APP-EVIDENCE.json",
+    "RELEASE-SUBJECT.json",
+    "loom-plugin-v1.9.0-repro.zip",
+    "loom-plugin-v1.9.0.zip",
+    "native-evidence-linux-arm64.zip",
+    "native-evidence-linux-x64.zip",
+    "native-evidence-macos-arm64.zip",
+    "native-evidence-macos-x64.zip",
+    "native-evidence-windows-arm64.zip",
+    "native-evidence-windows-x64.zip",
+)
+PASSPORT_ASSET_NAMES = (
+    "RELEASE-EVIDENCE-ATTESTATION.json",
+    "RELEASE-EVIDENCE-GRAPH.json",
+    "RELEASE-EVIDENCE-SUBJECT.json",
+    "RELEASE-EVIDENCE.json",
+    "RELEASE-READINESS.json",
+    "clean-room.json",
+    "compatibility-matrix-certificate.json",
+    "cut-receipt.json",
+    "exact-cut-ci.json",
+    "full-suite.json",
+    "installed-runtime-evidence.json",
+    "quality-matrix-certificate.json",
+    "reproducibility-receipt.json",
+    "rollback.json",
+)
+FINAL_ASSET_NAMES = tuple(sorted((*BASE_ASSET_NAMES, *PASSPORT_ASSET_NAMES)))
+
+
 class ReleasePromotionTests(unittest.TestCase):
     def _gate(self, digest):
         return {
@@ -24,14 +56,8 @@ class ReleasePromotionTests(unittest.TestCase):
         }
 
     def _asset_set_fixture(self, root):
-        plugin = root / "loom-plugin-v1.9.0.zip"
-        readiness = root / "RELEASE-READINESS.json"
-        plugin.write_bytes(b"plugin")
-        readiness.write_bytes(b"ready")
-        digests = {
-            plugin.name: hashlib.sha256(plugin.read_bytes()).hexdigest(),
-            readiness.name: hashlib.sha256(readiness.read_bytes()).hexdigest(),
-        }
+        self._write_assets(root, FINAL_ASSET_NAMES)
+        digests = self._asset_digests(root)
         manifest = root / "SHA256SUMS"
         manifest.write_bytes("".join(
             f"{digest} *{name}\n" for name, digest in sorted(digests.items())).encode(
@@ -44,6 +70,24 @@ class ReleasePromotionTests(unittest.TestCase):
             }.items())
         ]}
         return manifest, api
+
+    @staticmethod
+    def _write_assets(root, names):
+        for name in names:
+            (root / name).write_bytes(("fixture:" + name).encode("utf-8"))
+
+    @staticmethod
+    def _asset_digests(root):
+        return {
+            path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for path in root.iterdir() if path.name != "SHA256SUMS"
+        }
+
+    def _api_release(self, root):
+        return {"assets": [
+            {"name": name, "digest": "sha256:" + digest}
+            for name, digest in sorted(self._asset_digests(root).items())
+        ]}
 
     def _asset_set_verifier(self):
         verify = getattr(loom_release_promotion, "verify_asset_set", None)
@@ -108,25 +152,31 @@ class ReleasePromotionTests(unittest.TestCase):
         self.assertTrue(callable(verify), "base-asset verifier is required")
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            plugin = root / "loom-plugin-v1.9.0.zip"
-            subject = root / "RELEASE-SUBJECT.json"
-            plugin.write_bytes(b"plugin")
-            subject.write_bytes(b"subject")
-            release = {
-                "assets": [
-                    {"name": plugin.name,
-                     "digest": "sha256:" + hashlib.sha256(
-                         plugin.read_bytes()).hexdigest()},
-                    {"name": subject.name,
-                     "digest": "sha256:" + hashlib.sha256(
-                         subject.read_bytes()).hexdigest()},
-                ],
-            }
+            self._write_assets(root, BASE_ASSET_NAMES)
+            release = self._api_release(root)
 
-            result = verify(root, release)
+            result = verify(root, release, tag=TAG)
 
         self.assertEqual("verified-base-assets", result["status"])
-        self.assertEqual([subject.name, plugin.name], result["assets"])
+        self.assertEqual(list(BASE_ASSET_NAMES), result["assets"])
+
+    def test_base_assets_reject_matching_injection_and_missing_expected_name(self):
+        verify = loom_release_promotion.verify_base_assets
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self._write_assets(root, BASE_ASSET_NAMES)
+            (root / "injected.bin").write_bytes(b"injected")
+            with self.assertRaisesRegex(
+                    loom_release_promotion.PromotionError, "unexpected|exact"):
+                verify(root, self._api_release(root), tag=TAG)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            names = tuple(name for name in BASE_ASSET_NAMES
+                          if name != "CODEX-APP-EVIDENCE.json")
+            self._write_assets(root, names)
+            with self.assertRaisesRegex(
+                    loom_release_promotion.PromotionError, "missing|exact"):
+                verify(root, self._api_release(root), tag=TAG)
 
     def test_final_manifest_is_created_once_for_the_exact_combined_asset_set(self):
         create = getattr(loom_release_promotion, "create_asset_manifest", None)
@@ -137,21 +187,19 @@ class ReleasePromotionTests(unittest.TestCase):
             passport = root / "passport"
             base.mkdir()
             passport.mkdir()
-            (base / "loom-plugin-v1.9.0.zip").write_bytes(b"plugin")
-            (passport / "RELEASE-READINESS.json").write_bytes(b"ready")
+            self._write_assets(base, BASE_ASSET_NAMES)
+            self._write_assets(passport, PASSPORT_ASSET_NAMES)
             manifest = passport / "SHA256SUMS"
 
-            result = create([base, passport], manifest)
+            result = create([base, passport], manifest, tag=TAG)
             lines = manifest.read_text(encoding="utf-8").splitlines()
             with self.assertRaisesRegex(
                     loom_release_promotion.PromotionError, "already exists"):
-                create([base, passport], manifest)
+                create([base, passport], manifest, tag=TAG)
 
         self.assertEqual("created-final-manifest", result["status"])
-        self.assertEqual(
-            ["RELEASE-READINESS.json", "loom-plugin-v1.9.0.zip"],
-            result["assets"])
-        self.assertEqual(2, len(lines))
+        self.assertEqual(list(FINAL_ASSET_NAMES), result["assets"])
+        self.assertEqual(24, len(lines))
         self.assertTrue(all(__import__("re").fullmatch(
             r"[0-9a-f]{64} \*[A-Za-z0-9][A-Za-z0-9._+-]{0,254}", line)
                             for line in lines))
@@ -162,7 +210,7 @@ class ReleasePromotionTests(unittest.TestCase):
             base = root / "base"
             passport = root / "passport"
             base.mkdir()
-            (base / "loom-plugin-v1.9.0.zip").write_bytes(b"plugin")
+            self._write_assets(base, BASE_ASSET_NAMES)
             loom_release_passport.write_outputs(
                 passport,
                 {
@@ -174,6 +222,10 @@ class ReleasePromotionTests(unittest.TestCase):
                     },
                 },
                 defer_checksum_manifest=True)
+            self._write_assets(
+                passport,
+                tuple(name for name in PASSPORT_ASSET_NAMES
+                      if not (passport / name).exists()))
             expected_digests = {
                 path.name: hashlib.sha256(path.read_bytes()).hexdigest()
                 for asset_root in (base, passport)
@@ -181,7 +233,7 @@ class ReleasePromotionTests(unittest.TestCase):
             }
 
             result = loom_release_promotion.create_asset_manifest(
-                [base, passport], passport / "SHA256SUMS")
+                [base, passport], passport / "SHA256SUMS", tag=TAG)
             lines = (passport / "SHA256SUMS").read_text(
                 encoding="utf-8").splitlines()
             manifest_digests = {
@@ -190,16 +242,28 @@ class ReleasePromotionTests(unittest.TestCase):
             }
 
         self.assertEqual("created-final-manifest", result["status"])
-        self.assertEqual(4, len(lines))
-        self.assertEqual(
-            [
-                "RELEASE-EVIDENCE-GRAPH.json",
-                "RELEASE-EVIDENCE.json",
-                "RELEASE-READINESS.json",
-                "loom-plugin-v1.9.0.zip",
-            ],
-            result["assets"])
+        self.assertEqual(24, len(lines))
+        self.assertEqual(list(FINAL_ASSET_NAMES), result["assets"])
         self.assertEqual(expected_digests, manifest_digests)
+
+    def test_final_manifest_refuses_missing_or_injected_manifest_input(self):
+        for mutation in ("missing", "injected"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                base, passport = root / "base", root / "passport"
+                base.mkdir()
+                passport.mkdir()
+                self._write_assets(base, BASE_ASSET_NAMES)
+                self._write_assets(passport, PASSPORT_ASSET_NAMES)
+                if mutation == "missing":
+                    (passport / "rollback.json").unlink()
+                else:
+                    (passport / "injected.bin").write_bytes(b"injected")
+                with self.assertRaisesRegex(
+                        loom_release_promotion.PromotionError,
+                        "missing|unexpected|exact"):
+                    loom_release_promotion.create_asset_manifest(
+                        [base, passport], passport / "SHA256SUMS", tag=TAG)
 
     def test_exact_asset_set_accepts_local_manifest_and_api_digest_equality(self):
         verify = self._asset_set_verifier()
@@ -207,10 +271,11 @@ class ReleasePromotionTests(unittest.TestCase):
             root = Path(temporary)
             manifest, api = self._asset_set_fixture(root)
 
-            result = verify(root, manifest, api, manifest_published=True)
+            result = verify(
+                root, manifest, api, manifest_published=True, tag=TAG)
 
         self.assertEqual("verified-asset-set", result["status"])
-        self.assertEqual(3, result["asset_count"])
+        self.assertEqual(25, result["asset_count"])
 
     def test_exact_asset_set_rejects_every_unlisted_local_asset(self):
         verify = self._asset_set_verifier()
@@ -220,7 +285,7 @@ class ReleasePromotionTests(unittest.TestCase):
             (root / "injected.bin").write_bytes(b"injected")
             with self.assertRaisesRegex(
                     loom_release_promotion.PromotionError, "manifest|local"):
-                verify(root, manifest, api, manifest_published=True)
+                verify(root, manifest, api, manifest_published=True, tag=TAG)
 
     def test_exact_asset_set_rejects_stale_manifest_digest(self):
         verify = self._asset_set_verifier()
@@ -230,7 +295,7 @@ class ReleasePromotionTests(unittest.TestCase):
             (root / "RELEASE-READINESS.json").write_bytes(b"changed")
             with self.assertRaisesRegex(
                     loom_release_promotion.PromotionError, "manifest|digest"):
-                verify(root, manifest, api, manifest_published=True)
+                verify(root, manifest, api, manifest_published=True, tag=TAG)
 
     def test_exact_asset_set_rejects_every_injected_api_asset(self):
         verify = self._asset_set_verifier()
@@ -241,7 +306,7 @@ class ReleasePromotionTests(unittest.TestCase):
                                   hashlib.sha256(b"injected").hexdigest()})
             with self.assertRaisesRegex(
                     loom_release_promotion.PromotionError, "API|asset"):
-                verify(root, manifest, api, manifest_published=True)
+                verify(root, manifest, api, manifest_published=True, tag=TAG)
 
     def test_exact_asset_set_rejects_unsafe_or_duplicated_manifest_rows(self):
         verify = self._asset_set_verifier()
@@ -264,7 +329,7 @@ class ReleasePromotionTests(unittest.TestCase):
                 ]}
                 with self.assertRaisesRegex(
                         loom_release_promotion.PromotionError, "manifest"):
-                    verify(root, manifest, api, manifest_published=True)
+                    verify(root, manifest, api, manifest_published=True, tag=TAG)
 
 
 if __name__ == "__main__":

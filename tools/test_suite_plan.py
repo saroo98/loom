@@ -2,8 +2,10 @@
 
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_suite_plan
 
@@ -64,6 +66,136 @@ class SuitePlanTests(unittest.TestCase):
                 loom_suite_plan.inventory(
                     root, subject=SUBJECT, environment=ENVIRONMENT,
                     harness_sha256="4" * 64)
+
+    def test_inventory_discovery_contains_and_refuses_import_time_outside_write(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            tests = root / "tests"
+            tests.mkdir()
+            outside = root / "outside-discovery.txt"
+            (tests / "test_escape.py").write_text(
+                "import unittest\n"
+                "from pathlib import Path\n"
+                "(Path(__file__).resolve().parent.parent.parent / "
+                "'outside-discovery.txt').write_text('escaped', encoding='utf-8')\n"
+                "class Escape(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                    loom_suite_plan.SuitePlanError, "containment|mutation"):
+                loom_suite_plan.inventory(
+                    tests, subject=SUBJECT, environment=ENVIRONMENT,
+                    harness_sha256="4" * 64)
+            self.assertFalse(outside.exists())
+
+    def test_inventory_discovery_refuses_secret_bearing_transcript(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "test_private.py").write_text(
+                "import unittest\n"
+                "print('AKIAABCDEFGHIJKLMNOP')\n"
+                "class Private(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                    loom_suite_plan.SuitePlanError, "privacy"):
+                loom_suite_plan.inventory(
+                    root, subject=SUBJECT, environment=ENVIRONMENT,
+                    harness_sha256="4" * 64)
+
+    def test_inventory_discovery_refuses_secret_bearing_inventory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "test_private.py").write_text(
+                "import unittest\n"
+                "class AKIAABCDEFGHIJKLMNOP(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                    loom_suite_plan.SuitePlanError, "privacy"):
+                loom_suite_plan.inventory(
+                    root, subject=SUBJECT, environment=ENVIRONMENT,
+                    harness_sha256="4" * 64)
+
+    def test_inventory_discovery_cannot_import_controller_only_modules(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "test_controller_fallback.py").write_text(
+                "import loom_release_promotion\n"
+                "import unittest\n"
+                "class ControllerFallback(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+
+            with self.assertRaisesRegex(
+                    loom_suite_plan.SuitePlanError, "discovery failed"):
+                loom_suite_plan.inventory(
+                    root, subject=SUBJECT, environment=ENVIRONMENT,
+                    harness_sha256="4" * 64)
+
+    def test_inventory_discovery_times_out_and_cleans_descendants(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "test_waits.py").write_text(
+                "import time,unittest\n"
+                "time.sleep(60)\n"
+                "class Waits(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+            started = time.monotonic()
+            with self.assertRaisesRegex(
+                    loom_suite_plan.SuitePlanError, "containment"):
+                loom_suite_plan.inventory(
+                    root, subject=SUBJECT, environment=ENVIRONMENT,
+                    harness_sha256="4" * 64, timeout=0.2)
+            self.assertLess(time.monotonic() - started, 10)
+
+            marker = root.parent / "late-discovery-descendant.txt"
+            child = (
+                "import time; from pathlib import Path; time.sleep(1); "
+                f"Path({str(marker)!r}).write_text('survived')")
+            (root / "test_waits.py").write_text(
+                "import subprocess,sys,unittest\n"
+                f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+                "class Waits(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+            value = loom_suite_plan.inventory(
+                root, subject=SUBJECT, environment=ENVIRONMENT,
+                harness_sha256="4" * 64, timeout=10)
+            self.assertEqual(1, value["test_count"])
+            time.sleep(1.2)
+            self.assertFalse(marker.exists())
+
+    def test_inventory_discovery_refuses_malformed_and_oversize_output(self):
+        def operation_result(content):
+            def run(**kwargs):
+                Path(kwargs["command"][-1]).write_bytes(content)
+                return {}, b"", b""
+            return run
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "test_clean.py").write_text(
+                "import unittest\n"
+                "class Clean(unittest.TestCase):\n"
+                "    def test_loaded(self): pass\n",
+                encoding="utf-8")
+            for label, content in (
+                    ("malformed", b"{"),
+                    ("oversize", b" " * (4 * 1024 * 1024 + 1))):
+                with self.subTest(label=label), mock.patch.object(
+                        loom_suite_plan.loom_operation_supervisor, "run",
+                        side_effect=operation_result(content)), mock.patch.object(
+                            loom_suite_plan.loom_operation_supervisor,
+                            "require_passed"):
+                    with self.assertRaises(loom_suite_plan.SuitePlanError):
+                        loom_suite_plan.inventory(
+                            root, subject=SUBJECT, environment=ENVIRONMENT,
+                            harness_sha256="4" * 64)
 
     def test_lpt_plan_is_stable_uses_p75_and_reserves_exclusive_lane(self):
         inventory = loom_suite_plan.seal_inventory({

@@ -5,10 +5,14 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
+import loom_operation_supervisor
+import loom_privacy
 import loom_subject_identity
 import loom_reliability
 
@@ -151,11 +155,9 @@ def seal_inventory(value):
     return _seal(body, "inventory_sha256")
 
 
-def inventory(test_root, *, subject, environment, harness_sha256):
-    """Discover one exact environment's complete unittest inventory."""
+def _discover_inventory(test_root, *, subject, environment, harness_sha256):
+    """Child-only unittest import and discovery implementation."""
     root = Path(test_root).resolve()
-    if not root.is_dir():
-        raise SuitePlanError("test root is invalid")
     before_modules = set(sys.modules)
     sys.path.insert(0, str(root))
     try:
@@ -196,6 +198,175 @@ def inventory(test_root, *, subject, environment, harness_sha256):
             filename = getattr(module, "__file__", None)
             if filename and Path(filename).resolve().is_relative_to(root):
                 sys.modules.pop(name, None)
+
+
+def _inventory_child(request_path, output_path):
+    request = _load(request_path, "inventory request")
+    if not isinstance(request, dict) or set(request) != {
+            "test_root", "subject", "environment", "harness_sha256"}:
+        raise SuitePlanError("inventory request fields are invalid")
+    controller_root = Path(__file__).resolve().parent
+    isolated_path = []
+    for entry in sys.path:
+        try:
+            if Path(entry or os.curdir).resolve() == controller_root:
+                continue
+        except OSError:
+            pass
+        isolated_path.append(entry)
+    sys.path[:] = isolated_path
+    value = _discover_inventory(
+        request["test_root"], subject=request["subject"],
+        environment=request["environment"],
+        harness_sha256=request["harness_sha256"])
+    loom_reliability.atomic_write_json(Path(output_path), value)
+
+
+def _safe_discovery_source(test_root):
+    try:
+        root = loom_reliability._absolute(
+            test_root, "test root", must_exist=True).resolve(strict=True)
+        if not root.is_dir():
+            raise SuitePlanError("test root is invalid")
+        for entry in root.rglob("*"):
+            if loom_reliability._is_redirect(entry):
+                raise SuitePlanError("test root contains a redirected entry")
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise SuitePlanError("test root is invalid") from exc
+    return root
+
+
+def _minimal_protected_roots(values):
+    roots = []
+    for value in values:
+        path = Path(value)
+        try:
+            path = path.resolve(strict=True)
+        except OSError as exc:
+            raise SuitePlanError("protected discovery root is invalid") from exc
+        if path not in roots:
+            roots.append(path)
+    return [
+        path for path in roots
+        if not any(other != path and other in path.parents for other in roots)
+    ]
+
+
+def inventory(test_root, *, subject, environment, harness_sha256,
+              timeout=300, protected_roots=(), context_root=None):
+    """Discover one exact inventory in a supervised spawned interpreter."""
+    root = _safe_discovery_source(test_root)
+    if context_root is None and root.name == "tools" and all((
+            (root.parent / "VERSION").is_file(),
+            (root.parent / "contracts").is_dir(),
+            (root.parent / "schemas").is_dir())):
+        context_root = root.parent
+    context = root if context_root is None \
+        else _safe_discovery_source(context_root)
+    if root != context and context not in root.parents:
+        raise SuitePlanError("test root is outside its discovery context")
+    relative_test_root = root.relative_to(context)
+    subject = _subject(subject)
+    environment = _environment(environment)
+    if HEX64.fullmatch(str(harness_sha256)) is None \
+            or type(timeout) not in {int, float} or not 0 < timeout <= 3600 \
+            or not isinstance(protected_roots, (list, tuple)):
+        raise SuitePlanError("inventory discovery inputs are invalid")
+    discovery_root = Path(tempfile.mkdtemp(prefix="loom-si-")).resolve()
+    runtime_root = None
+    runtime_clean = discovery_clean = False
+    inventory_value = None
+    failure = None
+    try:
+        operation_root = discovery_root / "operation"
+        operation_root.mkdir()
+        candidate_context = operation_root / "candidate"
+        shutil.copytree(context, candidate_context)
+        candidate = candidate_context / relative_test_root
+        request_path = discovery_root / "request.json"
+        output_path = discovery_root / "inventory.json"
+        loom_reliability.atomic_write_json(request_path, {
+            "test_root": str(candidate), "subject": subject,
+            "environment": environment, "harness_sha256": harness_sha256,
+        })
+        # Import lazily: the worker imports this module at startup.  Reusing its
+        # environment factory keeps discovery and execution on one boundary.
+        import loom_suite_worker
+        child_environment, runtime_root = \
+            loom_suite_worker._isolated_environment(
+                discovery_root, "inventory")
+        protected = _minimal_protected_roots([
+            context, *protected_roots,
+        ])
+        try:
+            operation, stdout, stderr = loom_operation_supervisor.run(
+                operation_class="release-suite-inventory",
+                command=[
+                    sys.executable, "-B", str(Path(__file__).resolve()),
+                    "_inventory-child", str(request_path), str(output_path),
+                ],
+                cwd=candidate, timeout=timeout,
+                environment=child_environment,
+                allowed_roots=[discovery_root],
+                protected_roots=[operation_root, request_path, *protected],
+                capabilities=["local-process", "descendant-containment"],
+                capture_output=True)
+        finally:
+            if runtime_root is not None:
+                try:
+                    shutil.rmtree(runtime_root)
+                    runtime_clean = not runtime_root.exists()
+                except OSError:
+                    runtime_clean = False
+        if not runtime_clean:
+            raise SuitePlanError("inventory runtime cleanup failed")
+        try:
+            if any(loom_privacy._isolated_secret_signature_match(stream)
+                   is not None for stream in (stdout, stderr)):
+                raise SuitePlanError("inventory privacy validation failed")
+        except loom_privacy.PrivacyError as exc:
+            raise SuitePlanError("inventory privacy validation failed") from exc
+        expected_entries = {"operation", "request.json", "inventory.json"}
+        observed_entries = {entry.name for entry in discovery_root.iterdir()}
+        if observed_entries - expected_entries:
+            raise SuitePlanError("inventory containment mutation detected")
+        try:
+            loom_operation_supervisor.require_passed(operation)
+        except loom_operation_supervisor.SupervisorError as exc:
+            message = ("test discovery failed"
+                       if operation.get("primary_failure") == "nonzero-exit"
+                       else "inventory containment failed")
+            raise SuitePlanError(message) from exc
+        inventory_value = _load(output_path, "suite inventory")
+        inventory_value = _validate_seal(
+            inventory_value, "inventory_sha256", seal_inventory)
+        try:
+            if loom_privacy._isolated_secret_signature_match(
+                    canonical(inventory_value)) is not None:
+                raise SuitePlanError("inventory privacy validation failed")
+        except loom_privacy.PrivacyError as exc:
+            raise SuitePlanError("inventory privacy validation failed") from exc
+        if inventory_value["subject"] != subject \
+                or inventory_value["environment"] != environment \
+                or inventory_value["harness_sha256"] != harness_sha256:
+            raise SuitePlanError("inventory discovery identity is invalid")
+    except SuitePlanError as exc:
+        failure = exc
+    except (OSError, shutil.Error, loom_operation_supervisor.SupervisorError,
+            loom_reliability.ReliabilityError) as exc:
+        failure = SuitePlanError("inventory containment failed")
+        failure.__cause__ = exc
+    finally:
+        try:
+            shutil.rmtree(discovery_root)
+            discovery_clean = not discovery_root.exists()
+        except OSError:
+            discovery_clean = False
+    if not discovery_clean:
+        raise SuitePlanError("inventory discovery cleanup failed")
+    if failure is not None:
+        raise failure
+    return inventory_value
 
 
 def seal_timing_profile(value):
@@ -315,12 +486,18 @@ def main(argv=None):
     inventory_parser.add_argument("--environment", required=True)
     inventory_parser.add_argument("--harness-sha256", required=True)
     inventory_parser.add_argument("--output", required=True)
+    inventory_child = commands.add_parser("_inventory-child")
+    inventory_child.add_argument("request")
+    inventory_child.add_argument("output")
     plan_parser = commands.add_parser("plan")
     plan_parser.add_argument("inventory")
     plan_parser.add_argument("--timing-profile", required=True)
     plan_parser.add_argument("--policy", required=True)
     plan_parser.add_argument("--output", required=True)
     args = parser.parse_args(argv)
+    if args.command == "_inventory-child":
+        _inventory_child(args.request, args.output)
+        return 0
     if args.command == "validate-profile":
         value = _load(args.path, "timing profile")
         _validate_seal(value, "profile_sha256", seal_timing_profile)

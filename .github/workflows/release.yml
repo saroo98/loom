@@ -117,7 +117,7 @@ jobs:
           git config gpg.format ssh
           git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/loom-release-allowed-signers"
           git verify-tag "$RELEASE_TAG"
-          git branch -r --contains "${GITHUB_SHA}" | grep -q 'origin/main'
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
       - name: Rebuild the public cut twice and verify static identity
         shell: bash
         run: |
@@ -232,6 +232,7 @@ jobs:
         shell: bash
         run: |
           python -B tools/loom_release_promotion.py verify-base-assets release-assets \
+            --tag "$RELEASE_TAG" \
             --api-release "$RUNNER_TEMP/base-release.json"
           cd tools
           python -B loom_release_verify.py "../release-assets/loom-plugin-${RELEASE_TAG}.zip"
@@ -454,6 +455,7 @@ jobs:
           python -B tools/loom_release_promotion.py create-asset-manifest \
             --asset-root release-assets \
             --asset-root "$RUNNER_TEMP/release-passport" \
+            --tag "$RELEASE_TAG" \
             --manifest "$RUNNER_TEMP/release-passport/SHA256SUMS"
       - name: Verify generated operational truth is current
         working-directory: tools
@@ -496,7 +498,7 @@ jobs:
         shell: bash
         run: |
           test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
-          git branch -r --contains "$GITHUB_SHA" | grep -q 'origin/main'
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
           test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')" = "true"
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"
           while IFS= read -r asset; do
@@ -522,6 +524,7 @@ jobs:
             > "$RUNNER_TEMP/staged-release.json"
           python -B tools/loom_release_promotion.py verify-asset-set \
             "$RUNNER_TEMP/staged-release-assets" \
+            --tag "$RELEASE_TAG" \
             --manifest release-passport/SHA256SUMS \
             --api-release "$RUNNER_TEMP/staged-release.json"
           test -z "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
@@ -540,6 +543,7 @@ jobs:
             > "$RUNNER_TEMP/final-staged-release.json"
           python -B tools/loom_release_promotion.py verify-asset-set \
             "$RUNNER_TEMP/staged-release-assets" \
+            --tag "$RELEASE_TAG" \
             --manifest "$RUNNER_TEMP/staged-release-assets/SHA256SUMS" \
             --api-release "$RUNNER_TEMP/final-staged-release.json" \
             --manifest-published

@@ -43,6 +43,7 @@ class TestRunnerTests(unittest.TestCase):
                 "status": "failed", "test": coded_id,
             },
             {
+                "error_code": "PUBLIC_ERROR_CODE_REDACTED",
                 "exception_type": "UnsafeFailure",
                 "status": "failed", "test": invalid_id,
             },
@@ -72,6 +73,73 @@ class TestRunnerTests(unittest.TestCase):
             report = loom_test.run_modules(
                 ["test_clean"], start_dir=root, verbosity=0)
         self.assertEqual([], report.get("failure_diagnostics"))
+
+    def test_public_error_codes_preserve_allowlisted_values_and_redact_secrets(self):
+        source = (
+            "import unittest\n"
+            "class SafeFailure(AssertionError):\n"
+            "    code = 'HOST_UNVERIFIED'\n"
+            "class SecretFailure(AssertionError):\n"
+            "    code = 'AKIAABCDEFGHIJKLMNOP'\n"
+            "class UnhashableFailure(AssertionError):\n"
+            "    code = []\n"
+            "class OddCode(str):\n"
+            "    __hash__ = None\n"
+            "class HostileStringFailure(AssertionError):\n"
+            "    code = OddCode('HOST_UNVERIFIED')\n"
+            "class DiagnosticFixture(unittest.TestCase):\n"
+            "    def test_safe(self): raise SafeFailure('private')\n"
+            "    def test_secret(self): raise SecretFailure('private')\n"
+            "    def test_unhashable(self): raise UnhashableFailure('private')\n"
+            "    def test_hostile_string(self): "
+            "raise HostileStringFailure('private')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_codes.py").write_text(source, encoding="utf-8")
+            report = loom_test.run_modules(
+                ["test_codes"], start_dir=root, verbosity=0)
+
+        rows = {row["test"]: row for row in report["failure_diagnostics"]}
+        self.assertEqual(
+            "HOST_UNVERIFIED",
+            rows["test_codes.DiagnosticFixture.test_safe"]["error_code"])
+        self.assertEqual(
+            "PUBLIC_ERROR_CODE_REDACTED",
+            rows["test_codes.DiagnosticFixture.test_secret"]["error_code"])
+        self.assertEqual(
+            "PUBLIC_ERROR_CODE_REDACTED",
+            rows["test_codes.DiagnosticFixture.test_unhashable"]["error_code"])
+        self.assertEqual(
+            "PUBLIC_ERROR_CODE_REDACTED",
+            rows["test_codes.DiagnosticFixture.test_hostile_string"]["error_code"])
+        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", json.dumps(report, sort_keys=True))
+
+    def test_mixed_subtest_status_uses_order_independent_error_precedence(self):
+        cases = {
+            "failure-first": (
+                "with self.subTest(case='failed'): self.fail('private')\n"
+                "        with self.subTest(case='error'): "
+                "raise RuntimeError('private')\n"),
+            "error-first": (
+                "with self.subTest(case='error'): "
+                "raise RuntimeError('private')\n"
+                "        with self.subTest(case='failed'): self.fail('private')\n"),
+        }
+        for label, body in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / "test_mixed.py").write_text(
+                    "import unittest\n"
+                    "class Mixed(unittest.TestCase):\n"
+                    "    def test_outcomes(self):\n"
+                    f"        {body}", encoding="utf-8")
+                report = loom_test.run_modules(
+                    ["test_mixed"], start_dir=root, verbosity=0)
+                self.assertEqual("error", report["timings"][0]["status"])
+                self.assertEqual(
+                    {"error"},
+                    {row["status"] for row in report["failure_diagnostics"]})
 
     def test_exact_module_selection_runs_only_the_declared_real_modules(self):
         with tempfile.TemporaryDirectory() as temporary:

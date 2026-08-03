@@ -161,7 +161,7 @@ class FoundationSchemaTests(unittest.TestCase):
         self.assert_schema(inventory, "suite-inventory-v1.schema.json")
         self.assert_schema(plan, "suite-shard-plan-v1.schema.json")
 
-    def test_release_suite_qualification_record_matches_closed_schema(self):
+    def test_claim_only_release_suite_qualification_is_outside_closed_schema(self):
         value = {
             "schema_version": 1, "status": "qualified",
             "required_successes": 10, "serial_policy_sha256": "1" * 64,
@@ -205,7 +205,11 @@ class FoundationSchemaTests(unittest.TestCase):
             "worker_cleanup_verified": True,
             "qualification_sha256": "4" * 64,
         }
-        self.assert_schema(value, "suite-qualification-v1.schema.json")
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "suite-qualification", value,
+            "suite-qualification-v1.schema.json")
+        self.assertTrue(report.errors)
 
 
 if __name__ == "__main__":

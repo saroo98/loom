@@ -64,6 +64,18 @@ class ReleaseWorkflowPassportTests(unittest.TestCase):
         self.assertEqual(1, text.count(
             'gh release upload "$RELEASE_TAG" release-passport/SHA256SUMS'))
         self.assertEqual(1, text.count("--defer-checksum-manifest"))
+        self.assertEqual(5, text.count('--tag "$RELEASE_TAG"'))
+        for name in (
+                "CODEX-APP-EVIDENCE.json", "RELEASE-SUBJECT.json",
+                "loom-plugin-${RELEASE_TAG}.zip",
+                "loom-plugin-${RELEASE_TAG}-repro.zip",
+                "native-evidence-${platform}.zip", "RELEASE-READINESS.json",
+                "RELEASE-EVIDENCE.json", "RELEASE-EVIDENCE-GRAPH.json",
+                "RELEASE-EVIDENCE-SUBJECT.json",
+                "RELEASE-EVIDENCE-ATTESTATION.json",
+                "quality-matrix-certificate.json",
+                "compatibility-matrix-certificate.json"):
+            self.assertIn(name, text)
 
     def test_v4_verification_runs_only_after_actual_evidence_exists(self):
         release = (ROOT / ".github" / "workflows" / "release.yml").read_text(

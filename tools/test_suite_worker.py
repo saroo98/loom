@@ -296,6 +296,79 @@ class SuiteWorkerTests(unittest.TestCase):
             self.assertFalse(
                 (output / "general-000" / "failure-diagnostic.json").exists())
 
+    def test_secret_shaped_error_code_is_redacted_through_worker_sidecar(self):
+        source = (
+            "import unittest\n"
+            "class SecretFailure(AssertionError):\n"
+            "    code = 'AKIAABCDEFGHIJKLMNOP'\n"
+            "class UnhashableFailure(AssertionError):\n"
+            "    code = []\n"
+            "class OddCode(str):\n"
+            "    __hash__ = None\n"
+            "class HostileStringFailure(AssertionError):\n"
+            "    code = OddCode('HOST_UNVERIFIED')\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    def test_failed(self): raise SecretFailure('private')\n"
+            "    def test_unhashable(self): raise UnhashableFailure('private')\n"
+            "    def test_hostile_string(self): "
+            "raise HostileStringFailure('private')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cut, inventory, plan, output = self.fixture(root, source)
+            receipt = loom_suite_worker.execute_shard(
+                cut, inventory, plan, "general-000", output, timeout=10)
+            diagnostic = json.loads((
+                output / "general-000" / "failure-diagnostic.json").read_text(
+                    encoding="utf-8"))
+
+        self.assertEqual("failed", receipt["status"])
+        self.assertEqual(
+            {"PUBLIC_ERROR_CODE_REDACTED"},
+            {row["error_code"] for row in diagnostic["failures"]})
+        self.assertEqual(3, len(diagnostic["failures"]))
+        serialized = json.dumps(diagnostic, sort_keys=True)
+        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", serialized)
+        self.assertTrue(loom_suite_worker._privacy_clean(diagnostic))
+        loom_suite_worker.validate_failure_diagnostic(diagnostic, receipt)
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "failure-diagnostic", diagnostic,
+            "suite-failure-diagnostic-v1.schema.json")
+        self.assertEqual([], report.errors)
+
+    def test_mixed_subtest_severity_seals_one_terminal_error_receipt(self):
+        source = (
+            "import unittest\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    def test_mixed(self):\n"
+            "        with self.subTest(case='failed'):\n"
+            "            self.fail('private failure')\n"
+            "        with self.subTest(case='error'):\n"
+            "            raise RuntimeError('private error')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cut, inventory, plan, output = self.fixture(root, source)
+            receipt = loom_suite_worker.execute_shard(
+                cut, inventory, plan, "general-000", output, timeout=10)
+            worker_root = output / "general-000"
+            diagnostic = json.loads((worker_root / "failure-diagnostic.json").read_text(
+                encoding="utf-8"))
+            self.assertTrue((worker_root / "worker-receipt.json").is_file())
+
+        self.assertEqual("failed", receipt["status"])
+        self.assertEqual("TEST_FAILURE", receipt["primary_reason"])
+        self.assertEqual(0, receipt["failure_count"])
+        self.assertEqual(1, receipt["error_count"])
+        self.assertTrue(receipt["privacy_clean"])
+        self.assertTrue(receipt["mutation_clean"])
+        self.assertTrue(receipt["runtime_roots_clean"])
+        self.assertTrue(receipt["operation"]["survivors_confirmed_zero"])
+        self.assertEqual(1, len(diagnostic["failures"]))
+        self.assertEqual("error", diagnostic["failures"][0]["status"])
+        loom_suite_worker.validate_failure_diagnostic(diagnostic, receipt)
+
     def test_platform_skip_is_terminal_worker_evidence(self):
         source = (
             "import unittest\n"

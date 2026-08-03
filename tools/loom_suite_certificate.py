@@ -2,7 +2,11 @@
 """Compile and verify fail-closed exact-subject suite certificates."""
 
 import argparse
+import base64
+import binascii
+import gzip
 import hashlib
+import io
 import json
 import re
 from pathlib import Path
@@ -11,6 +15,8 @@ import loom_reliability
 import loom_exact_cut_ci
 import loom_operation_supervisor
 import loom_release
+import loom_release_candidate
+import loom_release_rollback
 import loom_suite_plan
 import loom_suite_worker
 import loom_test
@@ -38,7 +44,9 @@ RELEASE_MATRIX_LABELS = {
 }
 RELEASE_MATRIX_PYTHONS = ("3.10", "3.11", "3.12", "3.13", "3.14")
 QUALIFICATION_CODE_PATHS = (
-    "tools/loom_suite_plan.py", "tools/loom_suite_worker.py",
+    "tools/loom_exact_cut_ci.py", "tools/loom_release_candidate.py",
+    "tools/loom_release_rollback.py", "tools/loom_suite_plan.py",
+    "tools/loom_suite_worker.py",
     "tools/loom_suite_certificate.py", "tools/loom_release_suite.py",
     "tools/loom_clean_room.py", "schemas/suite-inventory-v1.schema.json",
     "schemas/suite-shard-plan-v1.schema.json",
@@ -46,6 +54,9 @@ QUALIFICATION_CODE_PATHS = (
     "schemas/suite-cell-certificate-v1.schema.json",
     "schemas/suite-matrix-certificate-v1.schema.json",
     "schemas/suite-qualification-v1.schema.json",
+    "schemas/exact-cut-ci-receipt-v2.schema.json",
+    "schemas/release-reproducibility-receipt-v1.schema.json",
+    "schemas/release-rollback-evidence.schema.json",
 )
 FAULT_TESTS = {
     "malformed-evidence": "test_release_candidate.ReleaseCandidateTests."
@@ -438,10 +449,25 @@ def compare_shadow(serial_report, certificate):
     outcomes.sort(key=lambda row: row["test"])
     if outcomes != certificate["outcomes"]:
         raise CertificateError("shadow parity mismatch", ["INVENTORY_MISMATCH"])
+    serial_microseconds = serial_report.get("elapsed_microseconds")
+    if type(serial_microseconds) is not int or serial_microseconds < 0:
+        serial_microseconds = 0
+        for row in serial_report.get("timings", []):
+            duration = row.get("duration_microseconds") if isinstance(row, dict) \
+                else None
+            if type(duration) is int and duration >= 0:
+                serial_microseconds += duration
     body = {
-        "schema_version": 1, "status": "matched",
+        "schema_version": 2, "status": "matched",
+        "subject_sha256": loom_suite_plan.digest(certificate["subject"]),
+        "environment_sha256": certificate["environment_sha256"],
+        "serial_suite_sha256": loom_suite_plan.digest(serial_report),
         "serial_outcomes_sha256": loom_suite_plan.digest(outcomes),
+        "sharded_outcomes_sha256": certificate["outcomes_sha256"],
         "cell_certificate_sha256": certificate["cell_certificate_sha256"],
+        "serial_execution_microseconds": serial_microseconds,
+        "sharded_execution_microseconds": certificate[
+            "execution_microseconds"],
         "test_count": len(outcomes),
     }
     return {**body, "comparison_sha256": loom_suite_plan.digest(body)}
@@ -622,161 +648,607 @@ def fault_injection_receipts(matrices):
     return result
 
 
-def verify_qualification(value, matrices, *, policy, root=None):
-    """Require sealed ten-run qualification before certificate authority."""
+QUALIFICATION_PAIR_CONTENT_FIELDS = {
+    "exact_cut_receipt", "serial_suite", "inventory", "timing_profile",
+    "plan", "worker_receipts", "cell_certificate", "shadow_comparison",
+}
+QUALIFICATION_PAIR_FIELDS = {
+    "encoding", "uncompressed_bytes", "payload_sha256", "payload_base64",
+    "pair_sha256",
+}
+MAX_QUALIFICATION_PAIR_BYTES = 16 * 1024 * 1024
+MAX_QUALIFICATION_BYTES = 95_000_000
+QUALIFICATION_DERIVED_FIELDS = {
+    "successful_runs", "resolved_operating_systems", "exact_image_versions",
+    "python_patches", "serial_p50_microseconds", "serial_p95_microseconds",
+    "sharded_p50_microseconds", "sharded_p95_microseconds",
+    "parity_verified", "terminal_receipts_verified", "privacy_clean",
+    "mutation_clean", "worker_cleanup_verified",
+    "workflow_critical_path_improved",
+}
+QUALIFICATION_FAMILY_FIELDS = {
+    "family_id", "consumer", "requested_label", "image_os", "architecture",
+    "python_implementation", "python_minor", "derived", "pairs",
+}
+
+
+def _qualification_policies(policy):
     try:
         policy = loom_suite_plan._validate_seal(
             policy, "policy_sha256", loom_suite_plan.seal_policy)
     except loom_suite_plan.SuitePlanError as exc:
-        raise CertificateError("qualification policy is invalid", ["WRONG_POLICY"]) from exc
-    if policy["authority_mode"] != "certificate" or not isinstance(value, dict) \
-            or "qualification_sha256" not in value:
-        raise CertificateError("qualification record is invalid", ["WRONG_POLICY"])
-    body = {key: item for key, item in value.items()
-            if key != "qualification_sha256"}
-    if value["qualification_sha256"] != loom_suite_plan.digest(body):
-        raise CertificateError("qualification record is invalid", ["RECEIPT_DIGEST"])
-    fields = {
-        "schema_version", "status", "required_successes",
-        "serial_policy_sha256", "certificate_policy_sha256", "bound_inputs",
-        "bound_inputs_sha256", "families", "fault_injection_receipts",
-        "reproducibility_receipt_sha256s", "rollback_receipt_sha256",
-        "workflow_critical_path_improved", "archive_subjects_agree",
-        "privacy_clean", "mutation_clean", "worker_cleanup_verified",
-    }
-    if set(body) != fields or body.get("schema_version") != 1 \
-            or body.get("status") != "qualified" \
-            or body.get("required_successes") != 10:
-        raise CertificateError("qualification record is invalid", ["SCHEMA"])
-    serial_policy = loom_suite_plan.seal_policy({
+        raise CertificateError(
+            "qualification policy is invalid", ["WRONG_POLICY"]) from exc
+    if policy["authority_mode"] != "certificate":
+        raise CertificateError(
+            "qualification record is invalid", ["WRONG_POLICY"])
+    serial = loom_suite_plan.seal_policy({
         "schema_version": policy["schema_version"], "authority_mode": "serial",
         "exclusive_modules": policy["exclusive_modules"],
     })
-    if body.get("serial_policy_sha256") != serial_policy["policy_sha256"] \
-            or body.get("certificate_policy_sha256") != policy["policy_sha256"]:
-        raise CertificateError("qualification policy binding is invalid",
-                               ["WRONG_POLICY"])
-    bound = body.get("bound_inputs")
-    if not isinstance(bound, dict) or set(bound) != {
-            "harness_sha256", "timing_profile_sha256", "workflow_digests",
-            "action_manifest_digests", "qualification_code_sha256"} \
-            or body.get("bound_inputs_sha256") != loom_suite_plan.digest(bound) \
-            or bound.get("qualification_code_sha256") != qualification_code_sha256(root) \
-            or any(loom_suite_plan.HEX64.fullmatch(str(bound.get(field, ""))) is None
-                   for field in ("harness_sha256", "timing_profile_sha256")):
-        raise CertificateError("qualification input binding is invalid", ["WRONG_POLICY"])
-    for field in ("workflow_digests", "action_manifest_digests"):
-        mapping = bound.get(field)
-        if not isinstance(mapping, dict) or set(mapping) != {"quality", "compatibility"} \
-                or any(loom_suite_plan.HEX64.fullmatch(str(item)) is None
-                       for item in mapping.values()):
-            raise CertificateError("qualification input binding is invalid",
-                                   ["WRONG_POLICY"])
-    matrices = [verify_matrix(matrix) for matrix in matrices]
-    global_true = (
-        "workflow_critical_path_improved", "archive_subjects_agree",
-        "privacy_clean", "mutation_clean", "worker_cleanup_verified",
-    )
-    faults = body.get("fault_injection_receipts")
-    repro = body.get("reproducibility_receipt_sha256s")
-    if any(body.get(field) is not True for field in global_true) \
-            or not isinstance(faults, dict) or set(faults) != {
-                "linux", "windows", "macos"} \
-            or faults != fault_injection_receipts(matrices) \
-            or not isinstance(repro, list) or len(repro) < 2 \
-            or len(repro) != len(set(repro)) \
-            or any(loom_suite_plan.HEX64.fullmatch(str(item)) is None for item in repro) \
+    return policy, serial
+
+
+def _nearest_rank(values, percentile):
+    if not isinstance(values, list) or len(values) != 10 \
+            or any(type(value) is not int or value <= 0 for value in values) \
+            or percentile not in {50, 95}:
+        raise CertificateError(
+            "qualification timing evidence is invalid", ["SCHEMA"])
+    ordered = sorted(values)
+    rank = (percentile * len(ordered) + 99) // 100
+    return ordered[rank - 1]
+
+
+def _strict_qualification_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON key")
+        value[key] = item
+    return value
+
+
+def _qualification_pair_envelope(content):
+    if not isinstance(content, dict) \
+            or set(content) != QUALIFICATION_PAIR_CONTENT_FIELDS:
+        raise CertificateError("qualification pair evidence is invalid", ["SCHEMA"])
+    raw = loom_suite_plan.canonical(content)
+    if not raw or len(raw) > MAX_QUALIFICATION_PAIR_BYTES:
+        raise CertificateError("qualification pair evidence is invalid", ["SCHEMA"])
+    compressed = gzip.compress(raw, compresslevel=9, mtime=0)
+    body = {
+        "encoding": "gzip-base64-json-v1",
+        "uncompressed_bytes": len(raw),
+        "payload_sha256": hashlib.sha256(raw).hexdigest(),
+        "payload_base64": base64.b64encode(compressed).decode("ascii"),
+    }
+    return {**body, "pair_sha256": loom_suite_plan.digest(body)}
+
+
+def _decode_qualification_pair(value):
+    if not isinstance(value, dict) or set(value) != QUALIFICATION_PAIR_FIELDS:
+        raise CertificateError("qualification pair evidence is invalid", ["SCHEMA"])
+    body = {key: item for key, item in value.items() if key != "pair_sha256"}
+    if value.get("encoding") != "gzip-base64-json-v1" \
+            or type(value.get("uncompressed_bytes")) is not int \
+            or not 1 <= value["uncompressed_bytes"] <= \
+            MAX_QUALIFICATION_PAIR_BYTES \
             or loom_suite_plan.HEX64.fullmatch(str(
-                body.get("rollback_receipt_sha256", ""))) is None:
-        raise CertificateError("qualification gates are incomplete", ["SCHEMA"])
+                value.get("payload_sha256", ""))) is None \
+            or not isinstance(value.get("payload_base64"), str) \
+            or len(value["payload_base64"]) > MAX_QUALIFICATION_PAIR_BYTES * 2 \
+            or value.get("pair_sha256") != loom_suite_plan.digest(body):
+        raise CertificateError(
+            "qualification pair evidence is invalid", ["RECEIPT_DIGEST"])
+    try:
+        compressed = base64.b64decode(
+            value["payload_base64"].encode("ascii"), validate=True)
+        with gzip.GzipFile(fileobj=io.BytesIO(compressed), mode="rb") as archive:
+            raw = archive.read(MAX_QUALIFICATION_PAIR_BYTES + 1)
+        if len(raw) != value["uncompressed_bytes"] \
+                or len(raw) > MAX_QUALIFICATION_PAIR_BYTES \
+                or hashlib.sha256(raw).hexdigest() != value["payload_sha256"]:
+            raise ValueError("pair payload identity")
+        content = json.loads(
+            raw.decode("utf-8"), object_pairs_hook=_strict_qualification_object,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                ValueError("non-finite JSON number")))
+    except (OSError, EOFError, ValueError, UnicodeError, RecursionError,
+            json.JSONDecodeError, binascii.Error) as exc:
+        raise CertificateError(
+            "qualification pair evidence is invalid", ["SCHEMA"]) from exc
+    if not isinstance(content, dict) \
+            or set(content) != QUALIFICATION_PAIR_CONTENT_FIELDS:
+        raise CertificateError("qualification pair evidence is invalid", ["SCHEMA"])
+    return content
+
+
+def _verify_qualification_pair(value, *, serial_policy):
+    content = _decode_qualification_pair(value)
+    try:
+        exact = loom_exact_cut_ci.verify_receipt(
+            content["exact_cut_receipt"], require_static=False)
+        serial_suite = content["serial_suite"]
+        exact_environment = exact["environment"]
+        environment = {
+            key: exact_environment[key]
+            for key in loom_suite_plan.ENVIRONMENT_FIELDS
+        }
+        if serial_suite != exact["suite"] \
+                or exact_environment.get("evidence_class") != "ci-reproduced" \
+                or exact.get("platform") != exact_environment.get("os") \
+                or exact.get("architecture") != exact_environment.get(
+                    "architecture") \
+                or exact.get("python") != exact_environment.get("python_version"):
+            raise CertificateError(
+                "qualification serial evidence is invalid", ["WRONG_ENVIRONMENT"])
+        inventory = loom_suite_plan._validate_seal(
+            content["inventory"], "inventory_sha256",
+            loom_suite_plan.seal_inventory)
+        timing_profile = loom_suite_plan._validate_seal(
+            content["timing_profile"], "profile_sha256",
+            loom_suite_plan.seal_timing_profile)
+        subject = inventory["subject"]
+        expected_subject = {
+            "repository": "https://github.com/saroo98/loom",
+            "source_commit": exact["source_commit"],
+            "source_tree_sha256": subject["source_tree_sha256"],
+            "public_root_sha256": exact["verified_root_sha256"],
+            "public_manifest_sha256": exact["public_manifest_sha256"],
+            "public_file_count": exact["public_file_count"],
+        }
+        if subject != expected_subject or inventory["environment"] != environment:
+            raise CertificateError(
+                "qualification pair names the wrong subject",
+                ["WRONG_SUBJECT"])
+        plan = content["plan"]
+        if not isinstance(plan, dict) or set(plan) != {
+                "schema_version", "inventory_sha256", "policy_sha256",
+                "timing_profile_sha256", "logical_cpu_count",
+                "max_parallel_workers", "shards", "plan_sha256"}:
+            raise CertificateError(
+                "qualification plan evidence is invalid", ["WRONG_POLICY"])
+        rebuilt_plan = loom_suite_plan.plan(
+            inventory, timing_profile=timing_profile, policy=serial_policy,
+            logical_cpus=plan["logical_cpu_count"])
+        if plan != rebuilt_plan:
+            raise CertificateError(
+                "qualification plan evidence is invalid", ["WRONG_POLICY"])
+        workers = content["worker_receipts"]
+        if not isinstance(workers, list) or not workers:
+            raise CertificateError(
+                "qualification worker evidence is invalid",
+                ["INVENTORY_MISMATCH"])
+        compiled = compile_cell(
+            inventory, plan, workers, policy=serial_policy)
+        if compiled != content["cell_certificate"]:
+            raise CertificateError(
+                "qualification cell evidence is invalid", ["RECEIPT_DIGEST"])
+        expected_comparison = compare_shadow(serial_suite, compiled)
+        if expected_comparison != content["shadow_comparison"] \
+                or expected_comparison.get("schema_version") != 2 \
+                or expected_comparison.get("status") != "matched" \
+                or type(serial_suite.get("elapsed_microseconds")) is not int \
+                or serial_suite["elapsed_microseconds"] <= 0 \
+                or type(compiled.get("execution_microseconds")) is not int \
+                or compiled["execution_microseconds"] <= 0:
+            raise CertificateError(
+                "qualification shadow evidence is invalid",
+                ["INVENTORY_MISMATCH"])
+    except CertificateError:
+        raise
+    except (KeyError, TypeError, ValueError, loom_suite_plan.SuitePlanError,
+            loom_suite_worker.SuiteWorkerError) as exc:
+        raise CertificateError(
+            "qualification pair evidence is invalid", ["SCHEMA"]) from exc
+    return content
+
+
+def compile_qualification_pair(value, *, policy):
+    """Seal one compressed, self-contained serial/shadow evidence pair."""
+    _certificate_policy, serial_policy = _qualification_policies(policy)
+    if not isinstance(value, dict) \
+            or set(value) != QUALIFICATION_PAIR_CONTENT_FIELDS:
+        raise CertificateError("qualification pair evidence is invalid", ["SCHEMA"])
+    pair = _qualification_pair_envelope(value)
+    _verify_qualification_pair(pair, serial_policy=serial_policy)
+    return pair
+
+
+def _derive_qualification_family(consumer, pairs, *, serial_policy,
+                                 compile_unsealed=False):
+    if consumer not in {"quality", "compatibility"} \
+            or not isinstance(pairs, list) or len(pairs) != 10:
+        raise CertificateError(
+            "qualification family is invalid", ["INVENTORY_MISMATCH"])
+    envelopes = []
+    validated = []
+    for pair in pairs:
+        if compile_unsealed and isinstance(pair, dict) \
+                and set(pair) == QUALIFICATION_PAIR_CONTENT_FIELDS:
+            pair = _qualification_pair_envelope(pair)
+        envelopes.append(pair)
+        validated.append(_verify_qualification_pair(
+            pair, serial_policy=serial_policy))
+    families = [_family(pair["cell_certificate"], consumer)
+                for pair in validated]
+    if any(family != families[0] for family in families[1:]):
+        raise CertificateError(
+            "qualification family mixes runner identities",
+            ["WRONG_ENVIRONMENT"])
+    subjects = [pair["cell_certificate"]["subject"] for pair in validated]
+    if any(subject != subjects[0] for subject in subjects[1:]):
+        raise CertificateError(
+            "qualification family mixes release subjects", ["WRONG_SUBJECT"])
+    runs = [{
+        "run_id": pair["exact_cut_receipt"]["environment"]["run_id"],
+        "run_attempt": pair["exact_cut_receipt"]["environment"]["run_attempt"],
+    } for pair in validated]
+    run_keys = [(row["run_id"], row["run_attempt"]) for row in runs]
+    if any(re.fullmatch(r"[0-9]+", run_id) is None
+           or re.fullmatch(r"[0-9]+", run_attempt) is None
+           for run_id, run_attempt in run_keys):
+        raise CertificateError(
+            "qualification run identity is invalid", ["WRONG_ENVIRONMENT"])
+    identity_fields = (
+        "pair_sha256", "inventory", "plan", "cell_certificate",
+        "shadow_comparison", "exact_cut_receipt",
+    )
+    identities = {
+        "pair_sha256": [pair["pair_sha256"] for pair in envelopes],
+        "inventory": [pair["inventory"]["inventory_sha256"]
+                      for pair in validated],
+        "plan": [pair["plan"]["plan_sha256"] for pair in validated],
+        "cell_certificate": [pair["cell_certificate"][
+            "cell_certificate_sha256"] for pair in validated],
+        "shadow_comparison": [pair["shadow_comparison"][
+            "comparison_sha256"] for pair in validated],
+        "exact_cut_receipt": [pair["exact_cut_receipt"]["receipt_sha256"]
+                              for pair in validated],
+    }
+    if len(run_keys) != len(set(run_keys)) \
+            or any(len(identities[field]) != len(set(identities[field]))
+                   for field in identity_fields):
+        raise CertificateError(
+            "qualification family reuses evidence", ["INVENTORY_MISMATCH"])
+    environments = [pair["cell_certificate"]["environment"]
+                    for pair in validated]
+    test_inventories = [[row["test"] for row in pair["cell_certificate"][
+        "outcomes"]] for pair in validated]
+    if any(tests != test_inventories[0] for tests in test_inventories[1:]):
+        raise CertificateError(
+            "qualification family test inventory changed",
+            ["INVENTORY_MISMATCH"])
+    for field in ("harness_sha256", "timing_profile_sha256"):
+        values = [pair["cell_certificate"][field] for pair in validated]
+        if any(item != values[0] for item in values[1:]):
+            raise CertificateError(
+                "qualification family inputs changed", ["WRONG_POLICY"])
+    for field in ("workflow_path", "workflow_digest", "action_manifest_digest"):
+        values = [environment[field] for environment in environments]
+        if any(item != values[0] for item in values[1:]):
+            raise CertificateError(
+                "qualification family workflow changed", ["WRONG_POLICY"])
+    serial_times = [pair["serial_suite"]["elapsed_microseconds"]
+                    for pair in validated]
+    sharded_times = [pair["cell_certificate"]["execution_microseconds"]
+                     for pair in validated]
+    serial_p50 = _nearest_rank(serial_times, 50)
+    serial_p95 = _nearest_rank(serial_times, 95)
+    sharded_p50 = _nearest_rank(sharded_times, 50)
+    sharded_p95 = _nearest_rank(sharded_times, 95)
+    improved = sharded_p50 <= serial_p50 and sharded_p95 <= serial_p95 \
+        and (sharded_p50 < serial_p50 or sharded_p95 < serial_p95)
+    if not improved:
+        raise CertificateError(
+            "qualification critical path did not improve", ["SCHEMA"])
+    resolved = sorted({(
+        environment["os"], environment["os_release"],
+        environment["os_version"])
+        for environment in environments})
+    derived = {
+        "successful_runs": [
+            {"run_id": run_id, "run_attempt": run_attempt}
+            for run_id, run_attempt in sorted(run_keys)],
+        "resolved_operating_systems": [
+            {"os": os_name, "os_release": release, "os_version": version}
+            for os_name, release, version in resolved],
+        "exact_image_versions": sorted({
+            environment["image_version"] for environment in environments}),
+        "python_patches": sorted({
+            environment["python_version"] for environment in environments}),
+        "serial_p50_microseconds": serial_p50,
+        "serial_p95_microseconds": serial_p95,
+        "sharded_p50_microseconds": sharded_p50,
+        "sharded_p95_microseconds": sharded_p95,
+        "parity_verified": True,
+        "terminal_receipts_verified": True,
+        "privacy_clean": True,
+        "mutation_clean": True,
+        "worker_cleanup_verified": True,
+        "workflow_critical_path_improved": True,
+    }
+    ordered = sorted(zip(envelopes, validated), key=lambda item: (
+        item[1]["exact_cut_receipt"]["environment"]["run_id"],
+        item[1]["exact_cut_receipt"]["environment"]["run_attempt"],
+        item[0]["pair_sha256"],
+    ))
+    ordered_pairs = [item[0] for item in ordered]
+    ordered_content = [item[1] for item in ordered]
+    return {
+        **families[0], "derived": derived, "pairs": ordered_pairs,
+    }, subjects[0], ordered_content
+
+
+def _qualification_matrix_families(matrices, *, policy):
+    if not isinstance(matrices, list) or len(matrices) != 2:
+        raise CertificateError(
+            "qualification matrices are incomplete", ["INVENTORY_MISMATCH"])
+    matrices = [verify_matrix(matrix) for matrix in matrices]
+    if sorted(matrix["consumer"] for matrix in matrices) != [
+            "compatibility", "quality"]:
+        raise CertificateError(
+            "qualification matrices are incomplete", ["INVENTORY_MISMATCH"])
+    subjects = [matrix["subject"] for matrix in matrices]
+    if subjects[0] != subjects[1]:
+        raise CertificateError(
+            "qualification matrices mix release subjects", ["WRONG_SUBJECT"])
+    cells = {}
+    for matrix in matrices:
+        for cell in matrix["cells"]:
+            family = _family(cell, matrix["consumer"])
+            if family["family_id"] in cells \
+                    or cell["policy_sha256"] != policy["policy_sha256"]:
+                raise CertificateError(
+                    "qualification matrix inputs are invalid", ["WRONG_POLICY"])
+            cells[family["family_id"]] = cell
+    clean_room_cells = [
+        cell for matrix in matrices if matrix["consumer"] == "compatibility"
+        for cell in matrix["cells"]
+        if cell["environment"]["requested_label"] == "ubuntu-24.04"
+        and cell["environment"]["python_version"].startswith("3.11.")
+    ]
+    if len(clean_room_cells) != 1:
+        raise CertificateError(
+            "clean-room qualification subject is ambiguous",
+            ["INVENTORY_MISMATCH"])
+    clean_room_family_id = _family(
+        clean_room_cells[0], "compatibility")["family_id"]
+    fault_injection_receipts(matrices)
+    return matrices, cells, clean_room_family_id
+
+
+def _require_family_matches_matrix(family, current, resolved_pairs):
+    # The historical qualification subject is intentionally not compared to
+    # the future cutover subject: adding the sealed qualification file changes
+    # that commit and public cut.  The full historical subject is instead
+    # uniform across every pair and binds reproduction plus rollback below.
+    if not isinstance(current, dict) or "environment" not in current:
+        raise CertificateError(
+            "matrix runner family is not qualified", ["WRONG_ENVIRONMENT"])
+    derived = family["derived"]
+    environment = current["environment"]
+    resolved = {
+        (row["os"], row["os_release"], row["os_version"])
+        for row in derived["resolved_operating_systems"]
+    }
+    current_tests = [row["test"] for row in current["outcomes"]]
+    if environment["image_version"] not in derived["exact_image_versions"] \
+            or environment["python_version"] not in derived["python_patches"] \
+            or (environment["os"], environment["os_release"],
+                environment["os_version"]) not in resolved:
+        raise CertificateError(
+            "matrix runner family is not qualified", ["WRONG_ENVIRONMENT"])
+    if not isinstance(resolved_pairs, list) or len(resolved_pairs) != 10:
+        raise CertificateError(
+            "qualification family evidence is incomplete",
+            ["INVENTORY_MISMATCH"])
+    for pair in resolved_pairs:
+        cell = pair["cell_certificate"]
+        pair_environment = cell["environment"]
+        if cell["harness_sha256"] != current["harness_sha256"] \
+                or cell["timing_profile_sha256"] != current[
+                    "timing_profile_sha256"] \
+                or pair_environment["workflow_path"] != environment[
+                    "workflow_path"] \
+                or pair_environment["workflow_digest"] != environment[
+                    "workflow_digest"] \
+                or pair_environment["action_manifest_digest"] != environment[
+                    "action_manifest_digest"] \
+                or [row["test"] for row in cell["outcomes"]] != current_tests:
+            raise CertificateError(
+                "matrix inputs differ from qualification", ["WRONG_POLICY"])
+
+
+def _verify_release_evidence(reproducibility_receipts, rollback_receipt,
+                             subject):
+    if not isinstance(reproducibility_receipts, list) \
+            or len(reproducibility_receipts) != 2:
+        raise CertificateError(
+            "qualification release evidence is incomplete", ["SCHEMA"])
+    verified = []
+    try:
+        for receipt in reproducibility_receipts:
+            verified.append(
+                loom_release_candidate.verify_reproducibility_receipt(receipt))
+        loom_release_rollback.verify_receipt(
+            rollback_receipt, expected_commit=subject["source_commit"],
+            expected_public_root_sha256=subject["public_root_sha256"])
+    except (loom_release_candidate.CandidateError,
+            loom_release_rollback.RollbackEvidenceError) as exc:
+        raise CertificateError(
+            "qualification release evidence is invalid", ["SCHEMA"]) from exc
+    public_cut = {
+        "root_sha256": subject["public_root_sha256"],
+        "manifest_sha256": subject["public_manifest_sha256"],
+        "file_count": subject["public_file_count"],
+    }
+    digests = [receipt["receipt_sha256"] for receipt in verified]
+    if len(digests) != len(set(digests)) \
+            or any(receipt["public_cut"] != public_cut for receipt in verified):
+        raise CertificateError(
+            "qualification release evidence is invalid", ["WRONG_SUBJECT"])
+
+
+def compile_qualification(families, matrices, *, policy,
+                          reproducibility_receipts, rollback_receipt,
+                          root=None):
+    """Compile ten resolved serial/shadow pairs per runner family."""
+    policy, serial_policy = _qualification_policies(policy)
+    _matrices, current, clean_room_family_id = _qualification_matrix_families(
+        matrices, policy=policy)
+    if not isinstance(families, list) or not families:
+        raise CertificateError(
+            "qualification families are incomplete", ["INVENTORY_MISMATCH"])
+    compiled = []
+    subjects = []
+    resolved_by_family = {}
+    for row in families:
+        if not isinstance(row, dict) or set(row) != {"consumer", "pairs"}:
+            raise CertificateError("qualification family is invalid", ["SCHEMA"])
+        family, subject, resolved = _derive_qualification_family(
+            row["consumer"], row["pairs"], serial_policy=serial_policy,
+            compile_unsealed=True)
+        compiled.append(family)
+        subjects.append(subject)
+        resolved_by_family[family["family_id"]] = resolved
+    compiled.sort(key=lambda row: row["family_id"])
+    family_ids = [row["family_id"] for row in compiled]
+    if len(family_ids) != len(set(family_ids)) or set(family_ids) != set(current):
+        raise CertificateError(
+            "qualification family coverage is incomplete",
+            ["INVENTORY_MISMATCH"])
+    if any(subject != subjects[0] for subject in subjects[1:]):
+        raise CertificateError(
+            "qualification evidence mixes release subjects", ["WRONG_SUBJECT"])
+    seen = set()
+    for family in compiled:
+        resolved = resolved_by_family[family["family_id"]]
+        _require_family_matches_matrix(
+            family, current[family["family_id"]], resolved)
+        for envelope, pair in zip(family["pairs"], resolved):
+            identities = (
+                envelope["pair_sha256"],
+                pair["exact_cut_receipt"]["receipt_sha256"],
+                pair["cell_certificate"]["cell_certificate_sha256"],
+                pair["shadow_comparison"]["comparison_sha256"],
+            )
+            if any(identity in seen for identity in identities):
+                raise CertificateError(
+                    "qualification reuses pair evidence",
+                    ["INVENTORY_MISMATCH"])
+            seen.update(identities)
+    _verify_release_evidence(
+        reproducibility_receipts, rollback_receipt, subjects[0])
+    body = {
+        "schema_version": 1, "status": "qualified",
+        "subject": subjects[0],
+        "serial_policy_sha256": serial_policy["policy_sha256"],
+        "certificate_policy_sha256": policy["policy_sha256"],
+        "qualification_code_sha256": qualification_code_sha256(root),
+        "clean_room_family_id": clean_room_family_id,
+        "families": compiled,
+        "reproducibility_receipts": reproducibility_receipts,
+        "rollback_receipt": rollback_receipt,
+    }
+    value = {**body, "qualification_sha256": loom_suite_plan.digest(body)}
+    return verify_qualification(value, matrices, policy=policy, root=root)
+
+
+def verify_qualification(value, matrices, *, policy, root=None):
+    """Verify resolved ten-pair evidence before certificate authority."""
+    policy, serial_policy = _qualification_policies(policy)
+    if not isinstance(value, dict) or "qualification_sha256" not in value:
+        raise CertificateError("qualification record is invalid", ["SCHEMA"])
+    body = {key: item for key, item in value.items()
+            if key != "qualification_sha256"}
+    if value["qualification_sha256"] != loom_suite_plan.digest(body):
+        raise CertificateError(
+            "qualification record is invalid", ["RECEIPT_DIGEST"])
+    if set(body) != {
+            "schema_version", "status", "subject", "serial_policy_sha256",
+            "certificate_policy_sha256", "qualification_code_sha256",
+            "clean_room_family_id",
+            "families", "reproducibility_receipts", "rollback_receipt"} \
+            or body.get("schema_version") != 1 \
+            or body.get("status") != "qualified":
+        raise CertificateError("qualification record is invalid", ["SCHEMA"])
+    try:
+        subject = loom_suite_plan._subject(body.get("subject"))
+    except loom_suite_plan.SuitePlanError as exc:
+        raise CertificateError(
+            "qualification subject is invalid", ["WRONG_SUBJECT"]) from exc
+    if body.get("serial_policy_sha256") != serial_policy["policy_sha256"] \
+            or body.get("certificate_policy_sha256") != policy["policy_sha256"] \
+            or body.get("qualification_code_sha256") != \
+            qualification_code_sha256(root):
+        raise CertificateError(
+            "qualification input binding is invalid", ["WRONG_POLICY"])
+    _matrices, current, clean_room_family_id = _qualification_matrix_families(
+        matrices, policy=policy)
+    if body.get("clean_room_family_id") != clean_room_family_id:
+        raise CertificateError(
+            "clean-room qualification is missing", ["WRONG_ENVIRONMENT"])
     families = body.get("families")
     if not isinstance(families, list) or not families:
-        raise CertificateError("qualification families are incomplete",
-                               ["INVENTORY_MISMATCH"])
-    by_family = {}
-    family_fields = {
-        "family_id", "consumer", "requested_label", "image_os", "architecture",
-        "python_implementation", "python_minor", "successful_run_ids",
-        "exact_image_versions", "python_patches", "serial_p50_microseconds",
-        "serial_p95_microseconds", "sharded_p50_microseconds",
-        "sharded_p95_microseconds", "parity_verified",
-    }
+        raise CertificateError(
+            "qualification families are incomplete", ["INVENTORY_MISMATCH"])
+    expected_families = []
+    all_identities = []
     for row in families:
-        identity = {key: row.get(key) for key in (
-            "consumer", "requested_label", "image_os", "architecture",
-            "python_implementation", "python_minor")}
-        numeric = (
-            "serial_p50_microseconds", "serial_p95_microseconds",
-            "sharded_p50_microseconds", "sharded_p95_microseconds",
-        )
-        runs = row.get("successful_run_ids") if isinstance(row, dict) else None
-        images = row.get("exact_image_versions") if isinstance(row, dict) else None
-        patches = row.get("python_patches") if isinstance(row, dict) else None
-        if not isinstance(row, dict) or set(row) != family_fields \
-                or row.get("consumer") not in {"quality", "compatibility", "clean-room"} \
-                or row.get("family_id") != loom_suite_plan.digest(identity) \
-                or row["family_id"] in by_family \
-                or not isinstance(runs, list) or len(runs) < 10 \
-                or len(runs) != len(set(runs)) \
-                or any(re.fullmatch(r"[0-9]+", str(run)) is None for run in runs) \
-                or not isinstance(images, list) or not images \
-                or len(images) != len(set(images)) \
-                or not isinstance(patches, list) or not patches \
-                or len(patches) != len(set(patches)) \
-                or any(type(row.get(field)) is not int or row[field] <= 0
-                       for field in numeric) \
-                or row["sharded_p50_microseconds"] > row["serial_p50_microseconds"] \
-                or row["sharded_p95_microseconds"] > row["serial_p95_microseconds"] \
-                or row.get("parity_verified") is not True:
+        if not isinstance(row, dict) or set(row) != QUALIFICATION_FAMILY_FIELDS \
+                or not isinstance(row.get("derived"), dict) \
+                or set(row["derived"]) != QUALIFICATION_DERIVED_FIELDS:
             raise CertificateError("qualification family is invalid", ["SCHEMA"])
-        by_family[row["family_id"]] = row
-    clean_room_cells = [cell for matrix in matrices
-                        if matrix["consumer"] == "compatibility"
-                        for cell in matrix["cells"]
-                        if cell["environment"]["requested_label"] == "ubuntu-24.04"
-                        and cell["environment"]["python_version"].startswith("3.11.")]
-    if len(clean_room_cells) != 1:
-        raise CertificateError("clean-room qualification subject is ambiguous",
-                               ["INVENTORY_MISMATCH"])
-    clean_cell = clean_room_cells[0]
-    clean_family = _family(clean_cell, "clean-room")
-    clean_qualified = by_family.get(clean_family["family_id"])
-    if clean_qualified is None \
-            or clean_cell["environment"]["image_version"] not in clean_qualified[
-                "exact_image_versions"] \
-            or clean_cell["environment"]["python_version"] not in clean_qualified[
-                "python_patches"]:
-        raise CertificateError("clean-room qualification is missing",
-                               ["WRONG_ENVIRONMENT"])
-    for matrix in matrices:
-        consumer = matrix["consumer"]
-        if consumer not in {"quality", "compatibility"}:
-            raise CertificateError("qualification consumer is invalid", ["SCHEMA"])
-        for cell in matrix["cells"]:
-            environment = cell["environment"]
-            family = _family(cell, consumer)
-            qualified = by_family.get(family["family_id"])
-            if qualified is None \
-                    or environment["image_version"] not in qualified[
-                        "exact_image_versions"] \
-                    or environment["python_version"] not in qualified["python_patches"]:
-                raise CertificateError("matrix runner family is not qualified",
-                                       ["WRONG_ENVIRONMENT"])
-            if cell["harness_sha256"] != bound["harness_sha256"] \
-                    or cell["timing_profile_sha256"] != bound[
-                        "timing_profile_sha256"] \
-                    or cell["policy_sha256"] != policy["policy_sha256"] \
-                    or environment["workflow_digest"] != bound[
-                        "workflow_digests"][consumer] \
-                    or environment["action_manifest_digest"] != bound[
-                        "action_manifest_digests"][consumer]:
-                raise CertificateError("matrix inputs differ from qualification",
-                                       ["WRONG_POLICY"])
+        expected, pair_subject, resolved = _derive_qualification_family(
+            row["consumer"], row["pairs"], serial_policy=serial_policy)
+        if row != expected or pair_subject != subject:
+            raise CertificateError("qualification family is invalid", ["SCHEMA"])
+        expected_families.append(expected)
+        _require_family_matches_matrix(
+            expected, current.get(row["family_id"], {}), resolved)
+        all_identities.extend((
+            envelope["pair_sha256"],
+            pair["exact_cut_receipt"]["receipt_sha256"],
+            pair["cell_certificate"]["cell_certificate_sha256"],
+            pair["shadow_comparison"]["comparison_sha256"],
+        ) for envelope, pair in zip(row["pairs"], resolved))
+    if families != sorted(expected_families, key=lambda row: row["family_id"]) \
+            or {row["family_id"] for row in families} != set(current):
+        raise CertificateError(
+            "qualification family coverage is incomplete",
+            ["INVENTORY_MISMATCH"])
+    flat_identities = [item for group in all_identities for item in group]
+    if len(flat_identities) != len(set(flat_identities)):
+        raise CertificateError(
+            "qualification reuses pair evidence", ["INVENTORY_MISMATCH"])
+    _verify_release_evidence(
+        body["reproducibility_receipts"], body["rollback_receipt"], subject)
     return value
 
 
 def _load(path):
     return loom_suite_worker._load(path, "certificate input")
+
+
+def _load_qualification(path, *, max_bytes=MAX_QUALIFICATION_BYTES):
+    path = Path(path)
+    if not path.is_file() or path.is_symlink() \
+            or type(max_bytes) is not int or max_bytes < 1 \
+            or path.stat().st_size > max_bytes:
+        raise loom_suite_worker.SuiteWorkerError(
+            "qualification input is unsafe")
+    try:
+        return json.loads(
+            path.read_text(encoding="utf-8", errors="strict"),
+            object_pairs_hook=_strict_qualification_object,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                ValueError("non-finite JSON number")))
+    except (OSError, UnicodeError, ValueError, RecursionError,
+            json.JSONDecodeError) as exc:
+        raise loom_suite_worker.SuiteWorkerError(
+            "qualification input is unreadable") from exc
 
 
 def _write(path, value):
@@ -834,7 +1306,8 @@ def _execute_cell(cut, test_root, exact_receipt, policy, timing_profile,
     harness = Path(test_root).resolve() / "loom_test.py"
     inventory = loom_suite_plan.inventory(
         test_root, subject=subject, environment=environment,
-        harness_sha256=hashlib.sha256(harness.read_bytes()).hexdigest())
+        harness_sha256=hashlib.sha256(harness.read_bytes()).hexdigest(),
+        timeout=timeout, protected_roots=[cut], context_root=cut)
     plan = loom_suite_plan.plan(
         inventory, timing_profile=timing_profile, policy=policy)
     _write(output_root / "inventory.json", inventory)
@@ -972,7 +1445,7 @@ def main(argv=None):
                 timeout=args.timeout)
         else:
             result = verify_qualification(
-                _load(args.qualification),
+                _load_qualification(args.qualification),
                 [_load(path) for path in args.matrix_certificate],
                 policy=_load(args.policy))
     except (CertificateError, loom_suite_worker.SuiteWorkerError) as exc:

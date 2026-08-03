@@ -231,6 +231,43 @@ class ReleaseSubjectVerifyPhase10Tests(unittest.TestCase):
             result = self._verify_actual_v4(fixture)
             self.assertEqual("verified", result["status"])
 
+    def test_v4_verifier_refuses_resealed_unrelated_installed_runtime(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self._v4_fixture(Path(temporary))
+            subjects = list(fixture["bundle"]["subjects"])
+            subjects.append(loom_subject_identity.seal_subject({
+                "schema_version": 1, "kind": "installed-runtime",
+                "subject_id": "9.9.9", "version": "9.9.9",
+                "release_sequence": 999, "payload_sha256": "2" * 64,
+                "install_receipt_sha256": "3" * 64,
+                "activation_receipt_sha256": "4" * 64,
+            }))
+            subjects.sort(key=lambda item: (
+                item["kind"], item["subject_id"], item["subject_digest"]))
+            relations = list(fixture["bundle"]["relations"])
+            runtime = next(
+                item for item in subjects if item["kind"] == "installed-runtime")
+            relations.append({
+                "relation": "component", "subject_kind": runtime["kind"],
+                "subject_id": runtime["subject_id"],
+                "subject_digest": runtime["subject_digest"],
+            })
+            body = {
+                key: value for key, value in fixture["bundle"].items()
+                if key != "bundle_sha256"
+            }
+            body["subjects"] = subjects
+            body["relations"] = relations
+            fixture["bundle"] = {
+                **body, "bundle_sha256": hashlib.sha256(
+                    loom_release_subject._canonical(body)).hexdigest(),
+            }
+
+            with self.assertRaisesRegex(
+                    loom_release_subject_verify.SubjectVerificationError,
+                    "invalid|incomplete"):
+                self._verify_actual_v4(fixture)
+
     def test_v4_verifier_rejects_a_swapped_reproducibility_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             fixture = self._v4_fixture(Path(temporary))

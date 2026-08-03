@@ -94,6 +94,73 @@ class ReleaseSubjectPhase7Tests(unittest.TestCase):
             report, __file__, result, "release-subject-v4.schema.json")
         self.assertEqual([], report.errors)
 
+    def test_v4_bundle_refuses_unrelated_installed_runtime_subject(self):
+        subjects = self.typed_subjects()[:-1]
+        subjects.append(loom_subject_identity.public_cut(
+            root_sha256="a" * 64, manifest_sha256="b" * 64, file_count=10))
+        for index, platform in enumerate(sorted(loom_subject_identity.PLATFORMS)):
+            subjects.append(loom_subject_identity.seal_subject({
+                "schema_version": 1, "kind": "native-helper",
+                "subject_id": platform, "platform": platform,
+                "filename": ("loom-vault.exe" if platform.startswith("windows")
+                             else "loom-vault"),
+                "bytes": index + 1, "sha256": f"{index + 1:x}" * 64,
+                "sbom_sha256": "c" * 64, "provenance_sha256": "d" * 64,
+            }))
+        subjects.append(loom_subject_identity.seal_subject({
+            "schema_version": 1, "kind": "installed-runtime",
+            "subject_id": "9.9.9", "version": "9.9.9",
+            "release_sequence": 999, "payload_sha256": "2" * 64,
+            "install_receipt_sha256": "3" * 64,
+            "activation_receipt_sha256": "4" * 64,
+        }))
+
+        with self.assertRaisesRegex(
+                loom_release_subject.ReleaseSubjectError, "invalid|incomplete"):
+            loom_release_subject.create_evidence_v4(
+                subjects=subjects, release_sequence=19,
+                reproducibility_receipt_sha256="e" * 64,
+                matrix_certificate_sha256="f" * 64,
+                promotion_policy_sha256="1" * 64)
+
+        mapped = loom_subject_identity.subject_map(subjects)
+        normalized = sorted(mapped.values(), key=lambda item: (
+            item["kind"], item["subject_id"], item["subject_digest"]))
+        plugin = next(item for item in normalized if item["kind"] == "plugin-zip")
+        public_cut = next(item for item in normalized if item["kind"] == "public-cut")
+        relations = [{
+            "relation": "component", "subject_kind": item["kind"],
+            "subject_id": item["subject_id"],
+            "subject_digest": item["subject_digest"],
+        } for item in normalized]
+        relations.append({
+            "relation": "embeds-public-cut",
+            "plugin_subject_digest": plugin["subject_digest"],
+            "public_cut_subject_digest": public_cut["subject_digest"],
+        })
+        relations.extend({
+            "relation": "contains-native-helper",
+            "plugin_subject_digest": plugin["subject_digest"],
+            "platform": helper["platform"],
+            "native_subject_digest": helper["subject_digest"],
+        } for helper in sorted(
+            (item for item in normalized if item["kind"] == "native-helper"),
+            key=lambda item: item["platform"]))
+        body = {
+            "schema_version": 4, "repository": loom_subject_identity.REPOSITORY,
+            "release_sequence": 19, "previous_bundle_sha256": None,
+            "subjects": normalized, "relations": relations,
+            "reproducibility_receipt_sha256": "e" * 64,
+            "matrix_certificate_sha256": "f" * 64,
+            "promotion_policy_sha256": "1" * 64,
+        }
+        malicious = {**body, "bundle_sha256": __import__("hashlib").sha256(
+            loom_release_subject._canonical(body)).hexdigest()}
+        schema_report = loom_lint.Report()
+        loom_lint.validate_schema(
+            schema_report, __file__, malicious, "release-subject-v4.schema.json")
+        self.assertTrue(schema_report.errors)
+
     def test_one_byte_change_changes_unified_subject(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
