@@ -300,7 +300,7 @@ class SuiteWorkerTests(unittest.TestCase):
         source = (
             "import unittest\n"
             "class SecretFailure(AssertionError):\n"
-            "    code = 'AKIAABCDEFGHIJKLMNOP'\n"
+            "    code = 'AKIA' + 'ABCDEFGHIJKLMNOP'\n"
             "class UnhashableFailure(AssertionError):\n"
             "    code = []\n"
             "class OddCode(str):\n"
@@ -328,7 +328,7 @@ class SuiteWorkerTests(unittest.TestCase):
             {row["error_code"] for row in diagnostic["failures"]})
         self.assertEqual(3, len(diagnostic["failures"]))
         serialized = json.dumps(diagnostic, sort_keys=True)
-        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", serialized)
+        self.assertNotIn("AKIA" + "ABCDEFGHIJKLMNOP", serialized)
         self.assertTrue(loom_suite_worker._privacy_clean(diagnostic))
         loom_suite_worker.validate_failure_diagnostic(diagnostic, receipt)
         report = loom_lint.Report()

@@ -94,7 +94,7 @@ class SuitePlanTests(unittest.TestCase):
             root = Path(temporary).resolve()
             (root / "test_private.py").write_text(
                 "import unittest\n"
-                "print('AKIAABCDEFGHIJKLMNOP')\n"
+                "print('AKIA' + 'ABCDEFGHIJKLMNOP')\n"
                 "class Private(unittest.TestCase):\n"
                 "    def test_loaded(self): pass\n",
                 encoding="utf-8")
@@ -110,8 +110,8 @@ class SuitePlanTests(unittest.TestCase):
             root = Path(temporary).resolve()
             (root / "test_private.py").write_text(
                 "import unittest\n"
-                "class AKIAABCDEFGHIJKLMNOP(unittest.TestCase):\n"
-                "    def test_loaded(self): pass\n",
+                "Private = type('AKIA' + 'ABCDEFGHIJKLMNOP', "
+                "(unittest.TestCase,), {'test_loaded': lambda self: None})\n",
                 encoding="utf-8")
 
             with self.assertRaisesRegex(

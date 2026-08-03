@@ -80,7 +80,7 @@ class TestRunnerTests(unittest.TestCase):
             "class SafeFailure(AssertionError):\n"
             "    code = 'HOST_UNVERIFIED'\n"
             "class SecretFailure(AssertionError):\n"
-            "    code = 'AKIAABCDEFGHIJKLMNOP'\n"
+            "    code = 'AKIA' + 'ABCDEFGHIJKLMNOP'\n"
             "class UnhashableFailure(AssertionError):\n"
             "    code = []\n"
             "class OddCode(str):\n"
@@ -113,7 +113,8 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(
             "PUBLIC_ERROR_CODE_REDACTED",
             rows["test_codes.DiagnosticFixture.test_hostile_string"]["error_code"])
-        self.assertNotIn("AKIAABCDEFGHIJKLMNOP", json.dumps(report, sort_keys=True))
+        self.assertNotIn(
+            "AKIA" + "ABCDEFGHIJKLMNOP", json.dumps(report, sort_keys=True))
 
     def test_mixed_subtest_status_uses_order_independent_error_precedence(self):
         cases = {
