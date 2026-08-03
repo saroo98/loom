@@ -1,8 +1,14 @@
 """Fail-closed suite certificate compilation and shadow comparison."""
 
 import copy
+import hashlib
+import json
+from pathlib import Path
+import tempfile
 import unittest
+from unittest import mock
 
+import loom_operation_supervisor
 import loom_suite_certificate
 import loom_suite_plan
 import loom_suite_worker
@@ -93,6 +99,45 @@ class SuiteCertificateTests(unittest.TestCase):
         return loom_suite_worker._seal({
             key: value for key, value in receipt.items()
             if key != "worker_receipt_sha256"})
+
+    def test_shadow_cell_sanitizes_supervisor_failure_as_mismatch_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "shadow"
+            private_message = "private C:\\Users\\owner\\secret must not escape"
+            failure = loom_operation_supervisor.SupervisorError(private_message)
+            with mock.patch.object(
+                    loom_suite_certificate, "_execute_cell",
+                    side_effect=failure):
+                result = loom_suite_certificate.run_shadow_cell(
+                    None, None, None, None, None, None, output,
+                    source_tree_sha256="1" * 64)
+
+        self.assertEqual("mismatched", result["status"])
+        self.assertEqual("OS_OPERATION", result["failure_code"])
+        self.assertEqual(
+            result["comparison_sha256"],
+            loom_suite_plan.digest({
+                key: value for key, value in result.items()
+                if key != "comparison_sha256"}))
+        public = json.dumps(result, sort_keys=True)
+        self.assertNotIn("owner", public)
+        self.assertNotIn("secret", public)
+        self.assertNotIn("Users", public)
+        self.assertNotIn(
+            hashlib.sha256(private_message.encode()).hexdigest(), public)
+
+    def test_certificate_cell_propagates_supervisor_failure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "certificate"
+            failure = loom_operation_supervisor.SupervisorError(
+                "authoritative execution failed closed")
+            with mock.patch.object(
+                    loom_suite_certificate, "_execute_cell",
+                    side_effect=failure), self.assertRaises(
+                        loom_operation_supervisor.SupervisorError):
+                loom_suite_certificate.run_certificate_cell(
+                    None, None, None, None, None, output,
+                    source_tree_sha256="1" * 64)
 
     def test_complete_exact_union_compiles_and_verifies(self):
         inventory, _profile, policy, plan, receipts = self.fixture()

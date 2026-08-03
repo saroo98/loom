@@ -106,13 +106,52 @@ class TestRunnerTests(unittest.TestCase):
                 "import unittest\n"
                 "class SetupError(unittest.TestCase):\n"
                 "    @classmethod\n"
-                "    def setUpClass(cls): raise RuntimeError('fixture')\n"
+                "    def setUpClass(cls): raise RuntimeError('private class setup')\n"
                 "    def test_never_runs(self): pass\n",
                 encoding="utf-8")
             report = loom_test.run_modules(
                 ["test_setup_error"], start_dir=root, verbosity=0)
         self.assertEqual(1, report["errors"])
         self.assertEqual("failed", report["status"])
+        test_id = "fixture.class.test_setup_error.SetupError"
+        self.assertEqual([{
+            "test": test_id, "seconds": 0.0, "status": "error",
+        }], report["timings"])
+        self.assertEqual([{
+            "test": test_id, "status": "error",
+            "exception_type": "RuntimeError",
+        }], report["failure_diagnostics"])
+        serialized = json.dumps(report, sort_keys=True)
+        self.assertNotIn("private class setup", serialized)
+        self.assertNotIn("setUpClass (", serialized)
+        self.assertNotIn(
+            hashlib.sha256(b"private class setup").hexdigest(), serialized)
+
+    def test_module_setup_error_has_a_safe_synthetic_outcome(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_module_setup_error.py").write_text(
+                "import unittest\n"
+                "def setUpModule(): raise OSError('private module setup')\n"
+                "class SetupError(unittest.TestCase):\n"
+                "    def test_never_runs(self): pass\n",
+                encoding="utf-8")
+            report = loom_test.run_modules(
+                ["test_module_setup_error"], start_dir=root, verbosity=0)
+        test_id = "fixture.module.test_module_setup_error"
+        self.assertEqual(1, report["errors"])
+        self.assertEqual([{
+            "test": test_id, "seconds": 0.0, "status": "error",
+        }], report["timings"])
+        self.assertEqual([{
+            "test": test_id, "status": "error",
+            "exception_type": "OSError",
+        }], report["failure_diagnostics"])
+        serialized = json.dumps(report, sort_keys=True)
+        self.assertNotIn("private module setup", serialized)
+        self.assertNotIn("setUpModule (", serialized)
+        self.assertNotIn(
+            hashlib.sha256(b"private module setup").hexdigest(), serialized)
 
     def test_fast_gate_inventory_is_real_bounded_and_has_no_loader_errors(self):
         # The full suite executes every selected test once, while the dedicated CI

@@ -213,9 +213,17 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("loom_release_promotion.py verify-draft", publish)
         self.assertIn("loom_release_suite.py --verify", publish)
         self.assertNotIn("actions: read", publish)
+        self.assertEqual(2, publish.count("verify-asset-set"))
+        self.assertLess(
+            publish.index("verify-asset-set"),
+            publish.index('gh release edit "$RELEASE_TAG" --draft=false'))
+        self.assertGreater(
+            publish.rindex("verify-asset-set"),
+            publish.index('gh release edit "$RELEASE_TAG" --draft=false'))
         self.assertIn("gh release edit \"$RELEASE_TAG\" --draft=false", publish)
         self.assertNotIn("gh release upload", publish)
         self.assertNotIn("loom_release.py build", publish)
+        self.assertNotIn("rm -f", publish)
         self.assertIn("represented-installed-subject", post)
         self.assertIn("installed/scripts/loom_bootstrap.py --ensure", post)
         self.assertIn("installed runtime selected the wrong native helper", post)

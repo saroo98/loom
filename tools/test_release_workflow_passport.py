@@ -23,7 +23,7 @@ class ReleaseWorkflowPassportTests(unittest.TestCase):
         order = [
             "Compile existing serial authority and run rollback battery",
             "Download existing draft assets without publishing",
-            "Verify canonical archive and checksums",
+            "Verify canonical base assets without a final manifest",
             "Expand exact native release evidence",
             "Build the bounded attestation subject",
             "attest-evidence-subject",
@@ -46,6 +46,48 @@ class ReleaseWorkflowPassportTests(unittest.TestCase):
             self.assertIn(expected, text)
         self.assertIn('gh release upload "$RELEASE_TAG" "$asset"', text)
         self.assertNotIn("--clobber", text)
+
+    def test_preexisting_draft_uses_base_validation_then_one_final_manifest(self):
+        text = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8")
+        required = (
+            "Download existing draft assets without publishing",
+            "verify-base-assets", "create-asset-manifest",
+            'gh release upload "$RELEASE_TAG" release-passport/SHA256SUMS',
+        )
+        offsets = [text.find(item) for item in required]
+
+        self.assertTrue(all(offset >= 0 for offset in offsets), offsets)
+        self.assertEqual(sorted(offsets), offsets)
+        self.assertNotIn("sha256sum --check SHA256SUMS", text)
+        self.assertEqual(1, text.count("create-asset-manifest"))
+        self.assertEqual(1, text.count(
+            'gh release upload "$RELEASE_TAG" release-passport/SHA256SUMS'))
+
+    def test_v4_verification_runs_only_after_actual_evidence_exists(self):
+        release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8")
+        verify_name = "Verify v4 subject against actual release evidence"
+        required = (
+            "--reproducibility-receipt", "--suite-certificate",
+            "--suite-policy", "--promotion-policy", "--exact-cut-receipt",
+        )
+        self.assertIn(verify_name, release)
+        self.assertLess(
+            release.index("Compare independent candidate A and B"),
+            release.index(verify_name))
+        self.assertLess(
+            release.index(verify_name),
+            release.index("Verify attestation and compile the exact release passport"))
+        for option in required:
+            self.assertGreaterEqual(release.count(option), 2)
+        self.assertIn("exact-cut-ci.json", release)
+
+        for workflow in ("publish-release.yml", "post-release.yml"):
+            text = (ROOT / ".github" / "workflows" / workflow).read_text(
+                encoding="utf-8")
+            for option in required:
+                self.assertIn(option, text)
 
 
 if __name__ == "__main__":

@@ -87,6 +87,59 @@ class SuiteWorkerTests(unittest.TestCase):
         output.mkdir()
         return cut, inventory, plan, output
 
+    def assert_setup_failure_worker(self, source, expected_test,
+                                    private_message):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cut, inventory, plan, output = self.fixture(root, source)
+            receipt = loom_suite_worker.execute_shard(
+                cut, inventory, plan, "general-000", output, timeout=10)
+            diagnostic_path = (
+                output / "general-000" / "failure-diagnostic.json")
+            self.assertTrue(diagnostic_path.is_file())
+            diagnostic = json.loads(
+                diagnostic_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(1, receipt["error_count"])
+        self.assertEqual(0, receipt["failure_count"])
+        self.assertEqual([{
+            "test": expected_test, "status": "error",
+        }], receipt["observed_tests"])
+        self.assertIn("INVENTORY_MISMATCH", receipt["findings"])
+        self.assertIn("TEST_FAILURE", receipt["findings"])
+        self.assertEqual([{
+            "test": expected_test, "status": "error",
+            "exception_type": "RuntimeError",
+        }], diagnostic["failures"])
+        loom_suite_worker.validate_failure_diagnostic(diagnostic, receipt)
+        public = json.dumps({"receipt": receipt, "diagnostic": diagnostic},
+                            sort_keys=True)
+        self.assertNotIn(private_message, public)
+        self.assertNotIn(hashlib.sha256(private_message.encode()).hexdigest(),
+                         public)
+        self.assertNotIn("setUpClass (", public)
+        self.assertNotIn("setUpModule (", public)
+
+    def test_class_setup_error_emits_bound_failure_diagnostic(self):
+        self.assert_setup_failure_worker(
+            "import unittest\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    @classmethod\n"
+            "    def setUpClass(cls):\n"
+            "        raise RuntimeError('private class setup')\n"
+            "    def test_never_runs(self): pass\n",
+            "fixture.class.test_worker_fixture.WorkerFixture",
+            "private class setup")
+
+    def test_module_setup_error_emits_bound_failure_diagnostic(self):
+        self.assert_setup_failure_worker(
+            "import unittest\n"
+            "def setUpModule():\n"
+            "    raise RuntimeError('private module setup')\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    def test_never_runs(self): pass\n",
+            "fixture.module.test_worker_fixture", "private module setup")
+
     def test_worker_runs_real_tests_in_an_isolated_copy_and_drops_secrets(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary) / "temp-base"

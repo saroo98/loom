@@ -20,6 +20,11 @@ _GATE_FIELDS = {
     "expected_sha256", "release_asset_sha256",
 }
 MAX_GATE_BYTES = 64 * 1024
+MAX_API_BYTES = 2 * 1024 * 1024
+MAX_MANIFEST_BYTES = 256 * 1024
+MAX_RELEASE_ASSETS = 256
+ASSET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,254}")
+FINAL_MANIFEST = "SHA256SUMS"
 
 
 def _strict_object(pairs):
@@ -45,12 +50,176 @@ def _load_gate(path):
         raise PromotionError("promotion gate is unreadable") from exc
 
 
+def _load_json(path, label, *, maximum=MAX_API_BYTES):
+    path = Path(path)
+    if not path.is_file() or path.is_symlink() \
+            or not 0 < path.stat().st_size <= maximum:
+        raise PromotionError(f"{label} is unsafe")
+    try:
+        return json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object,
+            parse_constant=lambda _value: (_ for _ in ()).throw(
+                ValueError("non-finite JSON number")))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise PromotionError(f"{label} is unreadable") from exc
+
+
 def _digest(value):
     if isinstance(value, str) and value.startswith("sha256:"):
         value = value[7:]
     if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
         raise PromotionError("release digest is invalid")
     return value
+
+
+def _asset_name(value):
+    if not isinstance(value, str) or ASSET_NAME.fullmatch(value) is None:
+        raise PromotionError("release asset name is invalid")
+    return value
+
+
+def _local_asset_digests(root):
+    try:
+        root = loom_reliability._absolute(
+            root, "release asset directory", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise PromotionError(str(exc)) from exc
+    if not root.is_dir():
+        raise PromotionError("release asset directory is unsafe")
+    result = {}
+    try:
+        entries = sorted(root.iterdir(), key=lambda path: path.name)
+    except OSError as exc:
+        raise PromotionError("release asset directory is unreadable") from exc
+    if not entries or len(entries) > MAX_RELEASE_ASSETS:
+        raise PromotionError("release asset inventory is invalid")
+    for path in entries:
+        name = _asset_name(path.name)
+        try:
+            safe = loom_reliability._absolute(
+                path, "release asset", must_exist=True)
+        except loom_reliability.ReliabilityError as exc:
+            raise PromotionError(str(exc)) from exc
+        if not safe.is_file() or name in result:
+            raise PromotionError("release asset inventory is invalid")
+        raw = safe.read_bytes()
+        if len(raw) != safe.stat().st_size:
+            raise PromotionError("release asset changed while hashing")
+        result[name] = hashlib.sha256(raw).hexdigest()
+    return result
+
+
+def _api_asset_digests(release):
+    assets = release.get("assets") if isinstance(release, dict) else None
+    if not isinstance(assets, list) or not assets \
+            or len(assets) > MAX_RELEASE_ASSETS:
+        raise PromotionError("release API asset inventory is invalid")
+    result = {}
+    for row in assets:
+        if not isinstance(row, dict):
+            raise PromotionError("release API asset inventory is invalid")
+        name = _asset_name(row.get("name"))
+        if name in result:
+            raise PromotionError("release API asset inventory is duplicated")
+        result[name] = _digest(row.get("digest"))
+    return result
+
+
+def verify_base_assets(asset_root, api_release):
+    """Verify the exact pre-passport draft bytes without a final manifest."""
+    local = _local_asset_digests(asset_root)
+    remote = _api_asset_digests(api_release)
+    if FINAL_MANIFEST in local or FINAL_MANIFEST in remote:
+        raise PromotionError("preexisting draft already contains the final manifest")
+    if local != remote:
+        raise PromotionError("downloaded base assets and release API bytes disagree")
+    return {"status": "verified-base-assets", "assets": sorted(local)}
+
+
+def create_asset_manifest(asset_roots, manifest):
+    """Create the one final checksum manifest from disjoint flat asset roots."""
+    if not isinstance(asset_roots, (list, tuple)) or not asset_roots:
+        raise PromotionError("final asset roots are invalid")
+    manifest = Path(manifest)
+    if manifest.name != FINAL_MANIFEST:
+        raise PromotionError("final asset manifest name is invalid")
+    try:
+        manifest = loom_reliability._absolute(
+            manifest, "final asset manifest", must_exist=False)
+    except loom_reliability.ReliabilityError as exc:
+        raise PromotionError(str(exc)) from exc
+    if manifest.exists():
+        raise PromotionError("final asset manifest already exists")
+    combined = {}
+    for root in asset_roots:
+        for name, digest in _local_asset_digests(root).items():
+            if name == FINAL_MANIFEST or name in combined:
+                raise PromotionError("final release asset names are duplicated")
+            combined[name] = digest
+    lines = "".join(
+        f"{digest} *{name}\n" for name, digest in sorted(combined.items()))
+    try:
+        loom_reliability.atomic_write_text(manifest, lines)
+    except loom_reliability.ReliabilityError as exc:
+        raise PromotionError(str(exc)) from exc
+    return {"status": "created-final-manifest", "assets": sorted(combined)}
+
+
+def _manifest_digests(manifest):
+    try:
+        manifest = loom_reliability._absolute(
+            manifest, "final asset manifest", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise PromotionError(str(exc)) from exc
+    if manifest.name != FINAL_MANIFEST or not manifest.is_file() \
+            or not 0 < manifest.stat().st_size <= MAX_MANIFEST_BYTES:
+        raise PromotionError("final asset manifest is unsafe")
+    try:
+        raw = manifest.read_bytes()
+        text = raw.decode("utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise PromotionError("final asset manifest is unreadable") from exc
+    if len(raw) != manifest.stat().st_size or not text.endswith("\n") \
+            or "\r" in text:
+        raise PromotionError("final asset manifest format is invalid")
+    lines = text.splitlines()
+    if not lines or len(lines) >= MAX_RELEASE_ASSETS:
+        raise PromotionError("final asset manifest inventory is invalid")
+    result = {}
+    for line in lines:
+        matched = re.fullmatch(
+            r"([0-9a-f]{64}) \*([A-Za-z0-9][A-Za-z0-9._+-]{0,254})", line)
+        if matched is None:
+            raise PromotionError("final asset manifest row is invalid")
+        digest, name = matched.groups()
+        if name == FINAL_MANIFEST or name in result:
+            raise PromotionError("final asset manifest names are duplicated")
+        result[name] = digest
+    if list(result) != sorted(result):
+        raise PromotionError("final asset manifest order is invalid")
+    return result, hashlib.sha256(raw).hexdigest()
+
+
+def verify_asset_set(asset_root, manifest, api_release, *, manifest_published):
+    """Require exact local, manifest, and GitHub API name/digest equality."""
+    if type(manifest_published) is not bool:
+        raise PromotionError("final manifest publication state is invalid")
+    declared, manifest_digest = _manifest_digests(manifest)
+    local = _local_asset_digests(asset_root)
+    expected = dict(declared)
+    if manifest_published:
+        expected[FINAL_MANIFEST] = manifest_digest
+    if local != expected:
+        raise PromotionError("local assets and final manifest digests disagree")
+    remote = _api_asset_digests(api_release)
+    if remote != expected:
+        raise PromotionError("release API assets and local asset set disagree")
+    canonical = json.dumps(
+        sorted(expected.items()), separators=(",", ":")).encode("utf-8")
+    return {
+        "status": "verified-asset-set", "asset_count": len(expected),
+        "asset_set_sha256": hashlib.sha256(canonical).hexdigest(),
+    }
 
 
 def _verify(asset, gate, status):
@@ -98,30 +267,58 @@ def verify_public(asset, gate, *, installed_subject_sha256=None,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("verify-draft", "verify-public"))
-    parser.add_argument("asset")
-    parser.add_argument("--gate", required=True)
-    parser.add_argument("--installed-subject")
-    parser.add_argument("--represented-installed-subject", action="append", default=[])
-    parser.add_argument("--output", required=True)
+    commands = parser.add_subparsers(dest="command", required=True)
+    for name in ("verify-draft", "verify-public"):
+        verify = commands.add_parser(name)
+        verify.add_argument("asset")
+        verify.add_argument("--gate", required=True)
+        verify.add_argument("--installed-subject")
+        verify.add_argument(
+            "--represented-installed-subject", action="append", default=[])
+        verify.add_argument("--output", required=True)
+    base = commands.add_parser("verify-base-assets")
+    base.add_argument("asset_root")
+    base.add_argument("--api-release", required=True)
+    manifest = commands.add_parser("create-asset-manifest")
+    manifest.add_argument("--asset-root", action="append", required=True)
+    manifest.add_argument("--manifest", required=True)
+    asset_set = commands.add_parser("verify-asset-set")
+    asset_set.add_argument("asset_root")
+    asset_set.add_argument("--manifest", required=True)
+    asset_set.add_argument("--api-release", required=True)
+    asset_set.add_argument("--manifest-published", action="store_true")
     args = parser.parse_args(argv)
     try:
-        gate = _load_gate(args.gate)
-        result = (verify_draft(args.asset, gate) if args.command == "verify-draft"
-                  else verify_public(args.asset, gate,
-                                     installed_subject_sha256=args.installed_subject,
-                                     represented_installed_subjects=(
-                                         args.represented_installed_subject)))
-        output = Path(args.output).resolve()
-        if output.exists():
-            raise PromotionError("promotion receipt output already exists")
-        loom_reliability.atomic_write_json(output, result)
+        if args.command == "verify-base-assets":
+            result = verify_base_assets(
+                args.asset_root, _load_json(args.api_release, "release API response"))
+        elif args.command == "create-asset-manifest":
+            result = create_asset_manifest(args.asset_root, args.manifest)
+        elif args.command == "verify-asset-set":
+            result = verify_asset_set(
+                args.asset_root, args.manifest,
+                _load_json(args.api_release, "release API response"),
+                manifest_published=args.manifest_published)
+        else:
+            gate = _load_gate(args.gate)
+            result = (verify_draft(args.asset, gate)
+                      if args.command == "verify-draft" else verify_public(
+                          args.asset, gate,
+                          installed_subject_sha256=args.installed_subject,
+                          represented_installed_subjects=(
+                              args.represented_installed_subject)))
+            output = Path(args.output).resolve()
+            if output.exists():
+                raise PromotionError("promotion receipt output already exists")
+            loom_reliability.atomic_write_json(output, result)
     except (PromotionError, loom_reliability.ReliabilityError, OSError,
             UnicodeError, json.JSONDecodeError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
-    print(json.dumps({"status": result["status"],
-                      "receipt_sha256": result["receipt_sha256"]}, sort_keys=True))
+    summary = {"status": result["status"]}
+    if "receipt_sha256" in result:
+        summary["receipt_sha256"] = result["receipt_sha256"]
+    print(json.dumps(summary, sort_keys=True))
     return 0
 
 

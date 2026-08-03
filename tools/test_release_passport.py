@@ -2,6 +2,7 @@
 
 import base64
 import hashlib
+import inspect
 import json
 from pathlib import Path
 import tempfile
@@ -174,6 +175,22 @@ class ReleasePassportTests(unittest.TestCase):
             self.assertTrue((output / "RELEASE-READINESS.json").is_file())
             self.assertEqual(3, len((output / "SHA256SUMS").read_text(
                 encoding="utf-8").splitlines()))
+
+    def test_passport_interface_carries_actual_v4_evidence_without_breaking_v3(self):
+        required = {
+            "reproducibility_receipt", "suite_policy", "promotion_policy",
+            "exact_cut_receipt",
+        }
+        self.assertTrue(required <= set(inspect.signature(
+            loom_release_passport.compile_passport).parameters))
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = self.fixture(Path(temporary))
+            with mock.patch.object(
+                    loom_release_passport.loom_release_subject_verify, "verify",
+                    return_value={"status": "verified",
+                                  "bundle_sha256": fixture["subject"]["bundle_sha256"]}):
+                value = loom_release_passport.compile_passport(**fixture)
+        self.assertEqual("release", value["readiness"]["report_kind"])
 
 
 if __name__ == "__main__":

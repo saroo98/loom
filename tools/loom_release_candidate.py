@@ -189,6 +189,72 @@ def compare(candidate_a, candidate_b, *, expected_public_root_sha256,
     return _seal(body)
 
 
+def verify_reproducibility_receipt(value):
+    """Validate one sealed A/B release reproducibility receipt."""
+    fields = {
+        "schema_version", "status", "candidate_a", "candidate_b",
+        "canonical_candidate", "public_cut", "native_subjects",
+        "receipt_sha256",
+    }
+    body = ({key: item for key, item in value.items()
+             if key != "receipt_sha256"} if isinstance(value, dict) else None)
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("status") != "reproduced" \
+            or value.get("canonical_candidate") != "A" \
+            or value.get("receipt_sha256") != _seal(body)["receipt_sha256"]:
+        raise CandidateError("reproducibility receipt identity is invalid")
+    candidate_fields = {
+        "sha256", "bytes", "files", "extracted_tree_sha256",
+        "installed_tree_sha256", "archive_metadata_sha256", "public_cut",
+        "native_binaries",
+    }
+    cut_fields = {"root_sha256", "manifest_sha256", "file_count"}
+    candidates = (value.get("candidate_a"), value.get("candidate_b"))
+    for candidate in candidates:
+        public_cut = candidate.get("public_cut") if isinstance(candidate, dict) else None
+        binaries = (candidate.get("native_binaries")
+                    if isinstance(candidate, dict) else None)
+        if not isinstance(candidate, dict) or set(candidate) != candidate_fields \
+                or any(re.fullmatch(r"[0-9a-f]{64}", str(
+                    candidate.get(field, ""))) is None for field in (
+                        "sha256", "extracted_tree_sha256",
+                        "installed_tree_sha256", "archive_metadata_sha256")) \
+                or any(type(candidate.get(field)) is not int
+                       or candidate[field] < 1 for field in ("bytes", "files")) \
+                or not isinstance(public_cut, dict) or set(public_cut) != cut_fields \
+                or any(re.fullmatch(r"[0-9a-f]{64}", str(
+                    public_cut.get(field, ""))) is None for field in (
+                        "root_sha256", "manifest_sha256")) \
+                or type(public_cut.get("file_count")) is not int \
+                or public_cut["file_count"] < 1 \
+                or not isinstance(binaries, dict) \
+                or set(binaries) != set(NATIVE_PLATFORMS) \
+                or any(re.fullmatch(r"[0-9a-f]{64}", str(digest)) is None
+                       for digest in binaries.values()):
+            raise CandidateError("reproducibility candidate identity is invalid")
+    if candidates[0] != candidates[1] \
+            or value.get("public_cut") != candidates[0]["public_cut"]:
+        raise CandidateError("reproducibility candidates or public cut disagree")
+    natives = value.get("native_subjects")
+    native_fields = {
+        "platform", "binary_sha256", "sbom_sha256", "provenance_sha256"}
+    if not isinstance(natives, list) or len(natives) != len(NATIVE_PLATFORMS) \
+            or any(not isinstance(row, dict) for row in natives) \
+            or natives != sorted(natives, key=lambda row: row.get("platform", "")) \
+            or {row.get("platform") for row in natives} != set(NATIVE_PLATFORMS):
+        raise CandidateError("reproducibility native subjects are invalid")
+    for row in natives:
+        if not isinstance(row, dict) or set(row) != native_fields \
+                or any(re.fullmatch(r"[0-9a-f]{64}", str(
+                    row.get(field, ""))) is None for field in (
+                        "binary_sha256", "sbom_sha256", "provenance_sha256")) \
+                or candidates[0]["native_binaries"].get(row.get("platform")) != \
+                row.get("binary_sha256"):
+            raise CandidateError("reproducibility native subjects are invalid")
+    return value
+
+
 def reconstruct(source, authority_archive, native_root, output, *, source_commit):
     """Rebuild all unsigned bytes from source and reuse only offline authority bytes."""
     source = Path(source).resolve()

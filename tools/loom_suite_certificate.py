@@ -9,6 +9,7 @@ from pathlib import Path
 
 import loom_reliability
 import loom_exact_cut_ci
+import loom_operation_supervisor
 import loom_release
 import loom_suite_plan
 import loom_suite_worker
@@ -876,7 +877,8 @@ def run_shadow_cell(cut, test_root, exact_receipt, serial_report, policy,
         comparison = compare_shadow(serial_report, certificate)
         _write(output_root / "shadow-comparison.json", comparison)
         return comparison
-    except (OSError, loom_suite_worker.SuiteWorkerError, CertificateError,
+    except (OSError, loom_operation_supervisor.SupervisorError,
+            loom_suite_worker.SuiteWorkerError, CertificateError,
             loom_suite_plan.SuitePlanError) as exc:
         findings = list(getattr(exc, "findings", None) or ["SCHEMA"])
         primary = _primary(findings)

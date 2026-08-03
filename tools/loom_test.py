@@ -27,6 +27,9 @@ WINDOWS_FAST_GATE_MAX_SECONDS = 45.0
 TEST_MODULE = re.compile(r"^test_[A-Za-z0-9_]+$")
 EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
+FIXTURE_HOLDER = re.compile(
+    r"^(setUpClass|tearDownClass|setUpModule|tearDownModule) "
+    r"\(([A-Za-z_][A-Za-z0-9_.]*)\)$")
 AUTHORIZED_SKIP_REASON_CODES = {
     "platform-boundary", "host-capability-unavailable", "tool-unavailable",
 }
@@ -124,6 +127,15 @@ class TimingResult(unittest.TextTestResult):
         self.failure_diagnostics = []
         self.timings = []
 
+    @staticmethod
+    def _test_id(test):
+        test_id = test.id()
+        fixture = FIXTURE_HOLDER.fullmatch(test_id)
+        if fixture is None:
+            return test_id
+        scope = "class" if fixture.group(1).endswith("Class") else "module"
+        return f"fixture.{scope}.{fixture.group(2)}"
+
     def _record_failure_diagnostic(self, test, status, err=None, *,
                                    unexpected_success=False):
         if unexpected_success:
@@ -138,12 +150,13 @@ class TimingResult(unittest.TextTestResult):
             if not isinstance(error_code, str) \
                     or ERROR_CODE.fullmatch(error_code) is None:
                 error_code = None
-        key = (test.id(), status, exception_type, error_code or "")
+        test_id = self._test_id(test)
+        key = (test_id, status, exception_type, error_code or "")
         if key in self._failure_diagnostic_keys:
             return
         self._failure_diagnostic_keys.add(key)
         row = {
-            "test": test.id(), "status": status,
+            "test": test_id, "status": status,
             "exception_type": exception_type,
         }
         if error_code is not None:
@@ -155,44 +168,52 @@ class TimingResult(unittest.TextTestResult):
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
-        self._statuses[test.id()] = "passed"
+        self._statuses[self._test_id(test)] = "passed"
         super().startTest(test)
 
     def stopTest(self, test):
         elapsed = time.perf_counter() - self._started_at
+        test_id = self._test_id(test)
         self.timings.append({
-            "test": test.id(), "seconds": round(elapsed, 6),
-            "status": self._statuses[test.id()],
+            "test": test_id, "seconds": round(elapsed, 6),
+            "status": self._statuses[test_id],
         })
         super().stopTest(test)
 
     def addFailure(self, test, err):
-        self._statuses[test.id()] = "failed"
+        self._statuses[self._test_id(test)] = "failed"
         self._record_failure_diagnostic(test, "failed", err)
         super().addFailure(test, err)
 
     def addError(self, test, err):
-        self._statuses[test.id()] = "error"
+        test_id = self._test_id(test)
+        synthetic = test_id not in self._statuses
+        self._statuses[test_id] = "error"
         self._record_failure_diagnostic(test, "error", err)
+        if synthetic:
+            self.timings.append({
+                "test": test_id, "seconds": 0.0, "status": "error",
+            })
         super().addError(test, err)
 
     def addSubTest(self, test, subtest, err):
         if err is not None:
             status = ("failed" if issubclass(err[0], test.failureException)
                       else "error")
-            if self._statuses.get(test.id()) != "error":
-                self._statuses[test.id()] = status
+            test_id = self._test_id(test)
+            if self._statuses.get(test_id) != "error":
+                self._statuses[test_id] = status
             self._record_failure_diagnostic(test, status, err)
         super().addSubTest(test, subtest, err)
 
     def addUnexpectedSuccess(self, test):
-        self._statuses[test.id()] = "failed"
+        self._statuses[self._test_id(test)] = "failed"
         self._record_failure_diagnostic(
             test, "failed", unexpected_success=True)
         super().addUnexpectedSuccess(test)
 
     def addSkip(self, test, reason):
-        self._statuses[test.id()] = "skipped"
+        self._statuses[self._test_id(test)] = "skipped"
         super().addSkip(test, reason)
 
 
