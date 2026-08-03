@@ -22,6 +22,9 @@ import loom_test
 
 
 MAX_RECEIPT_BYTES = 4 * 1024 * 1024
+MAX_FAILURE_DIAGNOSTICS = 100000
+EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 ABSOLUTE_OWNER_PATH = re.compile(
     r"(?:[A-Za-z]:[\\/](?:Users|Documents|AppData)[\\/]|/(?:home|Users|root)/)",
     re.IGNORECASE)
@@ -203,6 +206,61 @@ def validate_receipt(value):
     return value
 
 
+def validate_failure_diagnostic(value, receipt):
+    validate_receipt(receipt)
+    if not isinstance(value, dict) or set(value) != {
+            "schema_version", "worker_receipt_sha256", "shard_id", "failures",
+            "failure_diagnostic_sha256"}:
+        raise SuiteWorkerError("failure diagnostic fields are invalid")
+    body = {key: item for key, item in value.items()
+            if key != "failure_diagnostic_sha256"}
+    if value.get("schema_version") != 1 \
+            or loom_suite_plan.HEX64.fullmatch(str(
+                value.get("failure_diagnostic_sha256", ""))) is None \
+            or loom_suite_plan.digest(body) != value["failure_diagnostic_sha256"] \
+            or value.get("worker_receipt_sha256") != \
+            receipt["worker_receipt_sha256"] \
+            or value.get("shard_id") != receipt["shard_id"]:
+        raise SuiteWorkerError("failure diagnostic identity is invalid")
+    failures = value.get("failures")
+    if not isinstance(failures, list) or not failures \
+            or len(failures) > MAX_FAILURE_DIAGNOSTICS:
+        raise SuiteWorkerError("failure diagnostic rows are invalid")
+    keys = []
+    for row in failures:
+        required = {"test", "status", "exception_type"}
+        if not isinstance(row, dict) or (
+                set(row) != required
+                and set(row) != required | {"error_code"}) \
+                or not isinstance(row.get("test"), str) \
+                or not 3 <= len(row["test"]) <= 512 \
+                or row.get("status") not in {"failed", "error"} \
+                or EXCEPTION_TYPE.fullmatch(str(
+                    row.get("exception_type", ""))) is None \
+                or ("error_code" in row and (
+                    not isinstance(row["error_code"], str)
+                    or ERROR_CODE.fullmatch(row["error_code"]) is None)):
+            raise SuiteWorkerError("failure diagnostic row is invalid")
+        keys.append((row["test"], row["status"], row["exception_type"],
+                     row.get("error_code", "")))
+    if keys != sorted(keys) or len(keys) != len(set(keys)):
+        raise SuiteWorkerError("failure diagnostic order is invalid")
+    observed = {
+        (row["test"], row["status"])
+        for row in receipt["observed_tests"]
+        if row["status"] in {"failed", "error"}
+    }
+    diagnostic_outcomes = {(row["test"], row["status"]) for row in failures}
+    if not observed or diagnostic_outcomes != observed \
+            or sum(status == "failed" for _, status in observed) != \
+            receipt["failure_count"] \
+            or sum(status == "error" for _, status in observed) != \
+            receipt["error_count"] \
+            or not _privacy_clean(value):
+        raise SuiteWorkerError("failure diagnostic outcomes are invalid")
+    return value
+
+
 def _privacy_clean(value):
     def walk(item):
         if isinstance(item, dict):
@@ -331,6 +389,7 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
     request_path = worker_root / "request.json"
     report_path = worker_root / "suite-report.json"
     receipt_path = worker_root / "worker-receipt.json"
+    diagnostic_path = worker_root / "failure-diagnostic.json"
     request = {"modules": shard["modules"],
                "test_root": str((candidate / "tools").resolve())}
     loom_reliability.atomic_write_json(request_path, request)
@@ -469,7 +528,24 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
         body["primary_reason"] = body["findings"][0]
     receipt = _seal(body)
     validate_receipt(receipt)
+    diagnostic = None
+    if failure_count or error_count:
+        diagnostic_body = {
+            "schema_version": 1,
+            "worker_receipt_sha256": receipt["worker_receipt_sha256"],
+            "shard_id": shard_id,
+            "failures": report.get("failure_diagnostics")
+            if isinstance(report, dict) else None,
+        }
+        diagnostic = {
+            **diagnostic_body,
+            "failure_diagnostic_sha256": loom_suite_plan.digest(
+                diagnostic_body),
+        }
+        validate_failure_diagnostic(diagnostic, receipt)
     loom_reliability.atomic_write_json(receipt_path, receipt)
+    if diagnostic is not None:
+        loom_reliability.atomic_write_json(diagnostic_path, diagnostic)
     return receipt
 
 

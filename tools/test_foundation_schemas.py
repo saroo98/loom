@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import copy
 from pathlib import Path
 
 import loom_lint
@@ -24,6 +25,28 @@ class FoundationSchemaTests(unittest.TestCase):
                 subject_digest="1" * 64, sidecar_type="fixture-receipt",
                 sidecar_id="fixture.json", sidecar_digest="2" * 64)
             self.assert_schema(envelope, "operation-envelope.schema.json")
+
+    def test_suite_failure_diagnostic_matches_its_closed_schema(self):
+        value = {
+            "schema_version": 1,
+            "worker_receipt_sha256": "1" * 64,
+            "shard_id": "general-000",
+            "failures": [{
+                "test": "test_fixture.Fixture.test_failed",
+                "status": "failed",
+                "exception_type": "HostFailure",
+                "error_code": "HOST_UNVERIFIED",
+            }],
+            "failure_diagnostic_sha256": "3" * 64,
+        }
+        self.assert_schema(value, "suite-failure-diagnostic-v1.schema.json")
+        rejected = copy.deepcopy(value)
+        rejected["failures"][0]["message"] = "private detail"
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "suite-failure-diagnostic-v1.schema.json", rejected,
+            "suite-failure-diagnostic-v1.schema.json")
+        self.assertTrue(report.errors)
 
     def test_supervisor_receipt_matches_closed_schema(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -25,6 +25,8 @@ CONTAINMENT_FAST_TEST = (
 FAST_GATE_MAX_SECONDS = 30.0
 WINDOWS_FAST_GATE_MAX_SECONDS = 45.0
 TEST_MODULE = re.compile(r"^test_[A-Za-z0-9_]+$")
+EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
+ERROR_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 AUTHORIZED_SKIP_REASON_CODES = {
     "platform-boundary", "host-capability-unavailable", "tool-unavailable",
 }
@@ -118,7 +120,38 @@ class TimingResult(unittest.TextTestResult):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._statuses = {}
+        self._failure_diagnostic_keys = set()
+        self.failure_diagnostics = []
         self.timings = []
+
+    def _record_failure_diagnostic(self, test, status, err=None, *,
+                                   unexpected_success=False):
+        if unexpected_success:
+            exception_type = "UnexpectedSuccess"
+            error_code = None
+        else:
+            exception_type = getattr(err[0], "__name__", "UnknownException")
+            if not isinstance(exception_type, str) \
+                    or EXCEPTION_TYPE.fullmatch(exception_type) is None:
+                exception_type = "UnknownException"
+            error_code = getattr(err[1], "code", None)
+            if not isinstance(error_code, str) \
+                    or ERROR_CODE.fullmatch(error_code) is None:
+                error_code = None
+        key = (test.id(), status, exception_type, error_code or "")
+        if key in self._failure_diagnostic_keys:
+            return
+        self._failure_diagnostic_keys.add(key)
+        row = {
+            "test": test.id(), "status": status,
+            "exception_type": exception_type,
+        }
+        if error_code is not None:
+            row["error_code"] = error_code
+        self.failure_diagnostics.append(row)
+        self.failure_diagnostics.sort(key=lambda item: (
+            item["test"], item["status"], item["exception_type"],
+            item.get("error_code", "")))
 
     def startTest(self, test):
         self._started_at = time.perf_counter()
@@ -135,10 +168,12 @@ class TimingResult(unittest.TextTestResult):
 
     def addFailure(self, test, err):
         self._statuses[test.id()] = "failed"
+        self._record_failure_diagnostic(test, "failed", err)
         super().addFailure(test, err)
 
     def addError(self, test, err):
         self._statuses[test.id()] = "error"
+        self._record_failure_diagnostic(test, "error", err)
         super().addError(test, err)
 
     def addSubTest(self, test, subtest, err):
@@ -147,10 +182,13 @@ class TimingResult(unittest.TextTestResult):
                       else "error")
             if self._statuses.get(test.id()) != "error":
                 self._statuses[test.id()] = status
+            self._record_failure_diagnostic(test, status, err)
         super().addSubTest(test, subtest, err)
 
     def addUnexpectedSuccess(self, test):
         self._statuses[test.id()] = "failed"
+        self._record_failure_diagnostic(
+            test, "failed", unexpected_success=True)
         super().addUnexpectedSuccess(test)
 
     def addSkip(self, test, reason):
@@ -183,6 +221,7 @@ def _execute_suite(suite, *, mode, budget, verbosity, selected_modules=None):
                    and within_budget else "failed"),
         "successful": successful,
         "skip_receipts": skip_receipts,
+        "failure_diagnostics": list(result.failure_diagnostics),
         "timings": sorted(
             getattr(result, "timings", []),
             key=lambda item: (-item["seconds"], item["test"])),

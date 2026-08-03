@@ -1,6 +1,7 @@
 """Tests for the bounded CI test runner."""
 
 import contextlib
+import hashlib
 import io
 import json
 import tempfile
@@ -12,6 +13,66 @@ import loom_test
 
 
 class TestRunnerTests(unittest.TestCase):
+    def test_failures_emit_only_closed_deterministic_diagnostics(self):
+        source = (
+            "import unittest\n"
+            "class HostFailure(AssertionError):\n"
+            "    code = 'HOST_UNVERIFIED'\n"
+            "class UnsafeFailure(AssertionError):\n"
+            "    code = 'lowercase-code'\n"
+            "class DiagnosticFixture(unittest.TestCase):\n"
+            "    def test_coded(self): raise HostFailure('private host detail')\n"
+            "    def test_invalid_code(self): raise UnsafeFailure('other private detail')\n"
+            "    def test_subtest(self):\n"
+            "        with self.subTest(case='private-case'):\n"
+            "            self.fail('private subtest detail')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_diagnostics.py").write_text(source, encoding="utf-8")
+            report = loom_test.run_modules(
+                ["test_diagnostics"], start_dir=root, verbosity=0)
+
+        coded_id = "test_diagnostics.DiagnosticFixture.test_coded"
+        invalid_id = "test_diagnostics.DiagnosticFixture.test_invalid_code"
+        subtest_id = "test_diagnostics.DiagnosticFixture.test_subtest"
+        self.assertEqual([
+            {
+                "error_code": "HOST_UNVERIFIED",
+                "exception_type": "HostFailure",
+                "status": "failed", "test": coded_id,
+            },
+            {
+                "exception_type": "UnsafeFailure",
+                "status": "failed", "test": invalid_id,
+            },
+            {
+                "exception_type": "AssertionError",
+                "status": "failed", "test": subtest_id,
+            },
+        ], report.get("failure_diagnostics"))
+        serialized = json.dumps(report, sort_keys=True)
+        private_messages = (
+                "private host detail", "other private detail",
+                "private subtest detail", "private-case")
+        for private in private_messages:
+            self.assertNotIn(private, serialized)
+        for private in private_messages[:3]:
+            self.assertNotIn(
+                hashlib.sha256(private.encode("utf-8")).hexdigest(), serialized)
+
+    def test_passing_suite_emits_no_failure_diagnostics(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_clean.py").write_text(
+                "import unittest\n"
+                "class Clean(unittest.TestCase):\n"
+                "    def test_passes(self): pass\n",
+                encoding="utf-8")
+            report = loom_test.run_modules(
+                ["test_clean"], start_dir=root, verbosity=0)
+        self.assertEqual([], report.get("failure_diagnostics"))
+
     def test_exact_module_selection_runs_only_the_declared_real_modules(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

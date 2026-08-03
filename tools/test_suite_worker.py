@@ -1,6 +1,7 @@
 """Isolated release-suite worker execution contracts."""
 
 import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -174,6 +175,73 @@ class SuiteWorkerTests(unittest.TestCase):
         self.assertEqual("failed", receipt["status"])
         self.assertEqual("CANDIDATE_MUTATION", receipt["primary_reason"])
         self.assertFalse(receipt["mutation_clean"])
+
+    def test_failed_worker_writes_a_closed_privacy_safe_diagnostic_sidecar(self):
+        source = (
+            "import os,unittest\n"
+            "class HostFailure(AssertionError):\n"
+            "    code = 'HOST_UNVERIFIED'\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    def test_failed(self):\n"
+            "        print('private stdout')\n"
+            "        raise HostFailure('private message secret-value')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cut, inventory, plan, output = self.fixture(root, source)
+            receipt = loom_suite_worker.execute_shard(
+                cut, inventory, plan, "general-000", output, timeout=10)
+            worker_root = output / "general-000"
+            diagnostic_path = worker_root / "failure-diagnostic.json"
+            self.assertTrue((worker_root / "worker-receipt.json").is_file())
+            self.assertTrue(diagnostic_path.is_file())
+            diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+
+        test_id = "test_worker_fixture.WorkerFixture.test_failed"
+        self.assertEqual(receipt["worker_receipt_sha256"],
+                         diagnostic["worker_receipt_sha256"])
+        self.assertEqual("general-000", diagnostic["shard_id"])
+        self.assertEqual([{
+            "error_code": "HOST_UNVERIFIED",
+            "exception_type": "HostFailure",
+            "status": "failed", "test": test_id,
+        }], diagnostic["failures"])
+        loom_suite_worker.validate_failure_diagnostic(diagnostic, receipt)
+        serialized = json.dumps(diagnostic, sort_keys=True)
+        for private in (
+                "private message", "private stdout", "secret-value",
+                str(root), str(Path.home()), "traceback", "stdout", "stderr"):
+            self.assertNotIn(private, serialized)
+        self.assertNotIn(
+            hashlib.sha256(b"private message secret-value").hexdigest(),
+            serialized)
+
+        for field in diagnostic:
+            tampered = dict(diagnostic)
+            if field == "schema_version":
+                tampered[field] = 2
+            elif field == "failures":
+                tampered[field] = [dict(diagnostic[field][0], status="error")]
+            else:
+                tampered[field] = "0" * 64
+            with self.subTest(field=field), self.assertRaises(
+                    loom_suite_worker.SuiteWorkerError):
+                loom_suite_worker.validate_failure_diagnostic(tampered, receipt)
+
+    def test_passing_worker_does_not_write_a_failure_diagnostic(self):
+        source = (
+            "import unittest\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    def test_ok(self): pass\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            cut, inventory, plan, output = self.fixture(root, source)
+            receipt = loom_suite_worker.execute_shard(
+                cut, inventory, plan, "general-000", output, timeout=10)
+            self.assertEqual("passed", receipt["status"])
+            self.assertFalse(
+                (output / "general-000" / "failure-diagnostic.json").exists())
 
     def test_platform_skip_is_terminal_worker_evidence(self):
         source = (

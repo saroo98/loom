@@ -187,6 +187,25 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("quality-matrix-certificate", quality)
         self.assertIn("compatibility-matrix-certificate", compatibility)
 
+    def test_full_suite_cells_transport_optional_closed_worker_diagnostics(self):
+        quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
+        compatibility = (WORKFLOWS / "compatibility.yml").read_text(
+            encoding="utf-8")
+        for text in (quality, compatibility):
+            self.assertIn(
+                "tools/suite-shadow/workers/*/worker-receipt.json", text)
+            self.assertIn(
+                "tools/suite-shadow/workers/*/failure-diagnostic.json", text)
+            self.assertIn("permissions:\n  contents: read", text)
+            self.assertIn("retention-days: 7", text)
+            self.assertIn("if: always()", text)
+            self.assertNotIn("failure-diagnostic.json --", text)
+        self.assertIn(
+            'os: [ubuntu-latest, macos-latest, windows-latest]', quality)
+        self.assertIn(
+            'python: ["3.10", "3.11", "3.12", "3.13", "3.14"]', quality)
+        self.assertEqual(6, compatibility.count("- {runner:"))
+
     def test_publication_and_post_release_are_same_byte_gates(self):
         publish = (WORKFLOWS / "publish-release.yml").read_text(encoding="utf-8")
         post = (WORKFLOWS / "post-release.yml").read_text(encoding="utf-8")

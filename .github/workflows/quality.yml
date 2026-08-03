@@ -210,6 +210,8 @@ jobs:
           path: |
             tools/exact-cut-ci.json
             tools/full-test-timings.json
+            tools/suite-shadow/workers/*/worker-receipt.json
+            tools/suite-shadow/workers/*/failure-diagnostic.json
             tools/suite-shadow/cell-certificate.json
             tools/suite-shadow/shadow-comparison.json
           retention-days: 7
