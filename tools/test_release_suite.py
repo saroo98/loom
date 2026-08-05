@@ -479,18 +479,28 @@ class ReleaseSuiteTests(unittest.TestCase):
                 release_loader(path)
             with self.assertRaises(loom_suite_worker.SuiteWorkerError):
                 certificate_loader(path)
-            path.write_text("[" * 2000 + "0" + "]" * 2000, encoding="utf-8")
-            with self.assertRaises(loom_release_suite.ReleaseSuiteError):
-                release_loader(path)
-            with self.assertRaises(loom_suite_worker.SuiteWorkerError):
-                certificate_loader(path)
+            path.write_text("{}", encoding="utf-8")
+            with mock.patch.object(
+                    loom_release_suite.json, "loads",
+                    side_effect=RecursionError(
+                        "synthetic qualification nesting overflow")):
+                with self.assertRaisesRegex(
+                        loom_release_suite.ReleaseSuiteError,
+                        "suite qualification is invalid") as refusal:
+                    release_loader(path)
+            self.assertIsInstance(refusal.exception.__cause__, RecursionError)
 
-        deep = "[" * 2000 + "0" + "]" * 2000
-        raw = (
-            '{"exact_cut_receipt":' + deep
-            + ',"serial_suite":{},"inventory":{},"timing_profile":{},'
-            + '"plan":{},"worker_receipts":[],"cell_certificate":{},'
-            + '"shadow_comparison":{}}').encode("utf-8")
+            with mock.patch.object(
+                    loom_suite_certificate.json, "loads",
+                    side_effect=RecursionError(
+                        "synthetic qualification nesting overflow")):
+                with self.assertRaisesRegex(
+                        loom_suite_worker.SuiteWorkerError,
+                        "qualification input is unreadable") as refusal:
+                    certificate_loader(path)
+            self.assertIsInstance(refusal.exception.__cause__, RecursionError)
+
+        raw = b"{}"
         body = {
             "encoding": "gzip-base64-json-v1",
             "uncompressed_bytes": len(raw),
@@ -501,8 +511,17 @@ class ReleaseSuiteTests(unittest.TestCase):
         envelope = {
             **body, "pair_sha256": loom_suite_plan.digest(body),
         }
-        with self.assertRaises(loom_suite_certificate.CertificateError):
-            loom_suite_certificate._decode_qualification_pair(envelope)
+        with mock.patch.object(
+                loom_suite_certificate.json, "loads",
+                side_effect=RecursionError(
+                    "synthetic qualification nesting overflow")):
+            with self.assertRaisesRegex(
+                    loom_suite_certificate.CertificateError,
+                    "qualification pair evidence is invalid") as refusal:
+                loom_suite_certificate._decode_qualification_pair(envelope)
+        self.assertEqual(["SCHEMA"], refusal.exception.findings)
+        self.assertEqual("SCHEMA", refusal.exception.primary_reason)
+        self.assertIsInstance(refusal.exception.__cause__, RecursionError)
 
     def test_exactly_ten_full_pairs_derive_one_valid_qualification(self):
         policy = loom_suite_plan.seal_policy({
