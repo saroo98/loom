@@ -777,9 +777,14 @@ def _verify_qualification_pair(value, *, serial_policy):
         }
         if serial_suite != exact["suite"] \
                 or exact_environment.get("evidence_class") != "ci-reproduced" \
-                or exact.get("platform") != exact_environment.get("os") \
-                or exact.get("architecture") != exact_environment.get(
-                    "architecture") \
+                or not isinstance(exact.get("platform"), str) \
+                or not isinstance(exact_environment.get("os"), str) \
+                or exact["platform"].casefold() != exact_environment[
+                    "os"].casefold() \
+                or not isinstance(exact.get("architecture"), str) \
+                or not isinstance(exact_environment.get("architecture"), str) \
+                or exact["architecture"].casefold() != exact_environment[
+                    "architecture"].casefold() \
                 or exact.get("python") != exact_environment.get("python_version"):
             raise CertificateError(
                 "qualification serial evidence is invalid", ["WRONG_ENVIRONMENT"])

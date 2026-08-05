@@ -523,6 +523,48 @@ class ReleaseSuiteTests(unittest.TestCase):
         self.assertEqual("SCHEMA", refusal.exception.primary_reason)
         self.assertIsInstance(refusal.exception.__cause__, RecursionError)
 
+    def test_qualification_normalizes_host_identity_casing_without_equating_platforms(self):
+        certificate = loom_suite_plan.seal_policy({
+            "schema_version": 1, "authority_mode": "certificate",
+            "exclusive_modules": [],
+        })
+        serial = loom_suite_plan.seal_policy({
+            "schema_version": 1, "authority_mode": "serial",
+            "exclusive_modules": [],
+        })
+        cell = copy.deepcopy(next(
+            row for row in self._matrix(
+                "quality", policy_sha=serial["policy_sha256"])["cells"]
+            if row["environment"]["os"] == "windows"))
+        cell["environment"]["os"] = "Windows"
+        cell["environment"]["architecture"] = "AMD64"
+        pair = self._pair_evidence(cell, serial, run_id="901")
+        exact_body = {
+            key: value for key, value in pair["exact_cut_receipt"].items()
+            if key != "receipt_sha256"
+        }
+        exact_body["platform"] = "windows"
+        exact_body["architecture"] = "amd64"
+        pair["exact_cut_receipt"] = loom_exact_cut_ci._seal(exact_body)
+
+        envelope = loom_suite_certificate.compile_qualification_pair(
+            pair, policy=certificate)
+        self.assertEqual(
+            "windows", loom_suite_certificate._decode_qualification_pair(
+                envelope)["exact_cut_receipt"]["platform"])
+
+        wrong = copy.deepcopy(pair)
+        wrong_body = {
+            key: value for key, value in wrong["exact_cut_receipt"].items()
+            if key != "receipt_sha256"
+        }
+        wrong_body["platform"] = "linux"
+        wrong["exact_cut_receipt"] = loom_exact_cut_ci._seal(wrong_body)
+        with self.assertRaisesRegex(
+                loom_suite_certificate.CertificateError, "WRONG_ENVIRONMENT"):
+            loom_suite_certificate.compile_qualification_pair(
+                wrong, policy=certificate)
+
     def test_exactly_ten_full_pairs_derive_one_valid_qualification(self):
         policy = loom_suite_plan.seal_policy({
             "schema_version": 1, "authority_mode": "certificate",
