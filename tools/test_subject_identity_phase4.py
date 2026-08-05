@@ -153,6 +153,23 @@ class SubjectIdentityPhase4Tests(unittest.TestCase):
             [{"kind": "plugin-zip", "subject_id": "same.zip",
               "reason": "WRONG_SUBJECT"}], findings)
 
+    def test_public_cut_is_a_distinct_closed_subject(self):
+        subject = loom_subject_identity.public_cut(
+            root_sha256="1" * 64, manifest_sha256="2" * 64,
+            file_count=117)
+        self.assertEqual("public-cut", subject["kind"])
+        self.assertEqual("public-cut", subject["subject_id"])
+        self.assertEqual(117, subject["file_count"])
+        self.assertEqual(subject, loom_subject_identity.validate_subject(subject))
+        invalid = dict(subject)
+        invalid["owner_path"] = "C:/private"
+        invalid["subject_digest"] = loom_subject_identity.digest({
+            key: value for key, value in invalid.items()
+            if key != "subject_digest"})
+        with self.assertRaisesRegex(
+                loom_subject_identity.SubjectIdentityError, "fields are invalid"):
+            loom_subject_identity.validate_subject(invalid)
+
 
 if __name__ == "__main__":
     unittest.main()

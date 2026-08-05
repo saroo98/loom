@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/native-helper-ci-receipt-v2.schema.json",
+  "title": "Exact-subject native-helper CI receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "platform", "source_commit", "binary_sha256", "rebuild_sha256", "source_sha256", "cargo_lock_sha256", "sbom_sha256", "provenance_sha256", "environment_sha256", "workflow_digest", "action_manifest_digest", "receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "platform": {"enum": ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64", "linux-arm64"]},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "binary_sha256": {"$ref": "#/$defs/digest"},
+    "rebuild_sha256": {"$ref": "#/$defs/digest"},
+    "source_sha256": {"$ref": "#/$defs/digest"},
+    "cargo_lock_sha256": {"$ref": "#/$defs/digest"},
+    "sbom_sha256": {"$ref": "#/$defs/digest"},
+    "provenance_sha256": {"$ref": "#/$defs/digest"},
+    "environment_sha256": {"$ref": "#/$defs/digest"},
+    "workflow_digest": {"$ref": "#/$defs/digest"},
+    "action_manifest_digest": {"$ref": "#/$defs/digest"},
+    "receipt_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-subject-v4.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "repository", "release_sequence", "previous_bundle_sha256", "subjects", "relations", "reproducibility_receipt_sha256", "matrix_certificate_sha256", "promotion_policy_sha256", "bundle_sha256"],
+  "properties": {
+    "schema_version": {"const": 4},
+    "repository": {"const": "https://github.com/saroo98/loom"},
+    "release_sequence": {"type": "integer", "minimum": 1},
+    "previous_bundle_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "subjects": {"type": "array", "minItems": 11, "maxItems": 11, "uniqueItems": true, "items": {"allOf": [{"$ref": "subject-identity.schema.json"}, {"not": {"type": "object", "required": ["kind"], "properties": {"kind": {"const": "installed-runtime"}}}}]}},
+    "relations": {"type": "array", "minItems": 18, "maxItems": 18, "uniqueItems": true, "items": {"oneOf": [{"$ref": "#/$defs/component"}, {"$ref": "#/$defs/publicCutRelation"}, {"$ref": "#/$defs/nativeRelation"}]}},
+    "reproducibility_receipt_sha256": {"$ref": "#/$defs/digest"},
+    "matrix_certificate_sha256": {"$ref": "#/$defs/digest"},
+    "promotion_policy_sha256": {"$ref": "#/$defs/digest"},
+    "bundle_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "component": {"type": "object", "additionalProperties": false, "required": ["relation", "subject_kind", "subject_id", "subject_digest"], "properties": {"relation": {"const": "component"}, "subject_kind": {"enum": ["main-source", "candidate-source", "release-tag", "plugin-zip", "native-helper", "public-cut"]}, "subject_id": {"type": "string", "minLength": 1, "maxLength": 128}, "subject_digest": {"$ref": "#/$defs/digest"}}},
+    "publicCutRelation": {"type": "object", "additionalProperties": false, "required": ["relation", "plugin_subject_digest", "public_cut_subject_digest"], "properties": {"relation": {"const": "embeds-public-cut"}, "plugin_subject_digest": {"$ref": "#/$defs/digest"}, "public_cut_subject_digest": {"$ref": "#/$defs/digest"}}},
+    "nativeRelation": {"type": "object", "additionalProperties": false, "required": ["relation", "plugin_subject_digest", "platform", "native_subject_digest"], "properties": {"relation": {"const": "contains-native-helper"}, "plugin_subject_digest": {"$ref": "#/$defs/digest"}, "platform": {"enum": ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64", "linux-arm64"]}, "native_subject_digest": {"$ref": "#/$defs/digest"}}}
+  }
+}

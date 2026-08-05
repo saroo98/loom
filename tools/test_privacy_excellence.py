@@ -38,6 +38,19 @@ class PrivacyExcellenceTests(unittest.TestCase):
             {("forbidden-content", "asset.bin"),
              ("forbidden-filename", "PersonalIdentifier-notes.txt")})
 
+    def test_shipped_diagnostic_fixtures_do_not_contain_secret_signatures(self):
+        cut = self.root / "cut"
+        cut.mkdir()
+        tools = Path(__file__).resolve().parent
+        for name in (
+                "test_suite_plan.py", "test_suite_worker.py",
+                "test_test_runner.py"):
+            (cut / name).write_bytes((tools / name).read_bytes())
+
+        result = loom_privacy.scan_publication(cut, forbidden_tokens=[])
+
+        self.assertTrue(result["clean"], result["findings"])
+
     def test_firewall_detects_utf16_owner_tokens(self):
         cut = self.root / "cut"
         cut.mkdir()

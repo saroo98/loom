@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-reproducibility-receipt-v1.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "candidate_a", "candidate_b", "canonical_candidate", "public_cut", "native_subjects", "receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "reproduced"},
+    "candidate_a": {"$ref": "#/$defs/candidate"},
+    "candidate_b": {"$ref": "#/$defs/candidate"},
+    "canonical_candidate": {"const": "A"},
+    "public_cut": {"$ref": "#/$defs/publicCut"},
+    "native_subjects": {"type": "array", "minItems": 6, "maxItems": 6, "uniqueItems": true, "items": {"$ref": "#/$defs/native"}},
+    "receipt_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "publicCut": {"type": "object", "additionalProperties": false, "required": ["root_sha256", "manifest_sha256", "file_count"], "properties": {"root_sha256": {"$ref": "#/$defs/digest"}, "manifest_sha256": {"$ref": "#/$defs/digest"}, "file_count": {"type": "integer", "minimum": 1}}},
+    "candidate": {"type": "object", "additionalProperties": false, "required": ["sha256", "bytes", "files", "extracted_tree_sha256", "installed_tree_sha256", "archive_metadata_sha256", "public_cut", "native_binaries"], "properties": {"sha256": {"$ref": "#/$defs/digest"}, "bytes": {"type": "integer", "minimum": 1}, "files": {"type": "integer", "minimum": 1}, "extracted_tree_sha256": {"$ref": "#/$defs/digest"}, "installed_tree_sha256": {"$ref": "#/$defs/digest"}, "archive_metadata_sha256": {"$ref": "#/$defs/digest"}, "public_cut": {"$ref": "#/$defs/publicCut"}, "native_binaries": {"type": "object", "additionalProperties": false, "required": ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64", "linux-arm64"], "properties": {"windows-x64": {"$ref": "#/$defs/digest"}, "windows-arm64": {"$ref": "#/$defs/digest"}, "macos-x64": {"$ref": "#/$defs/digest"}, "macos-arm64": {"$ref": "#/$defs/digest"}, "linux-x64": {"$ref": "#/$defs/digest"}, "linux-arm64": {"$ref": "#/$defs/digest"}}}}},
+    "native": {"type": "object", "additionalProperties": false, "required": ["platform", "binary_sha256", "sbom_sha256", "provenance_sha256"], "properties": {"platform": {"enum": ["windows-x64", "windows-arm64", "macos-x64", "macos-arm64", "linux-x64", "linux-arm64"]}, "binary_sha256": {"$ref": "#/$defs/digest"}, "sbom_sha256": {"$ref": "#/$defs/digest"}, "provenance_sha256": {"$ref": "#/$defs/digest"}}}
+  }
+}

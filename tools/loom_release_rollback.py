@@ -30,6 +30,27 @@ def _canonical(value):
                       ensure_ascii=False).encode("utf-8")
 
 
+def verify_receipt(value, *, expected_commit, expected_public_root_sha256):
+    """Validate one successful rollback receipt for an exact release subject."""
+    fields = {
+        "schema_version", "status", "commit", "public_root_sha256", "tests",
+        "transcript_sha256", "result_sha256",
+    }
+    body = ({key: item for key, item in value.items()
+             if key != "result_sha256"} if isinstance(value, dict) else None)
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("status") != "passed" \
+            or value.get("commit") != expected_commit \
+            or value.get("public_root_sha256") != expected_public_root_sha256 \
+            or value.get("tests") != list(TESTS) \
+            or SHA.fullmatch(str(value.get("transcript_sha256", ""))) is None \
+            or value.get("result_sha256") != hashlib.sha256(
+                _canonical(body)).hexdigest():
+        raise RollbackEvidenceError("rollback evidence receipt is invalid")
+    return value
+
+
 def run(tools_root, *, commit, public_root_sha256, timeout=900):
     try:
         tools_root = loom_reliability._absolute(

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/suite-matrix-certificate-v1.schema.json",
+  "title": "Consumer-specific exact-subject suite matrix certificate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "consumer", "subject", "cells", "cell_count", "matrix_certificate_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "certified"},
+    "consumer": {"enum": ["quality", "compatibility", "clean-room", "release"]},
+    "subject": {"$ref": "#/$defs/subject"},
+    "cells": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"$ref": "suite-cell-certificate-v1.schema.json"}},
+    "cell_count": {"type": "integer", "minimum": 1},
+    "matrix_certificate_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subject": {"type": "object", "additionalProperties": false, "required": ["repository", "source_commit", "source_tree_sha256", "public_root_sha256", "public_manifest_sha256", "public_file_count"], "properties": {"repository": {"const": "https://github.com/saroo98/loom"}, "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "source_tree_sha256": {"$ref": "#/$defs/digest"}, "public_root_sha256": {"$ref": "#/$defs/digest"}, "public_manifest_sha256": {"$ref": "#/$defs/digest"}, "public_file_count": {"type": "integer", "minimum": 1, "maximum": 8192}}}
+  }
+}

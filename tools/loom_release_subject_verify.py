@@ -8,8 +8,12 @@ import re
 from pathlib import Path
 
 import loom_release_subject
+import loom_release_candidate
+import loom_exact_cut_ci
+import loom_release_suite
 import loom_reliability
 import loom_subject_identity
+import loom_suite_plan
 
 
 class SubjectVerificationError(RuntimeError):
@@ -25,6 +29,12 @@ V2_FIELDS = {
 V3_FIELDS = {
     "schema_version", "repository", "release_sequence",
     "previous_bundle_sha256", "subjects", "relations", "bundle_sha256",
+}
+V4_FIELDS = {
+    "schema_version", "repository", "release_sequence",
+    "previous_bundle_sha256", "subjects", "relations",
+    "reproducibility_receipt_sha256", "matrix_certificate_sha256",
+    "promotion_policy_sha256", "bundle_sha256",
 }
 
 
@@ -118,7 +128,144 @@ def _verify_v3(value, plugin, *, commit=None, tag=None):
     }
 
 
-def verify(value, plugin, *, commit=None, tag=None):
+def _verify_v4(value, plugin, *, commit=None, tag=None,
+               reproducibility_receipt=None, suite_certificate=None,
+               suite_policy=None, promotion_policy=None,
+               exact_cut_receipt=None):
+    if not isinstance(value, dict) or set(value) != V4_FIELDS \
+            or value.get("schema_version") != 4:
+        raise SubjectVerificationError("v4 release bundle identity is invalid")
+    try:
+        regenerated = loom_release_subject.create_evidence_v4(
+            subjects=value["subjects"], release_sequence=value["release_sequence"],
+            reproducibility_receipt_sha256=value["reproducibility_receipt_sha256"],
+            matrix_certificate_sha256=value["matrix_certificate_sha256"],
+            promotion_policy_sha256=value["promotion_policy_sha256"],
+            previous_bundle_sha256=value["previous_bundle_sha256"])
+    except (KeyError, loom_release_subject.ReleaseSubjectError) as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    if regenerated != value:
+        raise SubjectVerificationError("v4 release bundle digest or relations are invalid")
+    if any(item is None for item in (
+            reproducibility_receipt, suite_certificate, suite_policy,
+            promotion_policy, exact_cut_receipt)):
+        raise SubjectVerificationError("v4 actual release evidence is required")
+    subjects = loom_subject_identity.subject_map(value["subjects"])
+    candidates = [item for (kind, _), item in subjects.items()
+                  if kind == "candidate-source"]
+    tags = [item for (kind, _), item in subjects.items() if kind == "release-tag"]
+    plugins = [item for (kind, _), item in subjects.items() if kind == "plugin-zip"]
+    if commit is not None and candidates[0]["commit"] != commit \
+            or tag is not None and tags[0]["tag"] != tag:
+        raise SubjectVerificationError("v4 release component identity is invalid")
+    try:
+        plugin = loom_reliability._absolute(plugin, "canonical plugin", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    raw = plugin.read_bytes()
+    if plugins[0]["bytes"] != len(raw) \
+            or plugins[0]["sha256"] != hashlib.sha256(raw).hexdigest():
+        raise SubjectVerificationError("canonical plugin bytes do not match the v4 subject")
+    public_cuts = [item for (kind, _), item in subjects.items()
+                   if kind == "public-cut"]
+    native_helpers = {item["platform"]: item for (kind, _), item in subjects.items()
+                      if kind == "native-helper"}
+    try:
+        archive = loom_release_candidate._archive_subject(plugin)
+    except loom_release_candidate.CandidateError as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    declared_cut = public_cuts[0]
+    expected_cut = {
+        "root_sha256": declared_cut["root_sha256"],
+        "manifest_sha256": declared_cut["manifest_sha256"],
+        "file_count": declared_cut["file_count"],
+    }
+    if archive["public_cut"] != {
+            **expected_cut}:
+        raise SubjectVerificationError(
+            "canonical plugin embeds the wrong v4 public-cut subject")
+    if {platform: item["sha256"] for platform, item in native_helpers.items()} \
+            != archive["native_binaries"]:
+        raise SubjectVerificationError(
+            "canonical plugin embeds the wrong v4 native-helper subjects")
+    try:
+        reproducibility = loom_release_candidate.verify_reproducibility_receipt(
+            reproducibility_receipt)
+    except loom_release_candidate.CandidateError as exc:
+        raise SubjectVerificationError(
+            f"v4 reproducibility receipt is invalid: {exc}") from exc
+    if reproducibility["receipt_sha256"] != value[
+            "reproducibility_receipt_sha256"]:
+        raise SubjectVerificationError(
+            "v4 reproducibility receipt digest does not match the subject")
+    candidate = reproducibility["candidate_a"]
+    expected_natives = sorted(({
+        "platform": platform, "binary_sha256": subject["sha256"],
+        "sbom_sha256": subject["sbom_sha256"],
+        "provenance_sha256": subject["provenance_sha256"],
+    } for platform, subject in native_helpers.items()),
+        key=lambda row: row["platform"])
+    if candidate["sha256"] != plugins[0]["sha256"] \
+            or candidate["bytes"] != plugins[0]["bytes"] \
+            or reproducibility["public_cut"] != expected_cut \
+            or reproducibility["native_subjects"] != expected_natives:
+        raise SubjectVerificationError(
+            "v4 reproducibility receipt names the wrong release subjects")
+    try:
+        policy = loom_suite_plan._validate_seal(
+            suite_policy, "policy_sha256", loom_suite_plan.seal_policy)
+        suite = loom_release_suite.verify_compiled(
+            suite_certificate, policy=policy,
+            expected_commit=candidates[0]["commit"],
+            expected_root=declared_cut["root_sha256"])
+    except (loom_suite_plan.SuitePlanError,
+            loom_release_suite.ReleaseSuiteError) as exc:
+        raise SubjectVerificationError(
+            f"v4 aggregate suite certificate is invalid: {exc}") from exc
+    if suite["suite_certificate_sha256"] != value["matrix_certificate_sha256"]:
+        raise SubjectVerificationError(
+            "v4 aggregate suite certificate digest does not match the subject")
+    try:
+        promotion_path = loom_reliability._absolute(
+            promotion_policy, "promotion policy", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise SubjectVerificationError(str(exc)) from exc
+    if not promotion_path.is_file() or not 0 < promotion_path.stat().st_size <= 4 * 1024 * 1024:
+        raise SubjectVerificationError("v4 promotion policy is unsafe")
+    promotion_raw = promotion_path.read_bytes()
+    if len(promotion_raw) != promotion_path.stat().st_size \
+            or hashlib.sha256(promotion_raw).hexdigest() != value[
+                "promotion_policy_sha256"]:
+        raise SubjectVerificationError(
+            "v4 promotion policy digest does not match the subject")
+    try:
+        exact_cut = loom_exact_cut_ci.verify_receipt(exact_cut_receipt)
+    except ValueError as exc:
+        raise SubjectVerificationError(f"v4 exact-cut receipt is invalid: {exc}") from exc
+    if exact_cut["source_commit"] != candidates[0]["commit"] \
+            or {
+                "root_sha256": exact_cut["verified_root_sha256"],
+                "manifest_sha256": exact_cut["public_manifest_sha256"],
+                "file_count": exact_cut["public_file_count"],
+            } != expected_cut:
+        raise SubjectVerificationError(
+            "v4 exact-cut receipt names the wrong public-cut subject")
+    return {"status": "verified", "bundle_sha256": value["bundle_sha256"],
+            "plugin_subject_digest": plugins[0]["subject_digest"],
+            "plugin_sha256": plugins[0]["sha256"],
+            "release_sequence": value["release_sequence"]}
+
+
+def verify(value, plugin, *, commit=None, tag=None,
+           reproducibility_receipt=None, suite_certificate=None,
+           suite_policy=None, promotion_policy=None, exact_cut_receipt=None):
+    if isinstance(value, dict) and value.get("schema_version") == 4:
+        return _verify_v4(
+            value, plugin, commit=commit, tag=tag,
+            reproducibility_receipt=reproducibility_receipt,
+            suite_certificate=suite_certificate, suite_policy=suite_policy,
+            promotion_policy=promotion_policy,
+            exact_cut_receipt=exact_cut_receipt)
     if isinstance(value, dict) and value.get("schema_version") == 3:
         return _verify_v3(value, plugin, commit=commit, tag=tag)
     return _verify_v2(value, plugin, commit=commit, tag=tag)
@@ -130,11 +277,37 @@ def main(argv=None):
     parser.add_argument("--plugin", required=True)
     parser.add_argument("--commit")
     parser.add_argument("--tag")
+    parser.add_argument("--reproducibility-receipt")
+    parser.add_argument("--suite-certificate")
+    parser.add_argument("--suite-policy")
+    parser.add_argument("--promotion-policy")
+    parser.add_argument("--exact-cut-receipt")
     args = parser.parse_args(argv)
     try:
         value = json.loads(Path(args.subject).read_text(encoding="utf-8"))
-        result = verify(value, args.plugin, commit=args.commit, tag=args.tag)
-    except (OSError, UnicodeError, json.JSONDecodeError, SubjectVerificationError) as exc:
+        evidence = {
+            "reproducibility_receipt": (
+                loom_release_candidate._json_file(
+                    args.reproducibility_receipt, "reproducibility receipt")
+                if args.reproducibility_receipt else None),
+            "suite_certificate": (
+                loom_release_candidate._json_file(
+                    args.suite_certificate, "aggregate suite certificate")
+                if args.suite_certificate else None),
+            "suite_policy": (
+                loom_release_candidate._json_file(args.suite_policy, "suite policy")
+                if args.suite_policy else None),
+            "promotion_policy": args.promotion_policy,
+            "exact_cut_receipt": (
+                loom_release_candidate._json_file(
+                    args.exact_cut_receipt, "exact-cut receipt")
+                if args.exact_cut_receipt else None),
+        }
+        result = verify(
+            value, args.plugin, commit=args.commit, tag=args.tag, **evidence)
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            loom_release_candidate.CandidateError,
+            SubjectVerificationError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
     print(json.dumps(result, sort_keys=True))

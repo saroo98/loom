@@ -4703,7 +4703,6 @@ def resolve(*, request, cwd, action_path, action_sha256, home, install_root, now
                     "ACTION_CORRUPT", "verified action digest does not match the hook receipt")
             _path, action, _security = _read_action(
                 path, owner_home=home, install_root=install_root)
-            _reconcile_plan_authoring(action)
             try:
                 after = hashlib.sha256(path.read_bytes()).hexdigest()
             except OSError as exc:
@@ -4735,6 +4734,7 @@ def resolve(*, request, cwd, action_path, action_sha256, home, install_root, now
                     or assurance["ingress"] != "codex-user-prompt-hook-v2":
                 raise OrchestratorError(
                     "HOST_UNVERIFIED", "action was not created by the verified Codex hook")
+            _reconcile_plan_authoring(action)
             pointer = _read_active_pointer(path.parent)
             if pointer is None \
                     or pointer["action_id"] != action["action_id"] \

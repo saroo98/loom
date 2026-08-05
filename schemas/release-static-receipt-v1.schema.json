@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-static-receipt-v1.schema.json",
+  "title": "Static public-cut verification receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "root_sha256", "manifest_sha256", "files_verified", "firewall", "docs", "offline", "receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"const": "verified-static"},
+    "root_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "files_verified": {"type": "integer", "minimum": 1, "maximum": 8192},
+    "firewall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["clean", "files_scanned", "bytes_scanned", "findings"],
+      "properties": {
+        "clean": {"const": true},
+        "files_scanned": {"type": "integer", "minimum": 1, "maximum": 8192},
+        "bytes_scanned": {"type": "integer", "minimum": 1},
+        "findings": {"type": "array", "maxItems": 0}
+      }
+    },
+    "docs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "version", "findings"],
+      "properties": {
+        "status": {"const": "passed"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "findings": {"type": "array", "maxItems": 0}
+      }
+    },
+    "offline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["offline", "modules_scanned", "findings"],
+      "properties": {
+        "offline": {"const": true},
+        "modules_scanned": {"type": "integer", "minimum": 1, "maximum": 8192},
+        "findings": {"type": "array", "maxItems": 0}
+      }
+    },
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

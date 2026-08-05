@@ -5,6 +5,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -12,9 +13,12 @@ from pathlib import Path
 
 import loom_reliability
 import loom_release
+import loom_release_suite
 import loom_release_subject
 import loom_operation_supervisor
 import loom_operation_envelope
+import loom_suite_certificate
+import loom_suite_plan
 
 
 class CleanRoomError(RuntimeError):
@@ -148,11 +152,53 @@ def _bounded_home_inventory(home):
             "tree_sha256": digest.hexdigest(), "path_sample": sample}
 
 
-def verify(cut, *, timeout=CLEAN_ROOM_MAX_SECONDS):
+def verify(cut, *, timeout=CLEAN_ROOM_MAX_SECONDS,
+           suite_certificate=None, policy=None, serial_suite=None):
     cut = Path(cut).resolve()
     if not cut.is_dir() or (cut / ".git").exists() or (cut / ".loom").exists() \
             or not (cut / "tools" / "loom_release.py").is_file():
         raise CleanRoomError("clean-room subject is not an isolated public cut")
+    certificate_mode = suite_certificate is not None
+    serial_evidence_mode = serial_suite is not None
+    if certificate_mode and serial_evidence_mode:
+        raise CleanRoomError("clean-room evidence modes are mutually exclusive")
+    if (certificate_mode or serial_evidence_mode) and policy is None \
+            or policy is not None and not (certificate_mode or serial_evidence_mode):
+        raise CleanRoomError("clean-room evidence mode requires evidence and policy")
+    if certificate_mode:
+        try:
+            validated_policy = loom_suite_plan._validate_seal(
+                policy, "policy_sha256", loom_suite_plan.seal_policy)
+            if validated_policy["authority_mode"] != "certificate":
+                raise CleanRoomError(
+                    "clean-room certificate mode is disabled by serial authority")
+            suite_certificate = loom_suite_certificate.verify_cell(
+                suite_certificate)
+        except (loom_suite_plan.SuitePlanError,
+                loom_suite_certificate.CertificateError) as exc:
+            raise CleanRoomError(
+                f"clean-room suite certificate is invalid: {exc}") from exc
+    elif serial_evidence_mode:
+        try:
+            validated_policy = loom_suite_plan._validate_seal(
+                policy, "policy_sha256", loom_suite_plan.seal_policy)
+        except loom_suite_plan.SuitePlanError as exc:
+            raise CleanRoomError(f"clean-room serial policy is invalid: {exc}") from exc
+        binding = serial_suite.get("binding") if isinstance(serial_suite, dict) else None
+        if validated_policy["authority_mode"] != "serial" \
+                or not isinstance(binding, dict) \
+                or not re.fullmatch(r"[0-9a-f]{40}", str(
+                    binding.get("source_commit", ""))) \
+                or not re.fullmatch(r"[0-9a-f]{64}", str(
+                    binding.get("public_root_sha256", ""))):
+            raise CleanRoomError("clean-room serial suite evidence is invalid")
+        try:
+            loom_release_suite._validate_serial_report(
+                serial_suite, expected_commit=binding["source_commit"],
+                expected_root=binding["public_root_sha256"])
+        except loom_release_suite.ReleaseSuiteError as exc:
+            raise CleanRoomError(
+                f"clean-room serial suite evidence is invalid: {exc}") from exc
     before = loom_release_subject._tree(cut)
     with tempfile.TemporaryDirectory(prefix="loom-clean-home-") as temporary:
         home = Path(temporary)
@@ -182,7 +228,9 @@ def verify(cut, *, timeout=CLEAN_ROOM_MAX_SECONDS):
                 operation_class="clean-room-verification",
                 command=[
                     sys.executable, "-B", str(cut / "tools" / "loom_release.py"),
-                    "verify-cut", str(cut), "--output", str(verification_output),
+                    ("verify-cut-static" if certificate_mode or serial_evidence_mode
+                     else "verify-cut"),
+                    str(cut), "--output", str(verification_output),
                 ],
                 cwd=cut / "tools", environment=environment, timeout=timeout,
                 allowed_roots=[cut, home], protected_roots=protected,
@@ -205,10 +253,26 @@ def verify(cut, *, timeout=CLEAN_ROOM_MAX_SECONDS):
             except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 raise CleanRoomError(
                     f"clean-room verification receipt is unreadable: {exc}") from exc
+            expected_status = ("verified-static" if certificate_mode or serial_evidence_mode
+                               else "verified")
             if not isinstance(verification, dict) \
-                    or verification.get("status") != "verified":
+                    or verification.get("status") != expected_status:
                 raise CleanRoomError(
                     "clean-room verification receipt did not report success")
+            if certificate_mode or serial_evidence_mode:
+                try:
+                    loom_release.verify_static_receipt(verification)
+                except loom_release.ReleaseError as exc:
+                    raise CleanRoomError(
+                        f"clean-room static receipt is invalid: {exc}") from exc
+            if certificate_mode and suite_certificate["subject"][
+                    "public_root_sha256"] != verification.get("root_sha256"):
+                raise CleanRoomError(
+                    "clean-room suite certificate has the wrong public-cut subject")
+            if serial_evidence_mode and serial_suite["binding"][
+                    "public_root_sha256"] != verification.get("root_sha256"):
+                raise CleanRoomError(
+                    "clean-room serial evidence has the wrong public-cut subject")
         home_inventory = _bounded_home_inventory(home)
     after = loom_release_subject._tree(cut)
     if before != after:
@@ -224,6 +288,15 @@ def verify(cut, *, timeout=CLEAN_ROOM_MAX_SECONDS):
             "rust_toolchain": rust_metadata,
             "operation_receipt_sha256": operation["receipt_sha256"],
             "containment_provider": operation["containment_provider"],
+            "verification_mode": ("certificate" if certificate_mode else
+                                  "serial-evidence" if serial_evidence_mode else "serial"),
+            "suite_certificate_sha256": (
+                suite_certificate["cell_certificate_sha256"]
+                if certificate_mode else None),
+            "suite_evidence_sha256": (
+                hashlib.sha256(json.dumps(serial_suite, sort_keys=True,
+                                          separators=(",", ":")).encode()).hexdigest()
+                if serial_evidence_mode else None),
             "limitations": [
                 "Standard-library execution does not prove host-level network isolation.",
                 "Locked public Rust dependencies may be fetched into the disposable workspace "
@@ -247,10 +320,30 @@ def main(argv=None):
     parser.add_argument("cut")
     parser.add_argument("--timeout", type=int, default=CLEAN_ROOM_MAX_SECONDS)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--suite-certificate")
+    parser.add_argument("--serial-suite")
+    parser.add_argument("--policy")
     args = parser.parse_args(argv)
     try:
-        result = verify(args.cut, timeout=args.timeout)
-    except CleanRoomError as exc:
+        if bool(args.suite_certificate) + bool(args.serial_suite) > 1:
+            parser.error("clean-room evidence modes are mutually exclusive")
+        if bool(args.suite_certificate or args.serial_suite) != bool(args.policy):
+            parser.error("evidence mode requires evidence and policy")
+        certificate = (
+            loom_release_suite._read_json(
+                args.suite_certificate, "clean-room suite certificate")
+            if args.suite_certificate else None)
+        policy = (loom_release_suite._read_json(
+                  args.policy, "clean-room policy")
+                  if args.policy else None)
+        serial_suite = (loom_release_suite._read_json(
+                        args.serial_suite, "clean-room serial suite")
+                        if args.serial_suite else None)
+        result = verify(
+            args.cut, timeout=args.timeout,
+            suite_certificate=certificate, policy=policy,
+            serial_suite=serial_suite)
+    except (CleanRoomError, loom_release_suite.ReleaseSuiteError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
     try:

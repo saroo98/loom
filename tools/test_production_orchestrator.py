@@ -2914,6 +2914,69 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 home=self.home, install_root=self.installed)
         self.assertEqual("HOST_UNVERIFIED", caught.exception.code)
 
+    def test_standard_resolve_rejects_host_before_plan_author_reconciliation(self):
+        target = self.root / "standard-resolve-reconciliation-target"
+        target.mkdir()
+        request = "Plan a tiny Python command-line greeting tool."
+        opened = loom_orchestrator.invoke(
+            request=request, cwd=target, home=self.home,
+            install_root=self.installed)
+        action_path = Path(opened["action_path"])
+        injected = loom_plan_author.PlanAuthorError(
+            "PLAN_AUTHOR_RECOVERY_REQUIRED",
+            "deterministic reconciliation fault")
+
+        with mock.patch.object(
+                loom_orchestrator.loom_plan_author, "reconcile",
+                side_effect=injected) as reconcile:
+            with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+                loom_orchestrator.resolve(
+                    request=request, cwd=target, action_path=action_path,
+                    action_sha256=hashlib.sha256(action_path.read_bytes()).hexdigest(),
+                    home=self.home, install_root=self.installed)
+
+        self.assertEqual("HOST_UNVERIFIED", caught.exception.code)
+        reconcile.assert_not_called()
+
+    def test_verified_resolve_reconciles_plan_author_before_continuing(self):
+        target = self.root / "verified-resolve-reconciliation-target"
+        target.mkdir()
+        request = "Plan a tiny Python command-line greeting tool."
+        capabilities = {
+            key: key in {"invoke", "complete", "cancel", "status", "markdown"}
+            for key in loom_adapter_protocol.CAPABILITY_KEYS
+        }
+        source = {
+            "schema_version": 2, "message_type": "invoke",
+            "request_id": "verified-resolve-reconciliation-source",
+            "request": request, "cwd": str(target),
+        }
+        envelope = loom_adapter_protocol.request_envelope(
+            source, {"id": "codex", "version": "test"},
+            adapter={"id": "codex-prompt-hook", "version": "1.0.0"},
+            capabilities=capabilities)
+        opened = loom_orchestrator.invoke(
+            request=request, cwd=target, home=self.home,
+            install_root=self.installed,
+            transport_invocation_id=loom_orchestrator._transport_invocation_id(envelope),
+            assurance=envelope["assurance"])
+        action_path = Path(opened["action_path"])
+        injected = loom_plan_author.PlanAuthorError(
+            "PLAN_AUTHOR_RECOVERY_REQUIRED",
+            "deterministic reconciliation fault")
+
+        with mock.patch.object(
+                loom_orchestrator.loom_plan_author, "reconcile",
+                side_effect=injected) as reconcile:
+            with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+                loom_orchestrator.resolve(
+                    request=request, cwd=target, action_path=action_path,
+                    action_sha256=hashlib.sha256(action_path.read_bytes()).hexdigest(),
+                    home=self.home, install_root=self.installed)
+
+        self.assertEqual("PLAN_AUTHOR_RECOVERY_REQUIRED", caught.exception.code)
+        reconcile.assert_called_once()
+
     def test_same_plan_request_after_world_change_creates_new_frontier(self):
         non_git = self.root / "changed-world-target"
         non_git.mkdir()

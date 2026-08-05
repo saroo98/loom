@@ -1,0 +1,98 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/suite-worker-receipt-v1.schema.json",
+  "title": "Closed isolated release-suite worker receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "primary_reason", "findings", "subject", "environment", "inventory_sha256", "policy_sha256", "timing_profile_sha256", "plan_sha256", "shard_id", "exclusive", "expected_modules", "expected_tests", "observed_tests", "test_count", "failure_count", "error_count", "skip_count", "duration_microseconds", "pre_manifest_sha256", "post_manifest_sha256", "mutation_clean", "privacy_clean", "runtime_roots_clean", "operation", "worker_receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "status": {"enum": ["passed", "failed"]},
+    "primary_reason": {"type": ["string", "null"], "enum": [null, "CANDIDATE_MUTATION", "WORKER_NOT_TERMINAL", "INVENTORY_MISMATCH", "TEST_FAILURE", "UNAUTHORIZED_SKIP", "PRIVACY_FAILURE"]},
+    "findings": {"type": "array", "maxItems": 6, "uniqueItems": true, "items": {"enum": ["CANDIDATE_MUTATION", "WORKER_NOT_TERMINAL", "INVENTORY_MISMATCH", "TEST_FAILURE", "UNAUTHORIZED_SKIP", "PRIVACY_FAILURE"]}},
+    "subject": {"$ref": "#/$defs/subject"},
+    "environment": {"$ref": "#/$defs/environment"},
+    "inventory_sha256": {"$ref": "#/$defs/digest"},
+    "policy_sha256": {"$ref": "#/$defs/digest"},
+    "timing_profile_sha256": {"$ref": "#/$defs/digest"},
+    "plan_sha256": {"$ref": "#/$defs/digest"},
+    "shard_id": {"type": "string", "pattern": "^(exclusive|general-[0-9]{3})$"},
+    "exclusive": {"type": "boolean"},
+    "expected_modules": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "pattern": "^test_[A-Za-z0-9_]+$"}},
+    "expected_tests": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 3, "maxLength": 512}},
+    "observed_tests": {"type": "array", "items": {"$ref": "#/$defs/outcome"}},
+    "test_count": {"type": "integer", "minimum": 0, "maximum": 100000},
+    "failure_count": {"type": "integer", "minimum": 0, "maximum": 100000},
+    "error_count": {"type": "integer", "minimum": 0, "maximum": 100000},
+    "skip_count": {"type": "integer", "minimum": 0, "maximum": 100000},
+    "duration_microseconds": {"type": "integer", "minimum": 0},
+    "pre_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "post_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "mutation_clean": {"type": "boolean"},
+    "privacy_clean": {"type": "boolean"},
+    "runtime_roots_clean": {"type": "boolean"},
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "returncode", "primary_failure", "survivors_confirmed_zero", "protected_roots_unchanged", "network_isolation_proven", "containment_provider", "receipt_sha256"],
+      "properties": {
+        "status": {"enum": ["passed", "failed"]},
+        "returncode": {"type": ["integer", "null"]},
+        "primary_failure": {"type": ["string", "null"], "maxLength": 128},
+        "survivors_confirmed_zero": {"type": "boolean"},
+        "protected_roots_unchanged": {"type": "boolean"},
+        "network_isolation_proven": {"type": "boolean"},
+        "containment_provider": {"type": ["string", "null"], "maxLength": 128},
+        "receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "worker_receipt_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": ["repository", "source_commit", "source_tree_sha256", "public_root_sha256", "public_manifest_sha256", "public_file_count"],
+      "properties": {
+        "repository": {"const": "https://github.com/saroo98/loom"},
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_tree_sha256": {"$ref": "#/$defs/digest"},
+        "public_root_sha256": {"$ref": "#/$defs/digest"},
+        "public_manifest_sha256": {"$ref": "#/$defs/digest"},
+        "public_file_count": {"type": "integer", "minimum": 1, "maximum": 8192}
+      }
+    },
+    "environment": {
+      "type": "object", "additionalProperties": false,
+      "required": ["requested_label", "image_os", "image_version", "os", "os_release", "os_version", "architecture", "python_implementation", "python_version", "workflow_path", "workflow_digest", "action_manifest_digest", "event_name", "run_id", "run_attempt"],
+      "properties": {
+        "requested_label": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_os": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "os": {"type": "string", "minLength": 1, "maxLength": 128},
+        "os_release": {"type": "string", "minLength": 1, "maxLength": 128},
+        "os_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "architecture": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_implementation": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_version": {"type": "string", "minLength": 1, "maxLength": 128},
+        "workflow_path": {"type": "string", "minLength": 1, "maxLength": 128},
+        "workflow_digest": {"$ref": "#/$defs/digest"},
+        "action_manifest_digest": {"$ref": "#/$defs/digest"},
+        "event_name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_attempt": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    },
+    "outcome": {
+      "type": "object", "additionalProperties": false,
+      "required": ["test", "status"],
+      "properties": {
+        "test": {"type": "string", "minLength": 3, "maxLength": 512},
+        "status": {"enum": ["passed", "failed", "error", "skipped"]},
+        "skip_reason_code": {"enum": ["platform-boundary", "host-capability-unavailable", "tool-unavailable", "unclassified"]},
+        "skip_reason_sha256": {"$ref": "#/$defs/digest"}
+      },
+      "allOf": [{"if": {"properties": {"status": {"const": "skipped"}}}, "then": {"required": ["skip_reason_code", "skip_reason_sha256"]}, "else": {"allOf": [{"not": {"required": ["skip_reason_code"]}}, {"not": {"required": ["skip_reason_sha256"]}}]}}]
+    }
+  }
+}

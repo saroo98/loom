@@ -9,6 +9,7 @@ from unittest import mock
 import loom_provider_evidence
 import loom_clean_room
 import loom_release
+import loom_suite_plan
 import loom_tier_s_study
 
 
@@ -118,6 +119,131 @@ class ProviderTierCleanPhase7Tests(unittest.TestCase):
                     str(root / "cut"), "--output", str(output)])
             self.assertEqual(0, code)
             self.assertEqual(receipt, json.loads(output.read_text(encoding="utf-8")))
+
+    def test_clean_room_certificate_mode_runs_only_static_verification(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cut = Path(temporary) / "cut"
+            (cut / "tools").mkdir(parents=True)
+            (cut / "tools" / "loom_release.py").write_text(
+                "# fixture\n", encoding="utf-8")
+            certificate = {
+                "status": "certified",
+                "subject": {"public_root_sha256": "b" * 64},
+                "cell_certificate_sha256": "c" * 64,
+            }
+            policy = loom_suite_plan.seal_policy({
+                "schema_version": 1, "authority_mode": "certificate",
+                "exclusive_modules": [],
+            })
+            called = {}
+
+            def run(**kwargs):
+                called.update(kwargs)
+                output = Path(kwargs["command"][-1])
+                body = {
+                    "schema_version": 1, "status": "verified-static",
+                    "root_sha256": "b" * 64, "manifest_sha256": "c" * 64,
+                    "files_verified": 2,
+                    "firewall": {"clean": True, "files_scanned": 1,
+                                 "bytes_scanned": 1, "findings": []},
+                    "docs": {"status": "passed", "version": "1.8.30",
+                             "findings": []},
+                    "offline": {"offline": True, "modules_scanned": 1,
+                                "findings": []},
+                }
+                output.write_text(json.dumps({
+                    **body, "receipt_sha256": loom_release._canonical_hash(body),
+                }), encoding="utf-8")
+                return ({
+                    "status": "passed", "returncode": 0,
+                    "receipt_sha256": "a" * 64,
+                    "containment_provider": "test-provider",
+                    "primary_failure": None,
+                }, b"ok", b"")
+
+            with mock.patch.object(
+                    loom_clean_room.loom_operation_supervisor, "run",
+                    side_effect=run), mock.patch.object(
+                        loom_clean_room.loom_suite_certificate, "verify_cell",
+                        return_value=certificate):
+                receipt = loom_clean_room.verify(
+                    cut, suite_certificate=certificate, policy=policy)
+            self.assertIn("verify-cut-static", called["command"])
+            self.assertNotIn("verify-cut", called["command"])
+            self.assertEqual("certificate", receipt["verification_mode"])
+            self.assertEqual("c" * 64, receipt["suite_certificate_sha256"])
+
+    def test_clean_room_serial_evidence_reuses_exact_cell_without_behavior_rerun(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            cut = Path(temporary) / "cut"
+            (cut / "tools").mkdir(parents=True)
+            (cut / "tools" / "loom_release.py").write_text("# fixture\n", encoding="utf-8")
+            environment = {
+                "evidence_class": "ci-reproduced",
+                "requested_label": "ubuntu-24.04", "image_os": "ubuntu24",
+                "image_version": "fixture", "os": "linux",
+                "os_release": "fixture", "os_version": "fixture",
+                "architecture": "x86_64", "python_implementation": "CPython",
+                "python_version": "3.11.1",
+                "workflow_path": ".github/workflows/compatibility.yml",
+                "workflow_digest": "d" * 64,
+                "action_manifest_digest": "e" * 64,
+                "event_name": "push", "run_id": "1", "run_attempt": "1",
+            }
+            environment = {**environment,
+                           "environment_sha256": loom_suite_plan.digest(environment)}
+            suite = {
+                "passed": True, "tests_run": 2, "failure_count": 0,
+                "error_count": 0, "returncode": 0,
+                "capability_complete": True, "capability_status": "complete",
+                "skip_receipts": [],
+                "timings": [
+                    {"test": "test_fixture.Example.test_one", "status": "passed",
+                     "duration_microseconds": 1},
+                    {"test": "test_fixture.Example.test_two", "status": "passed",
+                     "duration_microseconds": 1},
+                ],
+                "binding": {
+                    "source_commit": "a" * 40,
+                    "public_root_sha256": "b" * 64,
+                    "platform": "ubuntu24:fixture", "architecture": "x86_64",
+                    "python": "3.11.1",
+                    "runner": environment["environment_sha256"],
+                    "environment": environment,
+                },
+            }
+            policy = loom_suite_plan.seal_policy({
+                "schema_version": 1, "authority_mode": "serial", "exclusive_modules": []})
+            called = {}
+
+            def run(**kwargs):
+                called.update(kwargs)
+                body = {
+                    "schema_version": 1, "status": "verified-static",
+                    "root_sha256": "b" * 64, "manifest_sha256": "c" * 64,
+                    "files_verified": 2,
+                    "firewall": {"clean": True, "files_scanned": 1,
+                                 "bytes_scanned": 1, "findings": []},
+                    "docs": {"status": "passed", "version": "1.8.30",
+                             "findings": []},
+                    "offline": {"offline": True, "modules_scanned": 1,
+                                "findings": []},
+                }
+                Path(kwargs["command"][-1]).write_text(json.dumps({
+                    **body, "receipt_sha256": loom_release._canonical_hash(body),
+                }), encoding="utf-8")
+                return ({"status": "passed", "returncode": 0,
+                         "receipt_sha256": "a" * 64,
+                         "containment_provider": "test-provider",
+                         "primary_failure": None}, b"ok", b"")
+
+            with mock.patch.object(
+                    loom_clean_room.loom_operation_supervisor, "run", side_effect=run):
+                receipt = loom_clean_room.verify(
+                    cut, serial_suite=suite, policy=policy)
+            self.assertIn("verify-cut-static", called["command"])
+            self.assertEqual("serial-evidence", receipt["verification_mode"])
+            self.assertRegex(receipt["suite_evidence_sha256"], r"^[0-9a-f]{64}$")
 
     def test_disposable_home_inventory_is_bounded_and_content_bound(self):
         with tempfile.TemporaryDirectory() as temporary:

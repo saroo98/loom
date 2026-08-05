@@ -367,8 +367,8 @@ def _verify_cut_manifest(root):
     return manifest
 
 
-def verify_cut(root, *, forbidden_tokens):
-    """Verify the exported artifact itself without trusting source Git metadata."""
+def verify_cut_static(root, *, forbidden_tokens):
+    """Verify public bytes and static predicates without executing behavior."""
     try:
         root = loom_reliability._absolute(root, "public cut", must_exist=True)
     except loom_reliability.ReliabilityError as exc:
@@ -387,6 +387,52 @@ def verify_cut(root, *, forbidden_tokens):
     offline = loom_privacy.audit_offline_modules(root / "tools")
     if not offline["offline"]:
         raise ReleaseError("public cut offline audit failed")
+    manifest_sha256 = hashlib.sha256(
+        (root / MANIFEST).read_bytes()).hexdigest()
+    body = {
+        "schema_version": 1,
+        "status": "verified-static", "root_sha256": manifest["root_sha256"],
+        "manifest_sha256": manifest_sha256,
+        "files_verified": len(manifest["files"]) + 1,
+        "firewall": firewall_before, "docs": docs, "offline": offline,
+    }
+    return {**body, "receipt_sha256": _canonical_hash(body)}
+
+
+def verify_static_receipt(value):
+    fields = {
+        "schema_version", "status", "root_sha256", "manifest_sha256",
+        "files_verified", "firewall", "docs", "offline", "receipt_sha256",
+    }
+    body = ({key: item for key, item in value.items()
+             if key != "receipt_sha256"} if isinstance(value, dict) else None)
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("status") != "verified-static" \
+            or not re.fullmatch(r"[0-9a-f]{64}", str(
+                value.get("root_sha256", ""))) \
+            or not re.fullmatch(r"[0-9a-f]{64}", str(
+                value.get("manifest_sha256", ""))) \
+            or type(value.get("files_verified")) is not int \
+            or value["files_verified"] < 1 \
+            or not isinstance(value.get("firewall"), dict) \
+            or value["firewall"].get("clean") is not True \
+            or value["firewall"].get("findings") != [] \
+            or not isinstance(value.get("docs"), dict) \
+            or value["docs"].get("status") != "passed" \
+            or value["docs"].get("findings") != [] \
+            or not isinstance(value.get("offline"), dict) \
+            or value["offline"].get("offline") is not True \
+            or value["offline"].get("findings") != [] \
+            or value.get("receipt_sha256") != _canonical_hash(body):
+        raise ReleaseError("static verification receipt is invalid")
+    return value
+
+
+def verify_cut(root, *, forbidden_tokens):
+    """Verify the exported artifact itself without trusting source Git metadata."""
+    before = verify_cut_static(root, forbidden_tokens=forbidden_tokens)
+    root = loom_reliability._absolute(root, "public cut", must_exist=True)
     suite = _suite(root)
     if not suite["passed"] or loom_docs.generate_evidence(root)[
             "discovered_test_methods"] < 1:
@@ -415,16 +461,16 @@ def verify_cut(root, *, forbidden_tokens):
                 "skip_receipts": suite.get("skip_receipts", []),
             },
         })
-    manifest_after = _verify_cut_manifest(root)
-    firewall_after = loom_privacy.scan_publication(
-        root, forbidden_tokens=forbidden_tokens,
-        require_owner_tokens=bool(forbidden_tokens))
-    if manifest_after != manifest or not firewall_after["clean"]:
+    after = verify_cut_static(root, forbidden_tokens=forbidden_tokens)
+    if after["root_sha256"] != before["root_sha256"] \
+            or after["manifest_sha256"] != before["manifest_sha256"]:
         raise ReleaseError("public cut changed or failed privacy after verification")
     return {
-        "status": "verified", "root_sha256": manifest["root_sha256"],
-        "files_verified": len(manifest["files"]) + 1,
-        "firewall": firewall_after, "docs": docs, "offline": offline,
+        "status": "verified", "root_sha256": after["root_sha256"],
+        "manifest_sha256": after["manifest_sha256"],
+        "files_verified": after["files_verified"],
+        "firewall": after["firewall"], "docs": after["docs"],
+        "offline": after["offline"],
         "suite": suite,
     }
 
@@ -1117,6 +1163,10 @@ def main(argv=None):
     verify_cut_parser.add_argument("root")
     verify_cut_parser.add_argument("--forbid", action="append", default=[])
     verify_cut_parser.add_argument("--output")
+    verify_cut_static_parser = sub.add_parser("verify-cut-static")
+    verify_cut_static_parser.add_argument("root")
+    verify_cut_static_parser.add_argument("--forbid", action="append", default=[])
+    verify_cut_static_parser.add_argument("--output")
     args = parser.parse_args(argv)
     try:
         if args.command == "build":
@@ -1150,8 +1200,12 @@ def main(argv=None):
                 source_classification=args.source_classification)
             if args.output:
                 loom_reliability.atomic_write_json(Path(args.output), result)
-        else:
+        elif args.command == "verify-cut":
             result = verify_cut(args.root, forbidden_tokens=args.forbid)
+            if args.output:
+                loom_reliability.atomic_write_json(Path(args.output), result)
+        else:
+            result = verify_cut_static(args.root, forbidden_tokens=args.forbid)
             if args.output:
                 loom_reliability.atomic_write_json(Path(args.output), result)
     except (ReleaseError, OSError, UnicodeError, json.JSONDecodeError) as exc:
@@ -1171,7 +1225,8 @@ def main(argv=None):
             },
         }
     print(json.dumps(printable, indent=2, sort_keys=True))
-    return 0 if result["status"] in {"built", "certified", "passed", "verified"} else 1
+    return 0 if result["status"] in {
+        "built", "certified", "passed", "verified", "verified-static"} else 1
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import copy
 from pathlib import Path
 
 import loom_lint
@@ -8,6 +9,7 @@ import loom_execution_chain
 import loom_operation_envelope
 import loom_operation_supervisor
 import loom_path_authority
+import loom_suite_plan
 
 
 class FoundationSchemaTests(unittest.TestCase):
@@ -23,6 +25,28 @@ class FoundationSchemaTests(unittest.TestCase):
                 subject_digest="1" * 64, sidecar_type="fixture-receipt",
                 sidecar_id="fixture.json", sidecar_digest="2" * 64)
             self.assert_schema(envelope, "operation-envelope.schema.json")
+
+    def test_suite_failure_diagnostic_matches_its_closed_schema(self):
+        value = {
+            "schema_version": 1,
+            "worker_receipt_sha256": "1" * 64,
+            "shard_id": "general-000",
+            "failures": [{
+                "test": "test_fixture.Fixture.test_failed",
+                "status": "failed",
+                "exception_type": "HostFailure",
+                "error_code": "HOST_UNVERIFIED",
+            }],
+            "failure_diagnostic_sha256": "3" * 64,
+        }
+        self.assert_schema(value, "suite-failure-diagnostic-v1.schema.json")
+        rejected = copy.deepcopy(value)
+        rejected["failures"][0]["message"] = "private detail"
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "suite-failure-diagnostic-v1.schema.json", rejected,
+            "suite-failure-diagnostic-v1.schema.json")
+        self.assertTrue(report.errors)
 
     def test_supervisor_receipt_matches_closed_schema(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -84,6 +108,108 @@ class FoundationSchemaTests(unittest.TestCase):
                 purpose="baseline-adoption")
             receipt = store.read_receipt(activated["activation_set_id"])
             self.assert_schema(receipt, "activation-set.schema.json")
+
+    def test_release_suite_inventory_plan_and_serial_policy_match_closed_schemas(self):
+        subject = {
+            "repository": "https://github.com/saroo98/loom",
+            "source_commit": "1" * 40,
+            "source_tree_sha256": "2" * 64,
+            "public_root_sha256": "3" * 64,
+            "public_manifest_sha256": "5" * 64,
+            "public_file_count": 117,
+        }
+        environment = {
+            "requested_label": "local",
+            "image_os": "windows",
+            "image_version": "fixture",
+            "os": "windows",
+            "os_release": "11", "os_version": "11",
+            "architecture": "x86_64",
+            "python_implementation": "CPython",
+            "python_version": "3.11.9",
+            "workflow_path": ".github/workflows/quality.yml",
+            "workflow_digest": "a" * 64, "action_manifest_digest": "b" * 64,
+            "event_name": "push", "run_id": "1", "run_attempt": "1",
+        }
+        inventory = loom_suite_plan.seal_inventory({
+            "schema_version": 1, "subject": subject,
+            "environment": environment, "harness_sha256": "4" * 64,
+            "modules": [{"module": "test_alpha", "tests": [
+                "test_alpha.Alpha.test_one"]}],
+            "module_count": 1, "test_count": 1,
+        })
+        root = Path(__file__).resolve().parents[1]
+        policy = __import__("json").loads((
+            root / "contracts" / "release-suite-policy-v1.json").read_text(
+                encoding="utf-8"))
+        profile = __import__("json").loads((
+            root / "contracts" / "release-suite-timing-profile-v1.json").read_text(
+                encoding="utf-8"))
+        validated_policy = loom_suite_plan._validate_seal(
+            policy, "policy_sha256", loom_suite_plan.seal_policy)
+        validated_profile = loom_suite_plan._validate_seal(
+            profile, "profile_sha256", loom_suite_plan.seal_timing_profile)
+        plan = loom_suite_plan.plan(
+            inventory, timing_profile=validated_profile,
+            policy=validated_policy, logical_cpus=2)
+        self.assertEqual("serial", validated_policy["authority_mode"])
+        self.assertEqual(
+            sorted(loom_suite_plan.DEFAULT_EXCLUSIVE_MODULES),
+            validated_policy["exclusive_modules"])
+        self.assertFalse(any(
+            key.endswith("_workers") for key in validated_policy))
+        self.assert_schema(inventory, "suite-inventory-v1.schema.json")
+        self.assert_schema(plan, "suite-shard-plan-v1.schema.json")
+
+    def test_claim_only_release_suite_qualification_is_outside_closed_schema(self):
+        value = {
+            "schema_version": 1, "status": "qualified",
+            "required_successes": 10, "serial_policy_sha256": "1" * 64,
+            "certificate_policy_sha256": "2" * 64,
+            "bound_inputs": {
+                "harness_sha256": "3" * 64,
+                "timing_profile_sha256": "4" * 64,
+                "workflow_digests": {"quality": "5" * 64,
+                                     "compatibility": "6" * 64},
+                "action_manifest_digests": {"quality": "7" * 64,
+                                            "compatibility": "8" * 64},
+                "qualification_code_sha256": "9" * 64,
+            },
+            "bound_inputs_sha256": "2" * 64,
+            "families": [{
+                "family_id": "a" * 64,
+                "consumer": "quality",
+                "requested_label": "ubuntu-latest",
+                "image_os": "ubuntu24",
+                "architecture": "x86_64",
+                "python_implementation": "CPython",
+                "python_minor": "3.13",
+                "successful_run_ids": [str(index) for index in range(10, 20)],
+                "exact_image_versions": ["20260801.1"],
+                "python_patches": ["3.13.7"],
+                "serial_p50_microseconds": 100,
+                "serial_p95_microseconds": 120,
+                "sharded_p50_microseconds": 90,
+                "sharded_p95_microseconds": 110,
+                "parity_verified": True,
+            }],
+            "fault_injection_receipts": {"linux": "b" * 64,
+                                           "windows": "c" * 64,
+                                           "macos": "d" * 64},
+            "reproducibility_receipt_sha256s": ["e" * 64, "f" * 64],
+            "rollback_receipt_sha256": "0" * 64,
+            "workflow_critical_path_improved": True,
+            "archive_subjects_agree": True,
+            "privacy_clean": True,
+            "mutation_clean": True,
+            "worker_cleanup_verified": True,
+            "qualification_sha256": "4" * 64,
+        }
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "suite-qualification", value,
+            "suite-qualification-v1.schema.json")
+        self.assertTrue(report.errors)
 
 
 if __name__ == "__main__":

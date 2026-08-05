@@ -11,6 +11,8 @@ from pathlib import Path
 
 import loom_evidence_graph
 import loom_readiness
+import loom_release
+import loom_release_suite
 import loom_release_subject_verify
 import loom_reliability
 import loom_subject_identity
@@ -107,7 +109,7 @@ def _public_value(value, label):
 
 
 def _subject_bundle(value):
-    if not isinstance(value, dict) or value.get("schema_version") != 3 \
+    if not isinstance(value, dict) or value.get("schema_version") not in {3, 4} \
             or value.get("repository") != loom_subject_identity.REPOSITORY \
             or not SHA.fullmatch(str(value.get("bundle_sha256", ""))) \
             or value["bundle_sha256"] != _digest({
@@ -118,8 +120,13 @@ def _subject_bundle(value):
     except loom_subject_identity.SubjectIdentityError as exc:
         raise ReleasePassportError(str(exc)) from exc
     required = {"main-source", "candidate-source", "release-tag", "plugin-zip"}
+    if value["schema_version"] == 4:
+        required.add("public-cut")
+    native_count = len([1 for kind, _subject_id in subjects
+                        if kind == "native-helper"])
     if not required <= {kind for kind, _subject_id in subjects} \
-            or not any(kind == "native-helper" for kind, _subject_id in subjects):
+            or value["schema_version"] == 4 and native_count != 6 \
+            or value["schema_version"] == 3 and native_count < 1:
         raise ReleasePassportError("release subject bundle is incomplete")
     return subjects
 
@@ -190,21 +197,40 @@ def _ci_authority(value, *, evaluation_epoch, subjects):
 
 
 def _passed_cut(value):
-    if not isinstance(value, dict) or value.get("status") != "verified" \
+    if not isinstance(value, dict) or value.get("status") not in {
+            "verified", "verified-static"} \
             or not SHA.fullmatch(str(value.get("root_sha256", ""))) \
             or not isinstance(value.get("firewall"), dict) \
             or value["firewall"].get("clean") is not True \
             or not isinstance(value.get("offline"), dict) \
             or value["offline"].get("offline") is not True:
         raise ReleasePassportError("exact-cut verification is not a passing exact result")
+    if value["status"] == "verified-static":
+        try:
+            loom_release.verify_static_receipt(value)
+        except loom_release.ReleaseError as exc:
+            raise ReleasePassportError(
+                f"static cut receipt is invalid: {exc}") from exc
 
 
-def _passed_suite(value, *, commit, root_sha256):
-    if not isinstance(value, dict) or value.get("schema_version") != 1 \
+def _passed_suite(value, *, commit, root_sha256, policy=None):
+    if not isinstance(value, dict) or value.get("schema_version") not in {1, 2} \
             or value.get("status") != "certified" \
             or value.get("subject") != {
                 "source_commit": commit, "public_root_sha256": root_sha256}:
         raise ReleasePassportError("release suite is not certified for the exact subject")
+    if value["schema_version"] == 2:
+        try:
+            if policy is None:
+                policy = _read_json(
+                    Path(__file__).resolve().parents[1] / "contracts" /
+                    "release-suite-policy-v1.json", "release suite policy")
+            loom_release_suite.verify_compiled(
+                value, policy=policy, expected_commit=commit,
+                expected_root=root_sha256)
+        except (ReleasePassportError, loom_release_suite.ReleaseSuiteError) as exc:
+            raise ReleasePassportError(
+                f"release suite certificate is invalid: {exc}") from exc
 
 
 def _passed_rollback(value, *, commit, root_sha256):
@@ -308,7 +334,9 @@ def _envelope(*, evidence_id, predicate, bindings, payload, authority,
 
 def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
                      suite_report, rollback_report, native_evidence,
-                     ci_authority, evaluation_epoch, codex_observation=None):
+                     ci_authority, evaluation_epoch, codex_observation=None,
+                     reproducibility_receipt=None, suite_policy=None,
+                     promotion_policy=None, exact_cut_receipt=None):
     subjects = _subject_bundle(subject)
     try:
         verification = loom_release_subject_verify.verify(
@@ -316,7 +344,11 @@ def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
             commit=next(item["commit"] for (kind, _), item in subjects.items()
                         if kind == "candidate-source"),
             tag=next(item["tag"] for (kind, _), item in subjects.items()
-                     if kind == "release-tag"))
+                     if kind == "release-tag"),
+            reproducibility_receipt=reproducibility_receipt,
+            suite_certificate=suite_report, suite_policy=suite_policy,
+            promotion_policy=promotion_policy,
+            exact_cut_receipt=exact_cut_receipt)
     except loom_release_subject_verify.SubjectVerificationError as exc:
         raise ReleasePassportError(str(exc)) from exc
     plugin_artifact, _ = _artifact(plugin, "canonical plugin")
@@ -330,8 +362,17 @@ def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
     if main["commit"] != candidate["commit"] or candidate["dirty"]:
         raise ReleasePassportError("release source subjects do not name one clean commit")
     _passed_cut(cut_receipt)
+    if subject.get("schema_version") == 4 and (
+            cut_receipt.get("root_sha256") != exact_cut_receipt.get(
+                "verified_root_sha256")
+            or cut_receipt.get("manifest_sha256") != exact_cut_receipt.get(
+                "public_manifest_sha256")
+            or cut_receipt.get("files_verified") != exact_cut_receipt.get(
+                "public_file_count")):
+        raise ReleasePassportError(
+            "static and CI exact-cut receipts name different public cuts")
     _passed_suite(suite_report, commit=candidate["commit"],
-                  root_sha256=cut_receipt["root_sha256"])
+                  root_sha256=cut_receipt["root_sha256"], policy=suite_policy)
     _passed_rollback(rollback_report, commit=candidate["commit"],
                      root_sha256=cut_receipt["root_sha256"])
     native_payload = _native_evidence(native_evidence, subjects)
@@ -429,7 +470,7 @@ def compile_passport(*, subject, plugin, reproduced_plugin, cut_receipt,
     return outputs
 
 
-def write_outputs(output_directory, value):
+def write_outputs(output_directory, value, *, defer_checksum_manifest=False):
     try:
         output = loom_reliability._absolute(
             output_directory, "release passport output")
@@ -443,12 +484,16 @@ def write_outputs(output_directory, value):
             ("RELEASE-EVIDENCE-GRAPH.json", "evidence_graph"),
             ("RELEASE-READINESS.json", "readiness")):
         loom_reliability.atomic_write_json(output / name, value[key])
-    checksums = []
-    for path in sorted(output.iterdir(), key=lambda item: item.name):
-        checksums.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}\n")
-    loom_reliability.atomic_write_text(output / "SHA256SUMS", "".join(checksums))
+    if not defer_checksum_manifest:
+        checksums = []
+        for path in sorted(output.iterdir(), key=lambda item: item.name):
+            checksums.append(
+                f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}\n")
+        loom_reliability.atomic_write_text(
+            output / "SHA256SUMS", "".join(checksums))
     return {"status": "created", "release_subject_sha256":
-            value["readiness"]["release_subject_sha256"], "files": 4}
+            value["readiness"]["release_subject_sha256"],
+            "files": 3 if defer_checksum_manifest else 4}
 
 
 def _mapping(values, label):
@@ -476,8 +521,13 @@ def main(argv=None):
     parser.add_argument("--native-provenance", action="append", default=[])
     parser.add_argument("--ci-authority", required=True)
     parser.add_argument("--codex-observation")
+    parser.add_argument("--reproducibility-receipt")
+    parser.add_argument("--suite-policy")
+    parser.add_argument("--promotion-policy")
+    parser.add_argument("--exact-cut-receipt")
     parser.add_argument("--evaluation-epoch", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--defer-checksum-manifest", action="store_true")
     args = parser.parse_args(argv)
     try:
         binaries = _mapping(args.native_binary, "native binary")
@@ -498,8 +548,21 @@ def main(argv=None):
             evaluation_epoch=args.evaluation_epoch,
             codex_observation=(
                 _read_json(args.codex_observation, "Codex App observation")
-                if args.codex_observation else None))
-        written = write_outputs(args.output, result)
+                if args.codex_observation else None),
+            reproducibility_receipt=(
+                _read_json(args.reproducibility_receipt,
+                           "reproducibility receipt")
+                if args.reproducibility_receipt else None),
+            suite_policy=(
+                _read_json(args.suite_policy, "release suite policy")
+                if args.suite_policy else None),
+            promotion_policy=args.promotion_policy,
+            exact_cut_receipt=(
+                _read_json(args.exact_cut_receipt, "exact-cut receipt")
+                if args.exact_cut_receipt else None))
+        written = write_outputs(
+            args.output, result,
+            defer_checksum_manifest=args.defer_checksum_manifest)
     except (ReleasePassportError, loom_evidence_graph.EvidenceGraphError,
             loom_readiness.ReadinessError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))

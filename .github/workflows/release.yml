@@ -20,14 +20,72 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  reproduce-candidates:
+    if: inputs.confirm_draft_only == 'DRAFT-ONLY'
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - {candidate: A, suffix: ""}
+          - {candidate: B, suffix: "-repro"}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Reconstruct one finalized candidate from source and exact native evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          CANDIDATE_ID: ${{ matrix.candidate }}
+          ASSET_SUFFIX: ${{ matrix.suffix }}
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" \
+            --pattern "loom-plugin-${RELEASE_TAG}${ASSET_SUFFIX}.zip" --dir input
+          INPUT="input/loom-plugin-${RELEASE_TAG}${ASSET_SUFFIX}.zip"
+          python -B tools/loom_release_verify.py "$INPUT"
+          COMPATIBILITY_RUN="$(python -B - <<'PY'
+          import json,os,subprocess
+          rows=json.loads(subprocess.run(
+              ["gh","run","list","--workflow","compatibility.yml","--commit",os.environ["GITHUB_SHA"],"--event","push","--limit","20","--json","databaseId,headBranch,headSha,status,conclusion"],
+              check=True,capture_output=True,text=True).stdout)
+          matches=[row for row in rows if row["headBranch"] == "main" and row["headSha"] == os.environ["GITHUB_SHA"] and row["status"] == "completed" and row["conclusion"] == "success"]
+          if not matches: raise SystemExit("no successful exact-main compatibility run")
+          print(max(int(row["databaseId"]) for row in matches))
+          PY
+          )"
+          gh run download "$COMPATIBILITY_RUN" \
+            --pattern "native-helper-*-${GITHUB_SHA}" --dir native-artifacts
+          test "$(find native-artifacts -name receipt.json -type f | wc -l)" -eq 6
+          python -B tools/loom_release_candidate.py reconstruct . "$INPUT" \
+            native-artifacts "candidate-${CANDIDATE_ID}.zip" \
+            --source-commit "$GITHUB_SHA"
+          cmp "$INPUT" "candidate-${CANDIDATE_ID}.zip"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-candidate-${{ matrix.candidate }}
+          path: candidate-${{ matrix.candidate }}.zip
+          retention-days: 1
+          if-no-files-found: error
+
   release:
+    needs: reproduce-candidates
     if: inputs.confirm_draft_only == 'DRAFT-ONLY'
     runs-on: ubuntu-24.04
     timeout-minutes: 65
     environment: loom-release
     permissions:
       actions: read
-      contents: write
+      contents: read
       id-token: write
       attestations: write
       artifact-metadata: write
@@ -39,6 +97,11 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.11"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: release-candidate-*
+          path: candidate-jobs
+          merge-multiple: true
       - name: Require clean exact signed tag on default branch
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -54,15 +117,14 @@ jobs:
           git config gpg.format ssh
           git config gpg.ssh.allowedSignersFile "$RUNNER_TEMP/loom-release-allowed-signers"
           git verify-tag "$RELEASE_TAG"
-          git branch -r --contains "${GITHUB_SHA}" | grep -q 'origin/main'
-      - name: Rebuild and verify the public cut twice
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+      - name: Rebuild the public cut twice and verify static identity
         shell: bash
         run: |
           python -B tools/loom_release.py build . "$RUNNER_TEMP/cut-a" --source-classification public-release
           python -B tools/loom_release.py build . "$RUNNER_TEMP/cut-b" --source-classification public-release
           diff -qr "$RUNNER_TEMP/cut-a" "$RUNNER_TEMP/cut-b"
-          python -B tools/loom_release.py verify-cut "$RUNNER_TEMP/cut-a" --output "$RUNNER_TEMP/cut-receipt.json"
-          python -B tools/loom_clean_room.py "$RUNNER_TEMP/cut-a" --output "$RUNNER_TEMP/clean-room.json"
+          python -B tools/loom_release.py verify-cut-static "$RUNNER_TEMP/cut-a" --output "$RUNNER_TEMP/cut-receipt.json"
       - name: Bind exact main capability evidence
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,8 +160,21 @@ jobs:
           test -n "$QUALITY_RUN" -a -n "$COMPATIBILITY_RUN"
           gh run download "$QUALITY_RUN" --pattern 'full-test-timings-*' \
             --dir "$RUNNER_TEMP/capability-reports"
-          test "$(find "$RUNNER_TEMP/capability-reports" -name full-test-timings.json -type f | wc -l)" -eq 15
-      - name: Run exact source suite and rollback battery
+          gh run download "$QUALITY_RUN" --pattern 'quality-matrix-certificate' \
+            --dir "$RUNNER_TEMP/quality-certificate"
+          gh run download "$COMPATIBILITY_RUN" --pattern 'compatibility-suite-*' \
+            --dir "$RUNNER_TEMP/compatibility-reports"
+          gh run download "$COMPATIBILITY_RUN" --pattern 'compatibility-matrix-certificate' \
+            --dir "$RUNNER_TEMP/compatibility-certificate"
+          gh run download "$COMPATIBILITY_RUN" --pattern "native-helper-*-${LOOM_SOURCE_SHA}" \
+            --dir "$RUNNER_TEMP/native-downloaded"
+          test "$(find "$RUNNER_TEMP/native-downloaded" -name receipt.json -type f | wc -l)" -eq 6
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$MODE" = serial; then
+            test "$(find "$RUNNER_TEMP/capability-reports" -name full-test-timings.json -type f | wc -l)" -eq 15
+            test "$(find "$RUNNER_TEMP/compatibility-reports" -name full-test-timings.json -type f | wc -l)" -eq 15
+          fi
+      - name: Compile existing serial authority and run rollback battery
         working-directory: tools
         env:
           LOOM_CUT_RECEIPT: ${{ runner.temp }}/cut-receipt.json
@@ -107,11 +182,38 @@ jobs:
           LOOM_SOURCE_SHA: ${{ github.sha }}
         run: |
           PUBLIC_ROOT="$(python -B -c 'import json,os; print(json.load(open(os.environ["LOOM_CUT_RECEIPT"], encoding="utf-8"))["root_sha256"])')"
-          mapfile -t REPORTS < <(find "$LOOM_MATRIX_ROOT" -name full-test-timings.json -type f | sort)
-          ARGS=()
-          for report in "${REPORTS[@]}"; do ARGS+=(--matrix-report "$report"); done
-          python -B loom_release_suite.py "${ARGS[@]}" --commit "$LOOM_SOURCE_SHA" \
-            --public-root "$PUBLIC_ROOT" --output "$RUNNER_TEMP/full-suite.json"
+          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$MODE" = serial; then
+            mapfile -t QUALITY_REPORTS < <(find "$LOOM_MATRIX_ROOT" -name full-test-timings.json -type f | sort)
+            mapfile -t COMPATIBILITY_REPORTS < <(find "$RUNNER_TEMP/compatibility-reports" -name full-test-timings.json -type f | sort)
+            ARGS=(--serial-evidence-only --policy ../contracts/release-suite-policy-v1.json)
+            for report in "${QUALITY_REPORTS[@]}"; do ARGS+=(--quality-report "$report"); done
+            for report in "${COMPATIBILITY_REPORTS[@]}"; do ARGS+=(--compatibility-report "$report"); done
+            python -B loom_release_suite.py "${ARGS[@]}" --commit "$LOOM_SOURCE_SHA" \
+              --public-root "$PUBLIC_ROOT" --output "$RUNNER_TEMP/full-suite.json"
+            CLEAN_REPORT="$(find "$RUNNER_TEMP/compatibility-reports" -path '*ubuntu-24.04-py3.11*' -name full-test-timings.json -type f -print -quit)"
+            test -n "$CLEAN_REPORT"
+            python -B loom_clean_room.py "$RUNNER_TEMP/cut-a" --serial-suite "$CLEAN_REPORT" \
+              --policy ../contracts/release-suite-policy-v1.json --output "$RUNNER_TEMP/clean-room.json"
+          else
+            QUALITY_CERT="$RUNNER_TEMP/quality-certificate/quality-matrix-certificate.json"
+            COMPAT_CERT="$RUNNER_TEMP/compatibility-certificate/compatibility-matrix-certificate.json"
+            python -B loom_release_suite.py --policy ../contracts/release-suite-policy-v1.json \
+              --qualification ../contracts/release-suite-qualification-v1.json \
+              --matrix-certificate "$QUALITY_CERT" --matrix-certificate "$COMPAT_CERT" \
+              --commit "$LOOM_SOURCE_SHA" --public-root "$PUBLIC_ROOT" \
+              --output "$RUNNER_TEMP/full-suite.json"
+            python -B - "$COMPAT_CERT" "$RUNNER_TEMP/clean-room-cell.json" <<'PY'
+          import json,sys
+          value=json.load(open(sys.argv[1],encoding="utf-8"))
+          matches=[cell for cell in value["cells"] if cell["environment"]["requested_label"] == "ubuntu-24.04" and cell["environment"]["python_version"].startswith("3.11.")]
+          assert len(matches) == 1
+          json.dump(matches[0],open(sys.argv[2],"w",encoding="utf-8"),sort_keys=True,separators=(",", ":"))
+          PY
+            python -B loom_clean_room.py "$RUNNER_TEMP/cut-a" \
+              --suite-certificate "$RUNNER_TEMP/clean-room-cell.json" \
+              --policy ../contracts/release-suite-policy-v1.json --output "$RUNNER_TEMP/clean-room.json"
+          fi
           python -B loom_release_rollback.py . --commit "$LOOM_SOURCE_SHA" \
             --public-root "$PUBLIC_ROOT" --output "$RUNNER_TEMP/rollback.json"
           python -B loom_current_facts.py ../contracts/current-facts-v1.json
@@ -119,31 +221,100 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
-        run: gh release download "$RELEASE_TAG" --dir release-assets
-      - name: Verify canonical archive and checksums
+        shell: bash
+        run: |
+          gh release download "$RELEASE_TAG" --dir release-assets
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/base-release.json"
+      - name: Verify canonical base assets without a final manifest
         env:
           RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
         run: |
-          cd release-assets
-          sha256sum --check SHA256SUMS
-          cd ../tools
+          python -B tools/loom_release_promotion.py verify-base-assets release-assets \
+            --tag "$RELEASE_TAG" \
+            --api-release "$RUNNER_TEMP/base-release.json"
+          cd tools
           python -B loom_release_verify.py "../release-assets/loom-plugin-${RELEASE_TAG}.zip"
-          python -B loom_release_subject_verify.py "../release-assets/RELEASE-SUBJECT.json" \
-            --plugin "../release-assets/loom-plugin-${RELEASE_TAG}.zip" \
-            --commit "${GITHUB_SHA}" --tag "$RELEASE_TAG"
+          python -B -c 'import json; assert json.load(open("../release-assets/RELEASE-SUBJECT.json",encoding="utf-8"))["schema_version"] == 4'
           test -f ../release-assets/CODEX-APP-EVIDENCE.json
       - name: Expand exact native release evidence
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/native"
           for platform in windows-x64 windows-arm64 macos-x64 macos-arm64 linux-x64 linux-arm64; do
+            RECEIPT="$(python -B - "$RUNNER_TEMP/native-downloaded" "$platform" <<'PY'
+          import json,sys
+          from pathlib import Path
+          matches=[]
+          for path in Path(sys.argv[1]).rglob("receipt.json"):
+              try: value=json.loads(path.read_text(encoding="utf-8"))
+              except (OSError,UnicodeError,json.JSONDecodeError): continue
+              if value.get("platform") == sys.argv[2]: matches.append(path)
+          if len(matches) != 1: raise SystemExit("native receipt coverage is ambiguous")
+          print(matches[0])
+          PY
+          )"
+            mkdir "$RUNNER_TEMP/native/$platform"
+            cp "$(dirname "$RECEIPT")"/* "$RUNNER_TEMP/native/$platform/"
             archive="release-assets/native-evidence-${platform}.zip"
             test -f "$archive"
-            mkdir "$RUNNER_TEMP/native/$platform"
-            unzip -q "$archive" -d "$RUNNER_TEMP/native/$platform"
-            test "$(find "$RUNNER_TEMP/native/$platform" -type f | wc -l)" -ge 3
+            mkdir "$RUNNER_TEMP/draft-native-$platform"
+            unzip -q "$archive" -d "$RUNNER_TEMP/draft-native-$platform"
+            diff -qr "$RUNNER_TEMP/native/$platform" "$RUNNER_TEMP/draft-native-$platform"
+            test "$(find "$RUNNER_TEMP/native/$platform" -type f | wc -l)" -ge 6
           done
+      - name: Compare independent candidate A and B and bind native subjects
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          python -B - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          rows=[]
+          for platform in ("windows-x64","windows-arm64","macos-x64","macos-arm64","linux-x64","linux-arm64"):
+              receipt=json.loads(Path(os.environ["RUNNER_TEMP"],"native",platform,"receipt.json").read_text(encoding="utf-8"))
+              rows.append({"platform":platform,"binary_sha256":receipt["binary_sha256"],
+                           "sbom_sha256":receipt["sbom_sha256"],
+                           "provenance_sha256":receipt["provenance_sha256"]})
+          Path(os.environ["RUNNER_TEMP"],"native-subjects.json").write_text(
+              json.dumps(rows,sort_keys=True,separators=(",", ":"))+"\n",encoding="utf-8")
+          PY
+          PUBLIC_ROOT="$(python -B -c 'import json,os; print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"cut-receipt.json"),encoding="utf-8"))["root_sha256"])')"
+          python -B tools/loom_release_candidate.py compare \
+            candidate-jobs/candidate-A.zip candidate-jobs/candidate-B.zip \
+            --public-root "$PUBLIC_ROOT" --native-subjects "$RUNNER_TEMP/native-subjects.json" \
+            --output "$RUNNER_TEMP/reproducibility-receipt.json"
+          python -B - <<'PY'
+          import json,os
+          from pathlib import Path
+          root=Path(os.environ["RUNNER_TEMP"])
+          receipt=json.loads((root/"reproducibility-receipt.json").read_text(encoding="utf-8"))
+          value={"schema_version":1,"status":"pre-installation",
+                 "candidate_extracted_tree_sha256":receipt["candidate_a"]["installed_tree_sha256"],
+                 "represented_installed_subjects":[],
+                 "source_reproducibility_receipt_sha256":receipt["receipt_sha256"]}
+          (root/"installed-runtime-evidence.json").write_text(
+              json.dumps(value,sort_keys=True,separators=(",", ":"))+"\n",encoding="utf-8")
+          PY
+      - name: Verify v4 subject against actual release evidence
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        shell: bash
+        run: |
+          EXACT_CUT="$RUNNER_TEMP/capability-reports/full-test-timings-ubuntu-latest-py3.11/exact-cut-ci.json"
+          test -f "$EXACT_CUT"
+          python -B tools/loom_release_subject_verify.py \
+            release-assets/RELEASE-SUBJECT.json \
+            --plugin "release-assets/loom-plugin-${RELEASE_TAG}.zip" \
+            --commit "$GITHUB_SHA" --tag "$RELEASE_TAG" \
+            --reproducibility-receipt "$RUNNER_TEMP/reproducibility-receipt.json" \
+            --suite-certificate "$RUNNER_TEMP/full-suite.json" \
+            --suite-policy contracts/release-suite-policy-v1.json \
+            --promotion-policy .github/workflows/publish-release.yml \
+            --exact-cut-receipt "$EXACT_CUT"
       - name: Build the bounded attestation subject
         env:
           RELEASE_TAG: ${{ inputs.tag }}
@@ -165,6 +336,11 @@ jobs:
               "cut_receipt": root / "cut-receipt.json",
               "suite_report": root / "full-suite.json",
               "rollback_report": root / "rollback.json",
+              "reproducibility_receipt": root / "reproducibility-receipt.json",
+              "suite_policy": Path("contracts/release-suite-policy-v1.json"),
+              "promotion_policy": Path(".github/workflows/publish-release.yml"),
+              "exact_cut_receipt": root / "capability-reports" / "full-test-timings-ubuntu-latest-py3.11" / "exact-cut-ci.json",
+              "installed_runtime_evidence": root / "installed-runtime-evidence.json",
               "codex_app_observation": assets / "CODEX-APP-EVIDENCE.json",
           }
           for platform in (
@@ -242,10 +418,15 @@ jobs:
             --reproduced-plugin "release-assets/loom-plugin-${RELEASE_TAG}-repro.zip" \
             --cut-receipt "$RUNNER_TEMP/cut-receipt.json" \
             --suite-report "$RUNNER_TEMP/full-suite.json" \
+            --reproducibility-receipt "$RUNNER_TEMP/reproducibility-receipt.json" \
+            --suite-policy contracts/release-suite-policy-v1.json \
+            --promotion-policy .github/workflows/publish-release.yml \
+            --exact-cut-receipt "$RUNNER_TEMP/capability-reports/full-test-timings-ubuntu-latest-py3.11/exact-cut-ci.json" \
             --rollback-report "$RUNNER_TEMP/rollback.json" \
             --ci-authority "$RUNNER_TEMP/ci-authority.json" \
             --codex-observation release-assets/CODEX-APP-EVIDENCE.json \
             --evaluation-epoch "$NOW" --output "$RUNNER_TEMP/release-passport" \
+            --defer-checksum-manifest \
             "${ARGS[@]}"
           test -f "$RUNNER_TEMP/release-passport/RELEASE-READINESS.json"
           test -f "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE.json"
@@ -254,36 +435,116 @@ jobs:
             "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE-SUBJECT.json"
           cp "$ATTESTATION_BUNDLE" \
             "$RUNNER_TEMP/release-passport/RELEASE-EVIDENCE-ATTESTATION.json"
-      - name: Publish exact release passport assets to the draft
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+      - name: Prepare exact release passport assets for protected staging
         shell: bash
         run: |
-          python -B - <<'PY'
-          import hashlib
-          from pathlib import Path
-          assets = Path("release-assets")
-          passport = Path(__import__("os").environ["RUNNER_TEMP"]) / "release-passport"
-          published = [
-              path for path in assets.iterdir()
-              if path.is_file() and path.name != "SHA256SUMS"
-          ] + [path for path in passport.iterdir()
-               if path.is_file() and path.name != "SHA256SUMS"]
-          lines = [f"{hashlib.sha256(path.read_bytes()).hexdigest()} *{path.name}\n"
-                   for path in sorted(published, key=lambda item: item.name)]
-          (passport / "SHA256SUMS").write_text("".join(lines), encoding="utf-8")
-          PY
-          gh release upload "$RELEASE_TAG" "$RUNNER_TEMP/release-passport"/* --clobber
+          cp "$RUNNER_TEMP/cut-receipt.json" "$RUNNER_TEMP/release-passport/cut-receipt.json"
+          cp "$RUNNER_TEMP/full-suite.json" "$RUNNER_TEMP/release-passport/full-suite.json"
+          cp "$RUNNER_TEMP/rollback.json" "$RUNNER_TEMP/release-passport/rollback.json"
+          cp "$RUNNER_TEMP/clean-room.json" "$RUNNER_TEMP/release-passport/clean-room.json"
+          cp "$RUNNER_TEMP/reproducibility-receipt.json" \
+            "$RUNNER_TEMP/release-passport/reproducibility-receipt.json"
+          cp "$RUNNER_TEMP/capability-reports/full-test-timings-ubuntu-latest-py3.11/exact-cut-ci.json" \
+            "$RUNNER_TEMP/release-passport/exact-cut-ci.json"
+          cp "$RUNNER_TEMP/installed-runtime-evidence.json" \
+            "$RUNNER_TEMP/release-passport/installed-runtime-evidence.json"
+          cp "$RUNNER_TEMP/quality-certificate/quality-matrix-certificate.json" \
+            "$RUNNER_TEMP/release-passport/quality-matrix-certificate.json"
+          cp "$RUNNER_TEMP/compatibility-certificate/compatibility-matrix-certificate.json" \
+            "$RUNNER_TEMP/release-passport/compatibility-matrix-certificate.json"
+          python -B tools/loom_release_promotion.py create-asset-manifest \
+            --asset-root release-assets \
+            --asset-root "$RUNNER_TEMP/release-passport" \
+            --tag "$RELEASE_TAG" \
+            --manifest "$RUNNER_TEMP/release-passport/SHA256SUMS"
       - name: Verify generated operational truth is current
         working-directory: tools
         run: python -B loom_readiness.py .. --check
       - uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-checksums: ${{ runner.temp }}/release-passport/SHA256SUMS
-      - name: Prove the release is still a draft
+      - uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: ${{ runner.temp }}/release-passport/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: verified-release-passport-${{ github.sha }}
+          path: ${{ runner.temp }}/release-passport/
+          retention-days: 1
+          if-no-files-found: error
+
+  stage-draft-assets:
+    needs: release
+    if: inputs.confirm_draft_only == 'DRAFT-ONLY'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment: loom-release
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: verified-release-passport-${{ github.sha }}
+          path: release-passport
+      - name: Revalidate and stage exact assets without overwrite
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
         shell: bash
-        run: test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"
+        run: |
+          test "$(git rev-parse "${RELEASE_TAG}^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" refs/remotes/origin/main
+          test "$(gh api "repos/$GITHUB_REPOSITORY/immutable-releases" --jq '.enabled')" = "true"
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"
+          while IFS= read -r asset; do
+            name="$(basename "$asset")"
+            local_digest="$(sha256sum "$asset" | cut -d' ' -f1)"
+            grep -Fxq "$local_digest *$name" release-passport/SHA256SUMS
+            gh attestation verify "$asset" -R "$GITHUB_REPOSITORY" > /dev/null
+            remote_digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              --jq '.assets[] | select(.name == "'"$name"'") | .digest')"
+            if test -z "$remote_digest"; then
+              gh release upload "$RELEASE_TAG" "$asset"
+            else
+              test "$remote_digest" = "sha256:$local_digest"
+            fi
+            observed_digest="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+              --jq '.assets[] | select(.name == "'"$name"'") | .digest')"
+            test "$observed_digest" = "sha256:$local_digest"
+          done < <(find release-passport -maxdepth 1 -type f \
+            ! -name SHA256SUMS -print | sort)
+          gh release download "$RELEASE_TAG" \
+            --dir "$RUNNER_TEMP/staged-release-assets"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/staged-release.json"
+          python -B tools/loom_release_promotion.py verify-asset-set \
+            "$RUNNER_TEMP/staged-release-assets" \
+            --tag "$RELEASE_TAG" \
+            --manifest release-passport/SHA256SUMS \
+            --api-release "$RUNNER_TEMP/staged-release.json"
+          test -z "$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq '.assets[] | select(.name == "SHA256SUMS") | .digest')"
+          gh attestation verify release-passport/SHA256SUMS \
+            -R "$GITHUB_REPOSITORY" > /dev/null
+          gh release upload "$RELEASE_TAG" release-passport/SHA256SUMS
+          manifest_digest="$(sha256sum release-passport/SHA256SUMS | cut -d' ' -f1)"
+          observed_manifest="$(gh api \
+            "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            --jq '.assets[] | select(.name == "SHA256SUMS") | .digest')"
+          test "$observed_manifest" = "sha256:$manifest_digest"
+          cp release-passport/SHA256SUMS \
+            "$RUNNER_TEMP/staged-release-assets/SHA256SUMS"
+          gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" \
+            > "$RUNNER_TEMP/final-staged-release.json"
+          python -B tools/loom_release_promotion.py verify-asset-set \
+            "$RUNNER_TEMP/staged-release-assets" \
+            --tag "$RELEASE_TAG" \
+            --manifest "$RUNNER_TEMP/staged-release-assets/SHA256SUMS" \
+            --api-release "$RUNNER_TEMP/final-staged-release.json" \
+            --manifest-published
+          test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"

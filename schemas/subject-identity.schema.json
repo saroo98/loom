@@ -8,7 +8,8 @@
     {"$ref": "#/$defs/releaseTag"},
     {"$ref": "#/$defs/pluginZip"},
     {"$ref": "#/$defs/nativeHelper"},
-    {"$ref": "#/$defs/installedRuntime"}
+    {"$ref": "#/$defs/installedRuntime"},
+    {"$ref": "#/$defs/publicCut"}
   ],
   "$defs": {
     "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
@@ -129,6 +130,24 @@
             "platform", "filename", "bytes", "sha256",
             "sbom_sha256", "provenance_sha256"
           ]
+        }
+      ]
+    },
+    "publicCut": {
+      "unevaluatedProperties": false,
+      "allOf": [
+        {"$ref": "#/$defs/base"},
+        {
+          "properties": {
+            "schema_version": {"const": 1},
+            "kind": {"const": "public-cut"},
+            "subject_id": {"const": "public-cut"},
+            "subject_digest": {"$ref": "#/$defs/digest"},
+            "root_sha256": {"$ref": "#/$defs/digest"},
+            "manifest_sha256": {"$ref": "#/$defs/digest"},
+            "file_count": {"type": "integer", "minimum": 1, "maximum": 8192}
+          },
+          "required": ["root_sha256", "manifest_sha256", "file_count"]
         }
       ]
     },

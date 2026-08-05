@@ -14,6 +14,10 @@ import loom_truth
 
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 MAX_CORPUS_BYTES = 1024 * 1024
+STABLE_CORPUS_SUBJECT_KINDS = [
+    "main-source", "candidate-source", "release-tag", "plugin-zip",
+    "native-helper", "installed-runtime",
+]
 
 
 class ShadowCorpusError(RuntimeError):
@@ -64,6 +68,13 @@ def _subject(kind, variant=0):
             "tag_object_sha256": digit * 64,
             "peeled_commit": digit * 40, "signature_state": "verified",
         }
+    elif kind == "public-cut":
+        body = {
+            "schema_version": 1, "kind": kind, "subject_id": "public-cut",
+            "root_sha256": digit * 64,
+            "manifest_sha256": str(variant + 2) * 64,
+            "file_count": variant + 1,
+        }
     elif kind == "plugin-zip":
         filename = f"loom-{variant}.zip"
         body = {
@@ -103,6 +114,8 @@ def _wrong_digest(subject):
         body["tag_object_sha256"] = "f" * 64
     elif kind in {"plugin-zip", "native-helper"}:
         body["sha256"] = "f" * 64
+    elif kind == "public-cut":
+        body["root_sha256"] = "f" * 64
     else:
         body["payload_sha256"] = "f" * 64
     return loom_subject_identity.seal_subject(body)
@@ -160,12 +173,7 @@ def _validate_corpus(value):
     if not isinstance(value, dict) or set(value) != required \
             or value.get("schema_version") != 1 \
             or value.get("policy_id") != "loom-truth-shadow-corpus-v1" \
-            or value.get("subject_kinds") != list(
-                sorted(loom_subject_identity.SUBJECT_KINDS,
-                       key=lambda kind: [
-                           "main-source", "candidate-source", "release-tag",
-                           "plugin-zip", "native-helper",
-                           "installed-runtime"].index(kind))) \
+            or value.get("subject_kinds") != STABLE_CORPUS_SUBJECT_KINDS \
             or value.get("fact_classes") != list(loom_truth.FACT_CLASSES):
         raise ShadowCorpusError("shadow corpus contract is invalid")
     if set(value.get("unsafe_states", [])) != {

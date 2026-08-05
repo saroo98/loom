@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/exact-cut-ci-receipt-v2.schema.json",
+  "title": "Exact-subject exact-cut CI receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "status", "platform", "architecture", "python", "source_commit", "build_root_sha256", "verified_root_sha256", "public_manifest_sha256", "public_file_count", "suite", "error_type", "error_sha256", "operation_id", "environment", "receipt_sha256"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"enum": ["verified", "failed"]},
+    "platform": {"type": "string", "minLength": 1},
+    "architecture": {"type": "string", "minLength": 1},
+    "python": {"type": "string", "minLength": 1},
+    "source_commit": {"type": ["string", "null"], "pattern": "^[0-9a-f]{40}$"},
+    "build_root_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "verified_root_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "public_manifest_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "public_file_count": {"type": ["integer", "null"], "minimum": 1},
+    "suite": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/suite"}]},
+    "error_type": {"type": ["string", "null"], "maxLength": 128},
+    "error_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+    "operation_id": {"type": ["string", "null"], "maxLength": 128},
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["evidence_class", "requested_label", "image_os", "image_version", "os", "os_release", "os_version", "architecture", "python_implementation", "python_version", "workflow_path", "workflow_digest", "action_manifest_digest", "event_name", "run_id", "run_attempt", "environment_sha256"],
+      "properties": {
+        "evidence_class": {"enum": ["ci-reproduced", "local-unattested"]},
+        "requested_label": {"type": "string", "minLength": 1},
+        "image_os": {"type": "string", "minLength": 1},
+        "image_version": {"type": "string", "minLength": 1},
+        "os": {"type": "string", "minLength": 1},
+        "os_release": {"type": "string"},
+        "os_version": {"type": "string"},
+        "architecture": {"type": "string", "minLength": 1},
+        "python_implementation": {"type": "string", "minLength": 1},
+        "python_version": {"type": "string", "minLength": 1},
+        "workflow_path": {"type": "string", "minLength": 1},
+        "workflow_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "action_manifest_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "event_name": {"type": "string", "minLength": 1},
+        "run_id": {"type": "string", "minLength": 1},
+        "run_attempt": {"type": "string", "minLength": 1},
+        "environment_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "receipt_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"status": {"const": "verified"}}},
+      "then": {
+        "properties": {
+          "build_root_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "verified_root_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "public_manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "public_file_count": {"type": "integer", "minimum": 1},
+          "error_type": {"type": "null"},
+          "error_sha256": {"type": "null"}
+        }
+      },
+      "else": {
+        "properties": {
+          "error_type": {"type": "string", "minLength": 1, "maxLength": 128},
+          "error_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "passed", "capability_complete", "capability_status", "returncode", "primary_failure_sha256", "operation_receipt_sha256", "elapsed_microseconds", "tests_run", "failure_count", "error_count", "failed_tests", "skip_receipts", "timings", "binding"],
+      "properties": {
+        "schema_version": {"const": 2},
+        "passed": {"type": "boolean"},
+        "capability_complete": {"type": "boolean"},
+        "capability_status": {"enum": ["complete", "requires-matrix", "failed"]},
+        "returncode": {"type": ["integer", "null"]},
+        "primary_failure_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "operation_receipt_sha256": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/digest"}]},
+        "elapsed_microseconds": {"type": ["integer", "null"], "minimum": 0},
+        "tests_run": {"type": ["integer", "null"], "minimum": 0},
+        "failure_count": {"type": ["integer", "null"], "minimum": 0},
+        "error_count": {"type": ["integer", "null"], "minimum": 0},
+        "failed_tests": {"type": "array", "maxItems": 64, "items": {"type": "object", "additionalProperties": false, "required": ["test", "status"], "properties": {"test": {"type": "string", "minLength": 3, "maxLength": 512}, "status": {"enum": ["failed", "error"]}}}},
+        "skip_receipts": {"type": "array", "maxItems": 100000, "items": {"type": "object", "additionalProperties": false, "required": ["test", "reason_code", "reason_sha256"], "properties": {"test": {"type": "string", "minLength": 3, "maxLength": 512}, "reason_code": {"enum": ["platform-boundary", "host-capability-unavailable", "tool-unavailable", "unclassified"]}, "reason_sha256": {"$ref": "#/$defs/digest"}}}},
+        "timings": {"type": "array", "maxItems": 100000, "items": {"type": "object", "additionalProperties": false, "required": ["test", "status", "duration_microseconds"], "properties": {"test": {"type": "string", "minLength": 3, "maxLength": 512}, "status": {"enum": ["passed", "failed", "error", "skipped"]}, "duration_microseconds": {"type": "integer", "minimum": 0}}}},
+        "binding": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]}
+      }
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_commit", "public_root_sha256", "environment", "platform", "architecture", "python", "runner"],
+      "properties": {
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "public_root_sha256": {"$ref": "#/$defs/digest"},
+        "environment": {"$ref": "#/properties/environment"},
+        "platform": {"type": "string", "minLength": 3, "maxLength": 257},
+        "architecture": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python": {"type": "string", "minLength": 1, "maxLength": 128},
+        "runner": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

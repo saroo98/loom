@@ -16,6 +16,70 @@ from pathlib import Path
 import loom_subject_identity
 
 
+_DIGEST = re.compile(r"[0-9a-f]{64}")
+
+
+def _canonical_digest(body):
+    return hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")).hexdigest()
+
+
+def release_environment(*, requested_label=None, image_os=None,
+                        image_version=None, workflow_path=None,
+                        workflow_digest=None, action_manifest_digest=None,
+                        event_name=None, run_id=None, run_attempt=None):
+    """Return the closed runner and workflow identity used by release evidence.
+
+    Requested labels and resolved images are intentionally separate. A moving
+    label is never treated as proof that two actual runner images are equal.
+    """
+    supplied = [requested_label, image_os, image_version, workflow_path,
+                workflow_digest, action_manifest_digest, event_name, run_id,
+                run_attempt]
+    if not any(value is not None for value in supplied) \
+            and os.environ.get("GITHUB_ACTIONS") == "true":
+        requested_label = os.environ.get("LOOM_REQUESTED_RUNNER_LABEL")
+        image_os = os.environ.get("ImageOS")
+        image_version = os.environ.get("ImageVersion")
+        workflow_path = os.environ.get("LOOM_WORKFLOW_PATH")
+        workflow_digest = os.environ.get("LOOM_WORKFLOW_DIGEST")
+        action_manifest_digest = os.environ.get("LOOM_ACTION_MANIFEST_DIGEST")
+        event_name = os.environ.get("GITHUB_EVENT_NAME")
+        run_id = os.environ.get("GITHUB_RUN_ID")
+        run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT")
+        supplied = [requested_label, image_os, image_version, workflow_path,
+                    workflow_digest, action_manifest_digest, event_name, run_id,
+                    run_attempt]
+    if any(value is not None for value in supplied) and not all(
+            isinstance(value, str) and value.strip() for value in supplied):
+        raise ValueError("release CI identity is incomplete")
+    if workflow_digest is not None and (not _DIGEST.fullmatch(workflow_digest)
+                                        or not _DIGEST.fullmatch(
+                                            action_manifest_digest or "")):
+        raise ValueError("release CI digests are invalid")
+    ci = workflow_digest is not None
+    body = {
+        "evidence_class": "ci-reproduced" if ci else "local-unattested",
+        "requested_label": requested_label or "local-unattested",
+        "image_os": image_os or os.environ.get("ImageOS") or platform.system().lower(),
+        "image_version": image_version or os.environ.get("ImageVersion") or "local-unattested",
+        "os": platform.system(),
+        "os_release": platform.release(),
+        "os_version": platform.version(),
+        "architecture": platform.machine(),
+        "python_implementation": platform.python_implementation(),
+        "python_version": platform.python_version(),
+        "workflow_path": workflow_path or "local-unattested",
+        "workflow_digest": workflow_digest or "0" * 64,
+        "action_manifest_digest": action_manifest_digest or "0" * 64,
+        "event_name": event_name or "local-unattested",
+        "run_id": run_id or "local-unattested",
+        "run_attempt": run_attempt or "local-unattested",
+    }
+    return {**body, "environment_sha256": _canonical_digest(body)}
+
+
 def _probe(root):
     results = {}
     target = root / "target"

@@ -169,11 +169,26 @@ def _verify_helper_receipt(
         source_digest):
     required = {"platform", "binary_sha256", "rebuild_sha256", "source_sha256",
                 "cargo_lock_sha256", "sbom_sha256", "provenance_sha256"}
-    if not isinstance(receipt, dict) or set(receipt) != required \
+    exact_fields = required | {"schema_version", "source_commit",
+                               "environment_sha256", "workflow_digest",
+                               "action_manifest_digest", "receipt_sha256"}
+    if not isinstance(receipt, dict) or frozenset(receipt) not in {
+            frozenset(required), frozenset(exact_fields)} \
             or not isinstance(evidence, dict) \
             or set(evidence) != {"rebuild", "sbom", "provenance"} \
             or receipt["platform"] != platform_id:
         raise PackageError(f"{platform_id} helper provenance receipt is incomplete")
+    if set(receipt) == exact_fields and (receipt.get("schema_version") != 2 \
+            or receipt.get("source_commit") != source_commit \
+            or any(not re.fullmatch(r"[0-9a-f]{64}", str(receipt.get(field, "")))
+                   for field in ("environment_sha256", "workflow_digest",
+                                 "action_manifest_digest", "receipt_sha256"))
+            or receipt["receipt_sha256"] != hashlib.sha256(json.dumps(
+                {key: item for key, item in receipt.items()
+                 if key != "receipt_sha256"}, sort_keys=True,
+                separators=(",", ":"), ensure_ascii=False).encode(
+                    "utf-8")).hexdigest()):
+        raise PackageError(f"{platform_id} helper exact CI identity is invalid")
     for key in required - {"platform"}:
         if not isinstance(receipt[key], str) or len(receipt[key]) != 64 \
                 or any(character not in "0123456789abcdef" for character in receipt[key]):
@@ -318,9 +333,16 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             verified_opaque_hashes=verified_opaque)
         if not firewall["clean"]:
             raise PackageError(f"plugin firewall failed: {firewall['findings'][:3]}")
+        public_manifest = json.loads((output / "BUILD-MANIFEST.json").read_text())
+        public_manifest_raw = (output / "BUILD-MANIFEST.json").read_bytes()
         return {"output": str(output), "manifest": manifest,
                 "firewall": firewall,
-                "public_manifest": json.loads((output / "BUILD-MANIFEST.json").read_text())}
+                "public_manifest": public_manifest,
+                "public_cut_relation": {
+                    "root_sha256": public_manifest["root_sha256"],
+                    "manifest_sha256": hashlib.sha256(public_manifest_raw).hexdigest(),
+                    "file_count": len(public_manifest["files"]) + 1,
+                }}
 
 
 def main(argv=None):
