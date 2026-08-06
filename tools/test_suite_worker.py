@@ -69,7 +69,12 @@ class SuiteWorkerTests(unittest.TestCase):
         }
         harness = hashlib.sha256(
             (tools / "loom_suite_worker.py").read_bytes()).hexdigest()
-        inventory = loom_suite_plan.inventory(
+        # This fixture is already executing inside a supervised release worker.
+        # Discover its synthetic one-module suite directly so worker tests do not
+        # create a nested supervisor whose transient host failure can obscure the
+        # behavior the test is meant to exercise. Supervised inventory has its
+        # own integration coverage in test_suite_plan.py.
+        inventory = loom_suite_plan._discover_inventory(
             tools, subject=subject, environment=ENVIRONMENT,
             harness_sha256=harness)
         profile = loom_suite_plan.seal_timing_profile({
@@ -86,6 +91,22 @@ class SuiteWorkerTests(unittest.TestCase):
         output = root / "workers"
         output.mkdir()
         return cut, inventory, plan, output
+
+    def test_worker_fixture_does_not_nest_supervised_inventory(self):
+        source = (
+            "import unittest\n"
+            "class WorkerFixture(unittest.TestCase):\n"
+            "    def test_passes(self): pass\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+                loom_suite_plan, "inventory",
+                side_effect=AssertionError("nested inventory is forbidden")):
+            _, inventory, plan, _ = self.fixture(
+                Path(temporary).resolve(), source)
+
+        self.assertEqual(1, inventory["test_count"])
+        self.assertEqual(
+            1, sum(len(shard["modules"]) for shard in plan["shards"]))
 
     def assert_setup_failure_worker(self, source, expected_test,
                                     private_message):

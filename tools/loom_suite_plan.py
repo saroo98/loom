@@ -41,9 +41,36 @@ DEFAULT_EXCLUSIVE_MODULES = (
     "test_loom_mutation",
 )
 
+SUITE_PLAN_ERROR_CODES = {
+    "test discovery failed": "SUITE_INVENTORY_DISCOVERY_FAILED",
+    "test discovery returned an unsafe module":
+        "SUITE_INVENTORY_DISCOVERY_FAILED",
+    "test discovery returned an empty inventory":
+        "SUITE_INVENTORY_DISCOVERY_FAILED",
+    "test root is invalid": "SUITE_INVENTORY_TEST_ROOT_INVALID",
+    "test root contains a redirected entry": "SUITE_INVENTORY_REDIRECTED_ROOT",
+    "protected discovery root is invalid":
+        "SUITE_INVENTORY_PROTECTED_ROOT_INVALID",
+    "test root is outside its discovery context":
+        "SUITE_INVENTORY_CONTEXT_INVALID",
+    "inventory discovery inputs are invalid": "SUITE_INVENTORY_INPUT_INVALID",
+    "inventory runtime cleanup failed":
+        "SUITE_INVENTORY_RUNTIME_CLEANUP_FAILED",
+    "inventory privacy validation failed": "SUITE_INVENTORY_PRIVACY_FAILED",
+    "inventory containment mutation detected": "SUITE_INVENTORY_MUTATION",
+    "inventory containment failed": "SUITE_INVENTORY_CONTAINMENT_FAILED",
+    "inventory discovery identity is invalid": "SUITE_INVENTORY_IDENTITY_INVALID",
+    "inventory discovery cleanup failed": "SUITE_INVENTORY_CLEANUP_FAILED",
+}
+SUITE_PLAN_PUBLIC_ERROR_CODES = frozenset(SUITE_PLAN_ERROR_CODES.values())
+
 
 class SuitePlanError(RuntimeError):
-    pass
+    def __init__(self, message):
+        super().__init__(message)
+        code = SUITE_PLAN_ERROR_CODES.get(message)
+        if code is not None:
+            self.code = code
 
 
 def _strict_object(pairs):
