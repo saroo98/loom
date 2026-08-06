@@ -365,7 +365,11 @@ def reconstruct(source, authority_archive, native_root, output, *, source_commit
         } for path in sorted(
             loom_reliability._regular_files(package),
             key=lambda item: item.relative_to(package).as_posix())]
-        if receipt["files"] != observed_files:
+        expected_files = {item["path"]: item for item in receipt["files"]}
+        observed_by_path = {item["path"]: item for item in observed_files}
+        if len(expected_files) != len(receipt["files"]) \
+                or len(observed_by_path) != len(observed_files) \
+                or expected_files != observed_by_path:
             raise CandidateError("candidate source build differs from signed receipt")
         loom_reliability.atomic_write_bytes(
             package / "FINAL-PACKAGE-RECEIPT.json",

@@ -60,6 +60,7 @@ class ReleaseCandidateTests(unittest.TestCase):
             raw = path.read_bytes()
             files.append({"path": path.relative_to(package).as_posix(),
                           "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()})
+        files.reverse()
         (package / "FINAL-PACKAGE-RECEIPT.json").write_text(json.dumps({
             "schema_version": 1, "version": "1.9.0", "release_sequence": 19,
             "files": files,
@@ -70,6 +71,10 @@ class ReleaseCandidateTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             package = self._package(root)
+            receipt = json.loads((package / "FINAL-PACKAGE-RECEIPT.json").read_text(
+                encoding="utf-8"))
+            receipt_paths = [row["path"] for row in receipt["files"]]
+            self.assertNotEqual(sorted(receipt_paths), receipt_paths)
             authority = root / "authority.zip"
             loom_plugin_package.archive_finalized(package, authority)
             native_root = root / "native"
