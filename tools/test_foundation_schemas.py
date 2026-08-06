@@ -152,7 +152,11 @@ class FoundationSchemaTests(unittest.TestCase):
         plan = loom_suite_plan.plan(
             inventory, timing_profile=validated_profile,
             policy=validated_policy, logical_cpus=2)
-        self.assertEqual("serial", validated_policy["authority_mode"])
+        qualification_exists = (
+            root / "contracts" / "release-suite-qualification-v1.json").is_file()
+        self.assertEqual(
+            "certificate" if qualification_exists else "serial",
+            validated_policy["authority_mode"])
         self.assertEqual(
             sorted(loom_suite_plan.DEFAULT_EXCLUSIVE_MODULES),
             validated_policy["exclusive_modules"])

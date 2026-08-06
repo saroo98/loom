@@ -1,5 +1,6 @@
 """Supply-chain policy checks for every GitHub Actions workflow."""
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -189,9 +190,14 @@ class WorkflowPolicyTests(unittest.TestCase):
     def test_serial_authority_and_shadow_topology_are_explicit(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
-        policy = (ROOT / "contracts" / "release-suite-policy-v1.json").read_text(
-            encoding="utf-8")
-        self.assertIn('"authority_mode":"serial"', policy.replace(" ", ""))
+        policy = json.loads((
+            ROOT / "contracts" / "release-suite-policy-v1.json").read_text(
+                encoding="utf-8"))
+        qualification_exists = (
+            ROOT / "contracts" / "release-suite-qualification-v1.json").is_file()
+        self.assertEqual(
+            "certificate" if qualification_exists else "serial",
+            policy["authority_mode"])
         for text in (quality, compatibility):
             self.assertIn("loom_suite_certificate.py shadow-cell", text)
             self.assertIn("loom_suite_certificate.py run-cell", text)
