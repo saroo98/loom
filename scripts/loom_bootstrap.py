@@ -236,8 +236,9 @@ def _stage_direct_runtime(plugin_root, manager, *, version, platform_id,
                           package_module):
     """Build one immutable unattested runtime without changing the active pointer."""
     final = manager.versions / version
-    if final.exists():
-        raise BootstrapError("direct runtime version path already exists")
+    # A concurrent cold bootstrap can publish the immutable destination after this
+    # process selected the staging path. Publication and same-source convergence are
+    # decided under the runtime transaction lock; staging remains UUID-isolated.
     staging = manager.versions / f".{version}.direct-staged-{uuid.uuid4().hex}"
     staging.mkdir()
     try:
@@ -768,15 +769,42 @@ def reconcile(plugin_root, home):
     platform_id = loom_update.platform_id()
     binary_name = "loom-vault.exe" if platform_id.startswith("windows-") else "loom-vault"
     manager = loom_update.SharedRuntime(home, plugin_roots=[plugin_root])
-    if manager.current_path.is_file() and manager.current().get("version") == version:
+
+    def finish_verified_current():
+        """Accept only a fully reverified current runtime at this observation point."""
+        if not manager.current_path.is_file():
+            return None
+        current = manager.current()
+        if current.get("version") != version:
+            return None
+        active_runtime = _verified_current_runtime(home)
+        if active_runtime is None:
+            raise BootstrapError("active runtime disappeared during verification")
+        if direct_receipt is not None:
+            _helper, payload_sha256 = _verify_recoverable_direct_runtime(
+                active_runtime, version=version, platform_id=platform_id,
+                binary_name=binary_name, source_receipt=direct_receipt)
+            if current.get("payload_sha256") != payload_sha256:
+                raise BootstrapError(
+                    "active direct runtime does not match its verified payload")
         manager.reconcile_current_metadata()
-        launcher = _install_active_launcher(home, current_runtime)
+        launcher = _install_active_launcher(home, active_runtime)
         authority = ("direct-source-install-unattested"
-                     if (current_runtime / ".loom-direct-source-receipt.json").is_file()
+                     if (active_runtime / ".loom-direct-source-receipt.json").is_file()
                      else "signed-release")
         return {"status": "current", "version": version,
                 "delivery_authority": authority, "launcher": launcher}
+
+    current_result = finish_verified_current()
+    if current_result is not None:
+        return current_result
     if direct_receipt is not None and manager.current_path.is_file():
+        # Close the interval between the first current-pointer observation and the
+        # direct-source replacement guard. A same-source concurrent winner is safe
+        # only after the complete runtime and source receipt are reverified above.
+        current_result = finish_verified_current()
+        if current_result is not None:
+            return current_result
         raise BootstrapError(
             "an unattested direct source cannot replace an active runtime; "
             "install a signed update")

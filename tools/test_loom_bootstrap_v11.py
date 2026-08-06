@@ -394,6 +394,94 @@ class BootstrapIntegrationTests(unittest.TestCase):
             self.assertEqual(
                 [], list((home / "runtime" / "versions").glob(".*.direct-staged-*")))
 
+    def test_concurrent_direct_winner_is_reverified_after_a_stale_cold_snapshot(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            home = root / "home" / ".loom"
+            loom_bootstrap.reconcile(direct, home)
+            runtime = loom_bootstrap._verified_current_runtime(home)
+
+            with mock.patch.object(
+                    loom_bootstrap, "_verified_current_runtime",
+                    side_effect=[None, runtime]) as verify:
+                result = loom_bootstrap.reconcile(direct, home)
+
+            self.assertEqual("current", result["status"])
+            self.assertEqual(2, verify.call_count)
+            self.assertEqual(runtime, loom_bootstrap._verified_current_runtime(home))
+
+    def test_concurrent_direct_winner_is_rechecked_before_replacement_rejection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            home = root / "home" / ".loom"
+            loom_bootstrap.reconcile(direct, home)
+            runtime = loom_bootstrap._verified_current_runtime(home)
+            manager = loom_update.SharedRuntime(home, plugin_roots=[direct])
+            current_path = manager.current_path
+
+            class DelayedCurrentPath:
+                def __init__(self, path):
+                    self.path = path
+                    self.observations = 0
+
+                def is_file(self):
+                    self.observations += 1
+                    return self.observations > 1
+
+                def __getattr__(self, name):
+                    return getattr(self.path, name)
+
+                def __fspath__(self):
+                    return os.fspath(self.path)
+
+            manager.current_path = DelayedCurrentPath(current_path)
+            with mock.patch.object(
+                    loom_bootstrap, "_verified_current_runtime",
+                    side_effect=[None, runtime]) as verify, \
+                    mock.patch.object(
+                        loom_update, "SharedRuntime", return_value=manager):
+                result = loom_bootstrap.reconcile(direct, home)
+
+            self.assertEqual("current", result["status"])
+            self.assertEqual(2, verify.call_count)
+            self.assertGreaterEqual(manager.current_path.observations, 3)
+
+    def test_direct_staging_converges_if_destination_appears_after_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            direct = self._install_direct_fixture(root)
+            home = root / "home" / ".loom"
+            activated = loom_bootstrap.reconcile(direct, home)
+            manager = loom_update.SharedRuntime(home, plugin_roots=[direct])
+            source_receipt = loom_bootstrap._direct_install_receipt(direct)
+            platform_id = loom_update.platform_id()
+            binary_name = "loom-vault.exe" if os.name == "nt" else "loom-vault"
+            version = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
+
+            staging, final, _helper, payload_sha256 = \
+                loom_bootstrap._stage_direct_runtime(
+                    direct, manager, version=version, platform_id=platform_id,
+                    binary_name=binary_name, source_receipt=source_receipt,
+                    reliability_module=loom_reliability,
+                    package_module=loom_plugin_package)
+            result = loom_bootstrap._activate_staged_direct_runtime(
+                manager, staging, final, {
+                    "version": version, "path": version,
+                    "payload_sha256": payload_sha256,
+                    "release_sequence": 1, "previous": None,
+                }, version=version, platform_id=platform_id,
+                binary_name=binary_name, source_receipt=source_receipt,
+                expected_payload_sha256=payload_sha256,
+                reliability_module=loom_reliability)
+
+            self.assertEqual("activated", activated["status"])
+            self.assertEqual("current", result["status"])
+            self.assertFalse(staging.exists())
+            self.assertEqual(
+                [], list((home / "runtime" / "versions").glob(".*.direct-staged-*")))
+
     def test_concurrent_direct_activation_rejects_mismatched_existing_destination(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
