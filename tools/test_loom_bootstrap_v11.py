@@ -333,7 +333,9 @@ class BootstrapIntegrationTests(unittest.TestCase):
         self.assertEqual(
             str(msvc / "bin" / "Hostx64" / "x64" / "link.exe"),
             environment["CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"])
-        self.assertEqual(300, VAULT_HELPER_BUILD_TIMEOUT_SECONDS)
+        self.assertEqual(
+            600 if os.name == "nt" else 300,
+            VAULT_HELPER_BUILD_TIMEOUT_SECONDS)
         with mock.patch.object(loom_update, "platform_id",
                                return_value="windows-x64"):
             self.assertEqual("windows-x64", _host_platform())
