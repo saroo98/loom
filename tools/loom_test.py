@@ -15,6 +15,7 @@ from pathlib import Path
 import loom_docs
 import loom_reliability
 import loom_suite_plan
+import v11_test_support
 
 
 CONTAINMENT_FAST_TEST = (
@@ -29,6 +30,7 @@ TEST_MODULE = re.compile(r"^test_[A-Za-z0-9_]+$")
 EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 PUBLIC_ERROR_CODES = frozenset({
     "HOST_UNVERIFIED", *loom_suite_plan.SUITE_PLAN_PUBLIC_ERROR_CODES,
+    *v11_test_support.NATIVE_HELPER_PUBLIC_ERROR_CODES,
 })
 PUBLIC_ERROR_CODE_REDACTED = "PUBLIC_ERROR_CODE_REDACTED"
 STATUS_SEVERITY = {

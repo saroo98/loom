@@ -206,11 +206,16 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("quality-matrix-certificate", quality)
         self.assertIn("compatibility-matrix-certificate", compatibility)
 
-    def test_full_suite_cells_transport_optional_closed_worker_diagnostics(self):
+    def test_full_suite_cells_transport_closed_failure_diagnostics(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(
             encoding="utf-8")
         for text in (quality, compatibility):
+            self.assertIn(
+                "--failure-diagnostic-output serial-failure-diagnostic.json",
+                text)
+            self.assertIn(
+                "tools/serial-failure-diagnostic.json", text)
             self.assertIn(
                 "tools/suite-shadow/workers/*/worker-receipt.json", text)
             self.assertIn(

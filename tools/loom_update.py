@@ -23,7 +23,7 @@ import loom_activation
 
 MAX_TARGET_BYTES = 128 * 1024 * 1024
 MAX_TARGETS = 16
-MAX_ARCHIVE_FILES = 512
+MAX_ARCHIVE_FILES = 1024
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
 
 

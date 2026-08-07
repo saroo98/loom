@@ -14,11 +14,16 @@ import loom_release_subject
 import loom_reliability
 import loom_operation_envelope
 import loom_platform_probe
+import loom_privacy
 import loom_test
 
 
 HEX40 = re.compile(r"[0-9a-f]{40}")
 HEX64 = re.compile(r"[0-9a-f]{64}")
+PUBLIC_TEST_ID = re.compile(r"^[A-Za-z_][A-Za-z0-9_.]{2,511}$")
+ABSOLUTE_OWNER_PATH = re.compile(
+    r"(?:[A-Za-z]:[\\/](?:Users|Documents|AppData)[\\/]|/(?:home|Users|root)/)",
+    re.IGNORECASE)
 RECEIPT_FIELDS = {
     "schema_version", "status", "platform", "architecture", "python",
     "source_commit", "build_root_sha256", "verified_root_sha256",
@@ -42,6 +47,20 @@ BINDING_FIELDS = {
     "source_commit", "public_root_sha256", "environment", "platform",
     "architecture", "python", "runner",
 }
+MAX_SERIAL_FAILURE_DIAGNOSTIC_BYTES = 128 * 1024
+
+
+def _strict_object(pairs):
+    value = {}
+    for key, item in pairs:
+        if key in value:
+            raise ValueError("duplicate JSON key")
+        value[key] = item
+    return value
+
+
+def _reject_constant(_value):
+    raise ValueError("non-finite JSON value")
 
 
 def _seal(receipt):
@@ -50,6 +69,109 @@ def _seal(receipt):
     return {**body, "receipt_sha256": hashlib.sha256(json.dumps(
         body, sort_keys=True, separators=(",", ":"), ensure_ascii=False
     ).encode("utf-8")).hexdigest()}
+
+
+def _digest(value):
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False).encode("utf-8")).hexdigest()
+
+
+def _serial_failure_diagnostic(failures, exact_receipt):
+    body = {
+        "schema_version": 1,
+        "exact_cut_receipt_sha256": exact_receipt["receipt_sha256"],
+        "failures": sorted(failures, key=lambda row: (
+            row.get("test", ""), row.get("status", ""),
+            row.get("exception_type", ""), row.get("error_code", ""))),
+    }
+    value = {**body, "failure_diagnostic_sha256": _digest(body)}
+    return verify_serial_failure_diagnostic(value, exact_receipt)
+
+
+def verify_serial_failure_diagnostic(value, exact_receipt):
+    """Verify one closed privacy-safe serial failure sidecar."""
+    if not isinstance(exact_receipt, dict) \
+            or set(exact_receipt) != RECEIPT_FIELDS \
+            or exact_receipt.get("schema_version") != 2 \
+            or exact_receipt.get("status") != "failed" \
+            or exact_receipt.get("receipt_sha256") != _seal(
+                exact_receipt)["receipt_sha256"]:
+        raise ValueError("serial diagnostic exact-cut receipt is invalid")
+    suite = exact_receipt.get("suite")
+    if not isinstance(suite, dict) or set(suite) != SUITE_FIELDS \
+            or suite.get("schema_version") != 2 \
+            or suite.get("passed") is not False \
+            or not isinstance(suite.get("failed_tests"), list):
+        raise ValueError("serial diagnostic exact-cut suite is invalid")
+    if not isinstance(value, dict) or set(value) != {
+            "schema_version", "exact_cut_receipt_sha256", "failures",
+            "failure_diagnostic_sha256"}:
+        raise ValueError("serial diagnostic fields are invalid")
+    body = {key: item for key, item in value.items()
+            if key != "failure_diagnostic_sha256"}
+    if value.get("schema_version") != 1 \
+            or value.get("exact_cut_receipt_sha256") != \
+            exact_receipt["receipt_sha256"] \
+            or HEX64.fullmatch(str(
+                value.get("failure_diagnostic_sha256", ""))) is None \
+            or value["failure_diagnostic_sha256"] != _digest(body):
+        raise ValueError("serial diagnostic identity is invalid")
+    failures = value.get("failures")
+    if not isinstance(failures, list) or not 1 <= len(failures) <= 64:
+        raise ValueError("serial diagnostic rows are invalid")
+    keys = []
+    for row in failures:
+        required = {"test", "status", "exception_type"}
+        if not isinstance(row, dict) or (
+                set(row) != required
+                and set(row) != required | {"error_code"}) \
+                or PUBLIC_TEST_ID.fullmatch(str(row.get("test", ""))) is None \
+                or row.get("status") not in {"failed", "error"} \
+                or loom_test.EXCEPTION_TYPE.fullmatch(str(
+                    row.get("exception_type", ""))) is None \
+                or ("error_code" in row and row["error_code"] not in
+                    loom_test.PUBLIC_ERROR_CODES | {
+                        loom_test.PUBLIC_ERROR_CODE_REDACTED}):
+            raise ValueError("serial diagnostic row is invalid")
+        keys.append((row["test"], row["status"], row["exception_type"],
+                     row.get("error_code", "")))
+    if keys != sorted(keys) or len(keys) != len(set(keys)):
+        raise ValueError("serial diagnostic order is invalid")
+    observed = {
+        (row.get("test"), row.get("status"))
+        for row in suite.get("failed_tests", [])
+    } if isinstance(suite, dict) else set()
+    diagnosed = {(row["test"], row["status"]) for row in failures}
+    if not observed or diagnosed != observed \
+            or sum(status == "failed" for _, status in observed) != \
+            suite.get("failure_count") \
+            or sum(status == "error" for _, status in observed) != \
+            suite.get("error_count"):
+        raise ValueError("serial diagnostic outcomes are invalid")
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False).encode("utf-8")
+    if ABSOLUTE_OWNER_PATH.search(encoded.decode("utf-8")) \
+            or loom_privacy._isolated_secret_signature_match(encoded) is not None:
+        raise ValueError("serial diagnostic contains private evidence")
+    return value
+
+
+def load_serial_failure_diagnostic(path, exact_receipt):
+    """Strictly load and verify a bounded serial diagnostic sidecar."""
+    path = Path(path)
+    if not path.is_file() or path.is_symlink() \
+            or path.stat().st_size > MAX_SERIAL_FAILURE_DIAGNOSTIC_BYTES:
+        raise ValueError("serial diagnostic transport is unsafe")
+    try:
+        value = json.loads(
+            path.read_bytes().decode("utf-8", errors="strict"),
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_constant)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("serial diagnostic JSON is invalid") from exc
+    return verify_serial_failure_diagnostic(value, exact_receipt)
 
 
 def _microseconds(value):
@@ -202,11 +324,13 @@ def verify_receipt(value, *, require_static=None):
     return value
 
 
-def run(source, cut, output, *, suite_output=None, forbidden_tokens=(),
-        static_only=False):
+def run(source, cut, output, *, suite_output=None,
+        failure_diagnostic_output=None, forbidden_tokens=(), static_only=False):
     source = Path(source).resolve()
     cut = Path(cut).resolve()
     output = Path(output).resolve()
+    requested_failure_diagnostic_output = failure_diagnostic_output
+    failure_diagnostic_output = None
     base = {
         "schema_version": 2,
         "status": "failed",
@@ -227,6 +351,7 @@ def run(source, cut, output, *, suite_output=None, forbidden_tokens=(),
     }
     envelope_path = None
     terminal_phase = "failed"
+    failure_diagnostics = None
     try:
         try:
             source_subject = loom_release_subject._tree(source)["sha256"]
@@ -257,6 +382,22 @@ def run(source, cut, output, *, suite_output=None, forbidden_tokens=(),
             envelope_path, phase="effect",
             side_effect_boundary="public-cut-build-started",
             state_may_have_changed=True)
+        if requested_failure_diagnostic_output is not None:
+            lexical_diagnostic_output = Path(os.path.abspath(
+                os.fspath(requested_failure_diagnostic_output)))
+            if lexical_diagnostic_output.is_symlink():
+                raise ValueError("serial diagnostic output is unsafe")
+            resolved_diagnostic_output = lexical_diagnostic_output.resolve()
+            if resolved_diagnostic_output == output \
+                    or suite_output is not None \
+                    and resolved_diagnostic_output == Path(
+                        suite_output).resolve():
+                raise ValueError("serial diagnostic output must be distinct")
+            if resolved_diagnostic_output.exists():
+                if not resolved_diagnostic_output.is_file():
+                    raise ValueError("serial diagnostic output is unsafe")
+                resolved_diagnostic_output.unlink()
+            failure_diagnostic_output = resolved_diagnostic_output
         build = loom_release.build_public(
             source, cut, forbidden_tokens=list(forbidden_tokens),
             source_classification="public-release")
@@ -295,6 +436,8 @@ def run(source, cut, output, *, suite_output=None, forbidden_tokens=(),
         })
         if isinstance(details, dict) and isinstance(details.get("suite"), dict):
             base["suite"] = _public_suite(details["suite"])
+            if isinstance(details["suite"].get("failure_diagnostics"), list):
+                failure_diagnostics = details["suite"]["failure_diagnostics"]
     finally:
         try:
             base = _seal(base)
@@ -311,6 +454,12 @@ def run(source, cut, output, *, suite_output=None, forbidden_tokens=(),
                         else base["error_type"] or "exact-cut-failed"),
                     cleanup_disposition=(
                         "completed" if terminal_phase == "passed" else "preserved"))
+            if failure_diagnostic_output is not None \
+                    and failure_diagnostics:
+                diagnostic = _serial_failure_diagnostic(
+                    failure_diagnostics, base)
+                loom_reliability.atomic_write_json(
+                    failure_diagnostic_output, diagnostic)
         except BaseException as final_exc:
             if base["error_type"] is None:
                 message = f"{type(final_exc).__name__}:{final_exc}"
@@ -331,10 +480,12 @@ def main(argv=None):
     parser.add_argument("cut")
     parser.add_argument("--output", required=True)
     parser.add_argument("--suite-output")
+    parser.add_argument("--failure-diagnostic-output")
     parser.add_argument("--static-only", action="store_true")
     parser.add_argument("--forbidden-token", action="append", default=[])
     args = parser.parse_args(argv)
     result = run(args.source, args.cut, args.output, suite_output=args.suite_output,
+                 failure_diagnostic_output=args.failure_diagnostic_output,
                  forbidden_tokens=args.forbidden_token,
                  static_only=args.static_only)
     print(json.dumps({key: result[key] for key in (

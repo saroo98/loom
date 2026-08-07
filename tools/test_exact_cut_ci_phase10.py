@@ -10,6 +10,28 @@ import loom_operation_envelope
 
 
 class ExactCutCiPhase10Tests(unittest.TestCase):
+    def test_unsafe_serial_diagnostic_target_still_emits_failed_receipt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            cut = root / "build" / "cut"
+            cut.parent.mkdir()
+            output = root / "receipt.json"
+            unsafe = root / "diagnostic-directory"
+            unsafe.mkdir()
+            result = loom_exact_cut_ci.run(
+                source, cut, output, failure_diagnostic_output=unsafe)
+
+            self.assertEqual("failed", result["status"])
+            self.assertEqual("ValueError", result["error_type"])
+            self.assertEqual(
+                result, json.loads(output.read_text(encoding="utf-8")))
+            envelope = loom_operation_envelope.read(
+                cut.parent / ".loom-operations" /
+                f"{result['operation_id']}.json")
+            self.assertEqual("failed", envelope["events"][-1]["phase"])
+
     def test_verifier_failure_still_emits_actionable_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -45,6 +67,8 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             cut.parent.mkdir()
             output = root / "receipt.json"
             suite_output = root / "suite.json"
+            diagnostic_output = root / "serial-failure-diagnostic.json"
+            diagnostic_output.write_text("stale\n", encoding="utf-8")
             verified = {
                 "root_sha256": "a" * 64,
                 "manifest_sha256": "b" * 64,
@@ -69,7 +93,8 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
                         loom_exact_cut_ci.loom_release, "verify_cut",
                         return_value=verified):
                 result = loom_exact_cut_ci.run(
-                    source, cut, output, suite_output=suite_output)
+                    source, cut, output, suite_output=suite_output,
+                    failure_diagnostic_output=diagnostic_output)
             self.assertEqual("verified", result["status"])
             self.assertEqual(result["build_root_sha256"], result["verified_root_sha256"])
             self.assertIn("public_manifest_sha256", result)
@@ -84,6 +109,7 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             self.assertIn("requested_label", suite["binding"]["environment"])
             self.assertEqual(result["receipt_sha256"], json.loads(
                 output.read_text(encoding="utf-8"))["receipt_sha256"])
+            self.assertFalse(diagnostic_output.exists())
             report = loom_lint.Report()
             loom_lint.validate_schema(
                 report, __file__, result, "exact-cut-ci-receipt-v2.schema.json")
@@ -148,6 +174,7 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             cut.parent.mkdir()
             output = root / "receipt.json"
             suite_output = root / "suite.json"
+            diagnostic_output = root / "serial-failure-diagnostic.json"
             error = loom_exact_cut_ci.loom_release.ReleaseError(
                 "suite failed",
                 details={"suite": {
@@ -156,6 +183,11 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
                     "failure_count": 1,
                     "error_count": 0,
                     "failed_tests": [{"test": "tests.ExactFailure", "status": "failed"}],
+                    "failure_diagnostics": [{
+                        "test": "tests.ExactFailure", "status": "failed",
+                        "exception_type": "NativeHelperBuildError",
+                        "error_code": "NATIVE_HELPER_BUILD_TIMEOUT",
+                    }],
                 }},
             )
             with mock.patch.object(
@@ -163,7 +195,8 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
                     return_value={"root_sha256": "a" * 64}), mock.patch.object(
                         loom_exact_cut_ci.loom_release, "verify_cut", side_effect=error):
                 result = loom_exact_cut_ci.run(
-                    source, cut, output, suite_output=suite_output)
+                    source, cut, output, suite_output=suite_output,
+                    failure_diagnostic_output=diagnostic_output)
             self.assertEqual("failed", result["status"])
             self.assertEqual(
                 [{"test": "tests.ExactFailure", "status": "failed"}],
@@ -171,6 +204,34 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             )
             self.assertEqual(result["suite"], json.loads(
                 suite_output.read_text(encoding="utf-8")))
+            diagnostic = json.loads(
+                diagnostic_output.read_text(encoding="utf-8"))
+            loom_exact_cut_ci.verify_serial_failure_diagnostic(
+                diagnostic, result)
+            self.assertEqual(
+                diagnostic,
+                loom_exact_cut_ci.load_serial_failure_diagnostic(
+                    diagnostic_output, result))
+            self.assertEqual(
+                result["receipt_sha256"],
+                diagnostic["exact_cut_receipt_sha256"])
+            self.assertEqual(
+                error.details["suite"]["failure_diagnostics"],
+                diagnostic["failures"])
+            self.assertNotIn("suite failed", json.dumps(diagnostic))
+            tampered = dict(diagnostic)
+            tampered["exact_cut_receipt_sha256"] = "0" * 64
+            with self.assertRaises(ValueError):
+                loom_exact_cut_ci.verify_serial_failure_diagnostic(
+                    tampered, result)
+            duplicate = diagnostic_output.with_name("duplicate.json")
+            duplicate.write_text(
+                diagnostic_output.read_text(encoding="utf-8").replace(
+                    "{", '{"schema_version":1,', 1),
+                encoding="utf-8")
+            with self.assertRaises(ValueError):
+                loom_exact_cut_ci.load_serial_failure_diagnostic(
+                    duplicate, result)
 
 
 if __name__ == "__main__":

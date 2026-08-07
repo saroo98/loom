@@ -401,6 +401,20 @@ class UpdateTests(unittest.TestCase):
             loom_update._extract_runtime_archive(hostile, destination)
         self.assertFalse((self.root / "outside.txt").exists())
 
+    def test_runtime_archive_inventory_keeps_bounded_release_headroom(self):
+        self.assertEqual(1024, loom_update.MAX_ARCHIVE_FILES)
+        archive = self.root / "oversized-inventory.zip"
+        with zipfile.ZipFile(archive, "w") as package:
+            for index in range(loom_update.MAX_ARCHIVE_FILES + 1):
+                package.writestr(f"files/{index:04d}.txt", b"")
+        destination = self.root / "oversized-extract"
+        destination.mkdir()
+
+        with self.assertRaisesRegex(
+                loom_update.UpdateError, "file count is outside"):
+            loom_update._extract_runtime_archive(archive, destination)
+        self.assertEqual([], list(destination.iterdir()))
+
     def test_old_runtime_cleanup_waits_for_ten_sessions_and_thirty_days(self):
         self.stage()
         plugin = self.root / "plugin-cache" / "loom" / "1.2.0" / "runtime-payload"

@@ -167,6 +167,11 @@ class ReleaseStandardTests(unittest.TestCase):
             "skip_receipts": [],
             "elapsed_seconds": 2.0,
             "tests_run": 2,
+            "failure_diagnostics": [{
+                "test": "tests.Failed", "status": "failed",
+                "exception_type": "NativeHelperBuildError",
+                "error_code": "NATIVE_HELPER_BUILD_TIMEOUT",
+            }],
             "timings": [
                 {"test": "tests.Failed", "seconds": 1.0, "status": "failed"},
                 {"test": "tests.Passed", "seconds": 1.0, "status": "passed"},
@@ -185,6 +190,8 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertEqual(0, result["error_count"])
         self.assertEqual(
             [{"test": "tests.Failed", "status": "failed"}], result["failed_tests"])
+        self.assertEqual(
+            report["failure_diagnostics"], result["failure_diagnostics"])
 
     def _source(self):
         source = self.root / "source"

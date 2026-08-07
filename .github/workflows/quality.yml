@@ -185,7 +185,7 @@ jobs:
           MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
           ARGS=(.. "${{ runner.temp }}/loom-public-cut" --forbidden-token "loom-ci-${{ github.sha }}" --output exact-cut-ci.json)
           if test "$MODE" = serial; then
-            ARGS+=(--suite-output full-test-timings.json)
+            ARGS+=(--suite-output full-test-timings.json --failure-diagnostic-output serial-failure-diagnostic.json)
           else
             ARGS+=(--static-only)
           fi
@@ -210,6 +210,7 @@ jobs:
           path: |
             tools/exact-cut-ci.json
             tools/full-test-timings.json
+            tools/serial-failure-diagnostic.json
             tools/suite-shadow/workers/*/worker-receipt.json
             tools/suite-shadow/workers/*/failure-diagnostic.json
             tools/suite-shadow/cell-certificate.json

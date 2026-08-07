@@ -10,6 +10,7 @@ import loom_operation_envelope
 import loom_operation_supervisor
 import loom_path_authority
 import loom_suite_plan
+import loom_test
 
 
 class FoundationSchemaTests(unittest.TestCase):
@@ -47,6 +48,42 @@ class FoundationSchemaTests(unittest.TestCase):
             report, "suite-failure-diagnostic-v1.schema.json", rejected,
             "suite-failure-diagnostic-v1.schema.json")
         self.assertTrue(report.errors)
+
+    def test_serial_suite_failure_diagnostic_matches_its_closed_schema(self):
+        value = {
+            "schema_version": 1,
+            "exact_cut_receipt_sha256": "1" * 64,
+            "failures": [{
+                "test": "fixture.class.test_fixture.Fixture",
+                "status": "error",
+                "exception_type": "NativeHelperBuildError",
+                "error_code": "NATIVE_HELPER_BUILD_TIMEOUT",
+            }],
+            "failure_diagnostic_sha256": "2" * 64,
+        }
+        self.assert_schema(
+            value, "serial-suite-failure-diagnostic-v1.schema.json")
+        rejected = copy.deepcopy(value)
+        rejected["failures"][0]["traceback"] = "private detail"
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "serial-suite-failure-diagnostic-v1.schema.json", rejected,
+            "serial-suite-failure-diagnostic-v1.schema.json")
+        self.assertTrue(report.errors)
+        expected_codes = sorted({
+            *loom_test.PUBLIC_ERROR_CODES,
+            loom_test.PUBLIC_ERROR_CODE_REDACTED,
+        })
+        root = Path(__file__).resolve().parents[1]
+        for name in (
+                "suite-failure-diagnostic-v1.schema.json",
+                "serial-suite-failure-diagnostic-v1.schema.json"):
+            schema = __import__("json").loads((
+                root / "schemas" / name).read_text(encoding="utf-8"))
+            self.assertEqual(
+                expected_codes,
+                sorted(schema["$defs"]["failure"]["properties"][
+                    "error_code"]["enum"]))
 
     def test_supervisor_receipt_matches_closed_schema(self):
         with tempfile.TemporaryDirectory() as temporary:

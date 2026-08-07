@@ -61,6 +61,126 @@ class NativeBuildEnvironmentTests(unittest.TestCase):
         self.assertIs(selected, observed)
         construct.assert_called_once()
 
+    def test_vault_helper_build_uses_descendant_containment(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            crate = root / "vault-helper"
+            target = root / "cache" / "builds" / ("a" * 64)
+            crate.mkdir()
+            binary = target / "release" / (
+                "loom-vault.exe" if os.name == "nt" else "loom-vault")
+
+            def complete(**_kwargs):
+                binary.parent.mkdir(parents=True)
+                binary.write_bytes(b"fixture")
+                return ({
+                    "status": "passed", "returncode": 0,
+                    "primary_failure": None, "secondary_failures": [],
+                    "survivors_confirmed_zero": True,
+                    "protected_roots_unchanged": True,
+                    "receipt_sha256": "a" * 64,
+                }, b"", b"")
+
+            with mock.patch.object(
+                    v11_test_support.loom_operation_supervisor, "run",
+                    side_effect=complete) as run:
+                observed = v11_test_support._compile_vault_helper(
+                    root, crate, target, environment={"PATH": "fixture"})
+
+        self.assertEqual(binary, observed)
+        call = run.call_args.kwargs
+        self.assertEqual("vault-helper-build", call["operation_class"])
+        self.assertEqual(root, call["cwd"])
+        self.assertEqual(VAULT_HELPER_BUILD_TIMEOUT_SECONDS, call["timeout"])
+        self.assertEqual([root, target], call["allowed_roots"])
+        self.assertEqual([crate], call["protected_roots"])
+        self.assertEqual(
+            ["local-process", "descendant-containment"], call["capabilities"])
+        self.assertTrue(call["capture_output"])
+        self.assertEqual(
+            v11_test_support.loom_operation_supervisor.MAX_TRANSCRIPT_BYTES,
+            call["max_transcript_bytes"])
+        self.assertNotEqual(
+            v11_test_support.MAX_CARGO_DIAGNOSTIC_CHARS,
+            call["max_transcript_bytes"])
+        self.assertEqual(
+            str(target), call["environment"]["CARGO_TARGET_DIR"])
+        self.assertEqual(
+            str(v11_test_support.RUST_COMPILER_STACK_BYTES),
+            call["environment"]["RUST_MIN_STACK"])
+        self.assertEqual([
+            "cargo", "build", "--quiet", "--locked", "--release",
+            "--manifest-path", str(crate / "Cargo.toml")], call["command"])
+
+    def test_vault_helper_timeout_is_typed_and_leaves_no_artifact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            crate = root / "vault-helper"
+            target = root / "cache" / "builds" / ("b" * 64)
+            crate.mkdir()
+            receipt = {
+                "status": "failed", "returncode": None,
+                "primary_failure": "timed-out", "secondary_failures": [],
+                "survivors_confirmed_zero": True,
+                "protected_roots_unchanged": True,
+                "receipt_sha256": "b" * 64,
+            }
+            with mock.patch.object(
+                    v11_test_support.loom_operation_supervisor, "run",
+                    return_value=(receipt, b"", b"")):
+                with self.assertRaises(
+                        v11_test_support.NativeHelperBuildError) as raised:
+                    v11_test_support._compile_vault_helper(root, crate, target)
+
+            self.assertEqual(
+                "NATIVE_HELPER_BUILD_TIMEOUT", raised.exception.code)
+            self.assertTrue(
+                raised.exception.receipt["survivors_confirmed_zero"])
+            self.assertFalse((target / "release" / "loom-vault").exists())
+            self.assertFalse((target / "release" / "loom-vault.exe").exists())
+
+    def test_vault_helper_cleanup_and_mutation_findings_precede_timeout(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            crate = root / "vault-helper"
+            target = root / "cache" / "builds" / ("c" * 64)
+            crate.mkdir()
+            cases = (
+                (False, True, "NATIVE_HELPER_BUILD_SURVIVOR"),
+                (True, False, "NATIVE_HELPER_BUILD_SOURCE_MUTATION"),
+            )
+            for survivors, unchanged, expected in cases:
+                with self.subTest(expected=expected), mock.patch.object(
+                        v11_test_support.loom_operation_supervisor, "run",
+                        return_value=({
+                            "status": "failed", "returncode": None,
+                            "primary_failure": "timed-out",
+                            "secondary_failures": [],
+                            "survivors_confirmed_zero": survivors,
+                            "protected_roots_unchanged": unchanged,
+                            "receipt_sha256": "c" * 64,
+                        }, b"", b"")):
+                    with self.assertRaises(
+                            v11_test_support.NativeHelperBuildError) as raised:
+                        v11_test_support._compile_vault_helper(
+                            root, crate, target)
+                self.assertEqual(expected, raised.exception.code)
+
+    def test_rustc_identity_failures_have_public_phase_codes(self):
+        _rustc_identity.cache_clear()
+        try:
+            with mock.patch(
+                    "v11_test_support.subprocess.run",
+                    side_effect=subprocess.TimeoutExpired("rustc", 60)):
+                with self.assertRaises(
+                        v11_test_support.NativeHelperBuildError) as timed_out:
+                    _rustc_identity()
+            self.assertEqual(
+                "NATIVE_HELPER_RUSTC_IDENTITY_TIMEOUT",
+                timed_out.exception.code)
+        finally:
+            _rustc_identity.cache_clear()
+
 
 class BootstrapIntegrationTests(unittest.TestCase):
     @classmethod
