@@ -116,6 +116,33 @@ class TestRunnerTests(unittest.TestCase):
         self.assertNotIn(
             "AKIA" + "ABCDEFGHIJKLMNOP", json.dumps(report, sort_keys=True))
 
+    def test_suite_inventory_failure_preserves_only_its_bounded_reason_code(self):
+        source = (
+            "import unittest\n"
+            "import loom_suite_plan\n"
+            "class DiagnosticFixture(unittest.TestCase):\n"
+            "    def test_inventory_failure(self):\n"
+            "        raise loom_suite_plan.SuitePlanError(\n"
+            "            'inventory runtime cleanup failed')\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_inventory_diagnostic.py").write_text(
+                source, encoding="utf-8")
+            report = loom_test.run_modules(
+                ["test_inventory_diagnostic"], start_dir=root, verbosity=0)
+
+        self.assertEqual([{
+            "error_code": "SUITE_INVENTORY_RUNTIME_CLEANUP_FAILED",
+            "exception_type": "SuitePlanError",
+            "status": "error",
+            "test": (
+                "test_inventory_diagnostic.DiagnosticFixture."
+                "test_inventory_failure"),
+        }], report["failure_diagnostics"])
+        self.assertNotIn(
+            "inventory runtime cleanup failed", json.dumps(report, sort_keys=True))
+
     def test_mixed_subtest_status_uses_order_independent_error_precedence(self):
         cases = {
             "failure-first": (

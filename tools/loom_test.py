@@ -14,6 +14,7 @@ from pathlib import Path
 
 import loom_docs
 import loom_reliability
+import loom_suite_plan
 
 
 CONTAINMENT_FAST_TEST = (
@@ -26,7 +27,9 @@ FAST_GATE_MAX_SECONDS = 30.0
 WINDOWS_FAST_GATE_MAX_SECONDS = 45.0
 TEST_MODULE = re.compile(r"^test_[A-Za-z0-9_]+$")
 EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-PUBLIC_ERROR_CODES = frozenset({"HOST_UNVERIFIED"})
+PUBLIC_ERROR_CODES = frozenset({
+    "HOST_UNVERIFIED", *loom_suite_plan.SUITE_PLAN_PUBLIC_ERROR_CODES,
+})
 PUBLIC_ERROR_CODE_REDACTED = "PUBLIC_ERROR_CODE_REDACTED"
 STATUS_SEVERITY = {
     "passed": 0, "skipped": 1, "failed": 2, "error": 3,
