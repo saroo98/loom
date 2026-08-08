@@ -239,6 +239,8 @@ class TestRunnerTests(unittest.TestCase):
             "import unittest\n"
             "class SafeFailure(AssertionError):\n"
             "    code = 'HOST_UNVERIFIED'\n"
+            "class LifecycleFailure(AssertionError):\n"
+            "    code = 'LIFECYCLE_VERIFICATION_CONTAINMENT_FAILED'\n"
             "class SecretFailure(AssertionError):\n"
             "    code = 'AKIA' + 'ABCDEFGHIJKLMNOP'\n"
             "class UnhashableFailure(AssertionError):\n"
@@ -249,6 +251,7 @@ class TestRunnerTests(unittest.TestCase):
             "    code = OddCode('HOST_UNVERIFIED')\n"
             "class DiagnosticFixture(unittest.TestCase):\n"
             "    def test_safe(self): raise SafeFailure('private')\n"
+            "    def test_lifecycle(self): raise LifecycleFailure('private')\n"
             "    def test_secret(self): raise SecretFailure('private')\n"
             "    def test_unhashable(self): raise UnhashableFailure('private')\n"
             "    def test_hostile_string(self): "
@@ -264,6 +267,9 @@ class TestRunnerTests(unittest.TestCase):
         self.assertEqual(
             "HOST_UNVERIFIED",
             rows["test_codes.DiagnosticFixture.test_safe"]["error_code"])
+        self.assertEqual(
+            "LIFECYCLE_VERIFICATION_CONTAINMENT_FAILED",
+            rows["test_codes.DiagnosticFixture.test_lifecycle"]["error_code"])
         self.assertEqual(
             "PUBLIC_ERROR_CODE_REDACTED",
             rows["test_codes.DiagnosticFixture.test_secret"]["error_code"])
