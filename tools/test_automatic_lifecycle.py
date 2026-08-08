@@ -161,20 +161,41 @@ class AutomaticLifecycleTests(unittest.TestCase):
             loom_lifecycle.capture_acceptance(
                 self.pack, self.repo, "WO-001", medium="checklist",
                 command=[sys.executable, "-c", "print('not enough')"])
-        with self.assertRaisesRegex(loom_lifecycle.LifecycleError, "command failed"):
+        with self.assertRaisesRegex(
+                loom_lifecycle.LifecycleError, "command failed") as failure:
             loom_lifecycle.capture_acceptance(
                 self.pack, self.repo, "WO-001", medium="cli-process",
                 command=[sys.executable, "-c", "raise SystemExit(7)"])
+        self.assertEqual(
+            "LIFECYCLE_VERIFICATION_COMMAND_NONZERO", failure.exception.code)
         self.assertFalse((self.pack / "evidence" / "WO-001.json").exists())
 
-        with self.assertRaisesRegex(loom_lifecycle.LifecycleError, "changed"):
+        with self.assertRaisesRegex(
+                loom_lifecycle.LifecycleError, "changed") as failure:
             loom_lifecycle.capture_acceptance(
                 self.pack, self.repo, "WO-001", medium="cli-process",
                 command=[sys.executable, "-c",
                          "from pathlib import Path; Path('app.py').write_text('changed')"])
+        self.assertEqual(
+            "LIFECYCLE_VERIFICATION_SNAPSHOT_MUTATION", failure.exception.code)
         self.assertFalse((self.pack / "evidence" / "WO-001.json").exists())
         self.assertEqual("print('baseline')\n",
                          (self.repo / "app.py").read_text(encoding="utf-8"))
+
+        receipt = {
+            "primary_failure": "survivor-census-indeterminate",
+            "secondary_failures": ["private-detail"],
+            "returncode": 0,
+        }
+        with mock.patch.object(
+                loom_lifecycle.loom_operation_envelope, "run_supervised",
+                return_value=(receipt, b"", b"")), self.assertRaisesRegex(
+                    loom_lifecycle.LifecycleError,
+                    "verification containment failed") as failure:
+            loom_lifecycle._run_bounded(
+                [sys.executable, "-c", "pass"], self.repo, 1)
+        self.assertEqual(
+            "LIFECYCLE_VERIFICATION_CONTAINMENT_FAILED", failure.exception.code)
 
     def test_verification_command_cannot_mutate_parent_of_real_target(self):
         outside = self.repo.parent / "owner-data.txt"

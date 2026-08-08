@@ -34,10 +34,25 @@ MAX_SECTIONS = 128
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 WO_ID = re.compile(r"^WO-[0-9]{3,}$")
 GENERIC_MEDIA = {"checklist", "generic", "unknown", "document-review", "self-report"}
+LIFECYCLE_VERIFICATION_PUBLIC_ERROR_CODES = frozenset({
+    "LIFECYCLE_VERIFICATION_COMMAND_NONZERO",
+    "LIFECYCLE_VERIFICATION_CONTAINMENT_FAILED",
+    "LIFECYCLE_VERIFICATION_SNAPSHOT_FAILED",
+    "LIFECYCLE_VERIFICATION_SNAPSHOT_MUTATION",
+    "LIFECYCLE_VERIFICATION_START_FAILED",
+    "LIFECYCLE_VERIFICATION_TIMEOUT",
+    "LIFECYCLE_VERIFICATION_TRANSCRIPT_ENCODING",
+    "LIFECYCLE_VERIFICATION_TRANSCRIPT_LIMIT",
+    "LIFECYCLE_VERIFICATION_WORLD_MUTATION",
+})
 
 
 class LifecycleError(RuntimeError):
-    pass
+    def __init__(self, message, *, code=None):
+        if code is not None and code not in LIFECYCLE_VERIFICATION_PUBLIC_ERROR_CODES:
+            raise ValueError("lifecycle error code is not public")
+        super().__init__(message)
+        self.code = code
 
 
 def _canonical(value):
@@ -138,16 +153,23 @@ def _run_bounded(command, cwd, timeout):
             capabilities=["local-process", "descendant-containment"],
             max_transcript_bytes=MAX_TRANSCRIPT_BYTES, capture_output=True)
     except loom_operation_supervisor.SupervisorError as exc:
-        raise LifecycleError(f"verification command could not start: {exc}") from exc
+        raise LifecycleError(
+            f"verification command could not start: {exc}",
+            code="LIFECYCLE_VERIFICATION_START_FAILED") from exc
     failure = receipt["primary_failure"]
     if failure == "timed-out":
-        raise LifecycleError("verification command timed out")
+        raise LifecycleError(
+            "verification command timed out",
+            code="LIFECYCLE_VERIFICATION_TIMEOUT")
     if failure == "transcript-limit":
-        raise LifecycleError("verification transcript exceeds its safety bound")
+        raise LifecycleError(
+            "verification transcript exceeds its safety bound",
+            code="LIFECYCLE_VERIFICATION_TRANSCRIPT_LIMIT")
     if failure not in {None, "nonzero-exit"}:
         raise LifecycleError(
             f"verification containment failed: {failure}; "
-            f"secondary={receipt['secondary_failures'][:3]}")
+            f"secondary={receipt['secondary_failures'][:3]}",
+            code="LIFECYCLE_VERIFICATION_CONTAINMENT_FAILED")
     return receipt["returncode"], stdout, stderr
 
 
@@ -162,7 +184,9 @@ def _copy_verification_snapshot(source, destination, excluded):
         try:
             entries = sorted(os.scandir(current), key=lambda item: item.name.casefold())
         except OSError as exc:
-            raise LifecycleError(f"verification snapshot cannot enumerate target: {exc}") \
+            raise LifecycleError(
+                f"verification snapshot cannot enumerate target: {exc}",
+                code="LIFECYCLE_VERIFICATION_SNAPSHOT_FAILED") \
                 from exc
         for entry in entries:
             path = Path(entry.path)
@@ -170,7 +194,8 @@ def _copy_verification_snapshot(source, destination, excluded):
                 continue
             if entry.is_symlink() or loom_privacy._is_redirect(path):
                 raise LifecycleError(
-                    f"verification snapshot refuses symlink or reparse entry: {path}")
+                    f"verification snapshot refuses symlink or reparse entry: {path}",
+                    code="LIFECYCLE_VERIFICATION_SNAPSHOT_FAILED")
             target = output / entry.name
             try:
                 if entry.is_dir(follow_symlinks=False):
@@ -180,9 +205,12 @@ def _copy_verification_snapshot(source, destination, excluded):
                     shutil.copy2(path, target)
                 else:
                     raise LifecycleError(
-                        f"verification snapshot refuses non-regular entry: {path}")
+                        f"verification snapshot refuses non-regular entry: {path}",
+                        code="LIFECYCLE_VERIFICATION_SNAPSHOT_FAILED")
             except OSError as exc:
-                raise LifecycleError(f"verification snapshot copy failed: {exc}") from exc
+                raise LifecycleError(
+                    f"verification snapshot copy failed: {exc}",
+                    code="LIFECYCLE_VERIFICATION_SNAPSHOT_FAILED") from exc
 
 
 def _capture_real_medium(pack, repo, *, medium, command, timeout, now):
@@ -205,18 +233,26 @@ def _capture_real_medium(pack, repo, *, medium, command, timeout, now):
         exit_code, stdout, stderr = _run_bounded(command, snapshot_root, timeout)
         snapshot_after = _repo_state(snapshot_root, excluded_snapshot_pack)
         if snapshot_before.state_hash != snapshot_after.state_hash:
-            raise LifecycleError("verification command changed its disposable target snapshot")
+            raise LifecycleError(
+                "verification command changed its disposable target snapshot",
+                code="LIFECYCLE_VERIFICATION_SNAPSHOT_MUTATION")
     completed = _stamp()
     after = _repo_state(repo, pack)
     if exit_code != 0:
-        raise LifecycleError(f"verification command failed with exit code {exit_code}")
+        raise LifecycleError(
+            f"verification command failed with exit code {exit_code}",
+            code="LIFECYCLE_VERIFICATION_COMMAND_NONZERO")
     if before.state_hash != after.state_hash:
-        raise LifecycleError("verification command changed the target world")
+        raise LifecycleError(
+            "verification command changed the target world",
+            code="LIFECYCLE_VERIFICATION_WORLD_MUTATION")
     try:
         stdout_text = stdout.decode("utf-8")
         stderr_text = stderr.decode("utf-8")
     except UnicodeError as exc:
-        raise LifecycleError("verification transcript is not UTF-8") from exc
+        raise LifecycleError(
+            "verification transcript is not UTF-8",
+            code="LIFECYCLE_VERIFICATION_TRANSCRIPT_ENCODING") from exc
     roots = [repo, snapshot_parent, Path.home()]
     stdout_minimized = loom_privacy.minimize_evidence(
         stdout_text, roots=roots, max_chars=MAX_PERSISTED_TRANSCRIPT_CHARS)
