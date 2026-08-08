@@ -4,11 +4,13 @@ import contextlib
 import hashlib
 import io
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
+import loom_operation_supervisor
 import loom_test
 
 
@@ -49,6 +51,32 @@ class TestRunnerTests(unittest.TestCase):
             allow_nan=False).encode("utf-8")).hexdigest()}
 
     def test_native_helper_failures_emit_only_verified_operation_projections(self):
+        with tempfile.TemporaryDirectory() as operation_temporary:
+            operation_root = Path(operation_temporary).resolve()
+            transcript_receipt, stdout, stderr = \
+                loom_operation_supervisor.run(
+                    operation_class="vault-helper-build",
+                    command=[sys.executable, "-c", (
+                        "import sys;sys.stdout.buffer.write(b'x'*"
+                        f"{loom_operation_supervisor.MAX_TRANSCRIPT_BYTES + 4096});"
+                        "sys.stdout.flush()")],
+                    cwd=operation_root, timeout=10,
+                    allowed_roots=[operation_root], protected_roots=[],
+                    capabilities=["local-process", "descendant-containment"],
+                    max_transcript_bytes=
+                    loom_operation_supervisor.MAX_TRANSCRIPT_BYTES,
+                    capture_output=True)
+        self.assertEqual("transcript-limit",
+                         transcript_receipt["primary_failure"])
+        self.assertEqual(loom_operation_supervisor.MAX_TRANSCRIPT_BYTES,
+                         len(stdout))
+        self.assertEqual(b"", stderr)
+        self.assertEqual(loom_operation_supervisor.MAX_TRANSCRIPT_BYTES,
+                         transcript_receipt["stdout_bytes"])
+        self.assertEqual(hashlib.sha256(stdout).hexdigest(),
+                         transcript_receipt["stdout_sha256"])
+        loom_operation_supervisor.verify_receipt(transcript_receipt)
+
         receipts = {
             "timeout": self._supervisor_receipt(
                 "timed-out",
@@ -59,6 +87,7 @@ class TestRunnerTests(unittest.TestCase):
             "mutation": self._supervisor_receipt(
                 "protected-root-changed", protected=False,
                 operation_id="00000000-0000-4000-8000-000000000003"),
+            "transcript": transcript_receipt,
         }
         invalid = dict(receipts["timeout"], cwd="private tampered cwd")
         source = (
@@ -79,6 +108,10 @@ class TestRunnerTests(unittest.TestCase):
             "        raise v11_test_support.NativeHelperBuildError(\n"
             "            'NATIVE_HELPER_BUILD_SOURCE_MUTATION', 'private',\n"
             "            receipt=self.receipts['mutation'])\n"
+            "    def test_transcript_limit(self):\n"
+            "        raise v11_test_support.NativeHelperBuildError(\n"
+            "            'NATIVE_HELPER_BUILD_TRANSCRIPT_LIMIT', 'private',\n"
+            "            receipt=self.receipts['transcript'])\n"
             "    def test_unverified(self):\n"
             "        raise v11_test_support.NativeHelperBuildError(\n"
             "            'NATIVE_HELPER_BUILD_TIMEOUT', 'private',\n"
@@ -104,7 +137,8 @@ class TestRunnerTests(unittest.TestCase):
         for label, expected_primary, expected_survivors, expected_protected in (
                 ("test_timeout", "timed-out", True, True),
                 ("test_survivor", "survivor-census-indeterminate", False, True),
-                ("test_mutation", "protected-root-changed", True, False)):
+                ("test_mutation", "protected-root-changed", True, False),
+                ("test_transcript_limit", "transcript-limit", True, True)):
             projection = rows[label]["operation_projection"]
             self.assertEqual(expected_fields, set(projection))
             self.assertEqual(expected_primary, projection["primary_failure"])
@@ -136,7 +170,7 @@ class TestRunnerTests(unittest.TestCase):
         for private in (
                 "Private Owner", "private checkout", "cargo.exe",
                 "USERPROFILE", "private child cleanup diagnostic",
-                "private tampered cwd"):
+                "private tampered cwd", operation_root.name):
             self.assertNotIn(private, serialized)
 
     def test_failures_emit_only_closed_deterministic_diagnostics(self):

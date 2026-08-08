@@ -603,10 +603,12 @@ def run(*, operation_class, command, cwd, timeout, environment=None,
                 stderr_file.seek(0)
                 stdout = stdout_file.read(max_transcript_bytes + 1)
                 stderr = stderr_file.read(max_transcript_bytes + 1)
-                if body["primary_failure"] is None and (
-                        len(stdout) > max_transcript_bytes
-                        or len(stderr) > max_transcript_bytes):
+                transcript_exceeded = len(stdout) > max_transcript_bytes \
+                    or len(stderr) > max_transcript_bytes
+                if body["primary_failure"] is None and transcript_exceeded:
                     body["primary_failure"] = "transcript-limit"
+                stdout = stdout[:max_transcript_bytes]
+                stderr = stderr[:max_transcript_bytes]
                 if body["primary_failure"] is None and returncode != 0:
                     body["primary_failure"] = "nonzero-exit"
                 body["returncode"] = returncode
