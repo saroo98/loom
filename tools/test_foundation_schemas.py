@@ -36,7 +36,7 @@ class FoundationSchemaTests(unittest.TestCase):
                 "test": "test_fixture.Fixture.test_failed",
                 "status": "failed",
                 "exception_type": "HostFailure",
-                "error_code": "HOST_UNVERIFIED",
+                "error_code": "LIFECYCLE_VERIFICATION_CONTAINMENT_FAILED",
             }],
             "failure_diagnostic_sha256": "3" * 64,
         }
