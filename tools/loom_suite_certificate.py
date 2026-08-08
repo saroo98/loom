@@ -54,6 +54,8 @@ QUALIFICATION_CODE_PATHS = (
     "schemas/suite-cell-certificate-v1.schema.json",
     "schemas/suite-matrix-certificate-v1.schema.json",
     "schemas/suite-qualification-v1.schema.json",
+    "schemas/suite-failure-diagnostic-v1.schema.json",
+    "schemas/serial-suite-failure-diagnostic-v1.schema.json",
     "schemas/exact-cut-ci-receipt-v2.schema.json",
     "schemas/release-reproducibility-receipt-v1.schema.json",
     "schemas/release-rollback-evidence.schema.json",

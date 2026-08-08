@@ -453,11 +453,15 @@ def verify_cut(root, *, forbidden_tokens):
                 "capability_status": suite.get("capability_status"),
                 "returncode": suite.get("returncode"),
                 "primary_failure": suite.get("primary_failure"),
+                "operation_receipt_sha256": suite.get(
+                    "operation_receipt_sha256"),
                 "elapsed_seconds": suite.get("elapsed_seconds"),
                 "tests_run": suite.get("tests_run"),
                 "failure_count": suite.get("failure_count"),
                 "error_count": suite.get("error_count"),
                 "failed_tests": failed_tests,
+                "failure_diagnostics": suite.get(
+                    "failure_diagnostics", []),
                 "skip_receipts": suite.get("skip_receipts", []),
             },
         })
@@ -997,10 +1001,19 @@ def _suite(root):
         "tests_run": timing.get("tests_run") if timing else None,
         "failure_count": timing.get("failures") if timing else None,
         "error_count": timing.get("errors") if timing else None,
+        "failure_diagnostics": (
+            timing.get("failure_diagnostics", [])[:64]
+            if timing and isinstance(timing.get("failure_diagnostics"), list)
+            else []),
         "failed_tests": [
             {"test": item.get("test"), "status": item.get("status")}
-            for item in (timing.get("timings", []) if timing else [])
-            if item.get("status") in {"failed", "error"}
+            for item in (
+                timing.get("failure_diagnostics", [])
+                if timing and isinstance(timing.get("failure_diagnostics"), list)
+                else timing.get("timings", []) if timing else [])
+            if isinstance(item, dict)
+            and isinstance(item.get("test"), str)
+            and item.get("status") in {"failed", "error"}
         ][:64],
         "timings": timing.get("timings", []) if timing else [],
     }

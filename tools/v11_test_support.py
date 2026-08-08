@@ -11,6 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import loom_reliability
+import loom_operation_supervisor
 import loom_update
 
 
@@ -18,14 +19,73 @@ MAX_CARGO_DIAGNOSTIC_CHARS = 4000
 SOURCE_KEY_HEX_LENGTH = 64
 RUST_COMPILER_STACK_BYTES = 64 * 1024 * 1024
 RUSTC_IDENTITY_TIMEOUT_SECONDS = 60
-VAULT_HELPER_BUILD_TIMEOUT_SECONDS = 300
+VAULT_HELPER_BUILD_TIMEOUT_SECONDS = 600 if os.name == "nt" else 300
 BUILD_ENVIRONMENT_KEYS = (
-    "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "RUSTC", "RUSTFLAGS",
+    "CARGO", "CARGO_HOME", "CARGO_ENCODED_RUSTFLAGS", "CARGO_INCREMENTAL",
+    "CARGO_NET_OFFLINE", "CARGO_TARGET_DIR", "RUSTC", "RUSTFLAGS",
+    "RUSTC_WRAPPER", "RUSTC_WORKSPACE_WRAPPER", "RUST_MIN_STACK",
+    "RUSTUP_TOOLCHAIN",
     "SOURCE_DATE_EPOCH", "TEMP", "TMP", "TMPDIR", "HOME", "USERPROFILE",
     "PATH", "INCLUDE", "LIB", "LIBPATH", "VCINSTALLDIR", "VCToolsInstallDir",
     "WindowsSdkDir", "WindowsSDKVersion", "LOOM_TEST_CACHE_ROOT",
     "CARGO_BUILD_JOBS", "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER",
+    "RUSTUP_HOME", "AR", "CC", "CFLAGS", "CXX", "CXXFLAGS", "LDFLAGS",
+    "DEVELOPER_DIR", "MACOSX_DEPLOYMENT_TARGET", "SDKROOT",
 )
+NATIVE_HELPER_PUBLIC_ERROR_CODES = frozenset({
+    "NATIVE_HELPER_BUILD_CANCELLED",
+    "NATIVE_HELPER_BUILD_CONTAINMENT_FAILURE",
+    "NATIVE_HELPER_BUILD_NONZERO",
+    "NATIVE_HELPER_BUILD_OUTPUT_MISSING",
+    "NATIVE_HELPER_BUILD_SOURCE_MUTATION",
+    "NATIVE_HELPER_BUILD_START_FAILED",
+    "NATIVE_HELPER_BUILD_SURVIVOR",
+    "NATIVE_HELPER_BUILD_TIMEOUT",
+    "NATIVE_HELPER_BUILD_TRANSCRIPT_LIMIT",
+    "NATIVE_HELPER_CACHE_LOCK_FAILED",
+    "NATIVE_HELPER_CACHE_ROOT_INVALID",
+    "NATIVE_HELPER_PUBLISH_FAILED",
+    "NATIVE_HELPER_RUSTC_IDENTITY_FAILED",
+    "NATIVE_HELPER_RUSTC_IDENTITY_TIMEOUT",
+    "NATIVE_HELPER_SOURCE_INCOMPLETE",
+    "NATIVE_HELPER_TARGET_RESET_FAILED",
+})
+
+
+class NativeHelperBuildError(RuntimeError):
+    """Privacy-safe native-helper phase failure with a stable public code."""
+
+    def __init__(self, code, message, *, receipt=None):
+        if code not in NATIVE_HELPER_PUBLIC_ERROR_CODES:
+            raise ValueError("native-helper error code is invalid")
+        super().__init__(message)
+        self.code = code
+        self.receipt = receipt
+
+
+def native_helper_operation_projection(error):
+    """Return only the self-bound public fields of a verified build receipt."""
+    if not isinstance(error, NativeHelperBuildError):
+        return None
+    try:
+        receipt = loom_operation_supervisor.verify_receipt(error.receipt)
+    except loom_operation_supervisor.SupervisorError:
+        return None
+    if receipt["operation_class"] != "vault-helper-build":
+        return None
+    body = {
+        "operation_receipt_sha256": receipt["receipt_sha256"],
+        "status": receipt["status"],
+        "returncode": receipt["returncode"],
+        "primary_failure": receipt["primary_failure"],
+        "survivors_confirmed_zero": receipt["survivors_confirmed_zero"],
+        "protected_roots_unchanged": receipt["protected_roots_unchanged"],
+        "network_isolation_proven": receipt["network_isolation_proven"],
+        "containment_provider": receipt["containment_provider"],
+    }
+    return {**body, "projection_sha256": hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False).encode("utf-8")).hexdigest()}
 
 
 def _cache_entry_valid(binary, receipt, source_key):
@@ -202,11 +262,70 @@ def _rustc_identity():
             ["rustc", "--version", "--verbose"], capture_output=True, text=True,
             timeout=RUSTC_IDENTITY_TIMEOUT_SECONDS, check=True)
     except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
+        raise NativeHelperBuildError(
+            "NATIVE_HELPER_RUSTC_IDENTITY_TIMEOUT",
             "rustc identity probe exceeded its 60-second bound") from exc
     except (OSError, subprocess.CalledProcessError) as exc:
-        raise RuntimeError("rustc identity probe failed") from exc
+        raise NativeHelperBuildError(
+            "NATIVE_HELPER_RUSTC_IDENTITY_FAILED",
+            "rustc identity probe failed") from exc
     return result.stdout.encode("utf-8")
+
+
+def _native_build_child_environment(environment):
+    """Project native tool inputs onto the supervisor's closed environment."""
+    return {
+        key: value for key in BUILD_ENVIRONMENT_KEYS
+        if isinstance((value := environment.get(key)), str)
+    }
+
+
+def _native_build_failure(receipt, stdout, stderr):
+    primary = receipt.get("primary_failure")
+    if receipt.get("protected_roots_unchanged") is not True \
+            or primary == "protected-root-changed":
+        return NativeHelperBuildError(
+            "NATIVE_HELPER_BUILD_SOURCE_MUTATION",
+            "vault-helper build changed protected source bytes", receipt=receipt)
+    if receipt.get("survivors_confirmed_zero") is not True \
+            or primary == "survivor-census-indeterminate":
+        return NativeHelperBuildError(
+            "NATIVE_HELPER_BUILD_SURVIVOR",
+            "vault-helper build descendant cleanup was not proven", receipt=receipt)
+    if receipt.get("secondary_failures"):
+        return NativeHelperBuildError(
+            "NATIVE_HELPER_BUILD_CONTAINMENT_FAILURE",
+            "vault-helper build containment did not finish cleanly", receipt=receipt)
+    if primary == "timed-out":
+        return NativeHelperBuildError(
+            "NATIVE_HELPER_BUILD_TIMEOUT",
+            "vault-helper build exceeded its "
+            f"{VAULT_HELPER_BUILD_TIMEOUT_SECONDS}-second bound",
+            receipt=receipt)
+    if primary == "nonzero-exit":
+        diagnostic = "\n".join(
+            item.decode("utf-8", errors="replace").strip()
+            for item in (stdout, stderr) if item.strip())
+        diagnostic = diagnostic[-MAX_CARGO_DIAGNOSTIC_CHARS:] \
+            or "no Cargo diagnostic"
+        return NativeHelperBuildError(
+            "NATIVE_HELPER_BUILD_NONZERO",
+            f"vault-helper build failed with exit {receipt.get('returncode')}: "
+            f"{diagnostic}", receipt=receipt)
+    code, message = {
+        "transcript-limit": (
+            "NATIVE_HELPER_BUILD_TRANSCRIPT_LIMIT",
+            "vault-helper build exceeded its diagnostic output bound"),
+        "start-failed": (
+            "NATIVE_HELPER_BUILD_START_FAILED",
+            "vault-helper build could not start"),
+        "cancelled": (
+            "NATIVE_HELPER_BUILD_CANCELLED",
+            "vault-helper build was cancelled"),
+    }.get(primary, (
+        "NATIVE_HELPER_BUILD_CONTAINMENT_FAILURE",
+        "vault-helper build containment failed"))
+    return NativeHelperBuildError(code, message, receipt=receipt)
 
 
 def _compile_vault_helper(root, crate, target, environment=None):
@@ -222,26 +341,35 @@ def _compile_vault_helper(root, crate, target, environment=None):
     if os.name == "nt":
         environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
                                      + " -C link-arg=/Brepro").strip()
+    command = [
+        "cargo", "build", "--quiet", "--locked", "--release",
+        "--manifest-path", str(crate / "Cargo.toml")]
     try:
-        result = subprocess.run(
-            ["cargo", "build", "--quiet", "--locked", "--release",
-             "--manifest-path", str(crate / "Cargo.toml")], cwd=root,
-            env=environment, capture_output=True, text=True,
-            check=False, timeout=VAULT_HELPER_BUILD_TIMEOUT_SECONDS)
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            "vault-helper build exceeded its "
-            f"{VAULT_HELPER_BUILD_TIMEOUT_SECONDS}-second bound") from exc
-    if result.returncode != 0:
-        diagnostic = "\n".join(
-            item.strip() for item in (result.stdout, result.stderr) if item.strip())
-        diagnostic = diagnostic[-MAX_CARGO_DIAGNOSTIC_CHARS:] or "no Cargo diagnostic"
-        raise RuntimeError(
-            f"vault-helper build failed with exit {result.returncode}: {diagnostic}")
+        receipt, stdout, stderr = loom_operation_supervisor.run(
+            operation_class="vault-helper-build", command=command, cwd=root,
+            timeout=VAULT_HELPER_BUILD_TIMEOUT_SECONDS,
+            environment=_native_build_child_environment(environment),
+            allowed_roots=[Path(root).resolve(), target],
+            protected_roots=[Path(crate).resolve()],
+            capabilities=["local-process", "descendant-containment"],
+            max_transcript_bytes=loom_operation_supervisor.MAX_TRANSCRIPT_BYTES,
+            capture_output=True)
+    except loom_operation_supervisor.SupervisorError as exc:
+        raise NativeHelperBuildError(
+            "NATIVE_HELPER_BUILD_START_FAILED",
+            "vault-helper build could not start") from exc
+    if receipt.get("status") != "passed" or receipt.get("returncode") != 0 \
+            or receipt.get("primary_failure") is not None \
+            or receipt.get("survivors_confirmed_zero") is not True \
+            or receipt.get("protected_roots_unchanged") is not True \
+            or receipt.get("secondary_failures"):
+        raise _native_build_failure(receipt, stdout, stderr)
     binary = target / "release" / (
         "loom-vault.exe" if os.name == "nt" else "loom-vault")
     if not binary.is_file():
-        raise RuntimeError("vault-helper build produced no executable")
+        raise NativeHelperBuildError(
+            "NATIVE_HELPER_BUILD_OUTPUT_MISSING",
+            "vault-helper build produced no executable", receipt=receipt)
     return binary
 
 
@@ -281,7 +409,9 @@ def build_vault_helper(root):
     source_files = [crate / "Cargo.toml", crate / "Cargo.lock", *sorted(
         (crate / "src").rglob("*.rs"))]
     if any(not path.is_file() for path in source_files):
-        raise RuntimeError("vault-helper test source is incomplete")
+        raise NativeHelperBuildError(
+            "NATIVE_HELPER_SOURCE_INCOMPLETE",
+            "vault-helper test source is incomplete")
     rustc = _rustc_identity()
     build_environment = _native_build_environment()
     build_policy = (b"release-v4-stack64-windows-brepro"
@@ -295,19 +425,42 @@ def build_vault_helper(root):
         digest.update(len(relative).to_bytes(4, "big") + relative)
         digest.update(len(raw).to_bytes(8, "big") + raw)
     source_key = digest.hexdigest()
-    cache_root = _test_cache_root()
+    try:
+        cache_root = _test_cache_root()
+    except (OSError, RuntimeError) as exc:
+        raise NativeHelperBuildError(
+            "NATIVE_HELPER_CACHE_ROOT_INVALID",
+            "vault-helper test cache root is invalid") from exc
     artifact = cache_root / "artifacts" / source_key
     binary = artifact / "release" / ("loom-vault.exe" if os.name == "nt" else "loom-vault")
     receipt = artifact / "loom-test-helper-receipt.json"
     if not _cache_entry_valid(binary, receipt, source_key):
         lock = cache_root / "locks" / f"{source_key}.lock"
-        with loom_reliability.exclusive_file_lock(lock, timeout=60):
-            if not _cache_entry_valid(binary, receipt, source_key):
-                target = cache_root / "builds" / source_key
-                _reset_private_build_target(cache_root, target, source_key)
-                built = _compile_vault_helper(
-                    root, crate, target, environment=build_environment)
-                _publish_cached_helper(binary, receipt, source_key, built)
+        try:
+            with loom_reliability.exclusive_file_lock(lock, timeout=60):
+                if not _cache_entry_valid(binary, receipt, source_key):
+                    target = cache_root / "builds" / source_key
+                    try:
+                        _reset_private_build_target(cache_root, target, source_key)
+                    except (OSError, RuntimeError) as exc:
+                        raise NativeHelperBuildError(
+                            "NATIVE_HELPER_TARGET_RESET_FAILED",
+                            "vault-helper private build target reset failed") from exc
+                    built = _compile_vault_helper(
+                        root, crate, target, environment=build_environment)
+                    try:
+                        _publish_cached_helper(
+                            binary, receipt, source_key, built)
+                    except (OSError, RuntimeError) as exc:
+                        raise NativeHelperBuildError(
+                            "NATIVE_HELPER_PUBLISH_FAILED",
+                            "vault-helper cache publication failed") from exc
+        except NativeHelperBuildError:
+            raise
+        except (OSError, RuntimeError) as exc:
+            raise NativeHelperBuildError(
+                "NATIVE_HELPER_CACHE_LOCK_FAILED",
+                "vault-helper cache lock failed") from exc
     return binary
 
 

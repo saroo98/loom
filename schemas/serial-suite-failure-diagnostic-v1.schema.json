@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/serial-suite-failure-diagnostic-v1.schema.json",
+  "title": "Closed privacy-safe serial release-suite failure diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "exact_cut_receipt_sha256", "failures", "failure_diagnostic_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "exact_cut_receipt_sha256": {"$ref": "#/$defs/digest"},
+    "failures": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/failure"}
+    },
+    "failure_diagnostic_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["test", "status", "exception_type"],
+      "properties": {
+        "test": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.]{2,511}$"},
+        "status": {"enum": ["failed", "error"]},
+        "exception_type": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,127}$"},
+        "error_code": {"enum": ["HOST_UNVERIFIED", "NATIVE_HELPER_BUILD_CANCELLED", "NATIVE_HELPER_BUILD_CONTAINMENT_FAILURE", "NATIVE_HELPER_BUILD_NONZERO", "NATIVE_HELPER_BUILD_OUTPUT_MISSING", "NATIVE_HELPER_BUILD_SOURCE_MUTATION", "NATIVE_HELPER_BUILD_START_FAILED", "NATIVE_HELPER_BUILD_SURVIVOR", "NATIVE_HELPER_BUILD_TIMEOUT", "NATIVE_HELPER_BUILD_TRANSCRIPT_LIMIT", "NATIVE_HELPER_CACHE_LOCK_FAILED", "NATIVE_HELPER_CACHE_ROOT_INVALID", "NATIVE_HELPER_PUBLISH_FAILED", "NATIVE_HELPER_RUSTC_IDENTITY_FAILED", "NATIVE_HELPER_RUSTC_IDENTITY_TIMEOUT", "NATIVE_HELPER_SOURCE_INCOMPLETE", "NATIVE_HELPER_TARGET_RESET_FAILED", "PUBLIC_ERROR_CODE_REDACTED", "SUITE_INVENTORY_CLEANUP_FAILED", "SUITE_INVENTORY_CONTAINMENT_FAILED", "SUITE_INVENTORY_CONTEXT_INVALID", "SUITE_INVENTORY_DISCOVERY_FAILED", "SUITE_INVENTORY_IDENTITY_INVALID", "SUITE_INVENTORY_INPUT_INVALID", "SUITE_INVENTORY_MUTATION", "SUITE_INVENTORY_PRIVACY_FAILED", "SUITE_INVENTORY_PROTECTED_ROOT_INVALID", "SUITE_INVENTORY_REDIRECTED_ROOT", "SUITE_INVENTORY_RUNTIME_CLEANUP_FAILED", "SUITE_INVENTORY_TEST_ROOT_INVALID"]},
+        "operation_projection": {"$ref": "#/$defs/operationProjection"}
+      }
+    },
+    "operationProjection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation_receipt_sha256", "status", "returncode", "primary_failure", "survivors_confirmed_zero", "protected_roots_unchanged", "network_isolation_proven", "containment_provider", "projection_sha256", "test_association_sha256"],
+      "properties": {
+        "operation_receipt_sha256": {"$ref": "#/$defs/digest"},
+        "status": {"enum": ["passed", "failed"]},
+        "returncode": {"type": ["integer", "null"]},
+        "primary_failure": {"enum": [null, "cancelled", "nonzero-exit", "protected-root-changed", "start-failed", "survivor-census-indeterminate", "timed-out", "transcript-limit"]},
+        "survivors_confirmed_zero": {"type": "boolean"},
+        "protected_roots_unchanged": {"type": "boolean"},
+        "network_isolation_proven": {"type": "boolean"},
+        "containment_provider": {"enum": ["windows-job-object", "posix-process-group"]},
+        "projection_sha256": {"$ref": "#/$defs/digest"},
+        "test_association_sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

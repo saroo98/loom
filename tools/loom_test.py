@@ -3,6 +3,7 @@
 
 import argparse
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -15,6 +16,7 @@ from pathlib import Path
 import loom_docs
 import loom_reliability
 import loom_suite_plan
+import v11_test_support
 
 
 CONTAINMENT_FAST_TEST = (
@@ -29,6 +31,7 @@ TEST_MODULE = re.compile(r"^test_[A-Za-z0-9_]+$")
 EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
 PUBLIC_ERROR_CODES = frozenset({
     "HOST_UNVERIFIED", *loom_suite_plan.SUITE_PLAN_PUBLIC_ERROR_CODES,
+    *v11_test_support.NATIVE_HELPER_PUBLIC_ERROR_CODES,
 })
 PUBLIC_ERROR_CODE_REDACTED = "PUBLIC_ERROR_CODE_REDACTED"
 STATUS_SEVERITY = {
@@ -160,8 +163,28 @@ class TimingResult(unittest.TextTestResult):
                 and raw_error_code in PUBLIC_ERROR_CODES
                 else PUBLIC_ERROR_CODE_REDACTED
                 if raw_error_code is not None else None)
+            operation_projection = \
+                v11_test_support.native_helper_operation_projection(err[1])
         test_id = self._test_id(test)
-        key = (test_id, status, exception_type, error_code or "")
+        if not unexpected_success and operation_projection is not None:
+            association = {
+                "test": test_id,
+                "status": status,
+                "operation_projection_sha256": operation_projection[
+                    "projection_sha256"],
+            }
+            operation_projection = {
+                **operation_projection,
+                "test_association_sha256": hashlib.sha256(json.dumps(
+                    association, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False, allow_nan=False).encode(
+                        "utf-8")).hexdigest(),
+            }
+        projection_digest = (
+            operation_projection.get("projection_sha256", "")
+            if not unexpected_success and operation_projection else "")
+        key = (test_id, status, exception_type, error_code or "",
+               projection_digest)
         if key in self._failure_diagnostic_keys:
             return
         self._failure_diagnostic_keys.add(key)
@@ -171,6 +194,8 @@ class TimingResult(unittest.TextTestResult):
         }
         if error_code is not None:
             row["error_code"] = error_code
+        if not unexpected_success and operation_projection is not None:
+            row["operation_projection"] = operation_projection
         self.failure_diagnostics.append(row)
         self._canonicalize_failure_diagnostics(test_id)
 
@@ -183,12 +208,14 @@ class TimingResult(unittest.TextTestResult):
             ]
         self._failure_diagnostic_keys = {
             (row["test"], row["status"], row["exception_type"],
-             row.get("error_code", ""))
+             row.get("error_code", ""), row.get(
+                 "operation_projection", {}).get("projection_sha256", ""))
             for row in self.failure_diagnostics
         }
         self.failure_diagnostics.sort(key=lambda item: (
             item["test"], item["status"], item["exception_type"],
-            item.get("error_code", "")))
+            item.get("error_code", ""), item.get(
+                "operation_projection", {}).get("projection_sha256", "")))
 
     def _promote_status(self, test, status):
         test_id = self._test_id(test)

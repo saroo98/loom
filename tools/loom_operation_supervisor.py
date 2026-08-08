@@ -24,6 +24,22 @@ MAX_TRANSCRIPT_BYTES = 256 * 1024
 MAX_SENTINEL_ENTRIES = 50_000
 MAX_SENTINEL_BYTES = 512 * 1024 * 1024
 SAFE_CAPABILITY = re.compile(r"^[a-z][a-z0-9._-]{0,63}$")
+HEX64 = re.compile(r"^[0-9a-f]{64}$")
+RECEIPT_FIELDS = {
+    "schema_version", "operation_id", "operation_class", "command_sha256",
+    "executable", "cwd", "environment_keys", "allowed_roots",
+    "protected_roots", "timeout_seconds", "capabilities",
+    "network_isolation_proven", "containment_provider", "status",
+    "returncode", "stdout_sha256", "stderr_sha256", "stdout_bytes",
+    "stderr_bytes", "survivors_confirmed_zero", "protected_roots_unchanged",
+    "primary_failure", "secondary_failures", "started_at", "completed_at",
+    "receipt_sha256",
+}
+PRIMARY_FAILURES = {
+    "cancelled", "nonzero-exit", "protected-root-changed", "start-failed",
+    "survivor-census-indeterminate", "timed-out", "transcript-limit",
+}
+CONTAINMENT_PROVIDERS = {"posix-process-group", "windows-job-object"}
 SYSTEM_ENVIRONMENT = (
     "PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "LD_LIBRARY_PATH",
     "DYLD_LIBRARY_PATH", "LANG", "LC_ALL", "TZ",
@@ -45,6 +61,77 @@ def _canonical(value):
 
 def _hash(value):
     return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def verify_receipt(receipt):
+    """Strictly verify one closed supervisor receipt, including its digest."""
+    if not isinstance(receipt, dict) or set(receipt) != RECEIPT_FIELDS \
+            or receipt.get("schema_version") != 1:
+        raise SupervisorError("operation receipt is invalid", receipt=receipt)
+    try:
+        operation_id = str(uuid.UUID(str(receipt.get("operation_id"))))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise SupervisorError("operation receipt is invalid", receipt=receipt) \
+            from exc
+    environment_keys = receipt.get("environment_keys")
+    allowed_roots = receipt.get("allowed_roots")
+    protected_roots = receipt.get("protected_roots")
+    capabilities = receipt.get("capabilities")
+    secondary = receipt.get("secondary_failures")
+    timeout = receipt.get("timeout_seconds")
+    returncode = receipt.get("returncode")
+    primary = receipt.get("primary_failure")
+    valid = (
+        operation_id == receipt["operation_id"]
+        and isinstance(receipt.get("operation_class"), str)
+        and SAFE_CAPABILITY.fullmatch(receipt["operation_class"]) is not None
+        and HEX64.fullmatch(str(receipt.get("command_sha256", ""))) is not None
+        and all(isinstance(receipt.get(field), str)
+                and 1 <= len(receipt[field]) <= 4096
+                for field in ("executable", "cwd"))
+        and isinstance(environment_keys, list)
+        and len(environment_keys) <= 64
+        and len(environment_keys) == len(set(environment_keys))
+        and all(isinstance(item, str) and 1 <= len(item) <= 128
+                for item in environment_keys)
+        and all(isinstance(rows, list) and len(rows) <= 32
+                and len(rows) == len(set(rows))
+                and all(isinstance(item, str) and 1 <= len(item) <= 4096
+                        for item in rows)
+                for rows in (allowed_roots, protected_roots))
+        and isinstance(capabilities, list)
+        and len(capabilities) <= 32
+        and len(capabilities) == len(set(capabilities))
+        and all(isinstance(item, str)
+                and SAFE_CAPABILITY.fullmatch(item) is not None
+                for item in capabilities)
+        and type(timeout) in {int, float} and 0 < timeout <= 3600
+        and receipt.get("containment_provider") in CONTAINMENT_PROVIDERS
+        and type(receipt.get("network_isolation_proven")) is bool
+        and receipt.get("status") in {"passed", "failed"}
+        and (returncode is None or type(returncode) is int)
+        and all(type(receipt.get(field)) is bool for field in (
+            "survivors_confirmed_zero", "protected_roots_unchanged"))
+        and (primary is None or primary in PRIMARY_FAILURES)
+        and isinstance(secondary, list) and len(secondary) <= 32
+        and all(isinstance(item, str) and 1 <= len(item) <= 240
+                for item in secondary)
+        and all(HEX64.fullmatch(str(receipt.get(field, ""))) is not None
+                for field in ("stdout_sha256", "stderr_sha256"))
+        and all(type(receipt.get(field)) is int
+                and 0 <= receipt[field] <= MAX_TRANSCRIPT_BYTES
+                for field in ("stdout_bytes", "stderr_bytes"))
+        and all(isinstance(receipt.get(field), str) and receipt[field]
+                for field in ("started_at", "completed_at"))
+        and receipt["status"] == ("passed" if primary is None else "failed")
+        and HEX64.fullmatch(str(receipt.get("receipt_sha256", ""))) is not None
+        and receipt["receipt_sha256"] == _hash({
+            key: item for key, item in receipt.items()
+            if key != "receipt_sha256"})
+    )
+    if not valid:
+        raise SupervisorError("operation receipt is invalid", receipt=receipt)
+    return receipt
 
 
 def _safe_path(value, label, *, directory=False):
@@ -516,10 +603,12 @@ def run(*, operation_class, command, cwd, timeout, environment=None,
                 stderr_file.seek(0)
                 stdout = stdout_file.read(max_transcript_bytes + 1)
                 stderr = stderr_file.read(max_transcript_bytes + 1)
-                if body["primary_failure"] is None and (
-                        len(stdout) > max_transcript_bytes
-                        or len(stderr) > max_transcript_bytes):
+                transcript_exceeded = len(stdout) > max_transcript_bytes \
+                    or len(stderr) > max_transcript_bytes
+                if body["primary_failure"] is None and transcript_exceeded:
                     body["primary_failure"] = "transcript-limit"
+                stdout = stdout[:max_transcript_bytes]
+                stderr = stderr[:max_transcript_bytes]
                 if body["primary_failure"] is None and returncode != 0:
                     body["primary_failure"] = "nonzero-exit"
                 body["returncode"] = returncode
