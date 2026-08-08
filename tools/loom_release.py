@@ -453,6 +453,8 @@ def verify_cut(root, *, forbidden_tokens):
                 "capability_status": suite.get("capability_status"),
                 "returncode": suite.get("returncode"),
                 "primary_failure": suite.get("primary_failure"),
+                "operation_receipt_sha256": suite.get(
+                    "operation_receipt_sha256"),
                 "elapsed_seconds": suite.get("elapsed_seconds"),
                 "tests_run": suite.get("tests_run"),
                 "failure_count": suite.get("failure_count"),

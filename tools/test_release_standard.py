@@ -193,6 +193,84 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertEqual(
             report["failure_diagnostics"], result["failure_diagnostics"])
 
+    def test_verify_cut_failure_preserves_child_and_outer_operation_bindings(self):
+        projections = []
+        for index, (code, primary, survivors, protected) in enumerate((
+                ("NATIVE_HELPER_BUILD_TIMEOUT", "timed-out", True, True),
+                ("NATIVE_HELPER_BUILD_SURVIVOR",
+                 "survivor-census-indeterminate", False, True),
+                ("NATIVE_HELPER_BUILD_SOURCE_MUTATION",
+                 "protected-root-changed", True, False)), start=1):
+            test_id = f"tests.Native.test_{index}"
+            operation_body = {
+                "operation_receipt_sha256": str(index) * 64,
+                "status": "failed", "returncode": None,
+                "primary_failure": primary,
+                "survivors_confirmed_zero": survivors,
+                "protected_roots_unchanged": protected,
+                "network_isolation_proven": False,
+                "containment_provider": "windows-job-object",
+            }
+            projection_sha256 = hashlib.sha256(json.dumps(
+                operation_body, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False, allow_nan=False).encode(
+                    "utf-8")).hexdigest()
+            operation = {
+                **operation_body,
+                "projection_sha256": projection_sha256,
+                "test_association_sha256": hashlib.sha256(json.dumps({
+                    "test": test_id, "status": "error",
+                    "operation_projection_sha256": projection_sha256,
+                }, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False, allow_nan=False).encode(
+                        "utf-8")).hexdigest(),
+            }
+            projections.append({
+                "test": test_id, "status": "error",
+                "exception_type": "NativeHelperBuildError",
+                "error_code": code, "operation_projection": operation,
+            })
+        tools = self.root / "tools"
+        tools.mkdir()
+        (tools / "loom_test.py").write_text(
+            "# fixture runner\n", encoding="utf-8")
+        timing_report = {
+            "capability_complete": False,
+            "failures": 0, "errors": 3, "within_budget": True,
+            "status": "failed", "successful": False,
+            "skip_receipts": [], "elapsed_seconds": 3.0,
+            "tests_run": 3, "failure_diagnostics": projections,
+            "timings": [{
+                "test": row["test"], "seconds": 1.0,
+                "status": row["status"],
+            } for row in projections],
+        }
+        operation = {
+            "returncode": 1, "receipt_sha256": "f" * 64,
+            "status": "failed", "primary_failure": "nonzero-exit",
+        }
+        with mock.patch.object(
+                loom_release.loom_operation_supervisor, "run",
+                return_value=(operation, json.dumps(timing_report).encode(
+                    "utf-8"), b"private output")):
+            suite = loom_release._suite(self.root)
+        self.assertEqual(projections, suite["failure_diagnostics"])
+        self.assertEqual("f" * 64, suite["operation_receipt_sha256"])
+        static = {
+            "root_sha256": "a" * 64, "manifest_sha256": "b" * 64,
+            "files_verified": 1,
+        }
+        with mock.patch.object(
+                loom_release, "verify_cut_static", return_value=static), \
+                mock.patch.object(loom_release, "_suite", return_value=suite):
+            with self.assertRaises(loom_release.ReleaseError) as raised:
+                loom_release.verify_cut(self.root, forbidden_tokens=[])
+
+        details = raised.exception.details["suite"]
+        self.assertEqual("f" * 64, details["operation_receipt_sha256"])
+        self.assertEqual(projections, details["failure_diagnostics"])
+        self.assertNotIn("output", details)
+
     def _source(self):
         source = self.root / "source"
         (source / "tools").mkdir(parents=True)

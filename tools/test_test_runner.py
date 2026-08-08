@@ -13,6 +13,132 @@ import loom_test
 
 
 class TestRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _supervisor_receipt(primary_failure, *, survivors=True, protected=True,
+                            operation_id="00000000-0000-4000-8000-000000000001"):
+        body = {
+            "schema_version": 1,
+            "operation_id": operation_id,
+            "operation_class": "vault-helper-build",
+            "command_sha256": "1" * 64,
+            "executable": r"C:\Users\Private Owner\.cargo\bin\cargo.exe",
+            "cwd": r"C:\Users\Private Owner\private checkout",
+            "environment_keys": ["PATH", "USERPROFILE"],
+            "allowed_roots": [r"C:\Users\Private Owner\private checkout"],
+            "protected_roots": [
+                r"C:\Users\Private Owner\private checkout\vault-helper"],
+            "timeout_seconds": 600.0,
+            "capabilities": ["descendant-containment", "local-process"],
+            "network_isolation_proven": False,
+            "containment_provider": "windows-job-object",
+            "status": "failed",
+            "returncode": None,
+            "stdout_sha256": "2" * 64,
+            "stderr_sha256": "3" * 64,
+            "stdout_bytes": 0,
+            "stderr_bytes": 0,
+            "survivors_confirmed_zero": survivors,
+            "protected_roots_unchanged": protected,
+            "primary_failure": primary_failure,
+            "secondary_failures": ["private child cleanup diagnostic"],
+            "started_at": "2026-08-08T12:00:00Z",
+            "completed_at": "2026-08-08T12:10:00Z",
+        }
+        return {**body, "receipt_sha256": hashlib.sha256(json.dumps(
+            body, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+            allow_nan=False).encode("utf-8")).hexdigest()}
+
+    def test_native_helper_failures_emit_only_verified_operation_projections(self):
+        receipts = {
+            "timeout": self._supervisor_receipt(
+                "timed-out",
+                operation_id="00000000-0000-4000-8000-000000000001"),
+            "survivor": self._supervisor_receipt(
+                "survivor-census-indeterminate", survivors=False,
+                operation_id="00000000-0000-4000-8000-000000000002"),
+            "mutation": self._supervisor_receipt(
+                "protected-root-changed", protected=False,
+                operation_id="00000000-0000-4000-8000-000000000003"),
+        }
+        invalid = dict(receipts["timeout"], cwd="private tampered cwd")
+        source = (
+            "import unittest\n"
+            "import v11_test_support\n"
+            "class DiagnosticFixture(unittest.TestCase):\n"
+            f"    receipts = {receipts!r}\n"
+            f"    invalid = {invalid!r}\n"
+            "    def test_timeout(self):\n"
+            "        raise v11_test_support.NativeHelperBuildError(\n"
+            "            'NATIVE_HELPER_BUILD_TIMEOUT', 'private',\n"
+            "            receipt=self.receipts['timeout'])\n"
+            "    def test_survivor(self):\n"
+            "        raise v11_test_support.NativeHelperBuildError(\n"
+            "            'NATIVE_HELPER_BUILD_SURVIVOR', 'private',\n"
+            "            receipt=self.receipts['survivor'])\n"
+            "    def test_mutation(self):\n"
+            "        raise v11_test_support.NativeHelperBuildError(\n"
+            "            'NATIVE_HELPER_BUILD_SOURCE_MUTATION', 'private',\n"
+            "            receipt=self.receipts['mutation'])\n"
+            "    def test_unverified(self):\n"
+            "        raise v11_test_support.NativeHelperBuildError(\n"
+            "            'NATIVE_HELPER_BUILD_TIMEOUT', 'private',\n"
+            "            receipt=self.invalid)\n"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_native_projection.py").write_text(
+                source, encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()):
+                report = loom_test.run_modules(
+                    ["test_native_projection"], start_dir=root, verbosity=0)
+
+        rows = {row["test"].rsplit(".", 1)[-1]: row
+                for row in report["failure_diagnostics"]}
+        expected_fields = {
+            "operation_receipt_sha256", "status", "returncode",
+            "primary_failure", "survivors_confirmed_zero",
+            "protected_roots_unchanged", "network_isolation_proven",
+            "containment_provider", "projection_sha256",
+            "test_association_sha256",
+        }
+        for label, expected_primary, expected_survivors, expected_protected in (
+                ("test_timeout", "timed-out", True, True),
+                ("test_survivor", "survivor-census-indeterminate", False, True),
+                ("test_mutation", "protected-root-changed", True, False)):
+            projection = rows[label]["operation_projection"]
+            self.assertEqual(expected_fields, set(projection))
+            self.assertEqual(expected_primary, projection["primary_failure"])
+            self.assertIs(expected_survivors,
+                          projection["survivors_confirmed_zero"])
+            self.assertIs(expected_protected,
+                          projection["protected_roots_unchanged"])
+            body = {key: value for key, value in projection.items()
+                    if key not in {
+                        "projection_sha256", "test_association_sha256"}}
+            self.assertEqual(
+                hashlib.sha256(json.dumps(
+                    body, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False, allow_nan=False).encode(
+                        "utf-8")).hexdigest(),
+                projection["projection_sha256"])
+            self.assertEqual(
+                hashlib.sha256(json.dumps({
+                    "test": rows[label]["test"],
+                    "status": rows[label]["status"],
+                    "operation_projection_sha256": projection[
+                        "projection_sha256"],
+                }, sort_keys=True, separators=(",", ":"),
+                    ensure_ascii=False, allow_nan=False).encode(
+                        "utf-8")).hexdigest(),
+                projection["test_association_sha256"])
+        self.assertNotIn("operation_projection", rows["test_unverified"])
+        serialized = json.dumps(report, sort_keys=True)
+        for private in (
+                "Private Owner", "private checkout", "cargo.exe",
+                "USERPROFILE", "private child cleanup diagnostic",
+                "private tampered cwd"):
+            self.assertNotIn(private, serialized)
+
     def test_failures_emit_only_closed_deterministic_diagnostics(self):
         source = (
             "import unittest\n"

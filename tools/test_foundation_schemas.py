@@ -63,6 +63,28 @@ class FoundationSchemaTests(unittest.TestCase):
         }
         self.assert_schema(
             value, "serial-suite-failure-diagnostic-v1.schema.json")
+        projected = copy.deepcopy(value)
+        projected["failures"][0]["operation_projection"] = {
+            "operation_receipt_sha256": "3" * 64,
+            "status": "failed", "returncode": None,
+            "primary_failure": "timed-out",
+            "survivors_confirmed_zero": True,
+            "protected_roots_unchanged": True,
+            "network_isolation_proven": False,
+            "containment_provider": "windows-job-object",
+            "projection_sha256": "4" * 64,
+            "test_association_sha256": "5" * 64,
+        }
+        self.assert_schema(
+            projected, "serial-suite-failure-diagnostic-v1.schema.json")
+        raw_child = copy.deepcopy(projected)
+        raw_child["failures"][0]["operation_projection"]["cwd"] = \
+            r"C:\Users\Private Owner\checkout"
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "serial-suite-failure-diagnostic-v1.schema.json", raw_child,
+            "serial-suite-failure-diagnostic-v1.schema.json")
+        self.assertTrue(report.errors)
         rejected = copy.deepcopy(value)
         rejected["failures"][0]["traceback"] = "private detail"
         report = loom_lint.Report()

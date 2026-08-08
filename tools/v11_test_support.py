@@ -63,6 +63,31 @@ class NativeHelperBuildError(RuntimeError):
         self.receipt = receipt
 
 
+def native_helper_operation_projection(error):
+    """Return only the self-bound public fields of a verified build receipt."""
+    if not isinstance(error, NativeHelperBuildError):
+        return None
+    try:
+        receipt = loom_operation_supervisor.verify_receipt(error.receipt)
+    except loom_operation_supervisor.SupervisorError:
+        return None
+    if receipt["operation_class"] != "vault-helper-build":
+        return None
+    body = {
+        "operation_receipt_sha256": receipt["receipt_sha256"],
+        "status": receipt["status"],
+        "returncode": receipt["returncode"],
+        "primary_failure": receipt["primary_failure"],
+        "survivors_confirmed_zero": receipt["survivors_confirmed_zero"],
+        "protected_roots_unchanged": receipt["protected_roots_unchanged"],
+        "network_isolation_proven": receipt["network_isolation_proven"],
+        "containment_provider": receipt["containment_provider"],
+    }
+    return {**body, "projection_sha256": hashlib.sha256(json.dumps(
+        body, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False).encode("utf-8")).hexdigest()}
+
+
 def _cache_entry_valid(binary, receipt, source_key):
     if not binary.is_file() or not receipt.is_file():
         return False

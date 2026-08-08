@@ -13,6 +13,7 @@ import loom_release
 import loom_release_subject
 import loom_reliability
 import loom_operation_envelope
+import loom_operation_supervisor
 import loom_platform_probe
 import loom_privacy
 import loom_test
@@ -48,6 +49,13 @@ BINDING_FIELDS = {
     "architecture", "python", "runner",
 }
 MAX_SERIAL_FAILURE_DIAGNOSTIC_BYTES = 128 * 1024
+SERIAL_DIAGNOSTIC_FINALIZATION_ERROR = "SerialDiagnosticFinalizationError"
+OPERATION_PROJECTION_FIELDS = {
+    "operation_receipt_sha256", "status", "returncode", "primary_failure",
+    "survivors_confirmed_zero", "protected_roots_unchanged",
+    "network_isolation_proven", "containment_provider", "projection_sha256",
+    "test_association_sha256",
+}
 
 
 def _strict_object(pairs):
@@ -78,12 +86,20 @@ def _digest(value):
 
 
 def _serial_failure_diagnostic(failures, exact_receipt):
+    ordered = sorted(failures, key=lambda row: (
+        row.get("test", ""), row.get("status", ""),
+        row.get("exception_type", ""), row.get("error_code", ""),
+        row.get("operation_projection", {}).get("projection_sha256", "")))
+    canonical = {}
+    for row in ordered:
+        if isinstance(row, dict):
+            canonical.setdefault((row.get("test"), row.get("status")), row)
     body = {
         "schema_version": 1,
         "exact_cut_receipt_sha256": exact_receipt["receipt_sha256"],
-        "failures": sorted(failures, key=lambda row: (
-            row.get("test", ""), row.get("status", ""),
-            row.get("exception_type", ""), row.get("error_code", ""))),
+        "failures": [canonical[(row["test"], row["status"])]
+                     for row in exact_receipt["suite"]["failed_tests"]
+                     if (row["test"], row["status"]) in canonical],
     }
     value = {**body, "failure_diagnostic_sha256": _digest(body)}
     return verify_serial_failure_diagnostic(value, exact_receipt)
@@ -123,9 +139,9 @@ def verify_serial_failure_diagnostic(value, exact_receipt):
     keys = []
     for row in failures:
         required = {"test", "status", "exception_type"}
-        if not isinstance(row, dict) or (
-                set(row) != required
-                and set(row) != required | {"error_code"}) \
+        optional = {"error_code", "operation_projection"}
+        if not isinstance(row, dict) or not required <= set(row) \
+                or not set(row) <= required | optional \
                 or PUBLIC_TEST_ID.fullmatch(str(row.get("test", ""))) is None \
                 or row.get("status") not in {"failed", "error"} \
                 or loom_test.EXCEPTION_TYPE.fullmatch(str(
@@ -134,20 +150,68 @@ def verify_serial_failure_diagnostic(value, exact_receipt):
                     loom_test.PUBLIC_ERROR_CODES | {
                         loom_test.PUBLIC_ERROR_CODE_REDACTED}):
             raise ValueError("serial diagnostic row is invalid")
+        projection = row.get("operation_projection")
+        if projection is not None:
+            if not isinstance(projection, dict) \
+                    or set(projection) != OPERATION_PROJECTION_FIELDS:
+                raise ValueError("serial diagnostic operation projection is invalid")
+            projection_body = {
+                key: item for key, item in projection.items()
+                if key not in {
+                    "projection_sha256", "test_association_sha256"}}
+            association = {
+                "test": row["test"], "status": row["status"],
+                "operation_projection_sha256": projection.get(
+                    "projection_sha256"),
+            }
+            primary = projection.get("primary_failure")
+            returncode = projection.get("returncode")
+            if HEX64.fullmatch(str(projection.get(
+                    "operation_receipt_sha256", ""))) is None \
+                    or projection.get("status") not in {"passed", "failed"} \
+                    or (returncode is not None and type(returncode) is not int) \
+                    or (primary is not None and primary not in
+                        loom_operation_supervisor.PRIMARY_FAILURES) \
+                    or projection["status"] != (
+                        "passed" if primary is None else "failed") \
+                    or any(type(projection.get(field)) is not bool for field in (
+                        "survivors_confirmed_zero",
+                        "protected_roots_unchanged",
+                        "network_isolation_proven")) \
+                    or projection.get("containment_provider") not in \
+                    loom_operation_supervisor.CONTAINMENT_PROVIDERS \
+                    or HEX64.fullmatch(str(projection.get(
+                        "projection_sha256", ""))) is None \
+                    or projection["projection_sha256"] != _digest(
+                        projection_body) \
+                    or HEX64.fullmatch(str(projection.get(
+                        "test_association_sha256", ""))) is None \
+                    or projection["test_association_sha256"] != _digest(
+                        association):
+                raise ValueError("serial diagnostic operation projection is invalid")
         keys.append((row["test"], row["status"], row["exception_type"],
-                     row.get("error_code", "")))
+                     row.get("error_code", ""),
+                     projection.get("projection_sha256", "")
+                     if projection is not None else ""))
     if keys != sorted(keys) or len(keys) != len(set(keys)):
         raise ValueError("serial diagnostic order is invalid")
-    observed = {
-        (row.get("test"), row.get("status"))
-        for row in suite.get("failed_tests", [])
-    } if isinstance(suite, dict) else set()
+    failed_tests = suite.get("failed_tests")
+    if not isinstance(failed_tests, list) \
+            or not 1 <= len(failed_tests) <= 64:
+        raise ValueError("serial diagnostic outcomes are invalid")
+    outcome_keys = []
+    for row in failed_tests:
+        if not isinstance(row, dict) or set(row) != {"test", "status"} \
+                or PUBLIC_TEST_ID.fullmatch(str(row.get("test", ""))) is None \
+                or row.get("status") not in {"failed", "error"}:
+            raise ValueError("serial diagnostic outcomes are invalid")
+        outcome_keys.append((row["test"], row["status"]))
+    if outcome_keys != sorted(outcome_keys) \
+            or len(outcome_keys) != len(set(outcome_keys)):
+        raise ValueError("serial diagnostic outcomes are invalid")
+    observed = set(outcome_keys)
     diagnosed = {(row["test"], row["status"]) for row in failures}
-    if not observed or diagnosed != observed \
-            or sum(status == "failed" for _, status in observed) != \
-            suite.get("failure_count") \
-            or sum(status == "error" for _, status in observed) != \
-            suite.get("error_count"):
+    if diagnosed != observed:
         raise ValueError("serial diagnostic outcomes are invalid")
     encoded = json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
@@ -203,11 +267,19 @@ def _public_suite(value, *, binding=None):
             continue
         timings.append({"test": row["test"], "status": row["status"],
                         "duration_microseconds": duration})
-    failures = []
+    failure_outcomes = {}
     for row in value.get("failed_tests", []):
-        if isinstance(row, dict) and isinstance(row.get("test"), str) \
+        if isinstance(row, dict) \
+                and PUBLIC_TEST_ID.fullmatch(str(row.get("test", ""))) \
                 and row.get("status") in {"failed", "error"}:
-            failures.append({"test": row["test"], "status": row["status"]})
+            test_id = row["test"]
+            if row["status"] == "error" \
+                    or failure_outcomes.get(test_id) is None:
+                failure_outcomes[test_id] = row["status"]
+    failures = [
+        {"test": test_id, "status": status}
+        for test_id, status in sorted(failure_outcomes.items())
+    ][:64]
     skip_only_incomplete = value.get("passed") is True \
         and value.get("capability_complete") is False \
         and value.get("capability_status") == "requires-matrix" \
@@ -238,7 +310,7 @@ def _public_suite(value, *, binding=None):
                           if type(value.get("failure_count")) is int else None),
         "error_count": (value.get("error_count")
                         if type(value.get("error_count")) is int else None),
-        "failed_tests": sorted(failures, key=lambda row: (row["test"], row["status"])),
+        "failed_tests": failures,
         "skip_receipts": sorted(skips, key=lambda row: row["test"]),
         "timings": sorted(timings, key=lambda row: row["test"]),
         "binding": binding,
@@ -352,6 +424,7 @@ def run(source, cut, output, *, suite_output=None,
     envelope_path = None
     terminal_phase = "failed"
     failure_diagnostics = None
+    diagnostic_finalization_started = False
     try:
         try:
             source_subject = loom_release_subject._tree(source)["sha256"]
@@ -456,12 +529,26 @@ def run(source, cut, output, *, suite_output=None,
                         "completed" if terminal_phase == "passed" else "preserved"))
             if failure_diagnostic_output is not None \
                     and failure_diagnostics:
+                diagnostic_finalization_started = True
                 diagnostic = _serial_failure_diagnostic(
                     failure_diagnostics, base)
                 loom_reliability.atomic_write_json(
                     failure_diagnostic_output, diagnostic)
         except BaseException as final_exc:
-            if base["error_type"] is None:
+            if diagnostic_finalization_started:
+                original_classification = base.get("error_type") or "None"
+                original_digest = base.get("error_sha256") or "0" * 64
+                base.update({
+                    "status": "failed",
+                    "error_type": SERIAL_DIAGNOSTIC_FINALIZATION_ERROR,
+                    "error_sha256": hashlib.sha256((
+                        SERIAL_DIAGNOSTIC_FINALIZATION_ERROR + ":" +
+                        original_classification + ":" + original_digest
+                    ).encode("utf-8")).hexdigest(),
+                })
+                base = _seal(base)
+                loom_reliability.atomic_write_json(output, base)
+            elif base["error_type"] is None:
                 message = f"{type(final_exc).__name__}:{final_exc}"
                 base.update({
                     "status": "failed",
