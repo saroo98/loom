@@ -205,6 +205,22 @@ def _validated_inputs(inventory, plan, policy):
     return inventory, plan, policy
 
 
+def _cell_execution_microseconds(workers, *, max_parallel_workers=None):
+    exclusive = [
+        row["duration_microseconds"] for row in workers
+        if row.get("exclusive") is True or row.get("shard_id") == "exclusive"
+    ]
+    general = [
+        row["duration_microseconds"] for row in workers
+        if row.get("exclusive") is False
+        or (row.get("exclusive") is None
+            and row.get("shard_id") != "exclusive")
+    ]
+    if max_parallel_workers is None or max_parallel_workers <= 1:
+        return sum(exclusive) + max(general, default=0)
+    return max([*exclusive, *general], default=0)
+
+
 def compile_cell(inventory, plan, receipts, *, policy):
     inventory, plan, policy = _validated_inputs(inventory, plan, policy)
     if not isinstance(receipts, list) or not receipts:
@@ -293,6 +309,7 @@ def compile_cell(inventory, plan, receipts, *, policy):
         "unexpected_tests": sorted(set(observed_ids) - set(expected_all)),
     })
     outcomes.sort(key=lambda row: row["test"])
+    max_parallel_workers = plan["max_parallel_workers"]
     body = {
         "schema_version": 1, "status": "certified",
         "subject": inventory["subject"],
@@ -303,16 +320,15 @@ def compile_cell(inventory, plan, receipts, *, policy):
         "policy_sha256": policy["policy_sha256"],
         "timing_profile_sha256": plan["timing_profile_sha256"],
         "plan_sha256": plan["plan_sha256"],
+        "execution_model": "bounded-parallel-v1",
+        "max_parallel_workers": max_parallel_workers,
         "worker_receipts": [{
             "shard_id": receipt["shard_id"],
             "worker_receipt_sha256": receipt["worker_receipt_sha256"],
             "duration_microseconds": receipt["duration_microseconds"],
         } for receipt in sorted(valid_receipts, key=lambda row: row["shard_id"])],
-        "execution_microseconds": (
-            sum(receipt["duration_microseconds"] for receipt in valid_receipts
-                if receipt["exclusive"])
-            + max((receipt["duration_microseconds"] for receipt in valid_receipts
-                   if not receipt["exclusive"]), default=0)),
+        "execution_microseconds": _cell_execution_microseconds(
+            valid_receipts, max_parallel_workers=max_parallel_workers),
         "outcomes": outcomes,
         "outcomes_sha256": loom_suite_plan.digest(outcomes),
         "test_count": len(outcomes),
@@ -330,14 +346,22 @@ def verify_cell(value):
             if key != "cell_certificate_sha256"}
     if value["cell_certificate_sha256"] != loom_suite_plan.digest(body):
         raise CertificateError("cell certificate is invalid", ["RECEIPT_DIGEST"])
-    if set(body) != {
+    fields = {
             "schema_version", "status", "subject", "environment",
             "environment_sha256", "inventory_sha256", "harness_sha256",
             "policy_sha256", "timing_profile_sha256", "plan_sha256",
             "worker_receipts", "execution_microseconds", "outcomes",
             "outcomes_sha256", "test_count",
-            "passed_count", "failure_count", "error_count", "skip_count"} \
-            or body.get("schema_version") != 1 or body.get("status") != "certified":
+            "passed_count", "failure_count", "error_count", "skip_count"}
+    current_fields = fields | {"execution_model", "max_parallel_workers"}
+    current = set(body) == current_fields
+    if (set(body) != fields and not current) \
+            or body.get("schema_version") != 1 \
+            or body.get("status") != "certified" \
+            or (current and (
+                body.get("execution_model") != "bounded-parallel-v1"
+                or type(body.get("max_parallel_workers")) is not int
+                or not 1 <= body["max_parallel_workers"] <= 8192)):
         raise CertificateError("cell certificate is invalid", ["SCHEMA"])
     try:
         loom_suite_plan._subject(body.get("subject"))
@@ -375,11 +399,14 @@ def verify_cell(value):
             or len(worker_digests) != len(set(worker_digests)):
         raise CertificateError("cell certificate is invalid",
                                ["INVENTORY_MISMATCH"])
-    expected_execution = (
-        sum(row["duration_microseconds"] for row in workers
-            if row["shard_id"] == "exclusive")
-        + max((row["duration_microseconds"] for row in workers
-               if row["shard_id"] != "exclusive"), default=0))
+    if current and ((body["max_parallel_workers"] > 1
+                     and len(workers) > body["max_parallel_workers"])
+                    or (body["max_parallel_workers"] == 1
+                        and len(workers) > 2)):
+        raise CertificateError("cell certificate is invalid", ["SCHEMA"])
+    expected_execution = _cell_execution_microseconds(
+        workers, max_parallel_workers=(
+            body["max_parallel_workers"] if current else None))
     if type(body.get("execution_microseconds")) is not int \
             or body["execution_microseconds"] != expected_execution:
         raise CertificateError("cell certificate is invalid", ["SCHEMA"])

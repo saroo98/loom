@@ -16,6 +16,8 @@
     "policy_sha256": {"$ref": "#/$defs/digest"},
     "timing_profile_sha256": {"$ref": "#/$defs/digest"},
     "plan_sha256": {"$ref": "#/$defs/digest"},
+    "execution_model": {"const": "bounded-parallel-v1"},
+    "max_parallel_workers": {"type": "integer", "minimum": 1, "maximum": 8192},
     "worker_receipts": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["shard_id", "worker_receipt_sha256", "duration_microseconds"], "properties": {"shard_id": {"type": "string", "pattern": "^(exclusive|general-[0-9]{3})$"}, "worker_receipt_sha256": {"$ref": "#/$defs/digest"}, "duration_microseconds": {"type": "integer", "minimum": 0}}}},
     "execution_microseconds": {"type": "integer", "minimum": 0},
     "outcomes": {"type": "array", "minItems": 1, "items": {"type": "object", "additionalProperties": false, "required": ["test", "status"], "properties": {"test": {"type": "string", "minLength": 3, "maxLength": 512}, "status": {"enum": ["passed", "skipped"]}, "skip_reason_code": {"enum": ["platform-boundary", "host-capability-unavailable", "tool-unavailable"]}, "skip_reason_sha256": {"$ref": "#/$defs/digest"}}, "allOf": [{"if": {"properties": {"status": {"const": "skipped"}}}, "then": {"required": ["skip_reason_code", "skip_reason_sha256"]}, "else": {"allOf": [{"not": {"required": ["skip_reason_code"]}}, {"not": {"required": ["skip_reason_sha256"]}}]}}]}},
@@ -27,6 +29,7 @@
     "skip_count": {"type": "integer", "minimum": 0},
     "cell_certificate_sha256": {"$ref": "#/$defs/digest"}
   },
+  "allOf": [{"if": {"required": ["execution_model"]}, "then": {"required": ["max_parallel_workers"]}, "else": {"not": {"required": ["max_parallel_workers"]}}}],
   "$defs": {
     "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "subject": {"type": "object", "additionalProperties": false, "required": ["repository", "source_commit", "source_tree_sha256", "public_root_sha256", "public_manifest_sha256", "public_file_count"], "properties": {"repository": {"const": "https://github.com/saroo98/loom"}, "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "source_tree_sha256": {"$ref": "#/$defs/digest"}, "public_root_sha256": {"$ref": "#/$defs/digest"}, "public_manifest_sha256": {"$ref": "#/$defs/digest"}, "public_file_count": {"type": "integer", "minimum": 1, "maximum": 8192}}},
