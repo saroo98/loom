@@ -104,6 +104,54 @@ class OperationSupervisorTests(unittest.TestCase):
             self.assertFalse(
                 loom_operation_supervisor._ps_group_live_state(42))
 
+    def test_posix_cleanup_retries_one_transient_census_uncertainty(self):
+        process = mock.Mock(pid=4242)
+        process.wait.return_value = 0
+        with mock.patch.object(
+                loom_operation_supervisor.os, "name", "posix"), \
+                mock.patch.object(
+                    loom_operation_supervisor.os, "killpg", create=True), \
+                mock.patch.object(
+                    loom_operation_supervisor.signal, "SIGKILL", 9,
+                    create=True), \
+                mock.patch.object(
+                    loom_operation_supervisor.time, "monotonic",
+                    side_effect=[0.0, 0.0, 0.1]), \
+                mock.patch.object(
+                    loom_operation_supervisor.time, "sleep"), \
+                mock.patch.object(
+                    loom_operation_supervisor, "_posix_group_live_state",
+                    side_effect=[None, False]):
+            survivors_zero, secondary = loom_operation_supervisor._terminate(
+                process, None)
+
+        self.assertTrue(survivors_zero)
+        self.assertEqual([], secondary)
+
+    def test_posix_cleanup_fails_closed_if_census_stays_uncertain(self):
+        process = mock.Mock(pid=4242)
+        process.wait.return_value = 0
+        with mock.patch.object(
+                loom_operation_supervisor.os, "name", "posix"), \
+                mock.patch.object(
+                    loom_operation_supervisor.os, "killpg", create=True), \
+                mock.patch.object(
+                    loom_operation_supervisor.signal, "SIGKILL", 9,
+                    create=True), \
+                mock.patch.object(
+                    loom_operation_supervisor.time, "monotonic",
+                    side_effect=[0.0, 0.0, 6.0]), \
+                mock.patch.object(
+                    loom_operation_supervisor.time, "sleep"), \
+                mock.patch.object(
+                    loom_operation_supervisor, "_posix_group_live_state",
+                    return_value=None):
+            survivors_zero, secondary = loom_operation_supervisor._terminate(
+                process, None)
+
+        self.assertFalse(survivors_zero)
+        self.assertEqual(["process-group-census:unavailable"], secondary)
+
     @unittest.skipUnless(os.name == "nt", "Windows Job Object release contract")
     def test_windows_timeout_releases_cwd_before_returning_receipt(self):
         with tempfile.TemporaryDirectory() as temporary:

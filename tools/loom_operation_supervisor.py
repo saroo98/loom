@@ -469,15 +469,16 @@ def _terminate(process, containment):
             secondary.append(f"process-wait:{exc}")
         survivors_zero = False
         deadline = time.monotonic() + 5
+        last_live = None
         while time.monotonic() < deadline:
             live = _posix_group_live_state(process.pid)
+            last_live = live
             if live is False:
                 survivors_zero = True
                 break
-            if live is None:
-                secondary.append("process-group-census:unavailable")
-                break
             time.sleep(0.01)
+        if not survivors_zero and last_live is None:
+            secondary.append("process-group-census:unavailable")
         return survivors_zero, secondary
     try:
         if not _KERNEL32.TerminateJobObject(containment, 1):
