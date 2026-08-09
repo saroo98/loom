@@ -570,10 +570,10 @@ def run_plan(cut, inventory, plan, output_root, *, timeout, protected_roots=()):
     if len(exclusive) > 1 or len(exclusive) + len(general) != len(shards):
         raise SuiteWorkerError("shard execution lanes are invalid")
     worker_budget = int(plan.get("max_parallel_workers", 1))
-    # A two-slot host cannot give the mutation/native-heavy exclusive lane and
-    # the general lane enough independent headroom. Qualify them sequentially
-    # there; wider hosts retain concurrent exclusive/general execution.
-    if exclusive and worker_budget <= 2:
+    # Preserve the serial fallback only when the resolved budget has one slot.
+    # With two or more slots the exclusive lane consumes one slot while the
+    # general lanes use the remaining bounded budget.
+    if exclusive and worker_budget <= 1:
         results.append(execute_shard(
             cut, inventory, plan, exclusive[0]["shard_id"], output_root,
             timeout=timeout, protected_roots=protected_roots))

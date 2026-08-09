@@ -16,7 +16,8 @@ import loom_lint
 
 
 class SuiteCertificateTests(unittest.TestCase):
-    def fixture(self):
+    def fixture(self, *, exclusive_modules=(), logical_cpus=4,
+                durations=None):
         subject = {
             "repository": "https://github.com/saroo98/loom",
             "source_commit": "1" * 40,
@@ -53,11 +54,12 @@ class SuiteCertificateTests(unittest.TestCase):
         })
         policy = loom_suite_plan.seal_policy({
             "schema_version": 1, "authority_mode": "serial",
-            "exclusive_modules": [],
+            "exclusive_modules": list(exclusive_modules),
         })
         plan = loom_suite_plan.plan(
             inventory, timing_profile=profile, policy=policy,
-            logical_cpus=4)
+            logical_cpus=logical_cpus)
+        durations = {} if durations is None else durations
         receipts = []
         tests_by_module = {
             row["module"]: row["tests"] for row in inventory["modules"]}
@@ -79,7 +81,8 @@ class SuiteCertificateTests(unittest.TestCase):
                     {"test": test_id, "status": "passed"} for test_id in expected],
                 "test_count": len(expected), "failure_count": 0,
                 "error_count": 0, "skip_count": 0,
-                "duration_microseconds": 1000,
+                "duration_microseconds": durations.get(
+                    shard["shard_id"], 1000),
                 "pre_manifest_sha256": subject["public_manifest_sha256"],
                 "post_manifest_sha256": subject["public_manifest_sha256"],
                 "mutation_clean": True, "privacy_clean": True,
@@ -177,6 +180,41 @@ class SuiteCertificateTests(unittest.TestCase):
             raised.exception.public_details["failed_tests"])
         self.assertEqual([], raised.exception.public_details["missing_tests"])
         self.assertEqual([], raised.exception.public_details["unexpected_tests"])
+
+    def test_two_worker_cell_records_parallel_critical_path(self):
+        inventory, _profile, policy, plan, receipts = self.fixture(
+            exclusive_modules=("test_alpha",), logical_cpus=3,
+            durations={"exclusive": 400, "general-000": 900})
+
+        certificate = loom_suite_certificate.compile_cell(
+            inventory, plan, receipts, policy=policy)
+
+        self.assertEqual(
+            "bounded-parallel-v1", certificate.get("execution_model"))
+        self.assertEqual(2, certificate.get("max_parallel_workers"))
+        self.assertEqual(900, certificate["execution_microseconds"])
+        self.assertEqual(
+            certificate, loom_suite_certificate.verify_cell(certificate))
+        legacy = copy.deepcopy(certificate)
+        legacy.pop("execution_model")
+        legacy.pop("max_parallel_workers")
+        legacy["execution_microseconds"] = 1300
+        legacy_body = {
+            key: value for key, value in legacy.items()
+            if key != "cell_certificate_sha256"
+        }
+        legacy["cell_certificate_sha256"] = loom_suite_plan.digest(legacy_body)
+        self.assertEqual(legacy, loom_suite_certificate.verify_cell(legacy))
+        oversize = copy.deepcopy(certificate)
+        oversize["max_parallel_workers"] = 8193
+        oversize_body = {
+            key: value for key, value in oversize.items()
+            if key != "cell_certificate_sha256"
+        }
+        oversize["cell_certificate_sha256"] = loom_suite_plan.digest(
+            oversize_body)
+        with self.assertRaises(loom_suite_certificate.CertificateError):
+            loom_suite_certificate.verify_cell(oversize)
 
     def test_fail_closed_precedence_prefers_subject_over_later_test_failure(self):
         inventory, _profile, policy, plan, receipts = self.fixture()

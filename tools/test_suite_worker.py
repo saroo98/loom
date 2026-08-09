@@ -483,7 +483,7 @@ class SuiteWorkerTests(unittest.TestCase):
                         cut, inventory, plan, "general-000", output, timeout=10)
             self.assertFalse(external.exists())
 
-    def test_run_plan_counts_exclusive_lane_inside_parallel_budget(self):
+    def test_run_plan_uses_two_available_slots_for_exclusive_and_general(self):
         plan = {
             "max_parallel_workers": 4,
             "shards": [
@@ -496,7 +496,7 @@ class SuiteWorkerTests(unittest.TestCase):
         release = __import__("threading").Event()
 
         def execute(_cut, _inventory, _plan, shard_id, _root, **_kwargs):
-            if shard_id == "exclusive" and _plan["max_parallel_workers"] > 2:
+            if shard_id == "exclusive" and _plan["max_parallel_workers"] > 1:
                 release.wait(timeout=1)
             else:
                 release.set()
@@ -522,7 +522,7 @@ class SuiteWorkerTests(unittest.TestCase):
             receipts = loom_suite_worker.run_plan(
                 Path(temporary) / "cut", {}, constrained, Path(temporary),
                 timeout=1)
-        self.assertEqual(["exclusive", "general-000"], order)
+        self.assertNotEqual("exclusive", order[0])
         self.assertEqual(
             ["exclusive", "general-000"],
             [row["shard_id"] for row in receipts])
