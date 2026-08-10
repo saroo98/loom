@@ -1,5 +1,5 @@
 {
-  "authority_mode": "serial",
+  "authority_mode": "certificate",
   "exclusive_modules": [
     "test_loom_bootstrap_v11",
     "test_loom_crypto_v11",
@@ -10,6 +10,6 @@
     "test_loom_transfer_v11",
     "test_recovery_contract_schemas"
   ],
-  "policy_sha256": "4f93a809e70c11116febc00dac5a1cb08d46990dd1e2b11e35a8561272c11d08",
+  "policy_sha256": "6b49bbd04661a283df2fcb907d8f46c4366a6942c1c596107535a8355f12dc4c",
   "schema_version": 1
 }
