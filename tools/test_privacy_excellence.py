@@ -92,7 +92,7 @@ class PrivacyExcellenceTests(unittest.TestCase):
             "rule": "openai-token",
         }])
 
-    def test_firewall_always_contains_secret_regex_engine_in_worker(self):
+    def test_firewall_contains_secret_scans_and_keeps_path_specific_bounds(self):
         cut = self.root / "cut"
         cut.mkdir()
         (cut / "safe.txt").write_text("public", encoding="utf-8")
@@ -106,6 +106,67 @@ class PrivacyExcellenceTests(unittest.TestCase):
 
         self.assertTrue(result["clean"])
         isolated.assert_called_once_with(b"public")
+
+        qualification_cut = self.root / "qualification-cut"
+        contracts = qualification_cut / "contracts"
+        contracts.mkdir(parents=True)
+        content = b'{"payload":"' + (b"a" * 80) + b'"}'
+        (contracts / "release-suite-qualification-v1.json").write_bytes(content)
+
+        with mock.patch.object(
+                loom_privacy, "MAX_SCAN_FILE_BYTES", 64), mock.patch.object(
+                    loom_privacy, "_isolated_secret_signature_match",
+                    return_value=None) as isolated:
+            try:
+                result = loom_privacy.scan_publication(
+                    qualification_cut, forbidden_tokens=[])
+            except loom_privacy.PrivacyError as exc:
+                self.fail(f"bound qualification contract was not scanned: {exc}")
+
+        self.assertTrue(result["clean"], result["findings"])
+        self.assertEqual(len(content), result["bytes_scanned"])
+        isolated.assert_called_once_with(content)
+
+        content = b"public-evidence" * 6
+        worker = loom_privacy._SecretScanWorker()
+        try:
+            with mock.patch.object(
+                    loom_privacy, "MAX_SCAN_FILE_BYTES", 64), mock.patch.object(
+                        loom_privacy, "MAX_QUALIFICATION_SCAN_BYTES", 96):
+                try:
+                    finding = worker.scan(content)
+                except loom_privacy.PrivacyError as exc:
+                    self.fail(
+                        f"qualification-sized input did not reach the worker: {exc}")
+        finally:
+            worker.close()
+
+        self.assertIsNone(finding)
+
+        generic_cut = self.root / "generic-cut"
+        generic_cut.mkdir()
+        (generic_cut / "ordinary.json").write_bytes(b"a" * 65)
+
+        with mock.patch.object(loom_privacy, "MAX_SCAN_FILE_BYTES", 64):
+            with self.assertRaisesRegex(
+                    loom_privacy.PrivacyError,
+                    r"safe scan limit \(64 bytes\): ordinary\.json"):
+                loom_privacy.scan_publication(generic_cut, forbidden_tokens=[])
+
+        oversized_cut = self.root / "oversized-cut"
+        contracts = oversized_cut / "contracts"
+        contracts.mkdir(parents=True)
+        (contracts / "release-suite-qualification-v1.json").write_bytes(
+            b"a" * 97)
+
+        with mock.patch.object(
+                loom_privacy, "MAX_SCAN_FILE_BYTES", 64), mock.patch.object(
+                    loom_privacy, "MAX_QUALIFICATION_SCAN_BYTES", 96):
+            with self.assertRaisesRegex(
+                    loom_privacy.PrivacyError,
+                    r"safe scan limit \(96 bytes\): contracts/"):
+                loom_privacy.scan_publication(
+                    oversized_cut, forbidden_tokens=[])
 
     def test_firewall_fails_closed_on_opaque_binary_content(self):
         cut = self.root / "cut"

@@ -22,6 +22,9 @@ from loom_reliability import _is_trusted_os_alias
 
 
 MAX_SCAN_FILE_BYTES = 64 * 1024 * 1024
+MAX_QUALIFICATION_SCAN_BYTES = 95_000_000
+QUALIFICATION_CONTRACT_PATH = (
+    "contracts/release-suite-qualification-v1.json")
 MAX_EXPORT_BYTES = 64 * 1024 * 1024
 SAFE_RECEIVER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 TOKEN_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be")
@@ -71,6 +74,12 @@ SECRET_PATTERNS = (
 
 class PrivacyError(RuntimeError):
     pass
+
+
+def _publication_file_scan_limit(relative):
+    return (MAX_QUALIFICATION_SCAN_BYTES
+            if relative == QUALIFICATION_CONTRACT_PATH
+            else MAX_SCAN_FILE_BYTES)
 
 
 def _is_redirect(path):
@@ -221,7 +230,8 @@ class _SecretScanWorker:
         self._stop()
 
     def scan(self, content):
-        if not isinstance(content, bytes) or len(content) > MAX_SCAN_FILE_BYTES:
+        if not isinstance(content, bytes) \
+                or len(content) > MAX_QUALIFICATION_SCAN_BYTES:
             raise PrivacyError("isolated secret scan input is invalid or oversized")
         for _attempt in range(3):
             if self.process is None or self.process.poll() is not None:
@@ -310,9 +320,10 @@ def scan_publication(root, *, forbidden_tokens, require_owner_tokens=False,
                 break
         try:
             size = path.stat().st_size
-            if size > MAX_SCAN_FILE_BYTES:
+            scan_limit = _publication_file_scan_limit(relative)
+            if size > scan_limit:
                 raise PrivacyError(
-                    f"publication file exceeds safe scan limit ({MAX_SCAN_FILE_BYTES} bytes): {relative}")
+                    f"publication file exceeds safe scan limit ({scan_limit} bytes): {relative}")
             content = path.read_bytes()
         except OSError as exc:
             raise PrivacyError(f"cannot read publication file: {relative}: {exc}") from exc
@@ -597,7 +608,7 @@ def main(argv=None):
             if len(header) != 8:
                 return 2
             size = int.from_bytes(header, "big")
-            if size > MAX_SCAN_FILE_BYTES:
+            if size > MAX_QUALIFICATION_SCAN_BYTES:
                 return 2
             chunks = []
             remaining = size

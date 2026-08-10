@@ -38,6 +38,12 @@ from v11_test_support import (
 ROOT = Path(__file__).resolve().parents[1]
 CRATE = ROOT / "vault-helper"
 
+
+class BootstrapConcurrencyFailure(AssertionError):
+    def __init__(self, code):
+        super().__init__(code)
+        self.code = code
+
 BOOTSTRAP_SPEC = importlib.util.spec_from_file_location(
     "loom_bootstrap_under_test", ROOT / "scripts" / "loom_bootstrap.py")
 loom_bootstrap = importlib.util.module_from_spec(BOOTSTRAP_SPEC)
@@ -500,9 +506,23 @@ class BootstrapIntegrationTests(unittest.TestCase):
             completed = [process.communicate(timeout=180) for process in processes]
 
             for process, (stdout, stderr) in zip(processes, completed):
-                self.assertEqual(0, process.returncode, stdout + stderr)
-                self.assertIn(
-                    json.loads(stdout)["status"], {"activated", "current"})
+                if process.returncode != 0:
+                    raise BootstrapConcurrencyFailure(
+                        "BOOTSTRAP_CONCURRENT_CHILD_FAILED")
+                try:
+                    status = json.loads(stdout)["status"]
+                except (json.JSONDecodeError, KeyError, TypeError) as exc:
+                    raise BootstrapConcurrencyFailure(
+                        "BOOTSTRAP_CONCURRENT_OUTPUT_INVALID") from exc
+                if status not in {"activated", "current"}:
+                    raise BootstrapConcurrencyFailure(
+                        "BOOTSTRAP_CONCURRENT_OUTPUT_INVALID")
+            generation = json.loads(
+                (home / "adapters" / "generation.json").read_text(
+                    encoding="utf-8"))
+            if generation.get("generation") != 1:
+                raise BootstrapConcurrencyFailure(
+                    "BOOTSTRAP_CONCURRENT_LAUNCHER_REWRITE")
             current = json.loads(
                 (home / "runtime" / "current.json").read_text(encoding="utf-8"))
             runtime = home / "runtime" / "versions" / current["path"]
@@ -511,10 +531,12 @@ class BootstrapIntegrationTests(unittest.TestCase):
                 platform_id=loom_update.platform_id(),
                 binary_name="loom-vault.exe" if os.name == "nt" else "loom-vault",
                 source_receipt=loom_bootstrap._direct_install_receipt(direct))
-            self.assertTrue(helper.is_file())
-            self.assertEqual(current["payload_sha256"], payload_sha256)
-            self.assertEqual(
-                [], list((home / "runtime" / "versions").glob(".*.direct-staged-*")))
+            if not helper.is_file() or current["payload_sha256"] != payload_sha256:
+                raise BootstrapConcurrencyFailure(
+                    "BOOTSTRAP_CONCURRENT_RUNTIME_INVALID")
+            if list((home / "runtime" / "versions").glob(".*.direct-staged-*")):
+                raise BootstrapConcurrencyFailure(
+                    "BOOTSTRAP_CONCURRENT_STAGING_SURVIVOR")
 
     def test_concurrent_direct_winner_is_reverified_after_a_stale_cold_snapshot(self):
         with tempfile.TemporaryDirectory() as temporary:
