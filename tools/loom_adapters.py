@@ -257,6 +257,17 @@ def _install_launcher_locked(loom_home, launcher_source):
     receipt_content = _json_bytes(receipt)
     user_home = loom_home.parent
     _recover_transaction(user_home, loom_home)
+    if receipt_path.is_file() and not receipt_path.is_symlink() \
+            and receipt_path.read_bytes() == receipt_content \
+            and all(target.is_file() and not target.is_symlink()
+                    and target.read_bytes() == content
+                    for target, content in targets.items()):
+        try:
+            os.chmod(posix, 0o700)
+        except OSError:
+            pass
+        return {"status": "installed", "python_launcher": str(python_launcher),
+                "posix_launcher": str(posix), "windows_launcher": str(windows)}
     journal, journal_path, generation_path = _begin_transaction(
         user_home, loom_home, "install-launcher",
         [*targets.items(), (receipt_path, receipt_content)])
