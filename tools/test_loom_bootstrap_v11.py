@@ -21,6 +21,7 @@ import loom_plugin_package
 import loom_activation
 import loom_adapter_protocol
 import loom_install
+import loom_test
 import loom_orchestrator
 import loom_release
 import loom_release_sign
@@ -43,6 +44,20 @@ class BootstrapConcurrencyFailure(AssertionError):
     def __init__(self, code):
         super().__init__(code)
         self.code = code
+
+
+SIGNED_ACTIVATION_TIMEOUT_SECONDS = 120
+INSTALLED_ADAPTER_PROBE_TIMEOUT_SECONDS = 30
+
+
+def _run_bootstrap_phase(command, *, timeout_seconds, timeout_code):
+    try:
+        return subprocess.run(
+            command, capture_output=True, text=True,
+            timeout=timeout_seconds, check=False)
+    except subprocess.TimeoutExpired as exc:
+        raise BootstrapConcurrencyFailure(timeout_code) from exc
+
 
 BOOTSTRAP_SPEC = importlib.util.spec_from_file_location(
     "loom_bootstrap_under_test", ROOT / "scripts" / "loom_bootstrap.py")
@@ -1050,6 +1065,32 @@ class BootstrapIntegrationTests(unittest.TestCase):
                 inspection["generated_rule_ids"])
 
     def test_signed_fresh_package_activates_and_stable_launcher_verifies_it(self):
+        phase_contracts = (
+            (SIGNED_ACTIVATION_TIMEOUT_SECONDS,
+             "BOOTSTRAP_SIGNED_ACTIVATION_TIMEOUT", 120),
+            (INSTALLED_ADAPTER_PROBE_TIMEOUT_SECONDS,
+             "BOOTSTRAP_INSTALLED_PROBE_TIMEOUT", 30),
+        )
+        for timeout_seconds, timeout_code, expected_bound in phase_contracts:
+            with self.subTest(timeout_code=timeout_code):
+                private_command = ["python", "private-owner-path"]
+                with mock.patch.object(
+                        subprocess, "run",
+                        side_effect=subprocess.TimeoutExpired(
+                            private_command, expected_bound)):
+                    with self.assertRaises(
+                            BootstrapConcurrencyFailure) as raised:
+                        _run_bootstrap_phase(
+                            private_command,
+                            timeout_seconds=timeout_seconds,
+                            timeout_code=timeout_code)
+                self.assertEqual(timeout_code, raised.exception.code)
+                self.assertEqual(timeout_code, str(raised.exception))
+                self.assertNotIn(
+                    "private-owner-path", str(raised.exception))
+                self.assertEqual(expected_bound, timeout_seconds)
+                self.assertIn(timeout_code, loom_test.PUBLIC_ERROR_CODES)
+
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             helpers, receipts, evidence = package_evidence(
@@ -1073,16 +1114,18 @@ class BootstrapIntegrationTests(unittest.TestCase):
                 expires=dt.datetime(2027, 1, 1, tzinfo=dt.timezone.utc))
             self.assertTrue(finalized["firewall"]["clean"])
             home = root / "home" / ".loom"
-            result = subprocess.run([
+            result = _run_bootstrap_phase([
                 sys.executable, "-B", str(package / "scripts" / "loom_bootstrap.py"),
                 "--ensure", "--plugin-root", str(package), "--home", str(home)],
-                capture_output=True, text=True, timeout=60, check=False)
+                timeout_seconds=SIGNED_ACTIVATION_TIMEOUT_SECONDS,
+                timeout_code="BOOTSTRAP_SIGNED_ACTIVATION_TIMEOUT")
             self.assertEqual(0, result.returncode, result.stdout + result.stderr)
             self.assertEqual("activated", json.loads(result.stdout)["status"])
-            probe = subprocess.run([
+            probe = _run_bootstrap_phase([
                 sys.executable, "-B", str(home / "bin" / "loom.py"),
                 "--home", str(home), "adapter-probe"],
-                capture_output=True, text=True, timeout=30, check=False)
+                timeout_seconds=INSTALLED_ADAPTER_PROBE_TIMEOUT_SECONDS,
+                timeout_code="BOOTSTRAP_INSTALLED_PROBE_TIMEOUT")
             self.assertEqual(0, probe.returncode, probe.stdout + probe.stderr)
             self.assertEqual("1.1.0", json.loads(probe.stdout)["version"])
 
