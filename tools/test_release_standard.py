@@ -94,16 +94,21 @@ class ReleaseStandardTests(unittest.TestCase):
     def test_public_cut_keeps_the_repository_pinned_rust_toolchain(self):
         self.assertIn("rust-toolchain.toml", loom_release.ROOT_FILES)
 
-    def test_public_cut_keeps_qualification_authority_outside_runtime_payload(self):
+    def test_public_cut_keeps_v1_and_v2_qualification_authority_outside_runtime_payload(self):
         source = self._source()
         contracts = source / "contracts"
         contracts.mkdir()
         policy = contracts / "release-suite-policy-v1.json"
         policy.write_text('{"authority_mode":"certificate"}\n', encoding="utf-8")
-        qualification = contracts / "release-suite-qualification-v1.json"
-        qualification.write_text(
-            '{"qualification_sha256":"' + ("a" * 64) + '"}\n',
-            encoding="utf-8")
+        qualifications = {
+            contracts / "release-suite-qualification-v1.json":
+                '{"qualification_sha256":"' + ("a" * 64) + '"}\n',
+            contracts / "release-mechanism-qualification-v2.json":
+                '{"mechanism_qualification_sha256":"' +
+                ("b" * 64) + '"}\n',
+        }
+        for qualification, content in qualifications.items():
+            qualification.write_text(content, encoding="utf-8")
         destination = self.root / "public-cut"
 
         result = loom_release.build_public(
@@ -111,14 +116,15 @@ class ReleaseStandardTests(unittest.TestCase):
             source_classification="public-release")
 
         self.assertTrue(policy.is_file())
-        self.assertTrue(qualification.is_file())
+        self.assertTrue(all(path.is_file() for path in qualifications))
         self.assertTrue(
             (destination / "contracts" / policy.name).is_file())
-        self.assertFalse(
-            (destination / "contracts" / qualification.name).exists())
-        self.assertNotIn(
-            "contracts/release-suite-qualification-v1.json",
-            {row["path"] for row in result["files"]})
+        published = {row["path"] for row in result["files"]}
+        for qualification in qualifications:
+            self.assertFalse(
+                (destination / "contracts" / qualification.name).exists())
+            self.assertNotIn(
+                f"contracts/{qualification.name}", published)
 
     def test_suite_separates_correctness_from_cross_platform_capability_skips(self):
         tools = self.root / "tools"

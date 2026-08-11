@@ -198,6 +198,27 @@ class PrivacyExcellenceTests(unittest.TestCase):
                 loom_privacy.scan_publication(
                     oversized_cut, forbidden_tokens=[])
 
+    def test_v1_and_v2_authority_records_share_only_the_explicit_large_scan_boundary(self):
+        cases = (
+            (loom_privacy,
+             "contracts/release-suite-qualification-v1.json"),
+            (loom_privacy,
+             "contracts/release-mechanism-qualification-v2.json"),
+            (loom_publication_privacy,
+             "contracts/release-suite-qualification-v1.json"),
+            (loom_publication_privacy,
+             "contracts/release-mechanism-qualification-v2.json"),
+        )
+        for module, relative in cases:
+            with self.subTest(module=module.__name__, relative=relative):
+                self.assertEqual(
+                    module.MAX_QUALIFICATION_SCAN_BYTES,
+                    module._publication_file_scan_limit(relative))
+                self.assertEqual(
+                    module.MAX_SCAN_FILE_BYTES,
+                    module._publication_file_scan_limit(
+                        "contracts/ordinary.json"))
+
     def test_firewall_fails_closed_on_opaque_binary_content(self):
         cut = self.root / "cut"
         cut.mkdir()

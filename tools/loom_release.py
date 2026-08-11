@@ -45,6 +45,7 @@ ROOT_DIRECTORIES = {
 # must not be replicated into the installable public cut or six runtime ZIPs.
 RELEASE_AUTHORITY_FILES = {
     "contracts/release-suite-qualification-v1.json",
+    "contracts/release-mechanism-qualification-v2.json",
 }
 MANIFEST = "BUILD-MANIFEST.json"
 LOCAL_CHECKS = (

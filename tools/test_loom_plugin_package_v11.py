@@ -4,9 +4,11 @@ import ast
 import hashlib
 import json
 import os
+import shutil
 import stat
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
@@ -155,6 +157,38 @@ class PluginPackageTests(unittest.TestCase):
                     ROOT, temp / "bad-evidence", helpers, receipts, evidence,
                     version="1.1.0", release_sequence=2,
                     source_commit=package_source_commit(ROOT))
+
+    def test_near_95mb_v2_authority_record_never_enters_plugin_or_runtime_archives(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            source = temp / "source"
+            shutil.copytree(
+                ROOT, source,
+                ignore=shutil.ignore_patterns(
+                    ".git", "__pycache__", "*.pyc", "*.pyo"))
+            authority = (
+                source / "contracts" /
+                "release-mechanism-qualification-v2.json")
+            with authority.open("wb") as stream:
+                stream.truncate(90_000_000)
+            helpers, receipts, evidence = package_evidence(
+                source, temp / "evidence", loom_plugin_package.PLATFORMS)
+            output = temp / "plugin"
+
+            loom_plugin_package.build(
+                source, output, helpers, receipts, evidence,
+                version="1.9.0", release_sequence=31,
+                source_commit=package_source_commit(source))
+
+            relative = "contracts/release-mechanism-qualification-v2.json"
+            self.assertTrue(authority.is_file())
+            self.assertEqual(90_000_000, authority.stat().st_size)
+            self.assertFalse((output / relative).exists())
+            for platform in loom_plugin_package.PLATFORMS:
+                runtime = output / "runtime-payload" / platform / \
+                    "loom-runtime.zip"
+                with zipfile.ZipFile(runtime) as archive:
+                    self.assertNotIn(relative, archive.namelist())
 
     def test_exact_native_receipts_are_self_bound_and_legacy_receipts_still_read(self):
         with tempfile.TemporaryDirectory() as temporary:

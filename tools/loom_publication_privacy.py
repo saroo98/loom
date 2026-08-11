@@ -21,6 +21,10 @@ MAX_QUALIFICATION_SCAN_BYTES = 95_000_000
 MAX_SCAN_FILE_BYTES = 64 * 1024 * 1024
 QUALIFICATION_CONTRACT_PATH = \
     "contracts/release-mechanism-qualification-v2.json"
+QUALIFICATION_CONTRACT_PATHS = frozenset({
+    "contracts/release-suite-qualification-v1.json",
+    QUALIFICATION_CONTRACT_PATH,
+})
 TOKEN_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be")
 TRANSPARENT_TEXT_SUFFIXES = {
     ".bat", ".cfg", ".cmd", ".css", ".csv", ".env", ".htm", ".html",
@@ -108,7 +112,7 @@ def _scan_views(content):
 
 def _publication_file_scan_limit(relative):
     return (MAX_QUALIFICATION_SCAN_BYTES
-            if relative == QUALIFICATION_CONTRACT_PATH
+            if relative in QUALIFICATION_CONTRACT_PATHS
             else MAX_SCAN_FILE_BYTES)
 
 

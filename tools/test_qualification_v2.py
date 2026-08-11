@@ -581,6 +581,23 @@ class QualificationV2Tests(unittest.TestCase):
                 serial, shadow, comparison, manifest=manifest,
                 workload=workload, context=context)
 
+    def test_mechanism_transport_rejects_95mb_plus_one_before_json_parse(self):
+        self.assertEqual(95_000_000, loom_qualification_v2.MAX_MECHANISM_BYTES)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "mechanism.json"
+            with path.open("wb") as stream:
+                stream.truncate(
+                    loom_qualification_v2.MAX_MECHANISM_BYTES + 1)
+            with mock.patch.object(
+                    loom_qualification_v2.json, "loads",
+                    side_effect=AssertionError("JSON parser must not run")) \
+                    as parser:
+                with self.assertRaises(
+                        loom_qualification_v2.QualificationV2Error):
+                    loom_qualification_v2._load_json(
+                        path, loom_qualification_v2.MAX_MECHANISM_BYTES)
+            parser.assert_not_called()
+
     def test_observation_rejects_nested_unknown_fields(self):
         _root, manifest, workload, timing, _authority = self.inputs()
         serial, shadow, _comparison, context = self.evidence(
@@ -776,6 +793,30 @@ class QualificationV2Tests(unittest.TestCase):
                 expected_tree=source_tree, expected_public_root=public_root,
                 mechanism=mechanism, policy=certificate_authority,
                 manifest=manifest, workload=workload))
+
+        serial_rollback = loom_qualification_v2.compile_candidate(
+            quality, compatibility, self.native_receipts(commit),
+            mechanism=None, policy=serial_authority, manifest=manifest)
+        self.assertEqual("serial", serial_rollback["authority_mode"])
+        self.assertIsNone(
+            serial_rollback["mechanism_qualification_sha256"])
+        self.assertEqual(
+            admission["source_commit"], serial_rollback["source_commit"])
+        self.assertEqual(
+            admission["repository_source_tree_sha256"],
+            serial_rollback["repository_source_tree_sha256"])
+        self.assertEqual(
+            serial_rollback, loom_qualification_v2.verify_candidate(
+                serial_rollback, expected_commit=commit,
+                expected_tree=source_tree, expected_public_root=public_root,
+                mechanism=None, policy=serial_authority,
+                manifest=manifest, workload=None))
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.verify_candidate(
+                admission, expected_commit=commit,
+                expected_tree=source_tree, expected_public_root=public_root,
+                mechanism=None, policy=serial_authority,
+                manifest=manifest, workload=None)
 
         damaged_native = self.native_receipts(commit)
         damaged_native[0]["receipt"]["rebuild_sha256"] = "0" * 64
