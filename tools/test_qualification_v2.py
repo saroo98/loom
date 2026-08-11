@@ -935,7 +935,7 @@ class QualificationV2Tests(unittest.TestCase):
 
     def test_run_observation_uses_only_manual_fixed_workload_identity(self):
         root, manifest, workload, _timing, _authority = self.inputs()
-        commit = self.git(root, "rev-parse", "HEAD")
+        commit = "1" * 40
         environment = loom_platform_probe.release_environment(
             requested_label="windows-latest", image_os="local-windows",
             image_version="test", workflow_path=(
@@ -945,7 +945,11 @@ class QualificationV2Tests(unittest.TestCase):
             run_attempt="1")
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
                 loom_qualification_v2.loom_platform_probe,
-                "release_environment", return_value=environment):
+                "release_environment", return_value=environment), \
+                mock.patch.object(
+                    loom_qualification_v2.loom_subject_identity,
+                    "git_tree_inventory", return_value={
+                        "tree_sha256": manifest["manifest_sha256"]}):
             output = Path(temporary) / "observation.json"
             observation = loom_qualification_v2.run_observation(
                 root, consumer="quality", output=output,
@@ -1132,7 +1136,10 @@ class QualificationV2Tests(unittest.TestCase):
             run_attempt="1")
         with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
                 loom_qualification_v2.loom_platform_probe,
-                "release_environment", return_value=environment):
+                "release_environment", return_value=environment), \
+                mock.patch.object(
+                    loom_qualification_v2.loom_subject_identity,
+                    "_run_git", return_value="1" * 40):
             output = Path(temporary) / "fault-receipt.json"
             receipt = loom_qualification_v2.run_fault_corpus(
                 root, platform="windows", output=output,
