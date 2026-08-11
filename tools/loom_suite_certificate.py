@@ -17,6 +17,7 @@ import loom_operation_supervisor
 import loom_release
 import loom_release_candidate
 import loom_release_rollback
+import loom_suite_certificate_core
 import loom_suite_plan
 import loom_suite_worker
 import loom_test
@@ -599,6 +600,28 @@ def verify_matrix(value):
         raise CertificateError("matrix certificate contains uncovered skips",
                                ["UNAUTHORIZED_SKIP"])
     return value
+
+
+# Preserve the historical public module and CLI while delegating the reusable
+# cell, shadow, and matrix semantics to the closed product-independent core.
+PRECEDENCE = loom_suite_certificate_core.PRECEDENCE
+RELEASE_MATRIX_LABELS = loom_suite_certificate_core.RELEASE_MATRIX_LABELS
+RELEASE_MATRIX_PYTHONS = loom_suite_certificate_core.RELEASE_MATRIX_PYTHONS
+WORKER_FAILURE_CODES = loom_suite_certificate_core.WORKER_FAILURE_CODES
+CertificateError = loom_suite_certificate_core.CertificateError
+_shadow_failure_code = loom_suite_certificate_core.shadow_failure_code
+_raise = loom_suite_certificate_core._raise
+_primary = loom_suite_certificate_core.primary
+_require_release_topology = \
+    loom_suite_certificate_core._require_release_topology
+_validated_inputs = loom_suite_certificate_core._validated_inputs
+_cell_execution_microseconds = \
+    loom_suite_certificate_core._cell_execution_microseconds
+compile_cell = loom_suite_certificate_core.compile_cell
+verify_cell = loom_suite_certificate_core.verify_cell
+compare_shadow = loom_suite_certificate_core.compare_shadow
+compile_matrix = loom_suite_certificate_core.compile_matrix
+verify_matrix = loom_suite_certificate_core.verify_matrix
 
 
 def qualification_code_sha256(root=None):
