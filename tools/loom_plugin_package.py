@@ -18,8 +18,8 @@ from pathlib import Path
 import loom_reliability
 import loom_release
 import loom_privacy
+import loom_product_interface
 import loom_sbom
-import loom_vault
 
 
 PLATFORMS = {
@@ -235,6 +235,10 @@ def _verify_helper_receipt(
 def build(source, output, helpers, helper_receipts, helper_evidence, *, version, release_sequence,
           source_commit, owner_tokens=()):
     source = loom_reliability._absolute(source, "plugin source", must_exist=True)
+    try:
+        product_interface = loom_product_interface.load(source)
+    except loom_product_interface.ProductInterfaceError as exc:
+        raise PackageError(f"release product interface is invalid: {exc}") from exc
     output = loom_reliability._absolute(output, "plugin output")
     if not re.fullmatch(r"[0-9a-f]{40}", str(source_commit)):
         raise PackageError("source commit must be an exact lowercase Git object ID")
@@ -309,11 +313,13 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             "package": "loom", "release_sequence": release_sequence, "version": version,
             "targets": targets,
             "schema_range": {
-                "minimum": 1, "maximum": loom_vault.VAULT_SCHEMA_VERSION},
+                "minimum": product_interface["vault_schema_min"],
+                "maximum": product_interface["vault_schema_max"]},
             "migration_chain": [
                 "legacy-0.8", "legacy-1.0",
                 *(f"vault-{schema}" for schema in range(
-                    1, loom_vault.VAULT_SCHEMA_VERSION + 1))],
+                    product_interface["vault_schema_min"],
+                    product_interface["vault_schema_max"] + 1))],
             "adapter_range": {"minimum": 1, "maximum": 1},
         }
         release = output / "release"

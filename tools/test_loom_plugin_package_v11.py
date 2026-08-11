@@ -1,5 +1,6 @@
 """Deterministic marketplace runtime packaging and opaque-artifact firewall tests."""
 
+import ast
 import hashlib
 import json
 import os
@@ -11,12 +12,56 @@ from unittest import mock
 
 import loom_plugin_package
 import loom_privacy
+import loom_product_interface
 import loom_vault
 import v11_test_support
 from v11_test_support import build_vault_helper, package_evidence, package_source_commit
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class PluginPackageProjectionTests(unittest.TestCase):
+    def test_product_interface_is_current_and_packaging_has_no_vault_import(self):
+        value = loom_product_interface.load(ROOT)
+        self.assertEqual(1, value["vault_schema_min"])
+        self.assertEqual(
+            loom_vault.VAULT_SCHEMA_VERSION, value["vault_schema_max"])
+        imports = {
+            alias.name
+            for node in ast.walk(ast.parse(
+                (ROOT / "tools" / "loom_plugin_package.py").read_text(
+                    encoding="utf-8")))
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        self.assertNotIn("loom_vault", imports)
+
+    def test_product_interface_rejects_stale_forged_and_unknown_fields(self):
+        current = loom_product_interface.derive(ROOT)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "interface.json"
+            stale_body = {
+                key: value for key, value in current.items()
+                if key != "interface_sha256"}
+            stale_body["vault_schema_max"] -= 1
+            stale = loom_product_interface.seal(stale_body)
+            path.write_text(json.dumps(stale), encoding="utf-8")
+            with self.assertRaisesRegex(
+                    loom_product_interface.ProductInterfaceError, "stale"):
+                loom_product_interface.load(ROOT, path=path)
+
+            forged = {**current, "interface_sha256": "0" * 64}
+            path.write_text(json.dumps(forged), encoding="utf-8")
+            with self.assertRaisesRegex(
+                    loom_product_interface.ProductInterfaceError, "digest"):
+                loom_product_interface.load(ROOT, path=path)
+
+            unknown = {**current, "private_runtime_state": "forbidden"}
+            path.write_text(json.dumps(unknown), encoding="utf-8")
+            with self.assertRaisesRegex(
+                    loom_product_interface.ProductInterfaceError, "fields"):
+                loom_product_interface.load(ROOT, path=path)
 
 
 class PluginPackageTests(unittest.TestCase):

@@ -9,6 +9,7 @@ import loom_execution_chain
 import loom_operation_envelope
 import loom_operation_supervisor
 import loom_path_authority
+import loom_product_interface
 import loom_suite_plan
 import loom_test
 
@@ -230,6 +231,11 @@ class FoundationSchemaTests(unittest.TestCase):
         policy = loom_suite_plan.load_authority_policy(policy_path)
         self.assertEqual("serial", policy["authority_mode"])
         self.assert_schema(policy, "release-authority-policy-v2.schema.json")
+
+    def test_release_product_interface_matches_its_closed_schema(self):
+        root = Path(__file__).resolve().parents[1]
+        value = loom_product_interface.load(root)
+        self.assert_schema(value, "release-product-interface-v1.schema.json")
 
     def test_claim_only_release_suite_qualification_is_outside_closed_schema(self):
         value = {

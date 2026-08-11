@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-product-interface-v1.schema.json",
+  "title": "Candidate-exact release product interface",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "vault_schema_min", "vault_schema_max", "interface_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "vault_schema_min": {"const": 1},
+    "vault_schema_max": {"type": "integer", "minimum": 1, "maximum": 1024},
+    "interface_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

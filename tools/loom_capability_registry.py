@@ -9,6 +9,7 @@ import re
 from pathlib import Path, PurePosixPath
 
 import loom_reliability
+import loom_product_interface
 import loom_subject_identity
 
 
@@ -304,6 +305,7 @@ def main(argv=None):
             args.root, "capability registry root", must_exist=True)
         declarations_path = root / "contracts" / "capability-declarations-v1.json"
         declarations = _read(declarations_path)
+        loom_product_interface.load(root)
         graph = _read(args.graph) if args.graph else None
         trusted_expected_digest = None
         if args.expected_subjects:
@@ -350,6 +352,7 @@ def main(argv=None):
             loom_reliability.atomic_write_json(output, result)
     except (
             CapabilityRegistryError, loom_reliability.ReliabilityError,
+            loom_product_interface.ProductInterfaceError,
             loom_subject_identity.SubjectIdentityError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)}, sort_keys=True))
         return 2
