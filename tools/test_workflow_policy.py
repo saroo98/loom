@@ -88,7 +88,11 @@ class WorkflowPolicyTests(unittest.TestCase):
     def test_compatibility_matrix_builds_and_serially_verifies_one_exact_cut(self):
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
-        verify = 'ARGS=(.. "${{ runner.temp }}/loom-public-cut" --output exact-cut-ci.json)'
+        verify = (
+            'ARGS=(.. "${{ runner.temp }}/loom-public-cut" '
+            '--output exact-cut-ci.json --suite-output full-test-timings.json '
+            '--failure-diagnostic-output serial-failure-diagnostic.json '
+            '--progress-diagnostic-output serial-progress-diagnostic.json)')
         self.assertIn(verify, compatibility)
         self.assertNotIn("loom_release.py verify-cut ..", compatibility)
         self.assertIn("--serial-suite full-test-timings.json", compatibility)
@@ -190,18 +194,22 @@ class WorkflowPolicyTests(unittest.TestCase):
     def test_serial_authority_and_shadow_topology_are_explicit(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
-        policy = json.loads((
+        authority = json.loads((
+            ROOT / "contracts" / "release-authority-policy-v2.json").read_text(
+                encoding="utf-8"))
+        historical = json.loads((
             ROOT / "contracts" / "release-suite-policy-v1.json").read_text(
                 encoding="utf-8"))
-        qualification_exists = (
-            ROOT / "contracts" / "release-suite-qualification-v1.json").is_file()
-        self.assertEqual(
-            "certificate" if qualification_exists else "serial",
-            policy["authority_mode"])
+        self.assertEqual("serial", authority["authority_mode"])
+        self.assertEqual("serial", historical["authority_mode"])
+        self.assertFalse((
+            ROOT / "contracts" / "release-mechanism-qualification-v2.json"
+        ).exists())
         for text in (quality, compatibility):
+            self.assertIn("release-authority-policy-v2.json", text)
             self.assertIn("loom_suite_certificate.py shadow-cell", text)
-            self.assertIn("loom_suite_certificate.py run-cell", text)
-            self.assertIn("--static-only", text)
+            self.assertNotIn("loom_suite_certificate.py run-cell", text)
+            self.assertNotIn("--static-only", text)
             self.assertIn("release-suite-timing-profile-v1.json", text)
         self.assertIn("quality-matrix-certificate", quality)
         self.assertIn("compatibility-matrix-certificate", compatibility)
@@ -234,6 +242,74 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn(
             'python: ["3.10", "3.11", "3.12", "3.13", "3.14"]', quality)
         self.assertEqual(6, compatibility.count("- {runner:"))
+
+    def test_v2_candidate_and_mechanism_workflows_are_strictly_separated(self):
+        candidate_quality = (WORKFLOWS / "quality.yml").read_text(
+            encoding="utf-8")
+        candidate_compatibility = (WORKFLOWS / "compatibility.yml").read_text(
+            encoding="utf-8")
+        for consumer in ("quality", "compatibility"):
+            path = WORKFLOWS / f"qualification-{consumer}.yml"
+            self.assertTrue(path.is_file())
+            text = path.read_text(encoding="utf-8")
+            trigger = text[text.index("on:"):text.index("permissions:")]
+            self.assertIn("workflow_dispatch:", trigger)
+            self.assertNotIn("push:", trigger)
+            self.assertNotIn("pull_request:", trigger)
+            self.assertNotIn("schedule:", trigger)
+            self.assertNotIn("workflow_call:", trigger)
+            self.assertNotIn("inputs:", trigger)
+            self.assertIn("permissions:\n  contents: read", text)
+            self.assertIn("loom_qualification_v2.py run-observation", text)
+            self.assertIn("ARGS=(compile-batch", text)
+            self.assertIn(
+                "release-qualification-workload-policy-v2.json", text)
+            self.assertIn("release-qualification-manifest-v2.json", text)
+            self.assertNotIn("loom_exact_cut_ci.py", text)
+            self.assertNotIn("loom_release_candidate.py", text)
+            self.assertNotIn("native-helpers:", text)
+            self.assertNotIn("cargo build", text)
+        fault_path = WORKFLOWS / "qualification-faults.yml"
+        self.assertTrue(fault_path.is_file())
+        fault = fault_path.read_text(encoding="utf-8")
+        fault_trigger = fault[fault.index("on:"):fault.index("permissions:")]
+        self.assertIn("workflow_dispatch:", fault_trigger)
+        self.assertNotIn("push:", fault_trigger)
+        self.assertNotIn("pull_request:", fault_trigger)
+        self.assertNotIn("schedule:", fault_trigger)
+        self.assertIn("permissions:\n  contents: read", fault)
+        self.assertIn("loom_qualification_v2.py run-fault-corpus", fault)
+        self.assertEqual(3, fault.count("- {runner:"))
+        self.assertNotIn("loom_exact_cut_ci.py", fault)
+        self.assertNotIn("cargo build", fault)
+        for text in (candidate_quality, candidate_compatibility):
+            self.assertIn("release-authority-policy-v2.json", text)
+            self.assertIn("loom_suite_certificate.py shadow-cell", text)
+            self.assertIn("compile-candidate-bundle --root", text)
+            self.assertIn("loom_qualification_v2.py \"${ARGS[@]}\"", text)
+            self.assertNotIn("loom_suite_certificate.py run-cell", text)
+            self.assertNotIn("--static-only", text)
+            self.assertNotIn("loom_qualification_v2.py run-observation", text)
+            self.assertNotIn("mechanism-qualification-v2", text)
+        self.assertEqual(6, candidate_compatibility.count("- {runner:"))
+        admission_path = WORKFLOWS / "candidate-admission.yml"
+        self.assertTrue(admission_path.is_file())
+        admission = admission_path.read_text(encoding="utf-8")
+        admission_trigger = admission[
+            admission.index("on:"):admission.index("permissions:")]
+        self.assertIn("workflow_dispatch:", admission_trigger)
+        self.assertNotIn("inputs:", admission_trigger)
+        self.assertIn("actions: read", admission)
+        self.assertIn("contents: read", admission)
+        self.assertNotIn("contents: write", admission)
+        self.assertIn("exact_success('quality.yml')", admission)
+        self.assertIn("exact_success('compatibility.yml')", admission)
+        self.assertIn("compile-candidate --root", admission)
+        self.assertIn("loom_qualification_v2.py \"${ARGS[@]}\"", admission)
+        self.assertIn("VERIFY=(verify-candidate --root", admission)
+        self.assertIn("loom_qualification_v2.py \"${VERIFY[@]}\"", admission)
+        self.assertNotIn("loom_test.py", admission)
+        self.assertNotIn("cargo build", admission)
 
     def test_publication_and_post_release_are_same_byte_gates(self):
         publish = (WORKFLOWS / "publish-release.yml").read_text(encoding="utf-8")

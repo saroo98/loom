@@ -128,8 +128,8 @@
       "required": [
         "schema_version", "evidence_domain", "platform",
         "mechanism_manifest_sha256", "boundary_sha256",
-        "workload_policy_sha256", "workload_source_sha256", "faults",
-        "fault_receipt_sha256"
+        "workload_policy_sha256", "workload_source_sha256", "environment",
+        "faults", "fault_receipt_sha256"
       ],
       "properties": {
         "schema_version": {"const": 2},
@@ -139,18 +139,22 @@
         "boundary_sha256": {"$ref": "#/$defs/digest"},
         "workload_policy_sha256": {"$ref": "#/$defs/digest"},
         "workload_source_sha256": {"$ref": "#/$defs/digest"},
+        "environment": {
+          "$ref": "exact-cut-ci-receipt-v2.schema.json#/properties/environment"
+        },
         "faults": {
           "type": "array", "minItems": 9, "maxItems": 9,
           "items": {
             "type": "object", "additionalProperties": false,
-            "required": ["code", "passed"],
+            "required": ["code", "passed", "evidence_sha256"],
             "properties": {
               "code": {"enum": [
                 "candidate-mutation", "malformed-evidence", "missing-test",
                 "privacy-leakage", "survivor-cleanup", "timeout",
                 "unauthorized-skip", "unexpected-test", "wrong-subject"
               ]},
-              "passed": {"const": true}
+              "passed": {"const": true},
+              "evidence_sha256": {"$ref": "#/$defs/digest"}
             }
           }
         },

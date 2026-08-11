@@ -1,0 +1,89 @@
+name: qualify-release-mechanism-faults-v2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qualification-faults-v2
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  exercise-fail-closed-faults:
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {runner: ubuntu-24.04, platform: linux}
+          - {runner: macos-15, platform: macos}
+          - {runner: windows-2025, platform: windows}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Exercise the closed deterministic fault corpus
+        shell: bash
+        env:
+          LOOM_REQUESTED_RUNNER_LABEL: ${{ matrix.runner }}
+          LOOM_WORKFLOW_PATH: .github/workflows/qualification-faults.yml
+        run: |
+          export LOOM_WORKFLOW_DIGEST="$(sha256sum .github/workflows/qualification-faults.yml | cut -d' ' -f1)"
+          export LOOM_ACTION_MANIFEST_DIGEST="$(printf '%s\n' \
+            'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+            'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
+            'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
+          python -B tools/loom_qualification_v2.py run-fault-corpus \
+            --root . --platform "${{ matrix.platform }}" \
+            --output tools/qualification-fault-receipt.json
+          python -B tools/loom_qualification_v2.py verify-fault \
+            --root . --receipt tools/qualification-fault-receipt.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-fault-v2-${{ github.run_id }}-${{ matrix.platform }}
+          path: tools/qualification-fault-receipt.json
+          retention-days: 90
+          if-no-files-found: error
+
+  certify-fault-topology:
+    needs: exercise-fail-closed-faults
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: qualification-fault-v2-${{ github.run_id }}-*
+          path: qualification-faults
+          merge-multiple: false
+      - name: Reverify exactly one receipt per supported host OS
+        shell: bash
+        run: |
+          mapfile -t RECEIPTS < <(find qualification-faults -name qualification-fault-receipt.json -type f | sort)
+          test "${#RECEIPTS[@]}" -eq 3
+          for receipt in "${RECEIPTS[@]}"; do
+            python -B tools/loom_qualification_v2.py verify-fault \
+              --root . --receipt "$receipt"
+          done
+          test "$(python -B - "${RECEIPTS[@]}" <<'PY'
+          import json,sys
+          print(len({json.load(open(path,encoding='utf-8'))['platform'] for path in sys.argv[1:]}))
+          PY
+          )" -eq 3
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: qualification-fault-set-v2-${{ github.run_id }}
+          path: qualification-faults/*/qualification-fault-receipt.json
+          retention-days: 90
+          if-no-files-found: error

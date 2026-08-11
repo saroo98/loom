@@ -2,14 +2,21 @@
 """Compile and verify separated repeated-mechanism qualification evidence."""
 
 import argparse
+import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
+import sys
+import tempfile
 
 import loom_qualification_manifest
 import loom_qualification_workload
 import loom_exact_cut_receipt
+import loom_operation_supervisor
+import loom_platform_probe
+import loom_reliability
 import loom_suite_certificate_core
 import loom_suite_plan
 import loom_suite_worker
@@ -25,6 +32,7 @@ OBSERVATION_DOMAIN = b"loom.release-qualification-observation.v2\0"
 FAMILY_DOMAIN = b"loom.release-qualification-family.v2\0"
 FAULT_DOMAIN = b"loom.release-qualification-fault.v2\0"
 MECHANISM_DOMAIN = b"loom.release-mechanism-qualification.v2\0"
+BATCH_DOMAIN = b"loom.release-qualification-batch.v2\0"
 CANDIDATE_DOMAIN = b"loom.release-candidate-admission.v2\0"
 EQUIVALENCE_DOMAIN = b"loom.release-candidate-equivalence.v2\0"
 AUTHORITY_SEMANTICS_DOMAIN = b"loom.release-authority-semantics.v2\0"
@@ -94,9 +102,14 @@ FAULT_CODES = (
 FAULT_FIELDS = {
     "schema_version", "evidence_domain", "platform",
     "mechanism_manifest_sha256", "boundary_sha256",
-    "workload_policy_sha256", "workload_source_sha256", "faults",
-    "fault_receipt_sha256",
+    "workload_policy_sha256", "workload_source_sha256", "environment",
+    "faults", "fault_receipt_sha256",
 }
+FAULT_LABELS = {
+    "linux": "ubuntu-24.04", "macos": "macos-15",
+    "windows": "windows-2025",
+}
+FAULT_CASE_DOMAIN = b"loom.release-qualification-fault-case.v2\0"
 MECHANISM_FIELDS = {
     "schema_version", "status", "evidence_domain", "required_observations",
     "mechanism_manifest_sha256", "boundary_sha256",
@@ -104,6 +117,15 @@ MECHANISM_FIELDS = {
     "timing_profile_sha256", "authority_semantics_sha256", "families",
     "family_count", "fault_receipts", "all_families_nonregressing",
     "qualification_sha256",
+}
+BATCH_FIELDS = {
+    "schema_version", "status", "evidence_domain", "consumer",
+    "source_commit", "repository_source_tree_sha256",
+    "mechanism_manifest_sha256", "boundary_sha256",
+    "workload_policy_sha256", "workload_source_sha256",
+    "timing_profile_sha256", "fixture_sha256", "workflow_path",
+    "workflow_digest", "action_manifest_digest", "run_id", "run_attempt",
+    "observations", "observation_count", "family_ids", "batch_sha256",
 }
 LABELS = {
     "quality": ("ubuntu-latest", "macos-latest", "windows-latest"),
@@ -179,6 +201,7 @@ GENERATED_EQUIVALENCE_PATHS = (
     "docs/capabilities.json", "docs/generated-evidence.json",
 )
 MAX_OBSERVATION_BYTES = 16 * 1024 * 1024
+MAX_BATCH_BYTES = 64 * 1024 * 1024
 MAX_MECHANISM_BYTES = 95_000_000
 MAX_CANDIDATE_BYTES = 64 * 1024 * 1024
 MAX_EQUIVALENCE_BYTES = 4 * 1024 * 1024
@@ -470,6 +493,174 @@ def load_observation(path, *, manifest, workload):
         workload=workload)
 
 
+def compile_batch(observations, *, consumer, manifest, workload):
+    """Seal one complete 15-family observation run for one consumer."""
+    manifest = _manifest(manifest)
+    workload = _workload(workload)
+    if consumer not in LABELS or not isinstance(observations, list) \
+            or len(observations) != 15:
+        raise QualificationV2Error(
+            "qualification batch coverage is incomplete")
+    observations = [verify_observation(
+        value, manifest=manifest, workload=workload) for value in observations]
+    observed = {}
+    for observation in observations:
+        family = family_identity(observation)
+        key = (family["requested_label"], family["python_minor"])
+        if observation["consumer"] != consumer or key in observed:
+            raise QualificationV2Error(
+                "qualification batch topology is invalid")
+        observed[key] = observation
+    expected = {
+        (label, python_minor) for label in LABELS[consumer]
+        for python_minor in PYTHON_MINORS
+    }
+    if set(observed) != expected:
+        raise QualificationV2Error(
+            "qualification batch topology is incomplete")
+    single_fields = {
+        "source_commit", "repository_source_tree_sha256",
+        "mechanism_manifest_sha256", "boundary_sha256",
+        "workload_policy_sha256", "workload_source_sha256",
+        "timing_profile_sha256", "fixture_sha256",
+    }
+    values = {
+        field: {observation[field] for observation in observations}
+        for field in single_fields
+    }
+    environment_fields = {
+        "workflow_path": {
+            observation["environment"]["workflow_path"]
+            for observation in observations},
+        "workflow_digest": {
+            observation["environment"]["workflow_digest"]
+            for observation in observations},
+        "action_manifest_digest": {
+            observation["environment"]["action_manifest_digest"]
+            for observation in observations},
+        "run_id": {observation["environment"]["run_id"]
+                   for observation in observations},
+        "run_attempt": {observation["environment"]["run_attempt"]
+                        for observation in observations},
+    }
+    if any(len(items) != 1 for items in (*values.values(),
+                                        *environment_fields.values())):
+        raise QualificationV2Error(
+            "qualification batch mixes execution identities")
+    workflow_path = next(iter(environment_fields["workflow_path"]))
+    if workflow_path != f".github/workflows/qualification-{consumer}.yml":
+        raise QualificationV2Error(
+            "qualification batch workflow identity is invalid")
+    observations = sorted(
+        observations, key=lambda row: row["family"]["family_id"])
+    body = {
+        "schema_version": 2, "status": "certified",
+        "evidence_domain": "mechanism-qualification-batch-v2",
+        "consumer": consumer,
+        **{field: next(iter(items)) for field, items in values.items()},
+        **{field: next(iter(items))
+           for field, items in environment_fields.items()},
+        "observations": observations,
+        "observation_count": len(observations),
+        "family_ids": [row["family"]["family_id"] for row in observations],
+    }
+    return {**body, "batch_sha256": _digest(BATCH_DOMAIN, body)}
+
+
+def verify_batch(value, *, manifest, workload):
+    if not isinstance(value, dict) or set(value) != BATCH_FIELDS \
+            or value.get("schema_version") != 2 \
+            or value.get("status") != "certified" \
+            or value.get("evidence_domain") != \
+            "mechanism-qualification-batch-v2":
+        raise QualificationV2Error("qualification batch fields are invalid")
+    body = {key: item for key, item in value.items()
+            if key != "batch_sha256"}
+    if value.get("batch_sha256") != _digest(BATCH_DOMAIN, body):
+        raise QualificationV2Error("qualification batch digest is invalid")
+    expected = compile_batch(
+        value.get("observations"), consumer=value.get("consumer"),
+        manifest=manifest, workload=workload)
+    if expected != value:
+        raise QualificationV2Error("qualification batch is inconsistent")
+    return value
+
+
+def load_batch(path, *, manifest, workload):
+    return verify_batch(
+        _load_json(path, MAX_BATCH_BYTES), manifest=manifest,
+        workload=workload)
+
+
+def run_observation(root, *, consumer, output, source_commit,
+                    logical_cpus=None, timeout=120):
+    """Run one fixed-workload serial/shadow observation in hosted CI."""
+    root, manifest, workload = _repository_inputs(root)
+    output = Path(output).resolve()
+    if consumer not in LABELS or HEX40.fullmatch(str(source_commit)) is None \
+            or output.exists() or not output.parent.is_dir() \
+            or type(timeout) is not int or not 1 <= timeout <= 900:
+        raise QualificationV2Error(
+            "qualification observation execution inputs are invalid")
+    logical_cpus = max(1, os.cpu_count() or 1) \
+        if logical_cpus is None else logical_cpus
+    if type(logical_cpus) is not int or not 1 <= logical_cpus <= 1024:
+        raise QualificationV2Error(
+            "qualification worker budget is invalid")
+    try:
+        environment = loom_platform_probe.release_environment()
+    except ValueError as exc:
+        raise QualificationV2Error(
+            "qualification execution identity is invalid") from exc
+    if environment["evidence_class"] != "ci-reproduced" \
+            or environment["event_name"] != "workflow_dispatch" \
+            or environment["workflow_path"] != \
+            f".github/workflows/qualification-{consumer}.yml":
+        raise QualificationV2Error(
+            "qualification execution identity is untrusted")
+    suite_environment = {
+        key: environment[key] for key in loom_suite_plan.ENVIRONMENT_FIELDS
+    }
+    try:
+        source_tree = loom_subject_identity.git_tree_inventory(
+            root, source_commit)["tree_sha256"]
+    except loom_subject_identity.SubjectIdentityError as exc:
+        raise QualificationV2Error(
+            "qualification source tree identity failed") from exc
+    timing = loom_qualification_workload.load_timing_profile(root)
+    with tempfile.TemporaryDirectory(
+            prefix="loom-qualification-v2-") as temporary:
+        temporary = Path(temporary)
+        fixture = temporary / "fixture"
+        identity = loom_qualification_workload.build_fixture(
+            fixture, manifest=manifest, root=root, mechanism_root=root)
+        serial = loom_qualification_workload.run_serial(fixture, workload)
+        shadow = loom_qualification_workload.run_shadow(
+            fixture, workload, timing, temporary / "shadow",
+            environment=suite_environment, fixture_identity=identity,
+            logical_cpus=logical_cpus, timeout=timeout,
+            serial_report=serial, source_commit=source_commit)
+        comparison = shadow["comparison"]
+        context = {
+            "consumer": consumer,
+            "qualification_workflow_path": suite_environment["workflow_path"],
+            "qualification_workflow_digest": suite_environment[
+                "workflow_digest"],
+            "action_manifest_digest": suite_environment[
+                "action_manifest_digest"],
+            "repository_source_tree_sha256": source_tree,
+        }
+        observation = compile_observation(
+            serial, shadow, comparison, manifest=manifest,
+            workload=workload, context=context)
+    try:
+        loom_reliability.atomic_write_json(output, observation)
+    except loom_reliability.ReliabilityError as exc:
+        raise QualificationV2Error(
+            "qualification observation output failed") from exc
+    return observation
+
+
 def _median(values):
     ordered = sorted(values)
     if len(ordered) != 10:
@@ -548,13 +739,36 @@ def verify_family(value, *, manifest, workload):
     return value
 
 
-def compile_fault_receipt(platform, results, *, manifest, workload):
+def _fault_environment(value, platform):
+    if not isinstance(value, dict) \
+            or set(value) != loom_exact_cut_receipt.ENVIRONMENT_FIELDS:
+        raise QualificationV2Error(
+            "qualification fault environment is invalid")
+    body = {key: item for key, item in value.items()
+            if key != "environment_sha256"}
+    if platform not in FAULT_LABELS \
+            or value.get("evidence_class") != "ci-reproduced" \
+            or value.get("requested_label") != FAULT_LABELS[platform] \
+            or str(value.get("os", "")).casefold() != platform \
+            or value.get("workflow_path") != \
+            ".github/workflows/qualification-faults.yml" \
+            or value.get("event_name") != "workflow_dispatch" \
+            or value.get("environment_sha256") != loom_suite_plan.digest(body):
+        raise QualificationV2Error(
+            "qualification fault environment is untrusted")
+    return dict(value)
+
+
+def compile_fault_receipt(environment, results, *, manifest, workload):
     manifest = _manifest(manifest)
     workload = _workload(workload)
-    if platform not in {"linux", "macos", "windows"} \
-            or not isinstance(results, dict) \
+    platform = str(environment.get("os", "")).casefold() \
+        if isinstance(environment, dict) else ""
+    environment = _fault_environment(environment, platform)
+    if not isinstance(results, dict) \
             or set(results) != set(FAULT_CODES) \
-            or any(value is not True for value in results.values()):
+            or any(HEX64.fullmatch(str(value)) is None
+                   for value in results.values()):
         raise QualificationV2Error("qualification fault evidence is incomplete")
     body = {
         "schema_version": 2, "evidence_domain": EVIDENCE_DOMAIN,
@@ -563,7 +777,11 @@ def compile_fault_receipt(platform, results, *, manifest, workload):
         "boundary_sha256": manifest["boundary_sha256"],
         "workload_policy_sha256": workload["policy_sha256"],
         "workload_source_sha256": workload["workload_source_sha256"],
-        "faults": [{"code": code, "passed": True} for code in FAULT_CODES],
+        "environment": environment,
+        "faults": [{
+            "code": code, "passed": True,
+            "evidence_sha256": results[code],
+        } for code in FAULT_CODES],
     }
     return {**body, "fault_receipt_sha256": _digest(FAULT_DOMAIN, body)}
 
@@ -572,14 +790,251 @@ def verify_fault_receipt(value, *, manifest, workload):
     if not isinstance(value, dict) or set(value) != FAULT_FIELDS:
         raise QualificationV2Error("qualification fault receipt fields are invalid")
     results = {
-        row.get("code"): row.get("passed")
+        row.get("code"): row.get("evidence_sha256")
         for row in value.get("faults", []) if isinstance(row, dict)
     }
     expected = compile_fault_receipt(
-        value.get("platform"), results, manifest=manifest, workload=workload)
+        value.get("environment"), results,
+        manifest=manifest, workload=workload)
     if expected != value:
         raise QualificationV2Error("qualification fault receipt is invalid")
     return value
+
+
+def _fault_digest(code, value):
+    return _digest(FAULT_CASE_DOMAIN, {"code": code, "evidence": value})
+
+
+def _fault_worker(receipt, **updates):
+    body = copy.deepcopy({
+        key: item for key, item in receipt.items()
+        if key != "worker_receipt_sha256"
+    })
+    body.update(updates)
+    return loom_suite_worker._seal(body)
+
+
+def _expect_cell_fault(shadow, receipts, code, expected):
+    try:
+        loom_suite_certificate_core.compile_cell(
+            shadow["inventory"], shadow["plan"], receipts,
+            policy=_v1_policy_from_shadow(shadow))
+    except loom_suite_certificate_core.CertificateError as exc:
+        if exc.primary_reason != expected:
+            raise QualificationV2Error(
+                f"{code} fault produced the wrong failure class") from exc
+        return _fault_digest(code, {
+            "primary_reason": exc.primary_reason,
+            "findings": exc.findings,
+            "public_details": exc.public_details,
+        })
+    raise QualificationV2Error(f"{code} fault was incorrectly accepted")
+
+
+def _v1_policy_from_shadow(shadow):
+    plan = shadow.get("plan") if isinstance(shadow, dict) else None
+    exclusive = []
+    if isinstance(plan, dict):
+        exclusive = [
+            module for shard in plan.get("shards", [])
+            if isinstance(shard, dict) and shard.get("exclusive") is True
+            for module in shard.get("modules", [])
+        ]
+    return loom_suite_plan.seal_policy({
+        "schema_version": 1, "authority_mode": "serial",
+        "exclusive_modules": sorted(exclusive),
+    })
+
+
+def _operation_faults(root, *, timeout):
+    operation_root = Path(root) / "operation-faults"
+    operation_root.mkdir()
+    protected = operation_root / "protected"
+    protected.mkdir()
+    target = protected / "state.txt"
+    target.write_text("before", encoding="utf-8")
+    mutation = loom_operation_supervisor.run(
+        operation_class="qualification-mutation-fixture",
+        command=[
+            sys.executable, "-c",
+            "from pathlib import Path;Path('protected/state.txt').write_text('after',encoding='utf-8')",
+        ], cwd=operation_root, timeout=max(1, timeout),
+        allowed_roots=[operation_root], protected_roots=[protected])
+    if mutation.get("status") != "failed" \
+            or mutation.get("primary_failure") != "protected-root-changed" \
+            or mutation.get("survivors_confirmed_zero") is not True:
+        raise QualificationV2Error(
+            "candidate mutation operation did not fail closed")
+
+    timeout_root = operation_root / "timeout"
+    timeout_root.mkdir()
+    child = (
+        "from pathlib import Path;import time;"
+        "Path('child-ready').write_text('ready',encoding='utf-8');"
+        "time.sleep(60)")
+    parent = (
+        "from pathlib import Path;import subprocess,sys,time;"
+        f"subprocess.Popen([sys.executable,'-c',{child!r}]);"
+        "deadline=time.monotonic()+30;ready=Path('child-ready');"
+        "\nwhile not ready.exists() and time.monotonic()<deadline: time.sleep(0.01)"
+        "\nif not ready.exists(): raise SystemExit(3)"
+        "\nPath('parent-ready').write_text('ready',encoding='utf-8')"
+        "\ntime.sleep(60)")
+    timed = loom_operation_supervisor.run(
+        operation_class="qualification-timeout-fixture",
+        command=[sys.executable, "-c", parent], cwd=timeout_root,
+        timeout=timeout, allowed_roots=[operation_root])
+    if not (timeout_root / "parent-ready").is_file() \
+            or timed.get("status") != "failed" \
+            or timed.get("primary_failure") != "timed-out" \
+            or timed.get("survivors_confirmed_zero") is not True:
+        raise QualificationV2Error(
+            "timeout and survivor cleanup fault did not fail closed")
+    return mutation, timed
+
+
+def run_fault_corpus(root, *, platform, output, logical_cpus=None,
+                     timeout=120, fault_timeout=2):
+    """Exercise every declared fault and emit only sealed public digests."""
+    root, manifest, workload = _repository_inputs(root)
+    if platform not in FAULT_LABELS \
+            or type(fault_timeout) not in {int, float} \
+            or not 0 < fault_timeout <= 30 \
+            or type(timeout) is not int or not 1 <= timeout <= 900:
+        raise QualificationV2Error("qualification fault request is invalid")
+    logical_cpus = max(1, os.cpu_count() or 1) \
+        if logical_cpus is None else logical_cpus
+    if type(logical_cpus) is not int or not 1 <= logical_cpus <= 1024:
+        raise QualificationV2Error("qualification worker budget is invalid")
+    try:
+        environment = loom_platform_probe.release_environment()
+    except ValueError as exc:
+        raise QualificationV2Error(
+            "qualification fault execution identity is invalid") from exc
+    environment = _fault_environment(environment, platform)
+    suite_environment = {
+        key: environment[key] for key in loom_suite_plan.ENVIRONMENT_FIELDS
+    }
+    timing = loom_qualification_workload.load_timing_profile(root)
+    source_commit = loom_subject_identity._run_git(
+        root, "rev-parse", "HEAD").strip()
+    with tempfile.TemporaryDirectory(
+            prefix="loom-qualification-faults-") as temporary:
+        temporary = Path(temporary)
+        fixture = temporary / "fixture"
+        fixture_identity = loom_qualification_workload.build_fixture(
+            fixture, manifest=manifest, root=root, mechanism_root=root)
+        serial = loom_qualification_workload.run_serial(fixture, workload)
+        shadow = loom_qualification_workload.run_shadow(
+            fixture, workload, timing, temporary / "shadow",
+            environment=suite_environment,
+            fixture_identity=fixture_identity,
+            logical_cpus=logical_cpus,
+            timeout=timeout, serial_report=serial,
+            source_commit=source_commit)
+        receipts = shadow["worker_receipts"]
+        first = receipts[0]
+        results = {}
+
+        changed = _fault_worker(
+            first, status="failed", primary_reason="CANDIDATE_MUTATION",
+            findings=["CANDIDATE_MUTATION"], mutation_clean=False,
+            post_manifest_sha256="0" * 64)
+        mutation_operation, timed_operation = _operation_faults(
+            temporary, timeout=fault_timeout)
+        digest = _expect_cell_fault(
+            shadow, [changed, *receipts[1:]], "candidate-mutation",
+            "CANDIDATE_MUTATION")
+        results["candidate-mutation"] = _fault_digest(
+            "candidate-mutation", {
+                "certificate_sha256": digest,
+                "operation_receipt_sha256": mutation_operation[
+                    "receipt_sha256"],
+            })
+
+        malformed = copy.deepcopy(first)
+        malformed["worker_receipt_sha256"] = "0" * 64
+        results["malformed-evidence"] = _expect_cell_fault(
+            shadow, [malformed, *receipts[1:]], "malformed-evidence",
+            "RECEIPT_DIGEST")
+
+        missing_body = copy.deepcopy({
+            key: item for key, item in first.items()
+            if key != "worker_receipt_sha256"})
+        missing_body["observed_tests"] = missing_body["observed_tests"][:-1]
+        missing_body["test_count"] -= 1
+        missing_body.update({
+            "status": "failed", "primary_reason": "INVENTORY_MISMATCH",
+            "findings": ["INVENTORY_MISMATCH"],
+        })
+        results["missing-test"] = _expect_cell_fault(
+            shadow, [loom_suite_worker._seal(missing_body), *receipts[1:]],
+            "missing-test", "INVENTORY_MISMATCH")
+
+        privacy = _fault_worker(
+            first, status="failed", primary_reason="PRIVACY_FAILURE",
+            findings=["PRIVACY_FAILURE"], privacy_clean=False)
+        if loom_suite_worker._privacy_clean({
+                "diagnostic": "C:\\Users\\owner\\secret.txt"}):
+            raise QualificationV2Error(
+                "privacy leakage fixture was incorrectly accepted")
+        results["privacy-leakage"] = _expect_cell_fault(
+            shadow, [privacy, *receipts[1:]], "privacy-leakage",
+            "PRIVACY_FAILURE")
+
+        results["survivor-cleanup"] = _fault_digest(
+            "survivor-cleanup", {
+                "receipt_sha256": timed_operation["receipt_sha256"],
+                "survivors_confirmed_zero": True,
+            })
+        results["timeout"] = _fault_digest("timeout", {
+            "receipt_sha256": timed_operation["receipt_sha256"],
+            "primary_failure": "timed-out",
+        })
+
+        skip_body = copy.deepcopy({
+            key: item for key, item in first.items()
+            if key != "worker_receipt_sha256"})
+        skip_body["observed_tests"][0] = {
+            "test": skip_body["observed_tests"][0]["test"],
+            "status": "skipped", "skip_reason_code": "unclassified",
+            "skip_reason_sha256": "1" * 64,
+        }
+        skip_body.update({
+            "status": "failed", "primary_reason": "UNAUTHORIZED_SKIP",
+            "findings": ["UNAUTHORIZED_SKIP"], "skip_count": 1,
+        })
+        results["unauthorized-skip"] = _expect_cell_fault(
+            shadow, [loom_suite_worker._seal(skip_body), *receipts[1:]],
+            "unauthorized-skip", "UNAUTHORIZED_SKIP")
+
+        unexpected_body = copy.deepcopy({
+            key: item for key, item in first.items()
+            if key != "worker_receipt_sha256"})
+        unexpected_body["observed_tests"].append({
+            "test": "test_qual_unexpected.Case.test_unexpected",
+            "status": "passed",
+        })
+        unexpected_body["observed_tests"].sort(key=lambda row: row["test"])
+        unexpected_body["test_count"] += 1
+        unexpected_body.update({
+            "status": "failed", "primary_reason": "INVENTORY_MISMATCH",
+            "findings": ["INVENTORY_MISMATCH"],
+        })
+        results["unexpected-test"] = _expect_cell_fault(
+            shadow, [loom_suite_worker._seal(unexpected_body), *receipts[1:]],
+            "unexpected-test", "INVENTORY_MISMATCH")
+
+        wrong_subject = copy.deepcopy(first["subject"])
+        wrong_subject["source_commit"] = "0" * 40
+        wrong = _fault_worker(first, subject=wrong_subject)
+        results["wrong-subject"] = _expect_cell_fault(
+            shadow, [wrong, *receipts[1:]], "wrong-subject",
+            "WRONG_SUBJECT")
+        receipt = compile_fault_receipt(
+            environment, results, manifest=manifest, workload=workload)
+        _write_output(output, receipt, "qualification fault receipt")
+        return receipt
 
 
 def _authority_semantics(policy):
@@ -691,6 +1146,42 @@ def load_mechanism(path, *, policy, manifest, workload, current_families):
         _load_json(path, MAX_MECHANISM_BYTES), policy=policy,
         manifest=manifest, workload=workload,
         current_families=current_families)
+
+
+def compile_mechanism_batches(batches, fault_receipts, *, policy, manifest,
+                              workload):
+    """Compile ten complete quality/compatibility batches into 30 families."""
+    if not isinstance(batches, list) or len(batches) != 20:
+        raise QualificationV2Error(
+            "mechanism qualification requires twenty complete batches")
+    batches = [verify_batch(
+        value, manifest=manifest, workload=workload) for value in batches]
+    if len({row["batch_sha256"] for row in batches}) != 20:
+        raise QualificationV2Error(
+            "mechanism qualification batches are duplicated")
+    for consumer in LABELS:
+        selected = [row for row in batches if row["consumer"] == consumer]
+        runs = {(row["workflow_path"], row["run_id"], row["run_attempt"])
+                for row in selected}
+        if len(selected) != 10 or len(runs) != 10:
+            raise QualificationV2Error(
+                f"{consumer} mechanism qualification batches are incomplete")
+    by_family = {}
+    for batch in batches:
+        for observation in batch["observations"]:
+            identity = family_identity(observation)
+            by_family.setdefault(identity["family_id"], []).append(observation)
+    if len(by_family) != 30 or any(
+            len(observations) != 10
+            for observations in by_family.values()):
+        raise QualificationV2Error(
+            "mechanism qualification family observations are incomplete")
+    families = [compile_family(
+        observations, manifest=manifest, workload=workload)
+        for _family_id, observations in sorted(by_family.items())]
+    return compile_mechanism(
+        families, fault_receipts, policy=policy, manifest=manifest,
+        workload=workload)
 
 
 def _candidate_environment(environment):
@@ -1114,6 +1605,64 @@ def load_candidate(path, *, expected_commit, expected_tree,
         policy=policy, manifest=manifest, workload=workload)
 
 
+def compile_candidate_bundle(consumer, exact_receipts, matrix_certificate, *,
+                             clean_room_receipt=None, policy):
+    """Normalize one transported candidate matrix into a closed v2 bundle."""
+    if consumer not in LABELS or not isinstance(exact_receipts, list):
+        raise QualificationV2Error("candidate bundle inputs are invalid")
+    clean_room = None
+    if clean_room_receipt is not None:
+        matches = [
+            receipt.get("suite") for receipt in exact_receipts
+            if isinstance(receipt, dict)
+            and loom_suite_plan.digest(receipt.get("suite")) ==
+            clean_room_receipt.get("suite_evidence_sha256")
+        ] if isinstance(clean_room_receipt, dict) else []
+        if len(matches) != 1:
+            raise QualificationV2Error(
+                "candidate clean-room suite binding is ambiguous")
+        clean_room = {"receipt": clean_room_receipt, "suite": matches[0]}
+    value = {
+        "schema_version": 2, "consumer": consumer,
+        "exact_cut_receipts": exact_receipts,
+        "matrix_certificate": matrix_certificate,
+        "clean_room": clean_room,
+    }
+    normalized, _comparisons = _candidate_matrix(
+        value, consumer=consumer, policy=policy)
+    return normalized
+
+
+def load_native_directory(path):
+    """Read only the three closed native evidence projections from one job."""
+    path = Path(path)
+    if path.is_symlink():
+        raise QualificationV2Error("candidate native directory is unsafe")
+    path = path.resolve()
+    if not path.is_dir():
+        raise QualificationV2Error("candidate native directory is unsafe")
+    values = {}
+    for field, name in (
+            ("receipt", "receipt.json"),
+            ("environment", "environment.json"),
+            ("provenance", "provenance.json")):
+        candidate = path / name
+        try:
+            candidate.resolve().relative_to(path)
+        except ValueError as exc:
+            raise QualificationV2Error(
+                "candidate native directory escaped its root") from exc
+        values[field] = _load_json(candidate, MAX_OBSERVATION_BYTES)
+    return values
+
+
+def _write_output(path, value, label):
+    path = Path(path).resolve()
+    if path.exists() or not path.parent.is_dir():
+        raise QualificationV2Error(f"{label} output is unsafe")
+    loom_reliability.atomic_write_json(path, value)
+
+
 def _candidate_seal(value):
     if not isinstance(value, dict) or set(value) != CANDIDATE_FIELDS \
             or value.get("schema_version") != 2 \
@@ -1291,17 +1840,99 @@ def main(argv=None):
     parser = argparse.ArgumentParser(
         description="Verify separated release-mechanism qualification evidence.")
     subparsers = parser.add_subparsers(dest="command", required=True)
+    run_parser = subparsers.add_parser("run-observation")
+    run_parser.add_argument("--root", required=True)
+    run_parser.add_argument("--consumer", choices=sorted(LABELS), required=True)
+    run_parser.add_argument("--source-commit", required=True)
+    run_parser.add_argument("--output", required=True)
+    run_parser.add_argument("--logical-cpus", type=int)
+    run_parser.add_argument("--timeout", type=int, default=120)
+    fault_parser = subparsers.add_parser("run-fault-corpus")
+    fault_parser.add_argument("--root", required=True)
+    fault_parser.add_argument(
+        "--platform", choices=sorted(FAULT_LABELS), required=True)
+    fault_parser.add_argument("--output", required=True)
+    fault_parser.add_argument("--logical-cpus", type=int)
+    fault_parser.add_argument("--timeout", type=int, default=120)
+    fault_parser.add_argument("--fault-timeout", type=float, default=2)
+    verify_fault_parser = subparsers.add_parser("verify-fault")
+    verify_fault_parser.add_argument("--root", required=True)
+    verify_fault_parser.add_argument("--receipt", required=True)
     observation_parser = subparsers.add_parser("verify-observation")
     observation_parser.add_argument("--root", required=True)
     observation_parser.add_argument("--observation", required=True)
+    batch_parser = subparsers.add_parser("compile-batch")
+    batch_parser.add_argument("--root", required=True)
+    batch_parser.add_argument(
+        "--consumer", choices=sorted(LABELS), required=True)
+    batch_parser.add_argument("--observation", action="append", required=True)
+    batch_parser.add_argument("--output", required=True)
+    verify_batch_parser = subparsers.add_parser("verify-batch")
+    verify_batch_parser.add_argument("--root", required=True)
+    verify_batch_parser.add_argument("--batch", required=True)
     mechanism_parser = subparsers.add_parser("verify-mechanism")
     mechanism_parser.add_argument("--root", required=True)
     mechanism_parser.add_argument("--qualification", required=True)
     mechanism_parser.add_argument("--current-families", required=True)
     mechanism_parser.add_argument("--policy", required=True)
+    compile_mechanism_parser = subparsers.add_parser("compile-mechanism")
+    compile_mechanism_parser.add_argument("--root", required=True)
+    compile_mechanism_parser.add_argument(
+        "--batch", action="append", required=True)
+    compile_mechanism_parser.add_argument(
+        "--fault-receipt", action="append", required=True)
+    compile_mechanism_parser.add_argument("--policy", required=True)
+    compile_mechanism_parser.add_argument("--output", required=True)
+    bundle_parser = subparsers.add_parser("compile-candidate-bundle")
+    bundle_parser.add_argument("--root", required=True)
+    bundle_parser.add_argument(
+        "--consumer", choices=sorted(LABELS), required=True)
+    bundle_parser.add_argument("--exact-receipt", action="append", required=True)
+    bundle_parser.add_argument("--matrix", required=True)
+    bundle_parser.add_argument("--clean-room")
+    bundle_parser.add_argument("--policy", default=(
+        "contracts/release-authority-policy-v2.json"))
+    bundle_parser.add_argument("--output", required=True)
+    candidate_parser = subparsers.add_parser("compile-candidate")
+    candidate_parser.add_argument("--root", required=True)
+    candidate_parser.add_argument("--quality-bundle", required=True)
+    candidate_parser.add_argument("--compatibility-bundle", required=True)
+    candidate_parser.add_argument(
+        "--native-directory", action="append", required=True)
+    candidate_parser.add_argument("--mechanism")
+    candidate_parser.add_argument("--policy", required=True)
+    candidate_parser.add_argument("--output", required=True)
+    verify_candidate_parser = subparsers.add_parser("verify-candidate")
+    verify_candidate_parser.add_argument("--root", required=True)
+    verify_candidate_parser.add_argument("--candidate", required=True)
+    verify_candidate_parser.add_argument("--expected-commit", required=True)
+    verify_candidate_parser.add_argument("--expected-tree", required=True)
+    verify_candidate_parser.add_argument(
+        "--expected-public-root", required=True)
+    verify_candidate_parser.add_argument("--mechanism")
+    verify_candidate_parser.add_argument("--policy", required=True)
     args = parser.parse_args(argv)
     try:
-        root, manifest, workload = _repository_inputs(args.root)
+        if args.command == "run-observation":
+            value = run_observation(
+                args.root, consumer=args.consumer, output=args.output,
+                source_commit=args.source_commit,
+                logical_cpus=args.logical_cpus, timeout=args.timeout)
+            result = {
+                "status": "recorded",
+                "observation_sha256": value["observation_sha256"],
+            }
+        elif args.command == "run-fault-corpus":
+            value = run_fault_corpus(
+                args.root, platform=args.platform, output=args.output,
+                logical_cpus=args.logical_cpus, timeout=args.timeout,
+                fault_timeout=args.fault_timeout)
+            result = {
+                "status": "certified",
+                "fault_receipt_sha256": value["fault_receipt_sha256"],
+            }
+        else:
+            root, manifest, workload = _repository_inputs(args.root)
         if args.command == "verify-observation":
             value = load_observation(
                 args.observation, manifest=manifest, workload=workload)
@@ -1309,7 +1940,98 @@ def main(argv=None):
                 "status": "verified",
                 "observation_sha256": value["observation_sha256"],
             }
-        else:
+        elif args.command == "compile-batch":
+            observations = [load_observation(
+                path, manifest=manifest, workload=workload)
+                for path in args.observation]
+            value = compile_batch(
+                observations, consumer=args.consumer,
+                manifest=manifest, workload=workload)
+            output = Path(args.output).resolve()
+            if output.exists() or not output.parent.is_dir():
+                raise QualificationV2Error(
+                    "qualification batch output is unsafe")
+            loom_reliability.atomic_write_json(output, value)
+            result = {
+                "status": "certified", "batch_sha256": value["batch_sha256"]}
+        elif args.command == "verify-batch":
+            value = load_batch(
+                args.batch, manifest=manifest, workload=workload)
+            result = {
+                "status": "verified", "batch_sha256": value["batch_sha256"]}
+        elif args.command == "verify-fault":
+            value = verify_fault_receipt(
+                _load_json(args.receipt, MAX_OBSERVATION_BYTES),
+                manifest=manifest, workload=workload)
+            result = {
+                "status": "verified",
+                "fault_receipt_sha256": value["fault_receipt_sha256"],
+            }
+        elif args.command == "compile-candidate-bundle":
+            policy_path = Path(args.policy)
+            if not policy_path.is_absolute():
+                policy_path = root / policy_path
+            policy = loom_suite_plan.load_authority_policy(policy_path)
+            receipts = [_load_json(path, MAX_OBSERVATION_BYTES)
+                        for path in args.exact_receipt]
+            matrix = _load_json(args.matrix, MAX_CANDIDATE_BYTES)
+            clean_room = (_load_json(args.clean_room, MAX_OBSERVATION_BYTES)
+                          if args.clean_room else None)
+            value = compile_candidate_bundle(
+                args.consumer, receipts, matrix,
+                clean_room_receipt=clean_room, policy=policy)
+            _write_output(args.output, value, "candidate bundle")
+            result = {
+                "status": "certified", "consumer": args.consumer,
+                "matrix_certificate_sha256": value[
+                    "matrix_certificate"]["matrix_certificate_sha256"],
+            }
+        elif args.command in {"compile-candidate", "verify-candidate"}:
+            policy = loom_suite_plan.load_authority_policy(args.policy)
+            mechanism = (_load_json(args.mechanism, MAX_MECHANISM_BYTES)
+                         if args.mechanism else None)
+            qualification_workload = (
+                workload if policy["authority_mode"] == "certificate" else None)
+            if args.command == "compile-candidate":
+                quality = _load_json(args.quality_bundle, MAX_CANDIDATE_BYTES)
+                compatibility = _load_json(
+                    args.compatibility_bundle, MAX_CANDIDATE_BYTES)
+                native = [load_native_directory(path)
+                          for path in args.native_directory]
+                value = compile_candidate(
+                    quality, compatibility, native, mechanism=mechanism,
+                    policy=policy, manifest=manifest,
+                    workload=qualification_workload)
+                _write_output(args.output, value, "candidate admission")
+            else:
+                value = load_candidate(
+                    args.candidate, expected_commit=args.expected_commit,
+                    expected_tree=args.expected_tree,
+                    expected_public_root=args.expected_public_root,
+                    mechanism=mechanism, policy=policy, manifest=manifest,
+                    workload=qualification_workload)
+            result = {
+                "status": "verified" if args.command == "verify-candidate"
+                else "admitted",
+                "candidate_admission_sha256": value[
+                    "candidate_admission_sha256"],
+            }
+        elif args.command == "compile-mechanism":
+            policy = loom_suite_plan.load_authority_policy(args.policy)
+            batches = [load_batch(
+                path, manifest=manifest, workload=workload)
+                for path in args.batch]
+            faults = [_load_json(path, MAX_OBSERVATION_BYTES)
+                      for path in args.fault_receipt]
+            value = compile_mechanism_batches(
+                batches, faults, policy=policy, manifest=manifest,
+                workload=workload)
+            _write_output(args.output, value, "mechanism qualification")
+            result = {
+                "status": "qualified",
+                "qualification_sha256": value["qualification_sha256"],
+            }
+        elif args.command == "verify-mechanism":
             policy = loom_suite_plan.load_authority_policy(args.policy)
             current_families = _load_json(
                 args.current_families, MAX_OBSERVATION_BYTES)
@@ -1324,6 +2046,7 @@ def main(argv=None):
         return 0
     except (QualificationV2Error, loom_qualification_manifest.ManifestError,
             loom_qualification_workload.WorkloadError,
+            loom_reliability.ReliabilityError,
             loom_suite_plan.SuitePlanError) as exc:
         print(json.dumps({"status": "refused", "error": str(exc)},
                          sort_keys=True))

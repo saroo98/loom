@@ -1,5 +1,5 @@
 {
-  "boundary_sha256": "6d76c1ace9b47fd11676c39f833f95e37bbe8cb62aa754fc6b8dc9ba0aea7d27",
+  "boundary_sha256": "1cab9d90c9d5e164f2059593ce66e967d5988bf5de58b84d3eb5010f8a33af62",
   "data_sets": [
     {
       "pattern": "qualification/workload-v2/*.py",
@@ -46,6 +46,11 @@
       "kind": "declared-data",
       "source": "tools/loom_qualification_v2.py",
       "target": "schemas/release-mechanism-qualification-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-qualification-batch-v2.schema.json"
     },
     {
       "kind": "declared-data",
@@ -142,6 +147,18 @@
   ],
   "roles": [
     {
+      "path": ".github/workflows/qualification-compatibility.yml",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": ".github/workflows/qualification-faults.yml",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": ".github/workflows/qualification-quality.yml",
+      "role": "mechanism-repeat"
+    },
+    {
       "path": "contracts/release-qualification-boundary-v2.json",
       "role": "shared-interface"
     },
@@ -203,6 +220,10 @@
     },
     {
       "path": "schemas/release-promotion-receipt-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-batch-v2.schema.json",
       "role": "shared-interface"
     },
     {
@@ -274,6 +295,10 @@
       "role": "mechanism-repeat"
     },
     {
+      "path": "tools/loom_platform_probe.py",
+      "role": "mechanism-repeat"
+    },
+    {
       "path": "tools/loom_publication_privacy.py",
       "role": "mechanism-repeat"
     },
@@ -336,5 +361,9 @@
   ],
   "runtime_process_sources": [],
   "schema_version": 2,
-  "workflow_entrypoints": []
+  "workflow_entrypoints": [
+    ".github/workflows/qualification-compatibility.yml",
+    ".github/workflows/qualification-faults.yml",
+    ".github/workflows/qualification-quality.yml"
+  ]
 }

@@ -27,6 +27,7 @@ WRITE_CLASS = {
     "loom_orchestrator": "owner-state", "loom_plugin_package": "explicit-destination",
     "loom_product_interface": "explicit-destination",
     "loom_qualification_manifest": "explicit-destination",
+    "loom_qualification_v2": "explicit-destination",
     "loom_preferences": "owner-state", "loom_release": "explicit-destination",
     "loom_release_suite": "explicit-destination",
     "loom_release_candidate": "explicit-destination",

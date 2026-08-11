@@ -16,6 +16,7 @@ import loom_qualification_v2
 import loom_qualification_workload
 import loom_exact_cut_receipt
 import loom_lint
+import loom_platform_probe
 import loom_release_suite
 import loom_suite_certificate_core
 import loom_suite_plan
@@ -51,7 +52,7 @@ class QualificationV2Tests(unittest.TestCase):
                  event_name="workflow_dispatch", timing_digest=None,
                  source_commit=None, source_tree_sha256=None,
                  public_root_sha256=None, public_manifest_sha256=None,
-                 workflow_path=None):
+                 workflow_path=None, run_id=None):
         workflow = (f".github/workflows/qualification-{consumer}.yml"
                     if workflow_path is None else workflow_path)
         environment = {
@@ -66,7 +67,8 @@ class QualificationV2Tests(unittest.TestCase):
             "workflow_path": workflow, "workflow_digest": "a" * 64,
             "action_manifest_digest": "b" * 64,
             "event_name": event_name,
-            "run_id": f"{consumer}-{label}-{python_minor}-{index}",
+            "run_id": (f"{consumer}-{label}-{python_minor}-{index}"
+                       if run_id is None else run_id),
             "run_attempt": "1",
         }
         subject = {
@@ -381,6 +383,42 @@ class QualificationV2Tests(unittest.TestCase):
             })
         return values
 
+    @staticmethod
+    def fault_receipts(manifest, workload):
+        identities = {
+            "linux": ("ubuntu-24.04", "ubuntu24", "x86_64"),
+            "macos": ("macos-15", "macos-15", "arm64"),
+            "windows": ("windows-2025", "win25-vs2026", "x86_64"),
+        }
+        receipts = []
+        for index, (platform, identity) in enumerate(identities.items(), 1):
+            label, image_os, architecture = identity
+            body = {
+                "evidence_class": "ci-reproduced",
+                "requested_label": label, "image_os": image_os,
+                "image_version": f"fault-{index}", "os": platform,
+                "os_release": "fixture", "os_version": "fixture",
+                "architecture": architecture,
+                "python_implementation": "CPython",
+                "python_version": "3.11.9",
+                "workflow_path": ".github/workflows/qualification-faults.yml",
+                "workflow_digest": "a" * 64,
+                "action_manifest_digest": "b" * 64,
+                "event_name": "workflow_dispatch",
+                "run_id": f"fault-{platform}", "run_attempt": "1",
+            }
+            environment = {
+                **body, "environment_sha256": loom_suite_plan.digest(body)}
+            results = {
+                code: f"{index * 100 + offset:064x}"
+                for offset, code in enumerate(
+                    loom_qualification_v2.FAULT_CODES, 1)
+            }
+            receipts.append(loom_qualification_v2.compile_fault_receipt(
+                environment, results, manifest=manifest,
+                workload=workload))
+        return receipts
+
     def mechanism_record(self, manifest, workload, timing, authority):
         labels = {
             "quality": (
@@ -410,11 +448,7 @@ class QualificationV2Tests(unittest.TestCase):
                     families.append(loom_qualification_v2.compile_family(
                         observations, manifest=manifest, workload=workload))
                     index += 1
-        faults = [loom_qualification_v2.compile_fault_receipt(
-            platform,
-            {code: True for code in loom_qualification_v2.FAULT_CODES},
-            manifest=manifest, workload=workload)
-            for platform in ("linux", "macos", "windows")]
+        faults = self.fault_receipts(manifest, workload)
         record = loom_qualification_v2.compile_mechanism(
             families, faults, policy=authority, manifest=manifest,
             workload=workload)
@@ -732,7 +766,7 @@ class QualificationV2Tests(unittest.TestCase):
         admission = loom_qualification_v2.compile_candidate(
             quality, compatibility, self.native_receipts(commit),
             mechanism=mechanism, policy=certificate_authority,
-            manifest=manifest, workload=workload)
+                        manifest=manifest, workload=workload)
         self.assertEqual(
             mechanism["qualification_sha256"],
             admission["mechanism_qualification_sha256"])
@@ -779,6 +813,310 @@ class QualificationV2Tests(unittest.TestCase):
                 quality, compatibility, wrong_runner,
                 mechanism=mechanism, policy=certificate_authority,
                 manifest=manifest, workload=workload)
+
+    def test_qualification_batch_requires_one_complete_single_run_topology(self):
+        _root, manifest, workload, timing, _authority = self.inputs()
+        observations = []
+        index = 1
+        labels = (
+            ("ubuntu-latest", "ubuntu24", "x86_64"),
+            ("macos-latest", "macos-26", "arm64"),
+            ("windows-latest", "win25-vs2026", "x86_64"),
+        )
+        for label, image_os, architecture in labels:
+            for python_minor in loom_qualification_v2.PYTHON_MINORS:
+                serial, shadow, comparison, context = self.evidence(
+                    manifest, workload, timing, consumer="quality",
+                    label=label, image_os=image_os,
+                    architecture=architecture, python_minor=python_minor,
+                    index=index, source_commit="5" * 40,
+                    source_tree_sha256=manifest["manifest_sha256"],
+                    run_id="quality-run")
+                context["repository_source_tree_sha256"] = "6" * 64
+                observations.append(loom_qualification_v2.compile_observation(
+                    serial, shadow, comparison, manifest=manifest,
+                    workload=workload, context=context))
+                index += 1
+        batch = loom_qualification_v2.compile_batch(
+            observations, consumer="quality", manifest=manifest,
+            workload=workload)
+        self.assertEqual("certified", batch["status"])
+        self.assertEqual(15, batch["observation_count"])
+        self.assertEqual(
+            batch, loom_qualification_v2.verify_batch(
+                batch, manifest=manifest, workload=workload))
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "qualification-batch", batch,
+            "release-qualification-batch-v2.schema.json")
+        self.assertEqual([], report.errors)
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            paths = []
+            for number, observation in enumerate(observations):
+                path = temporary / f"observation-{number}.json"
+                path.write_text(json.dumps(observation), encoding="utf-8")
+                paths.append(path)
+            output = temporary / "batch.json"
+            arguments = [
+                "compile-batch", "--root", str(_root),
+                "--consumer", "quality", "--output", str(output),
+            ]
+            for path in paths:
+                arguments.extend(("--observation", str(path)))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_qualification_v2.main(arguments))
+            self.assertEqual(
+                batch, json.loads(output.read_text(encoding="utf-8")))
+        for damaged in (
+                observations[:-1],
+                observations + [copy.deepcopy(observations[0])]):
+            with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+                loom_qualification_v2.compile_batch(
+                    damaged, consumer="quality", manifest=manifest,
+                    workload=workload)
+        mixed = copy.deepcopy(observations)
+        serial, shadow, comparison, context = self.evidence(
+            manifest, workload, timing, consumer="quality",
+            label="ubuntu-latest", image_os="ubuntu24",
+            architecture="x86_64", python_minor="3.10", index=99,
+            source_commit="5" * 40,
+            source_tree_sha256=manifest["manifest_sha256"],
+            run_id="different-run")
+        context["repository_source_tree_sha256"] = "6" * 64
+        mixed[0] = loom_qualification_v2.compile_observation(
+            serial, shadow, comparison, manifest=manifest,
+            workload=workload, context=context)
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.compile_batch(
+                mixed, consumer="quality", manifest=manifest,
+                workload=workload)
+
+    def test_run_observation_uses_only_manual_fixed_workload_identity(self):
+        root, manifest, workload, _timing, _authority = self.inputs()
+        commit = self.git(root, "rev-parse", "HEAD")
+        environment = loom_platform_probe.release_environment(
+            requested_label="windows-latest", image_os="local-windows",
+            image_version="test", workflow_path=(
+                ".github/workflows/qualification-quality.yml"),
+            workflow_digest="a" * 64, action_manifest_digest="b" * 64,
+            event_name="workflow_dispatch", run_id="fixture-run",
+            run_attempt="1")
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+                loom_qualification_v2.loom_platform_probe,
+                "release_environment", return_value=environment):
+            output = Path(temporary) / "observation.json"
+            observation = loom_qualification_v2.run_observation(
+                root, consumer="quality", output=output,
+                source_commit=commit, logical_cpus=2, timeout=60)
+            self.assertEqual(
+                observation, loom_qualification_v2.load_observation(
+                    output, manifest=manifest, workload=workload))
+        self.assertEqual("mechanism-v2", observation["workload_kind"])
+        self.assertEqual("workflow_dispatch",
+                         observation["environment"]["event_name"])
+        self.assertEqual(workload["expected_tests"], sorted(
+            row["test"] for row in observation["shadow"][
+                "cell_certificate"]["outcomes"]))
+
+    def test_candidate_cli_assembles_only_closed_matrix_and_native_artifacts(self):
+        root, manifest, workload, timing, authority = self.inputs()
+        commit = "6" * 40
+        source_tree = "7" * 64
+        public_root = "8" * 64
+        bundles = {
+            consumer: self.candidate_matrix_bundle(
+                manifest, workload, timing, consumer=consumer,
+                source_commit=commit, source_tree_sha256=source_tree,
+                public_root_sha256=public_root,
+                start_index=1 if consumer == "quality" else 101)
+            for consumer in ("quality", "compatibility")
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            bundle_paths = {}
+            for consumer, bundle in bundles.items():
+                inputs = temporary / consumer
+                inputs.mkdir()
+                receipt_paths = []
+                for index, receipt in enumerate(
+                        bundle["exact_cut_receipts"], 1):
+                    path = inputs / f"exact-cut-{index}.json"
+                    path.write_text(json.dumps(receipt), encoding="utf-8")
+                    receipt_paths.append(path)
+                matrix = inputs / "matrix.json"
+                matrix.write_text(
+                    json.dumps(bundle["matrix_certificate"]),
+                    encoding="utf-8")
+                output = temporary / f"{consumer}-bundle.json"
+                arguments = [
+                    "compile-candidate-bundle", "--root", str(root),
+                    "--consumer", consumer, "--matrix", str(matrix),
+                    "--output", str(output),
+                ]
+                for path in receipt_paths:
+                    arguments.extend(("--exact-receipt", str(path)))
+                if consumer == "compatibility":
+                    clean = inputs / "clean-room.json"
+                    clean.write_text(json.dumps(
+                        bundle["clean_room"]["receipt"]), encoding="utf-8")
+                    arguments.extend(("--clean-room", str(clean)))
+                with contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(0, loom_qualification_v2.main(arguments))
+                self.assertEqual(
+                    loom_qualification_v2._candidate_matrix(
+                        bundle, consumer=consumer, policy=authority)[0],
+                    json.loads(output.read_text(encoding="utf-8")))
+                bundle_paths[consumer] = output
+
+            native_directories = []
+            for native in self.native_receipts(commit):
+                directory = temporary / native["receipt"]["platform"]
+                directory.mkdir()
+                for name, value in (
+                        ("receipt.json", native["receipt"]),
+                        ("environment.json", native["environment"]),
+                        ("provenance.json", native["provenance"])):
+                    (directory / name).write_text(
+                        json.dumps(value), encoding="utf-8")
+                native_directories.append(directory)
+            candidate_path = temporary / "candidate-admission.json"
+            arguments = [
+                "compile-candidate", "--root", str(root),
+                "--quality-bundle", str(bundle_paths["quality"]),
+                "--compatibility-bundle",
+                str(bundle_paths["compatibility"]),
+                "--policy",
+                str(root / "contracts" / "release-authority-policy-v2.json"),
+                "--output", str(candidate_path),
+            ]
+            for directory in native_directories:
+                arguments.extend(("--native-directory", str(directory)))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_qualification_v2.main(arguments))
+            candidate = json.loads(candidate_path.read_text(encoding="utf-8"))
+            self.assertEqual(commit, candidate["source_commit"])
+            self.assertEqual(6, len(candidate["native_evidence"]))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_qualification_v2.main([
+                    "verify-candidate", "--root", str(root),
+                    "--candidate", str(candidate_path),
+                    "--expected-commit", commit,
+                    "--expected-tree", source_tree,
+                    "--expected-public-root", public_root,
+                    "--policy", str(
+                        root / "contracts" /
+                        "release-authority-policy-v2.json"),
+                ]))
+
+    def test_mechanism_cli_requires_ten_complete_paired_batches_and_faults(self):
+        root, manifest, workload, timing, authority = self.inputs()
+        labels = {
+            "quality": (
+                ("ubuntu-latest", "ubuntu24", "x86_64"),
+                ("macos-latest", "macos-26", "arm64"),
+                ("windows-latest", "win25-vs2026", "x86_64"),
+            ),
+            "compatibility": (
+                ("ubuntu-24.04", "ubuntu24", "x86_64"),
+                ("macos-15", "macos-15", "arm64"),
+                ("windows-2025", "win25-vs2026", "x86_64"),
+            ),
+        }
+        batches = []
+        for sequence in range(1, 11):
+            source_commit = f"{sequence:040x}"
+            source_tree = f"{sequence + 100:064x}"
+            for consumer in ("quality", "compatibility"):
+                observations = []
+                index = sequence * 100
+                for label, image_os, architecture in labels[consumer]:
+                    for python_minor in loom_qualification_v2.PYTHON_MINORS:
+                        serial, shadow, comparison, context = self.evidence(
+                            manifest, workload, timing, consumer=consumer,
+                            label=label, image_os=image_os,
+                            architecture=architecture,
+                            python_minor=python_minor, index=index,
+                            source_commit=source_commit,
+                            source_tree_sha256=manifest["manifest_sha256"],
+                            run_id=f"{consumer}-run-{sequence}")
+                        context["repository_source_tree_sha256"] = source_tree
+                        observations.append(
+                            loom_qualification_v2.compile_observation(
+                                serial, shadow, comparison,
+                                manifest=manifest, workload=workload,
+                                context=context))
+                        index += 1
+                batches.append(loom_qualification_v2.compile_batch(
+                    observations, consumer=consumer, manifest=manifest,
+                    workload=workload))
+        faults = self.fault_receipts(manifest, workload)
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            arguments = [
+                "compile-mechanism", "--root", str(root), "--policy",
+                str(root / "contracts" / "release-authority-policy-v2.json"),
+                "--output", str(temporary / "qualification.json"),
+            ]
+            for index, batch in enumerate(batches):
+                path = temporary / f"batch-{index}.json"
+                path.write_text(json.dumps(batch), encoding="utf-8")
+                arguments.extend(("--batch", str(path)))
+            for index, fault in enumerate(faults):
+                path = temporary / f"fault-{index}.json"
+                path.write_text(json.dumps(fault), encoding="utf-8")
+                arguments.extend(("--fault-receipt", str(path)))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_qualification_v2.main(arguments))
+            record = json.loads((temporary / "qualification.json").read_text(
+                encoding="utf-8"))
+            self.assertEqual(30, record["family_count"])
+            self.assertEqual(10, record["required_observations"])
+            missing = list(arguments)
+            position = missing.index("--batch")
+            del missing[position:position + 2]
+            missing[missing.index("--output") + 1] = str(
+                temporary / "missing.json")
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(1, loom_qualification_v2.main(missing))
+
+    def test_fault_corpus_executes_real_fail_closed_paths_and_binds_host(self):
+        root, manifest, workload, _timing, _authority = self.inputs()
+        environment = loom_platform_probe.release_environment(
+            requested_label="windows-2025", image_os="win25-vs2026",
+            image_version="fixture", workflow_path=(
+                ".github/workflows/qualification-faults.yml"),
+            workflow_digest="a" * 64, action_manifest_digest="b" * 64,
+            event_name="workflow_dispatch", run_id="fault-run",
+            run_attempt="1")
+        with tempfile.TemporaryDirectory() as temporary, mock.patch.object(
+                loom_qualification_v2.loom_platform_probe,
+                "release_environment", return_value=environment):
+            output = Path(temporary) / "fault-receipt.json"
+            receipt = loom_qualification_v2.run_fault_corpus(
+                root, platform="windows", output=output,
+                logical_cpus=2, timeout=60, fault_timeout=1)
+            self.assertEqual(
+                receipt, loom_qualification_v2.verify_fault_receipt(
+                    json.loads(output.read_text(encoding="utf-8")),
+                    manifest=manifest, workload=workload))
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_qualification_v2.main([
+                    "verify-fault", "--root", str(root),
+                    "--receipt", str(output),
+                ]))
+        self.assertEqual(environment, receipt["environment"])
+        self.assertEqual(
+            list(loom_qualification_v2.FAULT_CODES),
+            [row["code"] for row in receipt["faults"]])
+        self.assertTrue(all(
+            row["passed"] is True and len(row["evidence_sha256"]) == 64
+            for row in receipt["faults"]))
+        forged = copy.deepcopy(receipt)
+        forged["environment"]["requested_label"] = "windows-latest"
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.verify_fault_receipt(
+                forged, manifest=manifest, workload=workload)
 
     def test_merge_equivalence_reuses_only_an_identical_committed_tree(self):
         _root, manifest, workload, timing, authority = self.inputs()
