@@ -1,0 +1,158 @@
+{
+  "boundary_sha256": "70c26946239c923a9fb26dd62d62c7cbebb8891cd1c8cede8c7eaa00af5d9a5c",
+  "data_sets": [],
+  "declared_data_edges": [
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_manifest.py",
+      "target": "contracts/release-qualification-boundary-v2.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_manifest.py",
+      "target": "schemas/release-qualification-boundary-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_manifest.py",
+      "target": "schemas/release-qualification-manifest-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_certificate_core.py",
+      "target": "schemas/suite-cell-certificate-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_certificate_core.py",
+      "target": "schemas/suite-matrix-certificate-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_harness.py",
+      "target": "contracts/release-suite-diagnostics-v1.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_harness.py",
+      "target": "schemas/release-suite-diagnostics-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_plan.py",
+      "target": "schemas/suite-inventory-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_plan.py",
+      "target": "schemas/suite-shard-plan-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_worker.py",
+      "target": "schemas/suite-failure-diagnostic-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_worker.py",
+      "target": "schemas/suite-worker-receipt-v1.schema.json"
+    }
+  ],
+  "python_entrypoints": [
+    "tools/loom_qualification_manifest.py",
+    "tools/loom_suite_certificate_core.py"
+  ],
+  "roles": [
+    {
+      "path": "contracts/release-qualification-boundary-v2.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "contracts/release-suite-diagnostics-v1.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-boundary-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-manifest-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-suite-diagnostics-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-cell-certificate-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-failure-diagnostic-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-inventory-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-matrix-certificate-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-shard-plan-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-worker-receipt-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "tools/loom_cut_manifest.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_operation_supervisor.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_publication_privacy.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_qualification_manifest.py",
+      "role": "shared-interface"
+    },
+    {
+      "path": "tools/loom_reliability.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_subject_identity.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_certificate_core.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_harness.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_plan.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_worker.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_windows_acl.py",
+      "role": "mechanism-repeat"
+    }
+  ],
+  "runtime_process_sources": [],
+  "schema_version": 2,
+  "workflow_entrypoints": []
+}

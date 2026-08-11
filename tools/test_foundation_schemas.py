@@ -10,6 +10,7 @@ import loom_operation_envelope
 import loom_operation_supervisor
 import loom_path_authority
 import loom_product_interface
+import loom_qualification_manifest
 import loom_suite_harness
 import loom_suite_plan
 import loom_test
@@ -28,6 +29,36 @@ class FoundationSchemaTests(unittest.TestCase):
                 subject_digest="1" * 64, sidecar_type="fixture-receipt",
                 sidecar_id="fixture.json", sidecar_digest="2" * 64)
             self.assert_schema(envelope, "operation-envelope.schema.json")
+
+    def test_qualification_boundary_and_manifest_match_closed_v2_schemas(self):
+        boundary = loom_qualification_manifest.seal_boundary({
+            "schema_version": 2,
+            "python_entrypoints": ["tools/fixture.py"],
+            "workflow_entrypoints": [],
+            "roles": [{
+                "path": "tools/fixture.py", "role": "mechanism-repeat",
+            }],
+            "declared_data_edges": [], "data_sets": [],
+            "runtime_process_sources": [],
+        })
+        self.assert_schema(
+            boundary, "release-qualification-boundary-v2.schema.json")
+        node = {
+            "path": "tools/fixture.py", "role": "mechanism-repeat",
+            "kind": "python", "sha256": "1" * 64,
+            "dependencies": [],
+        }
+        body = {
+            "schema_version": 2,
+            "boundary_sha256": boundary["boundary_sha256"],
+            "entrypoints": ["tools/fixture.py"], "nodes": [node],
+        }
+        manifest = {
+            **body, "manifest_sha256": loom_qualification_manifest._digest(
+                loom_qualification_manifest.MANIFEST_DOMAIN, body),
+        }
+        self.assert_schema(
+            manifest, "release-qualification-manifest-v2.schema.json")
 
     def test_suite_failure_diagnostic_matches_its_closed_schema(self):
         value = {
