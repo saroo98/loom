@@ -38,7 +38,7 @@ ROOT_FILES = {
 }
 ROOT_DIRECTORIES = {
     ".codex-plugin", ".github", "benchmarks", "contracts", "docs", "hooks", "loom", "schemas", "scripts",
-    "skill", "skills", "templates", "tools", "vault-helper",
+    "qualification", "skill", "skills", "templates", "tools", "vault-helper",
 }
 # Qualification evidence remains source/tag-bound release authority. It is
 # consumed directly by release, promotion, and post-release verification and

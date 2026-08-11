@@ -126,6 +126,28 @@ class ReleaseStandardTests(unittest.TestCase):
             self.assertNotIn(
                 f"contracts/{qualification.name}", published)
 
+    def test_public_cut_preserves_the_fixed_qualification_workload(self):
+        source = self._source()
+        workload = source / "qualification" / "workload-v2"
+        workload.mkdir(parents=True)
+        fixture = workload / "test_qual_serial.py"
+        fixture.write_text(
+            "import unittest\n\n"
+            "class QualificationFixtureTests(unittest.TestCase):\n"
+            "    def test_fixed_workload(self):\n"
+            "        self.assertTrue(True)\n",
+            encoding="utf-8")
+        destination = self.root / "qualification-workload-cut"
+
+        result = loom_release.build_public(
+            source, destination, forbidden_tokens=[],
+            source_classification="public-release")
+
+        relative = "qualification/workload-v2/test_qual_serial.py"
+        self.assertEqual(
+            fixture.read_bytes(), (destination / relative).read_bytes())
+        self.assertIn(relative, {row["path"] for row in result["files"]})
+
     def test_suite_separates_correctness_from_cross_platform_capability_skips(self):
         tools = self.root / "tools"
         tools.mkdir()
