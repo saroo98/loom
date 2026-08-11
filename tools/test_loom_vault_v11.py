@@ -8,6 +8,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 import uuid
 from pathlib import Path
@@ -352,6 +353,36 @@ class OwnerVaultTests(unittest.TestCase):
             thread.start()
         for thread in threads:
             thread.join(10)
+        self.assertEqual([], errors)
+        self.assertEqual(10, self.vault.count("memory_records"))
+        self.assertEqual(10, self.vault.count("events"))
+        self.assertEqual(10, len({item["device_counter"] for item in self.vault.export_events()}))
+
+    def test_slow_concurrent_writers_serialize_before_sqlite_busy_bound(self):
+        real_seal = self.crypto.seal
+
+        def slow_seal(plaintext, aad):
+            time.sleep(0.35)
+            return real_seal(plaintext, aad)
+
+        self.crypto.seal = slow_seal
+        errors = []
+
+        def writer(index):
+            try:
+                self.vault.put_memory(self.record(
+                    statement=f"Private slow concurrent invariant {index}",
+                    record_id=str(uuid.uuid5(
+                        uuid.NAMESPACE_URL, f"loom:slow:{index}"))))
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        threads = [threading.Thread(target=writer, args=(index,)) for index in range(10)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(15)
+        self.assertFalse(any(thread.is_alive() for thread in threads))
         self.assertEqual([], errors)
         self.assertEqual(10, self.vault.count("memory_records"))
         self.assertEqual(10, self.vault.count("events"))
