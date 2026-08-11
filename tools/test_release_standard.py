@@ -219,6 +219,53 @@ class ReleaseStandardTests(unittest.TestCase):
         self.assertEqual(
             report["failure_diagnostics"], result["failure_diagnostics"])
 
+    def test_suite_timeout_preserves_progress_before_disposable_root_cleanup(self):
+        tools = self.root / "tools"
+        tools.mkdir()
+        (tools / "loom_test.py").write_text("# fixture runner\n", encoding="utf-8")
+        operation = {
+            "returncode": None,
+            "receipt_sha256": "a" * 64,
+            "status": "failed",
+            "primary_failure": "timed-out",
+            "survivors_confirmed_zero": True,
+            "protected_roots_unchanged": True,
+            "network_isolation_proven": False,
+            "containment_provider": "windows-job-object",
+        }
+
+        def timed_out(**kwargs):
+            command = kwargs["command"]
+            progress_path = Path(command[command.index("--progress-output") + 1])
+            body = {
+                "schema_version": 1,
+                "status": "running",
+                "authorizing": False,
+                "diagnostic_policy_sha256": (
+                    loom_release.loom_suite_harness._POLICY["policy_sha256"]),
+                "selected_modules_sha256": None,
+                "checkpoint_sequence": 17,
+                "completed_test_count": 732,
+                "last_started_test": "test_vault.OwnerVaultTests.test_concurrent",
+                "last_completed_test": "test_vault.OwnerVaultTests.test_previous",
+            }
+            checkpoint = loom_release.loom_suite_harness.seal_progress_checkpoint(body)
+            progress_path.write_text(json.dumps(checkpoint), encoding="utf-8")
+            return operation, b"", b"private timeout transcript"
+
+        with mock.patch.object(
+                loom_release.loom_operation_envelope, "run_supervised",
+                side_effect=timed_out):
+            result = loom_release._suite(self.root)
+        self.assertFalse(result["passed"])
+        self.assertEqual("timed-out", result["primary_failure"])
+        self.assertEqual(732, result["progress_checkpoint"][
+            "completed_test_count"])
+        self.assertEqual("test_vault.OwnerVaultTests.test_concurrent",
+                         result["progress_checkpoint"]["last_started_test"])
+        self.assertTrue(result["operation"]["survivors_confirmed_zero"])
+        self.assertTrue(result["operation"]["protected_roots_unchanged"])
+
     def test_verify_cut_failure_preserves_child_and_outer_operation_bindings(self):
         projections = []
         for index, (code, primary, survivors, protected) in enumerate((

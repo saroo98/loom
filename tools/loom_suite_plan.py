@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 import loom_operation_supervisor
-import loom_privacy
+import loom_publication_privacy
 import loom_subject_identity
 import loom_reliability
 
@@ -369,10 +369,10 @@ def inventory(test_root, *, subject, environment, harness_sha256,
         if not runtime_clean:
             raise SuitePlanError("inventory runtime cleanup failed")
         try:
-            if any(loom_privacy._isolated_secret_signature_match(stream)
+            if any(loom_publication_privacy._isolated_secret_signature_match(stream)
                    is not None for stream in (stdout, stderr)):
                 raise SuitePlanError("inventory privacy validation failed")
-        except loom_privacy.PrivacyError as exc:
+        except loom_publication_privacy.PrivacyError as exc:
             raise SuitePlanError("inventory privacy validation failed") from exc
         expected_entries = {"operation", "request.json", "inventory.json"}
         observed_entries = {entry.name for entry in discovery_root.iterdir()}
@@ -389,10 +389,10 @@ def inventory(test_root, *, subject, environment, harness_sha256,
         inventory_value = _validate_seal(
             inventory_value, "inventory_sha256", seal_inventory)
         try:
-            if loom_privacy._isolated_secret_signature_match(
+            if loom_publication_privacy._isolated_secret_signature_match(
                     canonical(inventory_value)) is not None:
                 raise SuitePlanError("inventory privacy validation failed")
-        except loom_privacy.PrivacyError as exc:
+        except loom_publication_privacy.PrivacyError as exc:
             raise SuitePlanError("inventory privacy validation failed") from exc
         if inventory_value["subject"] != subject \
                 or inventory_value["environment"] != environment \

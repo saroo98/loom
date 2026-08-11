@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-suite-diagnostics-v1.schema.json",
+  "title": "Closed public suite diagnostics policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "public_error_codes", "authorized_skip_reason_codes", "policy_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "public_error_codes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{1,127}$"}
+    },
+    "authorized_skip_reason_codes": {
+      "type": "array",
+      "const": ["host-capability-unavailable", "platform-boundary", "tool-unavailable"]
+    },
+    "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

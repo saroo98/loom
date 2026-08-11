@@ -17,7 +17,7 @@ from pathlib import Path
 
 import loom_reliability
 import loom_release
-import loom_privacy
+import loom_publication_privacy
 import loom_product_interface
 import loom_sbom
 
@@ -66,10 +66,10 @@ def _helper_platform(path):
 
 def _verify_helper_platform(platform_id, helper):
     size = helper.stat().st_size
-    if size > loom_privacy.MAX_SCAN_FILE_BYTES:
+    if size > loom_publication_privacy.MAX_SCAN_FILE_BYTES:
         raise PackageError(
             f"{platform_id} crypto helper exceeds the publication scan limit "
-            f"({size} > {loom_privacy.MAX_SCAN_FILE_BYTES} bytes)")
+            f"({size} > {loom_publication_privacy.MAX_SCAN_FILE_BYTES} bytes)")
     observed = _helper_platform(helper)
     if observed != platform_id:
         raise PackageError(
@@ -334,7 +334,7 @@ def build(source, output, helpers, helper_receipts, helper_evidence, *, version,
             "release_sequence": release_sequence, "files": files,
             "helper_provenance": helper_receipts,
         })
-        firewall = loom_privacy.scan_publication(
+        firewall = loom_publication_privacy.scan_publication(
             output, forbidden_tokens=tuple(owner_tokens),
             verified_opaque_hashes=verified_opaque)
         if not firewall["clean"]:

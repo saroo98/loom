@@ -1,3 +1,4 @@
+import copy
 import json
 import contextlib
 import io
@@ -472,6 +473,107 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
                 loom_exact_cut_ci._seal(result)["receipt_sha256"])
             self.assertFalse(diagnostic_output.exists())
             self.assertNotIn("Private Owner", json.dumps(result, sort_keys=True))
+
+    def test_timeout_progress_sidecar_is_bound_private_safe_and_non_authorizing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            cut = root / "build" / "cut"
+            cut.parent.mkdir()
+            output = root / "receipt.json"
+            diagnostic_output = root / "serial-progress-diagnostic.json"
+            progress = loom_exact_cut_ci.loom_suite_harness.seal_progress_checkpoint({
+                "schema_version": 1,
+                "status": "running",
+                "authorizing": False,
+                "diagnostic_policy_sha256": (
+                    loom_exact_cut_ci.loom_suite_harness._POLICY[
+                        "policy_sha256"]),
+                "selected_modules_sha256": None,
+                "checkpoint_sequence": 9,
+                "completed_test_count": 731,
+                "last_started_test": "test_owner.OwnerTests.test_concurrent",
+                "last_completed_test": "test_owner.OwnerTests.test_previous",
+            })
+            operation = {
+                "status": "failed", "returncode": None,
+                "primary_failure": "timed-out",
+                "survivors_confirmed_zero": True,
+                "protected_roots_unchanged": True,
+                "network_isolation_proven": False,
+                "containment_provider": "windows-job-object",
+                "receipt_sha256": "e" * 64,
+            }
+            error = loom_exact_cut_ci.loom_release.ReleaseError(
+                "private timeout",
+                details={"suite": {
+                    "passed": False, "capability_complete": False,
+                    "capability_status": "failed", "returncode": 1,
+                    "primary_failure": "timed-out",
+                    "operation_receipt_sha256": "e" * 64,
+                    "operation": operation,
+                    "progress_checkpoint": progress,
+                    "tests_run": None, "failure_count": None,
+                    "error_count": None, "failed_tests": [],
+                    "failure_diagnostics": [], "skip_receipts": [],
+                    "timings": [],
+                }})
+            with mock.patch.object(
+                    loom_exact_cut_ci.loom_release, "build_public",
+                    return_value={"root_sha256": "a" * 64}), \
+                    mock.patch.object(
+                        loom_exact_cut_ci.loom_release, "verify_cut",
+                        side_effect=error):
+                receipt = loom_exact_cut_ci.run(
+                    source, cut, output,
+                    progress_diagnostic_output=diagnostic_output)
+
+            diagnostic = loom_exact_cut_ci.load_serial_progress_diagnostic(
+                diagnostic_output, receipt)
+            self.assertFalse(diagnostic["authorizing"])
+            self.assertEqual(731, diagnostic["checkpoint"][
+                "completed_test_count"])
+            self.assertEqual("timed-out", diagnostic["operation"][
+                "primary_failure"])
+            self.assertTrue(diagnostic["operation"][
+                "survivors_confirmed_zero"])
+            self.assertTrue(diagnostic["operation"][
+                "protected_roots_unchanged"])
+            self.assertNotIn("private timeout", json.dumps(diagnostic))
+
+            stale = copy.deepcopy(diagnostic)
+            stale_body = {
+                key: value for key, value in stale["checkpoint"].items()
+                if key != "checkpoint_sha256"}
+            stale_body["diagnostic_policy_sha256"] = "0" * 64
+            stale["checkpoint"] = \
+                loom_exact_cut_ci.loom_suite_harness.seal_progress_checkpoint(
+                    stale_body)
+            stale["progress_diagnostic_sha256"] = loom_exact_cut_ci._digest({
+                key: value for key, value in stale.items()
+                if key != "progress_diagnostic_sha256"})
+            with self.assertRaisesRegex(ValueError, "checkpoint"):
+                loom_exact_cut_ci.verify_serial_progress_diagnostic(
+                    stale, receipt)
+
+            unknown = copy.deepcopy(diagnostic)
+            unknown["operation"]["cwd"] = r"C:\Users\Private Owner\checkout"
+            unknown["progress_diagnostic_sha256"] = loom_exact_cut_ci._digest({
+                key: value for key, value in unknown.items()
+                if key != "progress_diagnostic_sha256"})
+            with self.assertRaisesRegex(ValueError, "operation"):
+                loom_exact_cut_ci.verify_serial_progress_diagnostic(
+                    unknown, receipt)
+
+            mixed = copy.deepcopy(diagnostic)
+            mixed["exact_cut_receipt_sha256"] = "0" * 64
+            mixed["progress_diagnostic_sha256"] = loom_exact_cut_ci._digest({
+                key: value for key, value in mixed.items()
+                if key != "progress_diagnostic_sha256"})
+            with self.assertRaisesRegex(ValueError, "identity"):
+                loom_exact_cut_ci.verify_serial_progress_diagnostic(
+                    mixed, receipt)
 
 
 if __name__ == "__main__":

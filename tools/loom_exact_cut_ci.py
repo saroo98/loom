@@ -15,7 +15,8 @@ import loom_reliability
 import loom_operation_envelope
 import loom_operation_supervisor
 import loom_platform_probe
-import loom_privacy
+import loom_publication_privacy
+import loom_suite_harness
 import loom_test
 
 
@@ -49,6 +50,7 @@ BINDING_FIELDS = {
     "architecture", "python", "runner",
 }
 MAX_SERIAL_FAILURE_DIAGNOSTIC_BYTES = 128 * 1024
+MAX_SERIAL_PROGRESS_DIAGNOSTIC_BYTES = 128 * 1024
 SERIAL_DIAGNOSTIC_FINALIZATION_ERROR = "SerialDiagnosticFinalizationError"
 OPERATION_PROJECTION_FIELDS = {
     "operation_receipt_sha256", "status", "returncode", "primary_failure",
@@ -217,7 +219,8 @@ def verify_serial_failure_diagnostic(value, exact_receipt):
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
         allow_nan=False).encode("utf-8")
     if ABSOLUTE_OWNER_PATH.search(encoded.decode("utf-8")) \
-            or loom_privacy._isolated_secret_signature_match(encoded) is not None:
+            or loom_publication_privacy._isolated_secret_signature_match(
+                encoded) is not None:
         raise ValueError("serial diagnostic contains private evidence")
     return value
 
@@ -236,6 +239,103 @@ def load_serial_failure_diagnostic(path, exact_receipt):
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
         raise ValueError("serial diagnostic JSON is invalid") from exc
     return verify_serial_failure_diagnostic(value, exact_receipt)
+
+
+def _serial_progress_diagnostic(checkpoint, operation, exact_receipt):
+    body = {
+        "schema_version": 1,
+        "authorizing": False,
+        "exact_cut_receipt_sha256": exact_receipt["receipt_sha256"],
+        "operation": operation,
+        "checkpoint": checkpoint,
+    }
+    value = {**body, "progress_diagnostic_sha256": _digest(body)}
+    return verify_serial_progress_diagnostic(value, exact_receipt)
+
+
+def verify_serial_progress_diagnostic(value, exact_receipt):
+    """Verify one non-authorizing timeout/progress sidecar."""
+    if not isinstance(exact_receipt, dict) \
+            or set(exact_receipt) != RECEIPT_FIELDS \
+            or exact_receipt.get("schema_version") != 2 \
+            or exact_receipt.get("status") != "failed" \
+            or exact_receipt.get("receipt_sha256") != _seal(
+                exact_receipt)["receipt_sha256"]:
+        raise ValueError("serial progress exact-cut receipt is invalid")
+    suite = exact_receipt.get("suite")
+    if not isinstance(suite, dict) or set(suite) != SUITE_FIELDS \
+            or suite.get("schema_version") != 2 \
+            or suite.get("passed") is not False:
+        raise ValueError("serial progress exact-cut suite is invalid")
+    if not isinstance(value, dict) or set(value) != {
+            "schema_version", "authorizing", "exact_cut_receipt_sha256",
+            "operation", "checkpoint", "progress_diagnostic_sha256"}:
+        raise ValueError("serial progress diagnostic fields are invalid")
+    body = {key: item for key, item in value.items()
+            if key != "progress_diagnostic_sha256"}
+    if value.get("schema_version") != 1 \
+            or value.get("authorizing") is not False \
+            or value.get("exact_cut_receipt_sha256") != \
+            exact_receipt["receipt_sha256"] \
+            or HEX64.fullmatch(str(value.get(
+                "progress_diagnostic_sha256", ""))) is None \
+            or value["progress_diagnostic_sha256"] != _digest(body):
+        raise ValueError("serial progress diagnostic identity is invalid")
+    try:
+        checkpoint = loom_suite_harness.validate_progress_checkpoint(
+            value.get("checkpoint"))
+    except loom_suite_harness.SuiteHarnessError as exc:
+        raise ValueError("serial progress checkpoint is invalid") from exc
+    operation = value.get("operation")
+    fields = {
+        "status", "returncode", "primary_failure",
+        "survivors_confirmed_zero", "protected_roots_unchanged",
+        "network_isolation_proven", "containment_provider", "receipt_sha256",
+    }
+    primary = operation.get("primary_failure") \
+        if isinstance(operation, dict) else None
+    returncode = operation.get("returncode") \
+        if isinstance(operation, dict) else None
+    if not isinstance(operation, dict) or set(operation) != fields \
+            or operation.get("status") != "failed" \
+            or (returncode is not None and type(returncode) is not int) \
+            or primary not in loom_operation_supervisor.PRIMARY_FAILURES \
+            or any(type(operation.get(field)) is not bool for field in (
+                "survivors_confirmed_zero", "protected_roots_unchanged",
+                "network_isolation_proven")) \
+            or operation.get("containment_provider") not in \
+            loom_operation_supervisor.CONTAINMENT_PROVIDERS \
+            or HEX64.fullmatch(str(operation.get("receipt_sha256", ""))) is None \
+            or operation["receipt_sha256"] != suite.get(
+                "operation_receipt_sha256") \
+            or suite.get("primary_failure_sha256") != hashlib.sha256(
+                primary.encode("utf-8")).hexdigest():
+        raise ValueError("serial progress operation is invalid")
+    if checkpoint["status"] != "running":
+        raise ValueError("serial progress checkpoint is not interrupted")
+    encoded = json.dumps(
+        value, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+        allow_nan=False).encode("utf-8")
+    if ABSOLUTE_OWNER_PATH.search(encoded.decode("utf-8")) \
+            or loom_publication_privacy._isolated_secret_signature_match(
+                encoded) is not None:
+        raise ValueError("serial progress diagnostic contains private evidence")
+    return value
+
+
+def load_serial_progress_diagnostic(path, exact_receipt):
+    path = Path(path)
+    if not path.is_file() or path.is_symlink() \
+            or path.stat().st_size > MAX_SERIAL_PROGRESS_DIAGNOSTIC_BYTES:
+        raise ValueError("serial progress diagnostic transport is unsafe")
+    try:
+        value = json.loads(
+            path.read_bytes().decode("utf-8", errors="strict"),
+            object_pairs_hook=_strict_object,
+            parse_constant=_reject_constant)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise ValueError("serial progress diagnostic JSON is invalid") from exc
+    return verify_serial_progress_diagnostic(value, exact_receipt)
 
 
 def _microseconds(value):
@@ -397,12 +497,15 @@ def verify_receipt(value, *, require_static=None):
 
 
 def run(source, cut, output, *, suite_output=None,
-        failure_diagnostic_output=None, forbidden_tokens=(), static_only=False):
+        failure_diagnostic_output=None, progress_diagnostic_output=None,
+        forbidden_tokens=(), static_only=False):
     source = Path(source).resolve()
     cut = Path(cut).resolve()
     output = Path(output).resolve()
     requested_failure_diagnostic_output = failure_diagnostic_output
+    requested_progress_diagnostic_output = progress_diagnostic_output
     failure_diagnostic_output = None
+    progress_diagnostic_output = None
     base = {
         "schema_version": 2,
         "status": "failed",
@@ -424,6 +527,8 @@ def run(source, cut, output, *, suite_output=None,
     envelope_path = None
     terminal_phase = "failed"
     failure_diagnostics = None
+    progress_checkpoint = None
+    progress_operation = None
     diagnostic_finalization_started = False
     try:
         try:
@@ -471,6 +576,28 @@ def run(source, cut, output, *, suite_output=None,
                     raise ValueError("serial diagnostic output is unsafe")
                 resolved_diagnostic_output.unlink()
             failure_diagnostic_output = resolved_diagnostic_output
+        if requested_progress_diagnostic_output is not None:
+            lexical_progress_output = Path(os.path.abspath(
+                os.fspath(requested_progress_diagnostic_output)))
+            if lexical_progress_output.is_symlink():
+                raise ValueError("serial progress diagnostic output is unsafe")
+            resolved_progress_output = lexical_progress_output.resolve()
+            reserved = {
+                output,
+                *([Path(suite_output).resolve()]
+                  if suite_output is not None else []),
+                *([failure_diagnostic_output]
+                  if failure_diagnostic_output is not None else []),
+            }
+            if resolved_progress_output in reserved:
+                raise ValueError(
+                    "serial progress diagnostic output must be distinct")
+            if resolved_progress_output.exists():
+                if not resolved_progress_output.is_file():
+                    raise ValueError(
+                        "serial progress diagnostic output is unsafe")
+                resolved_progress_output.unlink()
+            progress_diagnostic_output = resolved_progress_output
         build = loom_release.build_public(
             source, cut, forbidden_tokens=list(forbidden_tokens),
             source_classification="public-release")
@@ -508,9 +635,14 @@ def run(source, cut, output, *, suite_output=None,
             "error_sha256": hashlib.sha256(message.encode("utf-8")).hexdigest(),
         })
         if isinstance(details, dict) and isinstance(details.get("suite"), dict):
-            base["suite"] = _public_suite(details["suite"])
-            if isinstance(details["suite"].get("failure_diagnostics"), list):
-                failure_diagnostics = details["suite"]["failure_diagnostics"]
+            suite_details = details["suite"]
+            base["suite"] = _public_suite(suite_details)
+            if isinstance(suite_details.get("failure_diagnostics"), list):
+                failure_diagnostics = suite_details["failure_diagnostics"]
+            if isinstance(suite_details.get("progress_checkpoint"), dict) \
+                    and isinstance(suite_details.get("operation"), dict):
+                progress_checkpoint = suite_details["progress_checkpoint"]
+                progress_operation = suite_details["operation"]
     finally:
         try:
             base = _seal(base)
@@ -534,6 +666,14 @@ def run(source, cut, output, *, suite_output=None,
                     failure_diagnostics, base)
                 loom_reliability.atomic_write_json(
                     failure_diagnostic_output, diagnostic)
+            if progress_diagnostic_output is not None \
+                    and progress_checkpoint is not None \
+                    and progress_operation is not None:
+                diagnostic_finalization_started = True
+                progress_diagnostic = _serial_progress_diagnostic(
+                    progress_checkpoint, progress_operation, base)
+                loom_reliability.atomic_write_json(
+                    progress_diagnostic_output, progress_diagnostic)
         except BaseException as final_exc:
             if diagnostic_finalization_started:
                 original_classification = base.get("error_type") or "None"
@@ -568,11 +708,13 @@ def main(argv=None):
     parser.add_argument("--output", required=True)
     parser.add_argument("--suite-output")
     parser.add_argument("--failure-diagnostic-output")
+    parser.add_argument("--progress-diagnostic-output")
     parser.add_argument("--static-only", action="store_true")
     parser.add_argument("--forbidden-token", action="append", default=[])
     args = parser.parse_args(argv)
     result = run(args.source, args.cut, args.output, suite_output=args.suite_output,
                  failure_diagnostic_output=args.failure_diagnostic_output,
+                 progress_diagnostic_output=args.progress_diagnostic_output,
                  forbidden_tokens=args.forbidden_token,
                  static_only=args.static_only)
     print(json.dumps({key: result[key] for key in (

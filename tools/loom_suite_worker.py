@@ -14,12 +14,11 @@ import time
 from pathlib import Path
 
 import loom_operation_supervisor
-import loom_privacy
+import loom_cut_manifest
+import loom_publication_privacy
 import loom_reliability
-import loom_release
-import loom_release_subject
+import loom_suite_harness
 import loom_suite_plan
-import loom_test
 
 
 MAX_RECEIPT_BYTES = 4 * 1024 * 1024
@@ -132,7 +131,8 @@ def validate_receipt(value):
         if set(outcome) != expected_fields \
                 or (outcome["status"] == "skipped" and
                     (outcome.get("skip_reason_code") not in
-                     loom_test.AUTHORIZED_SKIP_REASON_CODES | {"unclassified"}
+                     loom_suite_harness.AUTHORIZED_SKIP_REASON_CODES |
+                     {"unclassified"}
                      or loom_suite_plan.HEX64.fullmatch(str(
                          outcome.get("skip_reason_sha256", ""))) is None)):
             raise SuiteWorkerError("worker receipt outcome is invalid")
@@ -240,8 +240,8 @@ def validate_failure_diagnostic(value, receipt):
                 or ("error_code" in row and (
                     not isinstance(row["error_code"], str)
                     or row["error_code"] not in
-                    loom_test.PUBLIC_ERROR_CODES | {
-                        loom_test.PUBLIC_ERROR_CODE_REDACTED})):
+                    loom_suite_harness.PUBLIC_ERROR_CODES | {
+                        loom_suite_harness.PUBLIC_ERROR_CODE_REDACTED})):
             raise SuiteWorkerError("failure diagnostic row is invalid")
         keys.append((row["test"], row["status"], row["exception_type"],
                      row.get("error_code", "")))
@@ -282,8 +282,11 @@ def _privacy_clean(value):
         content = json.dumps(
             value, sort_keys=True, separators=(",", ":"),
             ensure_ascii=False, allow_nan=False).encode("utf-8")
-        return loom_privacy._isolated_secret_signature_match(content) is None
-    except (TypeError, ValueError, UnicodeError, loom_privacy.PrivacyError):
+        return loom_publication_privacy._isolated_secret_signature_match(
+            content) is None
+    except (
+            TypeError, ValueError, UnicodeError,
+            loom_publication_privacy.PrivacyError):
         return False
 
 
@@ -300,10 +303,10 @@ def _validate_inputs(cut, inventory, plan, shard_id):
         raise SuiteWorkerError("shard identity is invalid")
     cut = Path(cut).resolve()
     try:
-        manifest = loom_release._verify_cut_manifest(cut)
+        manifest = loom_cut_manifest.verify(cut)
         manifest_sha256 = hashlib.sha256(
-            (cut / loom_release.MANIFEST).read_bytes()).hexdigest()
-    except (OSError, loom_release.ReleaseError) as exc:
+            (cut / loom_cut_manifest.MANIFEST).read_bytes()).hexdigest()
+    except (OSError, loom_cut_manifest.CutManifestError) as exc:
         raise SuiteWorkerError("worker public-cut subject is invalid") from exc
     if not cut.is_dir() or manifest["root_sha256"] != \
             inventory["subject"]["public_root_sha256"] \
@@ -328,7 +331,7 @@ def _child(request_path, output_path):
     if set(request) != {"modules", "test_root"} \
             or not isinstance(request["modules"], list):
         raise SuiteWorkerError("worker request fields are invalid")
-    report = loom_test.run_modules(
+    report = loom_suite_harness.run_modules(
         request["modules"], start_dir=request["test_root"], verbosity=0)
     loom_reliability.atomic_write_json(Path(output_path), report)
     return 0 if report["status"] != "failed" and report["within_budget"] else 1
@@ -393,9 +396,9 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
     worker_root.mkdir()
     candidate = worker_root / "candidate"
     shutil.copytree(cut, candidate)
-    pre_manifest = loom_release._verify_cut_manifest(candidate)
+    pre_manifest = loom_cut_manifest.verify(candidate)
     pre_manifest_sha256 = hashlib.sha256(
-        (candidate / loom_release.MANIFEST).read_bytes()).hexdigest()
+        (candidate / loom_cut_manifest.MANIFEST).read_bytes()).hexdigest()
     request_path = worker_root / "request.json"
     report_path = worker_root / "suite-report.json"
     receipt_path = worker_root / "worker-receipt.json"
@@ -433,12 +436,12 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
         except SuiteWorkerError:
             report = None
     try:
-        post_manifest = loom_release._verify_cut_manifest(candidate)
+        post_manifest = loom_cut_manifest.verify(candidate)
         post_manifest_sha256 = hashlib.sha256(
-            (candidate / loom_release.MANIFEST).read_bytes()).hexdigest()
+            (candidate / loom_cut_manifest.MANIFEST).read_bytes()).hexdigest()
         mutation_clean = pre_manifest == post_manifest \
             and pre_manifest_sha256 == post_manifest_sha256
-    except (OSError, loom_release.ReleaseError):
+    except (OSError, loom_cut_manifest.CutManifestError):
         post_manifest_sha256 = "0" * 64
         mutation_clean = False
     expected_modules = list(shard["modules"])
@@ -466,7 +469,8 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
                                for item in report.get("skip_receipts", [])
                                if isinstance(item, dict)
                                and item.get("test") == row["test"]), "")
-                outcome["skip_reason_code"] = loom_test.skip_reason_code(reason)
+                outcome["skip_reason_code"] = \
+                    loom_suite_harness.skip_reason_code(reason)
                 outcome["skip_reason_sha256"] = skip_hashes.get(
                     row["test"], hashlib.sha256(b"").hexdigest())
             observed.append(outcome)
@@ -502,7 +506,7 @@ def execute_shard(cut, inventory, plan, shard_id, output_root, *, timeout,
             or (isinstance(report, dict) and report.get("status") == "failed"):
         findings.append("TEST_FAILURE")
     if any(row.get("skip_reason_code") not in
-           loom_test.AUTHORIZED_SKIP_REASON_CODES for row in observed
+           loom_suite_harness.AUTHORIZED_SKIP_REASON_CODES for row in observed
            if row["status"] == "skipped"):
         findings.append("UNAUTHORIZED_SKIP")
     findings = sorted(set(findings), key=WORKER_PRECEDENCE.index)

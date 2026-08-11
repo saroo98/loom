@@ -16,7 +16,7 @@ import tempfile
 import uuid
 from pathlib import Path
 
-import loom_privacy
+import loom_publication_privacy
 import loom_reliability
 import loom_adaptation_eval
 import loom_docs
@@ -25,9 +25,11 @@ import loom_improvement
 import loom_performance
 import loom_self_hosting
 import loom_crypto
+import loom_cut_manifest
 import loom_path_authority
 import loom_operation_supervisor
 import loom_operation_envelope
+import loom_suite_harness
 
 
 ROOT_FILES = {
@@ -223,13 +225,14 @@ def _owner_token_policy(source, forbidden_tokens, source_classification):
             if len(raw) != size:
                 raise ReleaseError("private owner-token grounding source changed during scan")
             folded_raw = raw.lower()
-            _views, decoded = loom_privacy._scan_views(raw)
+            _views, decoded = loom_publication_privacy._scan_views(raw)
             relative_text = relative.as_posix().casefold()
             for token in tokens:
                 if token in grounded:
                     continue
                 forms = {
-                    form for encoding in loom_privacy.TOKEN_ENCODINGS for form in (
+                    form for encoding in loom_publication_privacy.TOKEN_ENCODINGS
+                    for form in (
                         token.encode(encoding), token.casefold().encode(encoding))
                 }
                 if token.casefold() in relative_text \
@@ -282,7 +285,7 @@ def build_public(source, destination, *, forbidden_tokens,
             raise ReleaseError("release source lacks required public roots: " + ", ".join(missing))
         payload_manifest = loom_reliability.deterministic_manifest(staging)
         loom_reliability.atomic_write_json(staging / MANIFEST, payload_manifest)
-        firewall = loom_privacy.scan_publication(
+        firewall = loom_publication_privacy.scan_publication(
             staging, forbidden_tokens=forbidden_tokens,
             require_owner_tokens=source_classification == "private-owner")
         if not firewall["clean"]:
@@ -326,6 +329,13 @@ def build_public(source, destination, *, forbidden_tokens,
 
 
 def _verify_cut_manifest(root):
+    try:
+        return loom_cut_manifest.verify(root)
+    except loom_cut_manifest.CutManifestError as exc:
+        raise ReleaseError(str(exc)) from exc
+
+    # Historical implementation retained below for source compatibility; the
+    # closed verifier above is the only reachable path.
     manifest_path = root / MANIFEST
     try:
         manifest = json.loads(
@@ -383,7 +393,7 @@ def verify_cut_static(root, *, forbidden_tokens):
     if not root.is_dir():
         raise ReleaseError("public cut must be a directory")
     manifest = _verify_cut_manifest(root)
-    firewall_before = loom_privacy.scan_publication(
+    firewall_before = loom_publication_privacy.scan_publication(
         root, forbidden_tokens=forbidden_tokens,
         require_owner_tokens=bool(forbidden_tokens))
     if not firewall_before["clean"]:
@@ -391,7 +401,7 @@ def verify_cut_static(root, *, forbidden_tokens):
     docs = loom_docs.audit_docs(root)
     if docs["status"] != "passed":
         raise ReleaseError("public cut documentation audit failed")
-    offline = loom_privacy.audit_offline_modules(root / "tools")
+    offline = loom_publication_privacy.audit_offline_modules(root / "tools")
     if not offline["offline"]:
         raise ReleaseError("public cut offline audit failed")
     manifest_sha256 = hashlib.sha256(
@@ -444,7 +454,7 @@ def verify_cut(root, *, forbidden_tokens):
     if not suite["passed"] or loom_docs.generate_evidence(root)[
             "discovered_test_methods"] < 1:
         failed_tests = suite.get("failed_tests", [])
-        diagnostic = loom_privacy.minimize_evidence(
+        diagnostic = loom_publication_privacy.minimize_evidence(
             json.dumps({
                 "returncode": suite.get("returncode"),
                 "primary_failure": suite.get("primary_failure"),
@@ -934,11 +944,13 @@ def _suite(root):
         disposable_temp = disposable_home / "tmp"
         cargo_cache = disposable_home / "c"
         suite_report = disposable_home / "release-suite-report.json"
+        progress_report = disposable_home / "release-suite-progress.json"
         disposable_temp.mkdir()
         cargo_cache.mkdir()
         command = (
             [sys.executable, "-B", "loom_test.py", "full", "--quiet",
-             "--output", str(suite_report)]
+             "--output", str(suite_report),
+             "--progress-output", str(progress_report)]
             if uses_runner else
             [sys.executable, "-B", "-m", "unittest", "discover", "-p", "test_*.py"])
         environment = {
@@ -964,9 +976,16 @@ def _suite(root):
             capabilities=["local-process", "descendant-containment"],
             capture_output=True)
         report_text = None
+        progress_checkpoint = None
         if uses_runner and suite_report.is_file() and not suite_report.is_symlink() \
                 and suite_report.stat().st_size <= 4 * 1024 * 1024:
             report_text = suite_report.read_text(encoding="utf-8")
+        if progress_report.is_file() and not progress_report.is_symlink():
+            try:
+                progress_checkpoint = \
+                    loom_suite_harness.load_progress_checkpoint(progress_report)
+            except loom_suite_harness.SuiteHarnessError:
+                progress_checkpoint = None
     stdout_text = stdout.decode("utf-8", errors="replace")
     stderr_text = stderr.decode("utf-8", errors="replace")
     returncode = operation["returncode"] if operation["returncode"] is not None else 1
@@ -994,6 +1013,13 @@ def _suite(root):
     else:
         capability_complete = returncode == 0
         correctness_passed = returncode == 0
+    operation_public = {
+        key: operation.get(key) for key in (
+            "status", "returncode", "primary_failure",
+            "survivors_confirmed_zero", "protected_roots_unchanged",
+            "network_isolation_proven", "containment_provider",
+            "receipt_sha256")
+    }
     return {
         "passed": correctness_passed,
         "capability_complete": capability_complete,
@@ -1004,6 +1030,8 @@ def _suite(root):
         "output": (stderr_text if uses_runner
                    else stdout_text + stderr_text)[-4000:],
         "operation_receipt_sha256": operation["receipt_sha256"],
+        "operation": operation_public,
+        "progress_checkpoint": progress_checkpoint,
         "elapsed_seconds": timing.get("elapsed_seconds") if timing else None,
         "tests_run": timing.get("tests_run") if timing else None,
         "failure_count": timing.get("failures") if timing else None,
@@ -1047,7 +1075,7 @@ def _performance_contracts():
 
 def sanitize_suite_evidence(suite, *, root, home):
     value = dict(suite)
-    value["output"] = loom_privacy.minimize_evidence(
+    value["output"] = loom_publication_privacy.minimize_evidence(
         value.get("output", ""), roots=(root, home), max_chars=4000)
     return value
 

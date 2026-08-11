@@ -10,6 +10,7 @@ from pathlib import Path, PurePosixPath
 
 import loom_reliability
 import loom_product_interface
+import loom_suite_harness
 import loom_subject_identity
 
 
@@ -21,6 +22,31 @@ SEMVER_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$")
 
 class CapabilityRegistryError(RuntimeError):
     pass
+
+
+def _check_suite_diagnostic_projection(root):
+    """Keep candidate public diagnostics synchronized outside the harness."""
+    policy = loom_suite_harness.load_diagnostic_policy(root)
+    import loom_lifecycle
+    import loom_suite_plan
+    import v11_test_support
+    expected = {
+        "BOOTSTRAP_CONCURRENT_CHILD_FAILED",
+        "BOOTSTRAP_CONCURRENT_LAUNCHER_REWRITE",
+        "BOOTSTRAP_CONCURRENT_OUTPUT_INVALID",
+        "BOOTSTRAP_CONCURRENT_RUNTIME_INVALID",
+        "BOOTSTRAP_CONCURRENT_STAGING_SURVIVOR",
+        "BOOTSTRAP_INSTALLED_PROBE_TIMEOUT",
+        "BOOTSTRAP_SIGNED_ACTIVATION_TIMEOUT",
+        "HOST_UNVERIFIED",
+        *loom_suite_plan.SUITE_PLAN_PUBLIC_ERROR_CODES,
+        *loom_lifecycle.LIFECYCLE_VERIFICATION_PUBLIC_ERROR_CODES,
+        *v11_test_support.NATIVE_HELPER_PUBLIC_ERROR_CODES,
+    }
+    if policy["public_error_codes"] != sorted(expected):
+        raise CapabilityRegistryError(
+            "release suite diagnostic projection is stale")
+    return policy
 
 
 def _digest(value):
@@ -306,6 +332,7 @@ def main(argv=None):
         declarations_path = root / "contracts" / "capability-declarations-v1.json"
         declarations = _read(declarations_path)
         loom_product_interface.load(root)
+        _check_suite_diagnostic_projection(root)
         graph = _read(args.graph) if args.graph else None
         trusted_expected_digest = None
         if args.expected_subjects:

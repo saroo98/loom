@@ -9,6 +9,7 @@ from unittest import mock
 
 import loom_memory
 import loom_privacy
+import loom_publication_privacy
 import loom_lifecycle
 
 
@@ -19,6 +20,35 @@ class PrivacyExcellenceTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_extracted_publication_core_matches_legacy_firewall_semantics(self):
+        cut = self.root / "projection-parity"
+        cut.mkdir()
+        (cut / "safe.md").write_text("public", encoding="utf-8")
+        (cut / "opaque.bin").write_bytes(b"\x00\xffopaque")
+        opaque_sha = __import__("hashlib").sha256(
+            (cut / "opaque.bin").read_bytes()).hexdigest()
+        arguments = {
+            "forbidden_tokens": ["PrivateOwnerSentinel"],
+            "verified_opaque_hashes": {opaque_sha},
+        }
+        legacy = loom_privacy.scan_publication(cut, **arguments)
+        extracted = loom_publication_privacy.scan_publication(cut, **arguments)
+        self.assertEqual(legacy, extracted)
+        text = f"prefix {self.root} suffix"
+        self.assertEqual(
+            loom_privacy.minimize_evidence(
+                text, roots=[self.root], max_chars=80),
+            loom_publication_privacy.minimize_evidence(
+                text, roots=[self.root], max_chars=80))
+
+        tools = self.root / "offline-tools"
+        tools.mkdir()
+        (tools / "loom_fixture.py").write_text(
+            "import json\nVALUE = 1\n", encoding="utf-8")
+        self.assertEqual(
+            loom_privacy.audit_offline_modules(tools),
+            loom_publication_privacy.audit_offline_modules(tools))
 
     def test_firewall_scans_binary_content_and_every_filename(self):
         cut = self.root / "cut"

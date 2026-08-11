@@ -215,7 +215,12 @@ class WorkflowPolicyTests(unittest.TestCase):
                 "--failure-diagnostic-output serial-failure-diagnostic.json",
                 text)
             self.assertIn(
+                "--progress-diagnostic-output serial-progress-diagnostic.json",
+                text)
+            self.assertIn(
                 "tools/serial-failure-diagnostic.json", text)
+            self.assertIn(
+                "tools/serial-progress-diagnostic.json", text)
             self.assertIn(
                 "tools/suite-shadow/workers/*/worker-receipt.json", text)
             self.assertIn(
@@ -223,7 +228,7 @@ class WorkflowPolicyTests(unittest.TestCase):
             self.assertIn("permissions:\n  contents: read", text)
             self.assertIn("retention-days: 7", text)
             self.assertIn("if: always()", text)
-            self.assertNotIn("failure-diagnostic.json --", text)
+            self.assertNotIn("serial-progress-diagnostic.json --", text)
         self.assertIn(
             'os: [ubuntu-latest, macos-latest, windows-latest]', quality)
         self.assertIn(

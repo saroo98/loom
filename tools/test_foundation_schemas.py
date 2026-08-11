@@ -10,6 +10,7 @@ import loom_operation_envelope
 import loom_operation_supervisor
 import loom_path_authority
 import loom_product_interface
+import loom_suite_harness
 import loom_suite_plan
 import loom_test
 
@@ -236,6 +237,41 @@ class FoundationSchemaTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         value = loom_product_interface.load(root)
         self.assert_schema(value, "release-product-interface-v1.schema.json")
+
+    def test_release_suite_diagnostics_match_their_closed_schema(self):
+        root = Path(__file__).resolve().parents[1]
+        value = loom_suite_harness.load_diagnostic_policy(root)
+        self.assert_schema(value, "release-suite-diagnostics-v1.schema.json")
+
+    def test_serial_suite_progress_diagnostic_matches_closed_schema(self):
+        value = {
+            "schema_version": 1,
+            "authorizing": False,
+            "exact_cut_receipt_sha256": "1" * 64,
+            "operation": {
+                "status": "failed", "returncode": None,
+                "primary_failure": "timed-out",
+                "survivors_confirmed_zero": True,
+                "protected_roots_unchanged": True,
+                "network_isolation_proven": False,
+                "containment_provider": "windows-job-object",
+                "receipt_sha256": "2" * 64,
+            },
+            "checkpoint": {
+                "schema_version": 1, "status": "running",
+                "authorizing": False,
+                "diagnostic_policy_sha256": "3" * 64,
+                "selected_modules_sha256": None,
+                "checkpoint_sequence": 8,
+                "completed_test_count": 700,
+                "last_started_test": "test_owner.OwnerTests.test_current",
+                "last_completed_test": "test_owner.OwnerTests.test_previous",
+                "checkpoint_sha256": "4" * 64,
+            },
+            "progress_diagnostic_sha256": "5" * 64,
+        }
+        self.assert_schema(
+            value, "serial-suite-progress-diagnostic-v1.schema.json")
 
     def test_claim_only_release_suite_qualification_is_outside_closed_schema(self):
         value = {
