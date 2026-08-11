@@ -82,6 +82,33 @@ def report(platform, status, *, exact_environment=False):
 
 
 class ReleaseSuiteTests(unittest.TestCase):
+    def test_v2_release_policy_loading_never_takes_authority_from_candidate_policy(self):
+        authority = {
+            "schema_version": 2,
+            "authority_mode": "serial",
+            "mechanism_schema": "release-mechanism-qualification-v2",
+            "candidate_schema": "release-candidate-admission-v2",
+            "release_schema": "release-certificate-v2",
+        }
+        authority = loom_suite_plan.seal_authority_policy(authority)
+        candidate = loom_suite_plan.seal_policy({
+            "schema_version": 1,
+            "authority_mode": "certificate",
+            "exclusive_modules": [],
+        })
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            authority_path = root / "authority.json"
+            candidate_path = root / "candidate.json"
+            authority_path.write_text(json.dumps(authority), encoding="utf-8")
+            candidate_path.write_text(json.dumps(candidate), encoding="utf-8")
+            loaded = loom_release_suite.load_v2_policies(
+                authority_path=authority_path,
+                candidate_path=candidate_path)
+        self.assertEqual("serial", loaded["authority"]["authority_mode"])
+        self.assertEqual(
+            "certificate", loaded["candidate"]["authority_mode"])
+
     @staticmethod
     def _matrix(consumer, *, commit=COMMIT, root=ROOT, policy_sha="c" * 64):
         subject = {

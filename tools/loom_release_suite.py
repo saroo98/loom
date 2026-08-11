@@ -21,6 +21,17 @@ class ReleaseSuiteError(RuntimeError):
 MAX_QUALIFICATION_BYTES = 95_000_000
 
 
+def load_v2_policies(*, authority_path, candidate_path):
+    """Load v2 authority and legacy candidate-sharding policy independently."""
+    try:
+        return {
+            "authority": loom_suite_plan.load_authority_policy(authority_path),
+            "candidate": loom_suite_plan.load_candidate_policy(candidate_path),
+        }
+    except loom_suite_plan.SuitePlanError as exc:
+        raise ReleaseSuiteError(f"release policy is invalid: {exc}") from exc
+
+
 def _strict_object(pairs):
     value = {}
     for key, item in pairs:

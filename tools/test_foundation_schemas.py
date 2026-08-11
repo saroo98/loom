@@ -224,6 +224,13 @@ class FoundationSchemaTests(unittest.TestCase):
         self.assert_schema(inventory, "suite-inventory-v1.schema.json")
         self.assert_schema(plan, "suite-shard-plan-v1.schema.json")
 
+    def test_release_authority_policy_v2_matches_its_closed_schema(self):
+        root = Path(__file__).resolve().parents[1]
+        policy_path = root / "contracts" / "release-authority-policy-v2.json"
+        policy = loom_suite_plan.load_authority_policy(policy_path)
+        self.assertEqual("serial", policy["authority_mode"])
+        self.assert_schema(policy, "release-authority-policy-v2.schema.json")
+
     def test_claim_only_release_suite_qualification_is_outside_closed_schema(self):
         value = {
             "schema_version": 1, "status": "qualified",

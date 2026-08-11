@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-authority-policy-v2.schema.json",
+  "title": "Release authority policy separated from candidate sharding",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "authority_mode",
+    "mechanism_schema",
+    "candidate_schema",
+    "release_schema",
+    "policy_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "authority_mode": {"enum": ["serial", "certificate"]},
+    "mechanism_schema": {"const": "release-mechanism-qualification-v2"},
+    "candidate_schema": {"const": "release-candidate-admission-v2"},
+    "release_schema": {"const": "release-certificate-v2"},
+    "policy_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
