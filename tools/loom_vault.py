@@ -16,6 +16,7 @@ import os
 import sqlite3
 import stat
 import tempfile
+import threading
 import uuid
 from contextlib import closing
 from pathlib import Path
@@ -378,6 +379,7 @@ class OwnerVault:
     def __init__(self, path, crypto, *, allow_test_crypto=False):
         self.path = _safe_path(path, "owner vault")
         self.crypto = crypto
+        self._transaction_lock = threading.RLock()
         safe = getattr(crypto, "production_safe", False) is True
         if not safe and not allow_test_crypto:
             raise VaultError("production vault requires the signed loom-vault crypto helper")
@@ -736,29 +738,30 @@ class OwnerVault:
     def run_transaction(self, operation):
         if not callable(operation):
             raise VaultError("transaction operation must be callable")
-        connection = self._connect()
-        try:
-            connection.execute("BEGIN IMMEDIATE")
-            result = operation(connection)
-            connection.execute(
-                "UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='generation'")
-            connection.commit()
-            return result
-        except BaseException as exc:
+        with self._transaction_lock:
+            connection = self._connect()
             try:
-                connection.rollback()
+                connection.execute("BEGIN IMMEDIATE")
+                result = operation(connection)
+                connection.execute(
+                    "UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='generation'")
+                connection.commit()
+                return result
+            except BaseException as exc:
+                try:
+                    connection.rollback()
+                finally:
+                    connection.close()
+                if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                    raise
+                if isinstance(exc, VaultError):
+                    raise
+                raise VaultError(str(exc)) from exc
             finally:
-                connection.close()
-            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-                raise
-            if isinstance(exc, VaultError):
-                raise
-            raise VaultError(str(exc)) from exc
-        finally:
-            try:
-                connection.close()
-            except sqlite3.Error:
-                pass
+                try:
+                    connection.close()
+                except sqlite3.Error:
+                    pass
 
     def _tags(self, record):
         scope = record["scope"]
