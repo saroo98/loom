@@ -223,7 +223,10 @@ def _local_module(root, source_relative, module, level=0):
         candidate = (parent / (module.replace(".", "/") + ".py")).as_posix()
         return candidate if (root / candidate).is_file() else None
     top = module.split(".")[0]
+    parent = PurePosixPath(source_relative).parent
     candidates = [
+        (parent / f"{top}.py").as_posix(),
+        (parent / top / "__init__.py").as_posix(),
         f"tools/{top}.py", f"{top}.py", f"{top}/__init__.py",
     ]
     for candidate in candidates:

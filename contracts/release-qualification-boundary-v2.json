@@ -1,6 +1,11 @@
 {
-  "boundary_sha256": "70c26946239c923a9fb26dd62d62c7cbebb8891cd1c8cede8c7eaa00af5d9a5c",
-  "data_sets": [],
+  "boundary_sha256": "21827dd776eb58db085c6171ae98ee686f2a7c3520f5f6a8870a238018f8169e",
+  "data_sets": [
+    {
+      "pattern": "qualification/workload-v2/*.py",
+      "source": "tools/loom_qualification_workload.py"
+    }
+  ],
   "declared_data_edges": [
     {
       "kind": "declared-data",
@@ -16,6 +21,26 @@
       "kind": "declared-data",
       "source": "tools/loom_qualification_manifest.py",
       "target": "schemas/release-qualification-manifest-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "contracts/release-qualification-timing-profile-v2.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "contracts/release-qualification-workload-policy-v2.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "schemas/release-qualification-timing-profile-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "schemas/release-qualification-workload-policy-v2.schema.json"
     },
     {
       "kind": "declared-data",
@@ -60,6 +85,7 @@
   ],
   "python_entrypoints": [
     "tools/loom_qualification_manifest.py",
+    "tools/loom_qualification_workload.py",
     "tools/loom_suite_certificate_core.py"
   ],
   "roles": [
@@ -68,8 +94,36 @@
       "role": "shared-interface"
     },
     {
+      "path": "contracts/release-qualification-timing-profile-v2.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "contracts/release-qualification-workload-policy-v2.json",
+      "role": "shared-interface"
+    },
+    {
       "path": "contracts/release-suite-diagnostics-v1.json",
       "role": "shared-interface"
+    },
+    {
+      "path": "qualification/workload-v2/fixture_support.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_exclusive.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_general_a.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_general_b.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_serial.py",
+      "role": "mechanism-repeat"
     },
     {
       "path": "schemas/release-qualification-boundary-v2.schema.json",
@@ -77,6 +131,14 @@
     },
     {
       "path": "schemas/release-qualification-manifest-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-timing-profile-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-workload-policy-v2.schema.json",
       "role": "shared-interface"
     },
     {
@@ -122,6 +184,10 @@
     {
       "path": "tools/loom_qualification_manifest.py",
       "role": "shared-interface"
+    },
+    {
+      "path": "tools/loom_qualification_workload.py",
+      "role": "mechanism-repeat"
     },
     {
       "path": "tools/loom_reliability.py",

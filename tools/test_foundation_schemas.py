@@ -11,6 +11,7 @@ import loom_operation_supervisor
 import loom_path_authority
 import loom_product_interface
 import loom_qualification_manifest
+import loom_qualification_workload
 import loom_suite_harness
 import loom_suite_plan
 import loom_test
@@ -59,6 +60,15 @@ class FoundationSchemaTests(unittest.TestCase):
         }
         self.assert_schema(
             manifest, "release-qualification-manifest-v2.schema.json")
+
+    def test_qualification_workload_policy_and_timing_profile_are_closed(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assert_schema(
+            loom_qualification_workload.load_policy(root),
+            "release-qualification-workload-policy-v2.schema.json")
+        self.assert_schema(
+            loom_qualification_workload.load_timing_profile(root),
+            "release-qualification-timing-profile-v2.schema.json")
 
     def test_suite_failure_diagnostic_matches_its_closed_schema(self):
         value = {

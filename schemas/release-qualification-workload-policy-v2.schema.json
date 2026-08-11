@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-qualification-workload-policy-v2.schema.json",
+  "title": "Fixed mechanism qualification workload policy",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "workload_kind",
+    "source_files",
+    "modules",
+    "expected_tests",
+    "exclusive_modules",
+    "required_observations",
+    "workload_source_sha256",
+    "policy_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "workload_kind": {"const": "mechanism-v2"},
+    "source_files": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"type": "string", "pattern": "^qualification/workload-v2/[A-Za-z0-9_]+\\.py$"}
+    },
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"type": "string", "pattern": "^test_qual_[A-Za-z0-9_]+$"}
+    },
+    "expected_tests": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 512,
+      "items": {"type": "string", "pattern": "^test_qual_[A-Za-z0-9_.]+$"}
+    },
+    "exclusive_modules": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "items": {"type": "string", "pattern": "^test_qual_[A-Za-z0-9_]+$"}
+    },
+    "required_observations": {"const": 10},
+    "workload_source_sha256": {"$ref": "#/$defs/digest"},
+    "policy_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
