@@ -1,5 +1,5 @@
 {
-  "boundary_sha256": "21827dd776eb58db085c6171ae98ee686f2a7c3520f5f6a8870a238018f8169e",
+  "boundary_sha256": "667675ddc40382c3b962915b574ec1e804de5e491be28bf38eb156ba7bac32ba",
   "data_sets": [
     {
       "pattern": "qualification/workload-v2/*.py",
@@ -21,6 +21,21 @@
       "kind": "declared-data",
       "source": "tools/loom_qualification_manifest.py",
       "target": "schemas/release-qualification-manifest-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-authority-policy-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-mechanism-qualification-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-qualification-observation-v2.schema.json"
     },
     {
       "kind": "declared-data",
@@ -85,6 +100,7 @@
   ],
   "python_entrypoints": [
     "tools/loom_qualification_manifest.py",
+    "tools/loom_qualification_v2.py",
     "tools/loom_qualification_workload.py",
     "tools/loom_suite_certificate_core.py"
   ],
@@ -126,11 +142,23 @@
       "role": "mechanism-repeat"
     },
     {
+      "path": "schemas/release-authority-policy-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-mechanism-qualification-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
       "path": "schemas/release-qualification-boundary-v2.schema.json",
       "role": "shared-interface"
     },
     {
       "path": "schemas/release-qualification-manifest-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-observation-v2.schema.json",
       "role": "shared-interface"
     },
     {
@@ -184,6 +212,10 @@
     {
       "path": "tools/loom_qualification_manifest.py",
       "role": "shared-interface"
+    },
+    {
+      "path": "tools/loom_qualification_v2.py",
+      "role": "mechanism-repeat"
     },
     {
       "path": "tools/loom_qualification_workload.py",

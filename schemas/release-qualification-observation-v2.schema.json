@@ -1,0 +1,187 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-qualification-observation-v2.schema.json",
+  "title": "One exact repeated-mechanism serial-shadow observation",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "evidence_domain",
+    "workload_kind",
+    "consumer",
+    "source_commit",
+    "repository_source_tree_sha256",
+    "mechanism_manifest_sha256",
+    "boundary_sha256",
+    "workload_policy_sha256",
+    "workload_source_sha256",
+    "timing_profile_sha256",
+    "fixture_sha256",
+    "family",
+    "environment",
+    "serial",
+    "shadow",
+    "comparison",
+    "serial_microseconds",
+    "sharded_microseconds",
+    "paired_delta_microseconds",
+    "test_count",
+    "terminal_workers",
+    "privacy_clean",
+    "mutation_clean",
+    "runtime_roots_clean",
+    "observation_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "evidence_domain": {"const": "mechanism-qualification-v2"},
+    "workload_kind": {"const": "mechanism-v2"},
+    "consumer": {"enum": ["quality", "compatibility"]},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "repository_source_tree_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "boundary_sha256": {"$ref": "#/$defs/digest"},
+    "workload_policy_sha256": {"$ref": "#/$defs/digest"},
+    "workload_source_sha256": {"$ref": "#/$defs/digest"},
+    "timing_profile_sha256": {"$ref": "#/$defs/digest"},
+    "fixture_sha256": {"$ref": "#/$defs/digest"},
+    "family": {"$ref": "#/$defs/family"},
+    "environment": {"$ref": "suite-cell-certificate-v1.schema.json#/$defs/environment"},
+    "serial": {"$ref": "#/$defs/serial"},
+    "shadow": {"$ref": "#/$defs/shadow"},
+    "comparison": {"$ref": "#/$defs/comparison"},
+    "serial_microseconds": {"type": "integer", "minimum": 1},
+    "sharded_microseconds": {"type": "integer", "minimum": 1},
+    "paired_delta_microseconds": {"type": "integer"},
+    "test_count": {"type": "integer", "minimum": 1, "maximum": 512},
+    "terminal_workers": {"const": true},
+    "privacy_clean": {"const": true},
+    "mutation_clean": {"const": true},
+    "runtime_roots_clean": {"const": true},
+    "observation_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "family": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "consumer",
+        "requested_label",
+        "image_os",
+        "architecture",
+        "python_implementation",
+        "python_minor",
+        "family_id"
+      ],
+      "properties": {
+        "consumer": {"enum": ["quality", "compatibility"]},
+        "requested_label": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_os": {"type": "string", "minLength": 1, "maxLength": 128},
+        "architecture": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_implementation": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_minor": {"enum": ["3.10", "3.11", "3.12", "3.13", "3.14"]},
+        "family_id": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "serial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "mode", "selected_modules", "tests_run",
+        "failures", "errors", "skipped", "elapsed_seconds",
+        "elapsed_microseconds", "suppressed_stdout_chars", "max_seconds",
+        "within_budget", "capability_complete", "status", "successful",
+        "skip_receipts", "failure_diagnostics", "timings"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "mode": {"const": "modules"},
+        "selected_modules": {
+          "type": "array", "minItems": 1, "maxItems": 32,
+          "items": {"type": "string", "pattern": "^test_qual_[A-Za-z0-9_]+$"}
+        },
+        "tests_run": {"type": "integer", "minimum": 1, "maximum": 512},
+        "failures": {"const": 0},
+        "errors": {"const": 0},
+        "skipped": {"const": 0},
+        "elapsed_seconds": {"type": "number", "minimum": 0},
+        "elapsed_microseconds": {"type": "integer", "minimum": 1},
+        "suppressed_stdout_chars": {"type": "integer", "minimum": 0},
+        "max_seconds": {"type": "null"},
+        "within_budget": {"const": true},
+        "capability_complete": {"const": true},
+        "status": {"const": "passed"},
+        "successful": {"const": true},
+        "skip_receipts": {"type": "array", "maxItems": 0},
+        "failure_diagnostics": {"type": "array", "maxItems": 0},
+        "timings": {
+          "type": "array", "minItems": 1, "maxItems": 512,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["test", "seconds", "status"],
+            "properties": {
+              "test": {"type": "string", "minLength": 1, "maxLength": 512},
+              "seconds": {"type": "number", "minimum": 0},
+              "status": {"const": "passed"}
+            }
+          }
+        }
+      }
+    },
+    "comparison": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "status", "subject_sha256", "environment_sha256",
+        "serial_suite_sha256", "serial_outcomes_sha256",
+        "sharded_outcomes_sha256", "cell_certificate_sha256",
+        "serial_execution_microseconds", "sharded_execution_microseconds",
+        "test_count", "comparison_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "status": {"const": "matched"},
+        "subject_sha256": {"$ref": "#/$defs/digest"},
+        "environment_sha256": {"$ref": "#/$defs/digest"},
+        "serial_suite_sha256": {"$ref": "#/$defs/digest"},
+        "serial_outcomes_sha256": {"$ref": "#/$defs/digest"},
+        "sharded_outcomes_sha256": {"$ref": "#/$defs/digest"},
+        "cell_certificate_sha256": {"$ref": "#/$defs/digest"},
+        "serial_execution_microseconds": {"type": "integer", "minimum": 1},
+        "sharded_execution_microseconds": {"type": "integer", "minimum": 1},
+        "test_count": {"type": "integer", "minimum": 1, "maximum": 512},
+        "comparison_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "shadow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "workload_kind", "workload_policy_sha256",
+        "timing_profile_sha256", "mechanism_manifest_sha256",
+        "workload_source_sha256", "fixture_sha256", "serial_report",
+        "inventory", "plan", "worker_receipts", "cell_certificate",
+        "comparison"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "workload_kind": {"const": "mechanism-v2"},
+        "workload_policy_sha256": {"$ref": "#/$defs/digest"},
+        "timing_profile_sha256": {"$ref": "#/$defs/digest"},
+        "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+        "workload_source_sha256": {"$ref": "#/$defs/digest"},
+        "fixture_sha256": {"$ref": "#/$defs/digest"},
+        "serial_report": {"$ref": "#/$defs/serial"},
+        "inventory": {"$ref": "suite-inventory-v1.schema.json"},
+        "plan": {"$ref": "suite-shard-plan-v1.schema.json"},
+        "worker_receipts": {
+          "type": "array", "minItems": 1, "maxItems": 64,
+          "items": {"$ref": "suite-worker-receipt-v1.schema.json"}
+        },
+        "cell_certificate": {"$ref": "suite-cell-certificate-v1.schema.json"},
+        "comparison": {"$ref": "#/$defs/comparison"}
+      }
+    }
+  }
+}

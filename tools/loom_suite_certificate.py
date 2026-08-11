@@ -14,6 +14,7 @@ from pathlib import Path
 import loom_reliability
 import loom_exact_cut_ci
 import loom_operation_supervisor
+import loom_qualification_v2
 import loom_release
 import loom_release_candidate
 import loom_release_rollback
@@ -622,6 +623,9 @@ verify_cell = loom_suite_certificate_core.verify_cell
 compare_shadow = loom_suite_certificate_core.compare_shadow
 compile_matrix = loom_suite_certificate_core.compile_matrix
 verify_matrix = loom_suite_certificate_core.verify_matrix
+compile_mechanism_qualification_v2 = loom_qualification_v2.compile_mechanism
+verify_mechanism_qualification_v2 = loom_qualification_v2.verify_mechanism
+load_mechanism_qualification_v2 = loom_qualification_v2.load_mechanism
 
 
 def qualification_code_sha256(root=None):
