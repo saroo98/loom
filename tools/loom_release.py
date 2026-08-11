@@ -38,6 +38,12 @@ ROOT_DIRECTORIES = {
     ".codex-plugin", ".github", "benchmarks", "contracts", "docs", "hooks", "loom", "schemas", "scripts",
     "skill", "skills", "templates", "tools", "vault-helper",
 }
+# Qualification evidence remains source/tag-bound release authority. It is
+# consumed directly by release, promotion, and post-release verification and
+# must not be replicated into the installable public cut or six runtime ZIPs.
+RELEASE_AUTHORITY_FILES = {
+    "contracts/release-suite-qualification-v1.json",
+}
 MANIFEST = "BUILD-MANIFEST.json"
 LOCAL_CHECKS = (
     "suite", "adaptation", "privacy", "failure_injection",
@@ -128,7 +134,8 @@ def _strict_object(pairs):
 
 
 def _eligible(relative):
-    if relative.as_posix() == MANIFEST:
+    relative_name = relative.as_posix()
+    if relative_name == MANIFEST or relative_name in RELEASE_AUTHORITY_FILES:
         return False
     if len(relative.parts) == 1:
         return relative.name in ROOT_FILES
