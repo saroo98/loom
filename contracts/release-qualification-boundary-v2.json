@@ -1,5 +1,5 @@
 {
-  "boundary_sha256": "1cab9d90c9d5e164f2059593ce66e967d5988bf5de58b84d3eb5010f8a33af62",
+  "boundary_sha256": "4c16f5ba923d04b045bed2250de6aeabf54da9005208c219a5094b13de0219c4",
   "data_sets": [
     {
       "pattern": "qualification/workload-v2/*.py",
@@ -79,6 +79,16 @@
     },
     {
       "kind": "declared-data",
+      "source": "tools/loom_release_authority.py",
+      "target": "schemas/release-authority-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_authority.py",
+      "target": "schemas/release-candidate-suite-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
       "source": "tools/loom_release_certificate.py",
       "target": "schemas/release-certificate-v2.schema.json"
     },
@@ -142,6 +152,7 @@
     "tools/loom_qualification_manifest.py",
     "tools/loom_qualification_v2.py",
     "tools/loom_qualification_workload.py",
+    "tools/loom_release_authority.py",
     "tools/loom_release_certificate.py",
     "tools/loom_suite_certificate_core.py"
   ],
@@ -203,11 +214,19 @@
       "role": "shared-interface"
     },
     {
+      "path": "schemas/release-authority-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
       "path": "schemas/release-candidate-admission-v2.schema.json",
       "role": "shared-interface"
     },
     {
       "path": "schemas/release-candidate-equivalence-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-candidate-suite-v2.schema.json",
       "role": "shared-interface"
     },
     {
@@ -312,6 +331,10 @@
     },
     {
       "path": "tools/loom_qualification_workload.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_authority.py",
       "role": "mechanism-repeat"
     },
     {

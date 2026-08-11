@@ -102,6 +102,18 @@ jobs:
           gh attestation verify "$ASSET" -R "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/attestation.json"
           gh attestation verify release-assets/SHA256SUMS \
             -R "$GITHUB_REPOSITORY" > "$RUNNER_TEMP/checksums-attestation.json"
+          gh attestation verify release-assets/RELEASE-EVIDENCE-SUBJECT.json \
+            -R "$GITHUB_REPOSITORY" \
+            --bundle release-assets/RELEASE-EVIDENCE-ATTESTATION.json \
+            > "$RUNNER_TEMP/evidence-subject-attestation.json"
+          python -B tools/loom_release_certificate.py record-tag \
+            --repository . --tag "$RELEASE_TAG" \
+            --expected-commit "$GITHUB_SHA" \
+            --signer-identity "$RUNNER_TEMP/allowed-signers" \
+            --attestation release-assets/RELEASE-EVIDENCE-ATTESTATION.json \
+            --output "$RUNNER_TEMP/recomputed-release-tag-evidence-v2.json"
+          cmp "$RUNNER_TEMP/recomputed-release-tag-evidence-v2.json" \
+            release-assets/release-tag-evidence-v2.json
           EXPECTED="$(sha256sum "$ASSET" | cut -d' ' -f1)"
           API_DIGEST="$(gh api "repos/$GITHUB_REPOSITORY/releases/tags/$RELEASE_TAG" --jq '.assets[] | select(.name == "loom-plugin-'"$RELEASE_TAG"'.zip") | .digest')"
           python -B - "$EXPECTED" "$API_DIGEST" <<'PY'
@@ -117,6 +129,54 @@ jobs:
           PY
           python -B tools/loom_release_promotion.py verify-draft "$ASSET" \
             --gate promotion-gate.json --output draft-promotion-receipt.json
+          CANDIDATE="release-assets/candidate-admission-v2.json"
+          SOURCE_TREE="$(python -B -c 'import os,sys; sys.path.insert(0,"tools"); import loom_subject_identity as s; print(s.git_tree_inventory(".",os.environ["GITHUB_SHA"])["tree_sha256"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json; print(json.load(open("release-assets/candidate-admission-v2.json",encoding="utf-8"))["public_root_sha256"])')"
+          AUTHORITY=(--root . --candidate "$CANDIDATE" \
+            --expected-commit "$GITHUB_SHA" --expected-tree "$SOURCE_TREE" \
+            --expected-public-root "$PUBLIC_ROOT" \
+            --policy contracts/release-authority-policy-v2.json)
+          MODE_V2="$(python -B -c 'import json; print(json.load(open("contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$MODE_V2" = certificate; then
+            test -f contracts/release-mechanism-qualification-v2.json
+            AUTHORITY+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          else
+            test "$MODE_V2" = serial
+            test ! -f contracts/release-mechanism-qualification-v2.json
+          fi
+          python -B tools/loom_release_certificate.py verify \
+            --candidate "$CANDIDATE" \
+            --certificate release-assets/release-certificate-v2.json \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
+          python -B tools/loom_release_authority.py verify \
+            "${AUTHORITY[@]}" \
+            --candidate-suite release-assets/release-candidate-suite-v2.json \
+            --release-certificate release-assets/release-certificate-v2.json \
+            --release-authority release-assets/release-authority-v2.json \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
+          python -B tools/loom_release_certificate.py compile \
+            --candidate "$CANDIDATE" \
+            --reproducibility release-assets/reproducibility-receipt.json \
+            --rollback release-assets/rollback.json \
+            --tag-evidence release-assets/release-tag-evidence-v2.json \
+            --promotion draft-promotion-receipt.json \
+            --output draft-release-certificate-v2.json
+          python -B tools/loom_release_certificate.py verify \
+            --candidate "$CANDIDATE" \
+            --certificate draft-release-certificate-v2.json \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
+          python -B tools/loom_release_authority.py release-authority \
+            "${AUTHORITY[@]}" \
+            --candidate-suite release-assets/release-candidate-suite-v2.json \
+            --release-certificate draft-release-certificate-v2.json \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET" \
+            --output draft-release-authority-v2.json
+          python -B tools/loom_release_authority.py verify \
+            "${AUTHORITY[@]}" \
+            --candidate-suite release-assets/release-candidate-suite-v2.json \
+            --release-certificate draft-release-certificate-v2.json \
+            --release-authority draft-release-authority-v2.json \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
       - name: Publish the already-verified draft without changing assets
         env:
           GH_TOKEN: ${{ github.token }}

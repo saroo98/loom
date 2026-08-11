@@ -130,9 +130,10 @@ class WorkflowPolicyTests(unittest.TestCase):
 
     def test_capability_matrix_uses_one_exact_publication_subject(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
-        invocation = re.search(r"ARGS=\(\.\. [^\n]+--output exact-cut-ci\.json\)", quality)
+        invocation = re.search(r"ARGS=\(\.\. [^\n]+\)", quality)
         self.assertIsNotNone(invocation)
         command = invocation.group(0)
+        self.assertIn("--output exact-cut-ci.json", command)
         self.assertIn('--forbidden-token "loom-ci-${{ github.sha }}"', command)
         self.assertNotIn("${{ matrix.os }}", command)
         self.assertNotIn("${{ matrix.python }}", command)
@@ -336,6 +337,47 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn("steps.installed-subject.outputs.runtime_tools", post)
         self.assertIn('"status":"pre-installation"', (
             WORKFLOWS / "release.yml").read_text(encoding="utf-8").replace(" ", ""))
+
+    def test_release_publication_and_post_release_consume_the_separated_v2_chain(self):
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        publish = (WORKFLOWS / "publish-release.yml").read_text(
+            encoding="utf-8")
+        post = (WORKFLOWS / "post-release.yml").read_text(encoding="utf-8")
+        self.assertIn("candidate-admission-v2-${LOOM_SOURCE_SHA}", release)
+        self.assertIn("candidate-admission-v2.json", release)
+        self.assertIn("loom_release_certificate.py record-tag", release)
+        self.assertIn("loom_release_certificate.py record-tag", publish)
+        self.assertIn("loom_release_certificate.py record-tag", post)
+        self.assertIn("loom_release_certificate.py compile", release)
+        self.assertIn("loom_release_certificate.py verify", release)
+        self.assertIn("loom_release_authority.py candidate-suite", release)
+        self.assertIn("loom_release_authority.py release-authority", release)
+        self.assertIn("loom_release_authority.py verify", release)
+        for name in (
+                "candidate-admission-v2.json",
+                "release-candidate-suite-v2.json",
+                "release-certificate-v2.json",
+                "release-authority-v2.json"):
+            self.assertIn(name, release)
+            self.assertIn(name, publish)
+            self.assertIn(name, post)
+        for text in (release, publish, post):
+            self.assertIn("release-authority-policy-v2.json", text)
+            self.assertIn("loom_release_authority.py verify", text)
+            self.assertIn("loom_release_certificate.py verify", text)
+            self.assertNotIn("run-observation", text)
+            self.assertNotIn("compile-mechanism", text)
+            self.assertNotIn("release-qualification-observation-v2", text)
+            self.assertNotIn("release-qualification-batch-v2", text)
+        self.assertIn("release-mechanism-qualification-v2.json", release)
+        self.assertIn("release-mechanism-qualification-v2.json", publish)
+        self.assertIn("release-mechanism-qualification-v2.json", post)
+        self.assertNotIn("loom_test.py", publish)
+        self.assertIn(
+            "if: steps.installed-subject.outputs.rerun_required == 'true'",
+            post)
+        self.assertNotIn("cargo build", publish)
+        self.assertNotIn("cargo build", post)
 
 
 if __name__ == "__main__":

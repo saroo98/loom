@@ -213,12 +213,15 @@ jobs:
             "tools/loom_suite_worker.py",
             "tools/loom_suite_certificate_core.py",
             "tools/loom_operation_supervisor.py",
+            "tools/loom_release_authority.py",
+            "schemas/release-authority-v2.schema.json",
+            "schemas/release-candidate-suite-v2.schema.json",
         }.issubset(paths))
         self.assertTrue({
             "tools/loom_memory.py", "tools/loom_owner.py",
             "tools/loom_orchestrator.py", "tools/loom_runtime.py",
             "tools/loom_update.py", "tools/loom_vault.py",
-            "tools/loom_release.py",
+            "tools/loom_release.py", "tools/loom_release_suite.py",
         }.isdisjoint(paths))
         self.assertEqual(
             "tools/loom_qualification_manifest.py",

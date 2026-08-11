@@ -153,11 +153,32 @@ jobs:
                   raise SystemExit(f"no successful exact-main {workflow} run")
               return max(int(row["databaseId"]) for row in matches)
 
+          def exact_dispatch_success(workflow):
+              completed = subprocess.run(
+                  ["gh", "run", "list", "--workflow", workflow,
+                   "--commit", sha, "--event", "workflow_dispatch",
+                   "--limit", "20", "--json",
+                   "databaseId,headBranch,headSha,status,conclusion"],
+                  check=True, capture_output=True, text=True,
+              )
+              rows = json.loads(completed.stdout)
+              matches = [row for row in rows if row["headBranch"] == "main"
+                         and row["headSha"] == sha
+                         and row["status"] == "completed"
+                         and row["conclusion"] == "success"]
+              if not matches:
+                  raise SystemExit(
+                      f"no successful exact-main {workflow} dispatch")
+              return max(int(row["databaseId"]) for row in matches)
+
           print(f"QUALITY_RUN={exact_success('quality.yml')}")
           print(f"COMPATIBILITY_RUN={exact_success('compatibility.yml')}")
+          print(
+              f"ADMISSION_RUN={exact_dispatch_success('candidate-admission.yml')}")
           PY
           source "$RUNNER_TEMP/main-runs.env"
-          test -n "$QUALITY_RUN" -a -n "$COMPATIBILITY_RUN"
+          test -n "$QUALITY_RUN" -a -n "$COMPATIBILITY_RUN" \
+            -a -n "$ADMISSION_RUN"
           gh run download "$QUALITY_RUN" --pattern 'full-test-timings-*' \
             --dir "$RUNNER_TEMP/capability-reports"
           gh run download "$QUALITY_RUN" --pattern 'quality-matrix-certificate' \
@@ -168,7 +189,12 @@ jobs:
             --dir "$RUNNER_TEMP/compatibility-certificate"
           gh run download "$COMPATIBILITY_RUN" --pattern "native-helper-*-${LOOM_SOURCE_SHA}" \
             --dir "$RUNNER_TEMP/native-downloaded"
+          gh run download "$ADMISSION_RUN" \
+            --pattern "candidate-admission-v2-${LOOM_SOURCE_SHA}" \
+            --dir "$RUNNER_TEMP/candidate-admission"
           test "$(find "$RUNNER_TEMP/native-downloaded" -name receipt.json -type f | wc -l)" -eq 6
+          test "$(find "$RUNNER_TEMP/candidate-admission" \
+            -name candidate-admission-v2.json -type f | wc -l)" -eq 1
           MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
           if test "$MODE" = serial; then
             test "$(find "$RUNNER_TEMP/capability-reports" -name full-test-timings.json -type f | wc -l)" -eq 15
@@ -217,6 +243,35 @@ jobs:
           python -B loom_release_rollback.py . --commit "$LOOM_SOURCE_SHA" \
             --public-root "$PUBLIC_ROOT" --output "$RUNNER_TEMP/rollback.json"
           python -B loom_current_facts.py ../contracts/current-facts-v1.json
+      - name: Verify the separated exact candidate and compile its suite authority
+        shell: bash
+        run: |
+          CANDIDATE="$(find "$RUNNER_TEMP/candidate-admission" \
+            -name candidate-admission-v2.json -type f -print -quit)"
+          test -n "$CANDIDATE"
+          SOURCE_TREE="$(python -B -c 'import os,sys; sys.path.insert(0,"tools"); import loom_subject_identity as s; print(s.git_tree_inventory(".",os.environ["GITHUB_SHA"])["tree_sha256"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json,os; print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"cut-receipt.json"),encoding="utf-8"))["root_sha256"])')"
+          POLICY="contracts/release-authority-policy-v2.json"
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          VERIFY=(verify-candidate --root . --candidate "$CANDIDATE" \
+            --expected-commit "$GITHUB_SHA" --expected-tree "$SOURCE_TREE" \
+            --expected-public-root "$PUBLIC_ROOT" --policy "$POLICY")
+          AUTHORITY=(--root . --candidate "$CANDIDATE" \
+            --expected-commit "$GITHUB_SHA" --expected-tree "$SOURCE_TREE" \
+            --expected-public-root "$PUBLIC_ROOT" --policy "$POLICY")
+          if test "$MODE" = certificate; then
+            test -f contracts/release-mechanism-qualification-v2.json
+            VERIFY+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+            AUTHORITY+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          else
+            test "$MODE" = serial
+            test ! -f contracts/release-mechanism-qualification-v2.json
+          fi
+          python -B tools/loom_qualification_v2.py "${VERIFY[@]}"
+          cp "$CANDIDATE" "$RUNNER_TEMP/candidate-admission-v2.json"
+          python -B tools/loom_release_authority.py candidate-suite \
+            "${AUTHORITY[@]}" \
+            --output "$RUNNER_TEMP/release-candidate-suite-v2.json"
       - name: Download existing draft assets without publishing
         env:
           GH_TOKEN: ${{ github.token }}
@@ -337,12 +392,20 @@ jobs:
               "suite_report": root / "full-suite.json",
               "rollback_report": root / "rollback.json",
               "reproducibility_receipt": root / "reproducibility-receipt.json",
+              "candidate_admission_v2": root / "candidate-admission-v2.json",
+              "candidate_suite_v2": root / "release-candidate-suite-v2.json",
+              "authority_policy_v2": Path("contracts/release-authority-policy-v2.json"),
+              "mechanism_manifest_v2": Path("contracts/release-qualification-manifest-v2.json"),
               "suite_policy": Path("contracts/release-suite-policy-v1.json"),
               "promotion_policy": Path(".github/workflows/publish-release.yml"),
               "exact_cut_receipt": root / "capability-reports" / "full-test-timings-ubuntu-latest-py3.11" / "exact-cut-ci.json",
               "installed_runtime_evidence": root / "installed-runtime-evidence.json",
               "codex_app_observation": assets / "CODEX-APP-EVIDENCE.json",
           }
+          mechanism = Path(
+              "contracts/release-mechanism-qualification-v2.json")
+          if mechanism.is_file():
+              named["mechanism_qualification_v2"] = mechanism
           for platform in (
                   "windows-x64", "windows-arm64", "macos-x64", "macos-arm64",
                   "linux-x64", "linux-arm64"):
@@ -379,6 +442,48 @@ jobs:
           gh attestation verify "$RUNNER_TEMP/release-evidence-subject.json" \
             -R "${GITHUB_REPOSITORY}" --bundle "$ATTESTATION_BUNDLE" \
             > "$RUNNER_TEMP/attestation-verification.json"
+          ASSET="release-assets/loom-plugin-${RELEASE_TAG}.zip"
+          python -B tools/loom_release_certificate.py record-tag \
+            --repository . --tag "$RELEASE_TAG" \
+            --expected-commit "$LOOM_SOURCE_SHA" \
+            --signer-identity "$RUNNER_TEMP/loom-release-allowed-signers" \
+            --attestation "$ATTESTATION_BUNDLE" \
+            --output "$RUNNER_TEMP/release-tag-evidence-v2.json"
+          python -B tools/loom_release_certificate.py compile \
+            --candidate "$RUNNER_TEMP/candidate-admission-v2.json" \
+            --reproducibility "$RUNNER_TEMP/reproducibility-receipt.json" \
+            --rollback "$RUNNER_TEMP/rollback.json" \
+            --tag-evidence "$RUNNER_TEMP/release-tag-evidence-v2.json" \
+            --output "$RUNNER_TEMP/release-certificate-v2.json"
+          python -B tools/loom_release_certificate.py verify \
+            --candidate "$RUNNER_TEMP/candidate-admission-v2.json" \
+            --certificate "$RUNNER_TEMP/release-certificate-v2.json" \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
+          SOURCE_TREE="$(python -B -c 'import os,sys; sys.path.insert(0,"tools"); import loom_subject_identity as s; print(s.git_tree_inventory(".",os.environ["GITHUB_SHA"])["tree_sha256"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json,os; print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"candidate-admission-v2.json"),encoding="utf-8"))["public_root_sha256"])')"
+          POLICY="contracts/release-authority-policy-v2.json"
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          AUTHORITY=(--root . \
+            --candidate "$RUNNER_TEMP/candidate-admission-v2.json" \
+            --expected-commit "$LOOM_SOURCE_SHA" --expected-tree "$SOURCE_TREE" \
+            --expected-public-root "$PUBLIC_ROOT" --policy "$POLICY")
+          if test "$MODE" = certificate; then
+            AUTHORITY+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          else
+            test "$MODE" = serial
+          fi
+          python -B tools/loom_release_authority.py release-authority \
+            "${AUTHORITY[@]}" \
+            --candidate-suite "$RUNNER_TEMP/release-candidate-suite-v2.json" \
+            --release-certificate "$RUNNER_TEMP/release-certificate-v2.json" \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET" \
+            --output "$RUNNER_TEMP/release-authority-v2.json"
+          python -B tools/loom_release_authority.py verify \
+            "${AUTHORITY[@]}" \
+            --candidate-suite "$RUNNER_TEMP/release-candidate-suite-v2.json" \
+            --release-certificate "$RUNNER_TEMP/release-certificate-v2.json" \
+            --release-authority "$RUNNER_TEMP/release-authority-v2.json" \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
           export NOW="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           export EXPIRES="$(date -u -d '+7 days' +%Y-%m-%dT%H:%M:%SZ)"
           export WORKFLOW_DIGEST="$(sha256sum .github/workflows/release.yml | cut -d' ' -f1)"
@@ -452,6 +557,16 @@ jobs:
             "$RUNNER_TEMP/release-passport/quality-matrix-certificate.json"
           cp "$RUNNER_TEMP/compatibility-certificate/compatibility-matrix-certificate.json" \
             "$RUNNER_TEMP/release-passport/compatibility-matrix-certificate.json"
+          cp "$RUNNER_TEMP/candidate-admission-v2.json" \
+            "$RUNNER_TEMP/release-passport/candidate-admission-v2.json"
+          cp "$RUNNER_TEMP/release-candidate-suite-v2.json" \
+            "$RUNNER_TEMP/release-passport/release-candidate-suite-v2.json"
+          cp "$RUNNER_TEMP/release-tag-evidence-v2.json" \
+            "$RUNNER_TEMP/release-passport/release-tag-evidence-v2.json"
+          cp "$RUNNER_TEMP/release-certificate-v2.json" \
+            "$RUNNER_TEMP/release-passport/release-certificate-v2.json"
+          cp "$RUNNER_TEMP/release-authority-v2.json" \
+            "$RUNNER_TEMP/release-passport/release-authority-v2.json"
           python -B tools/loom_release_promotion.py create-asset-manifest \
             --asset-root release-assets \
             --asset-root "$RUNNER_TEMP/release-passport" \
@@ -547,4 +662,28 @@ jobs:
             --manifest "$RUNNER_TEMP/staged-release-assets/SHA256SUMS" \
             --api-release "$RUNNER_TEMP/final-staged-release.json" \
             --manifest-published
+          ASSET="$RUNNER_TEMP/staged-release-assets/loom-plugin-${RELEASE_TAG}.zip"
+          python -B tools/loom_release_certificate.py verify \
+            --candidate release-passport/candidate-admission-v2.json \
+            --certificate release-passport/release-certificate-v2.json \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
+          SOURCE_TREE="$(python -B -c 'import os,sys; sys.path.insert(0,"tools"); import loom_subject_identity as s; print(s.git_tree_inventory(".",os.environ["GITHUB_SHA"])["tree_sha256"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json; print(json.load(open("release-passport/candidate-admission-v2.json",encoding="utf-8"))["public_root_sha256"])')"
+          AUTHORITY=(--root . \
+            --candidate release-passport/candidate-admission-v2.json \
+            --expected-commit "$GITHUB_SHA" --expected-tree "$SOURCE_TREE" \
+            --expected-public-root "$PUBLIC_ROOT" \
+            --policy contracts/release-authority-policy-v2.json)
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$MODE" = certificate; then
+            AUTHORITY+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          else
+            test "$MODE" = serial
+          fi
+          python -B tools/loom_release_authority.py verify \
+            "${AUTHORITY[@]}" \
+            --candidate-suite release-passport/release-candidate-suite-v2.json \
+            --release-certificate release-passport/release-certificate-v2.json \
+            --release-authority release-passport/release-authority-v2.json \
+            --expected-tag "$RELEASE_TAG" --asset "$ASSET"
           test "$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)" = "true"

@@ -1,15 +1,19 @@
 """Exact current-candidate release certificate v2."""
 
 import copy
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 import loom_lint
 import loom_qualification_v2
 import loom_release_candidate
+import loom_release_authority
 import loom_release_certificate
 import loom_release_promotion
 import loom_release_rollback
@@ -141,12 +145,38 @@ class ReleaseCertificateTests(unittest.TestCase):
             "suite_certificate_sha256": loom_suite_plan.digest(
                 candidate_suite_body),
         }
+        helper = test_qualification_v2.QualificationV2Tests()
+        _root, manifest, workload, _timing, authority_policy = helper.inputs()
+        narrow_suite = loom_release_authority.certify_candidate_admission(
+            admission, mechanism=None, authority_policy=authority_policy,
+            manifest=manifest, workload=None,
+            expected_commit=admission["source_commit"],
+            expected_tree=admission["repository_source_tree_sha256"],
+            expected_root=admission["public_root_sha256"])
+        self.assertEqual(candidate_suite, narrow_suite)
+        self.assertEqual(
+            narrow_suite, loom_release_authority.verify_candidate_admission(
+                narrow_suite, admission=admission, mechanism=None,
+                authority_policy=authority_policy, manifest=manifest,
+                workload=None, expected_commit=admission["source_commit"],
+                expected_tree=admission["repository_source_tree_sha256"],
+                expected_root=admission["public_root_sha256"]))
         authority = loom_release_suite.certify_release_authority(
             candidate_suite, ready, candidate_admission=admission,
             expected_tag="v1.9.0")
         self.assertEqual(
             authority, loom_release_suite.verify_release_authority(
                 authority, candidate_suite=candidate_suite,
+                release_certificate=ready, candidate_admission=admission,
+                expected_tag="v1.9.0"))
+        narrow_authority = loom_release_authority.certify_release_authority(
+            narrow_suite, ready, candidate_admission=admission,
+            expected_tag="v1.9.0")
+        self.assertEqual(authority, narrow_authority)
+        self.assertEqual(
+            narrow_authority,
+            loom_release_authority.verify_release_authority(
+                narrow_authority, candidate_suite=narrow_suite,
                 release_certificate=ready, candidate_admission=admission,
                 expected_tag="v1.9.0"))
         with self.assertRaises(loom_release_suite.ReleaseSuiteError):
@@ -278,6 +308,111 @@ class ReleaseCertificateTests(unittest.TestCase):
             loom_release_certificate.compile_release(
                 admission, reproducibility, rollback, tag=tag,
                 promotion=wrong)
+
+    def test_release_certificate_cli_compiles_verifies_and_records_tag_evidence(self):
+        admission = self.candidate()
+        _archive_bytes, reproducibility, rollback, tag = self.evidence(admission)
+        with tempfile.TemporaryDirectory() as temporary:
+            temporary = Path(temporary)
+            paths = {}
+            for name, value in (
+                    ("candidate", admission),
+                    ("reproducibility", reproducibility),
+                    ("rollback", rollback), ("tag", tag)):
+                path = temporary / f"{name}.json"
+                path.write_text(json.dumps(value), encoding="utf-8")
+                paths[name] = path
+            certificate = temporary / "release-certificate.json"
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_release_certificate.main([
+                    "compile", "--candidate", str(paths["candidate"]),
+                    "--reproducibility", str(paths["reproducibility"]),
+                    "--rollback", str(paths["rollback"]),
+                    "--tag-evidence", str(paths["tag"]),
+                    "--output", str(certificate),
+                ]))
+                self.assertEqual(0, loom_release_certificate.main([
+                    "verify", "--candidate", str(paths["candidate"]),
+                    "--certificate", str(certificate),
+                    "--expected-tag", "v1.9.0",
+                ]))
+            root = Path(__file__).resolve().parents[1]
+            candidate_suite = temporary / "candidate-suite.json"
+            release_authority = temporary / "release-authority.json"
+            authority_arguments = [
+                "--root", str(root), "--candidate", str(paths["candidate"]),
+                "--expected-commit", admission["source_commit"],
+                "--expected-tree",
+                admission["repository_source_tree_sha256"],
+                "--expected-public-root", admission["public_root_sha256"],
+                "--policy", str(
+                    root / "contracts" / "release-authority-policy-v2.json"),
+            ]
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_release_authority.main([
+                    "candidate-suite", *authority_arguments,
+                    "--output", str(candidate_suite),
+                ]))
+                self.assertEqual(0, loom_release_authority.main([
+                    "release-authority", *authority_arguments,
+                    "--candidate-suite", str(candidate_suite),
+                    "--release-certificate", str(certificate),
+                    "--expected-tag", "v1.9.0",
+                    "--output", str(release_authority),
+                ]))
+                self.assertEqual(0, loom_release_authority.main([
+                    "verify", *authority_arguments,
+                    "--candidate-suite", str(candidate_suite),
+                    "--release-certificate", str(certificate),
+                    "--release-authority", str(release_authority),
+                    "--expected-tag", "v1.9.0",
+                ]))
+            report = loom_lint.Report()
+            loom_lint.validate_schema(
+                report, __file__, json.loads(candidate_suite.read_text(
+                    encoding="utf-8")),
+                "release-candidate-suite-v2.schema.json")
+            loom_lint.validate_schema(
+                report, __file__, json.loads(release_authority.read_text(
+                    encoding="utf-8")), "release-authority-v2.schema.json")
+            self.assertEqual([], report.errors)
+            signer = temporary / "allowed-signers"
+            signer.write_text(
+                "loom-release@example.invalid ssh-ed25519 fixture\n",
+                encoding="utf-8")
+            attestation = temporary / "attestation.json"
+            attestation.write_text("{}\n", encoding="utf-8")
+            recorded = temporary / "recorded-tag.json"
+            raw_tag = (
+                b"object " + admission["source_commit"].encode("ascii") +
+                b"\ntype commit\ntag v1.9.0\n\nrelease\n"
+                b"-----BEGIN SSH SIGNATURE-----\nfixture\n"
+                b"-----END SSH SIGNATURE-----\n")
+
+            def git_bytes(_repository, *arguments):
+                if arguments[:2] == ("rev-parse", "v1.9.0^{commit}"):
+                    return admission["source_commit"].encode("ascii") + b"\n"
+                if arguments[:2] == ("verify-tag", "v1.9.0"):
+                    return b""
+                if arguments[:3] == ("cat-file", "tag", "v1.9.0"):
+                    return raw_tag
+                raise AssertionError(arguments)
+
+            with mock.patch.object(
+                    loom_release_certificate, "_git_bytes",
+                    side_effect=git_bytes), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(0, loom_release_certificate.main([
+                    "record-tag", "--repository", str(temporary),
+                    "--tag", "v1.9.0", "--expected-commit",
+                    admission["source_commit"], "--signer-identity",
+                    str(signer), "--attestation", str(attestation),
+                    "--output", str(recorded),
+                ]))
+            recorded_value = json.loads(recorded.read_text(encoding="utf-8"))
+            self.assertTrue(recorded_value["signature_verified"])
+            self.assertEqual(admission["source_commit"],
+                             recorded_value["commit"])
 
 
 if __name__ == "__main__":

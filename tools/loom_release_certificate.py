@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 """Compile exact current-candidate release evidence separately from qualification."""
 
+import argparse
 import hashlib
 import json
 from pathlib import Path
 import re
+import subprocess
 
 import loom_qualification_v2
 import loom_release_promotion
 import loom_release_reproducibility
 import loom_release_rollback
+import loom_reliability
 
 
 class ReleaseCertificateError(RuntimeError):
@@ -21,6 +24,7 @@ HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
 TAG = re.compile(r"^v([0-9]+)\.([0-9]+)\.([0-9]+)$")
 MAX_RELEASE_BYTES = 8 * 1024 * 1024
+MAX_TAG_BYTES = 1024 * 1024
 TAG_FIELDS = {
     "schema_version", "tag", "commit", "tag_object_sha256",
     "signature_sha256", "signer_identity_sha256", "attestation_sha256",
@@ -72,6 +76,64 @@ def _load(path):
     except (OSError, UnicodeError, ValueError) as exc:
         raise ReleaseCertificateError(
             "release certificate input is invalid") from exc
+
+
+def _git_bytes(repository, *arguments):
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(repository), *arguments],
+            capture_output=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ReleaseCertificateError(
+            "release tag verification could not execute") from exc
+    if completed.returncode != 0 \
+            or len(completed.stdout) > MAX_TAG_BYTES \
+            or len(completed.stderr) > MAX_TAG_BYTES:
+        raise ReleaseCertificateError("release tag verification failed")
+    return completed.stdout
+
+
+def _private_digest(path, label):
+    path = Path(path)
+    if not path.is_file() or path.is_symlink() \
+            or not 0 < path.stat().st_size <= MAX_TAG_BYTES:
+        raise ReleaseCertificateError(f"{label} is unsafe")
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise ReleaseCertificateError(f"{label} is unreadable") from exc
+
+
+def record_tag(repository, tag, expected_commit, *, signer_identity,
+               attestation):
+    repository = Path(repository).resolve()
+    matched = TAG.fullmatch(str(tag))
+    if not repository.is_dir() or matched is None \
+            or tuple(map(int, matched.groups())) <= (1, 8, 30) \
+            or HEX40.fullmatch(str(expected_commit)) is None:
+        raise ReleaseCertificateError("release tag request is invalid")
+    commit = _git_bytes(
+        repository, "rev-parse", f"{tag}^{{commit}}").decode(
+            "ascii", errors="strict").strip()
+    _git_bytes(repository, "verify-tag", tag)
+    raw_tag = _git_bytes(repository, "cat-file", "tag", tag)
+    signature = re.search(
+        br"-----BEGIN SSH SIGNATURE-----.*?-----END SSH SIGNATURE-----\r?\n?",
+        raw_tag, flags=re.DOTALL)
+    if commit != expected_commit or signature is None:
+        raise ReleaseCertificateError("release tag identity is invalid")
+    body = {
+        "schema_version": 1, "tag": tag, "commit": commit,
+        "tag_object_sha256": hashlib.sha256(raw_tag).hexdigest(),
+        "signature_sha256": hashlib.sha256(signature.group(0)).hexdigest(),
+        "signer_identity_sha256": _private_digest(
+            signer_identity, "release signer identity"),
+        "attestation_sha256": _private_digest(
+            attestation, "release attestation"),
+        "signature_verified": True,
+    }
+    return {**body, "receipt_sha256": hashlib.sha256(
+        _canonical(body)).hexdigest()}
 
 
 def _tag(value, source_commit):
@@ -231,3 +293,88 @@ def load_release(path, *, candidate_admission, expected_tag,
     return verify_release(
         _load(path), candidate_admission=candidate_admission,
         expected_tag=expected_tag, expected_asset=expected_asset)
+
+
+def _write(path, value):
+    path = Path(path).resolve()
+    if path.exists() or not path.parent.is_dir():
+        raise ReleaseCertificateError("release certificate output is unsafe")
+    loom_reliability.atomic_write_json(path, value)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    record = subparsers.add_parser("record-tag")
+    record.add_argument("--repository", required=True)
+    record.add_argument("--tag", required=True)
+    record.add_argument("--expected-commit", required=True)
+    record.add_argument("--signer-identity", required=True)
+    record.add_argument("--attestation", required=True)
+    record.add_argument("--output", required=True)
+    compile_parser = subparsers.add_parser("compile")
+    compile_parser.add_argument("--candidate", required=True)
+    compile_parser.add_argument("--reproducibility", required=True)
+    compile_parser.add_argument("--rollback", required=True)
+    compile_parser.add_argument("--tag-evidence", required=True)
+    compile_parser.add_argument("--promotion")
+    compile_parser.add_argument("--output", required=True)
+    verify_parser = subparsers.add_parser("verify")
+    verify_parser.add_argument("--candidate", required=True)
+    verify_parser.add_argument("--certificate", required=True)
+    verify_parser.add_argument("--expected-tag", required=True)
+    verify_parser.add_argument("--asset")
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "record-tag":
+            value = record_tag(
+                args.repository, args.tag, args.expected_commit,
+                signer_identity=args.signer_identity,
+                attestation=args.attestation)
+            _write(args.output, value)
+            result = {
+                "status": "verified",
+                "tag_receipt_sha256": value["receipt_sha256"],
+            }
+        else:
+            candidate = loom_qualification_v2._load_json(
+                args.candidate, loom_qualification_v2.MAX_CANDIDATE_BYTES)
+            if args.command == "compile":
+                value = compile_release(
+                    candidate, _load(args.reproducibility),
+                    _load(args.rollback), tag=_load(args.tag_evidence),
+                    promotion=(_load(args.promotion)
+                               if args.promotion else None))
+                _write(args.output, value)
+            else:
+                expected_asset = None
+                if args.asset:
+                    asset = Path(args.asset)
+                    if not asset.is_file() or asset.is_symlink():
+                        raise ReleaseCertificateError(
+                            "release asset transport is unsafe")
+                    raw = asset.read_bytes()
+                    expected_asset = {
+                        "sha256": hashlib.sha256(raw).hexdigest(),
+                        "bytes": len(raw),
+                    }
+                value = load_release(
+                    args.certificate, candidate_admission=candidate,
+                    expected_tag=args.expected_tag,
+                    expected_asset=expected_asset)
+            result = {
+                "status": value["status"],
+                "release_certificate_sha256": value[
+                    "release_certificate_sha256"],
+            }
+        print(json.dumps(result, sort_keys=True))
+        return 0
+    except (ReleaseCertificateError, loom_qualification_v2.QualificationV2Error,
+            loom_reliability.ReliabilityError, OSError, UnicodeError) as exc:
+        print(json.dumps({"status": "refused", "error": str(exc)},
+                         sort_keys=True))
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-authority-v2.schema.json",
+  "title": "Final exact release authority v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "mode", "release_status", "subject",
+    "authority_policy_sha256", "mechanism_manifest_sha256",
+    "mechanism_qualification_sha256", "candidate_admission_sha256",
+    "candidate_suite_certificate_sha256", "release_certificate_sha256",
+    "tag", "archive_sha256", "release_authority_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 4},
+    "status": {"const": "authorized"},
+    "mode": {"enum": ["serial", "certificate"]},
+    "release_status": {
+      "enum": ["release-ready", "draft-verified", "public-verified"]
+    },
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "source_commit", "source_tree_sha256", "public_root_sha256"
+      ],
+      "properties": {
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_tree_sha256": {"$ref": "#/$defs/digest"},
+        "public_root_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "authority_policy_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_qualification_sha256": {
+      "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"
+    },
+    "candidate_admission_sha256": {"$ref": "#/$defs/digest"},
+    "candidate_suite_certificate_sha256": {"$ref": "#/$defs/digest"},
+    "release_certificate_sha256": {"$ref": "#/$defs/digest"},
+    "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "archive_sha256": {"$ref": "#/$defs/digest"},
+    "release_authority_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}
