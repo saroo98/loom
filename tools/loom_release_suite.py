@@ -8,6 +8,7 @@ from pathlib import Path
 
 import loom_capability
 import loom_exact_cut_ci
+import loom_qualification_v2
 import loom_reliability
 import loom_test
 import loom_suite_certificate
@@ -19,6 +20,12 @@ class ReleaseSuiteError(RuntimeError):
 
 
 MAX_QUALIFICATION_BYTES = 95_000_000
+CANDIDATE_SUITE_FIELDS = {
+    "schema_version", "status", "mode", "subject",
+    "authority_policy_sha256", "mechanism_manifest_sha256",
+    "mechanism_qualification_sha256", "candidate_admission_sha256",
+    "matrices", "suite_certificate_sha256",
+}
 
 
 def load_v2_policies(*, authority_path, candidate_path):
@@ -159,6 +166,66 @@ def _validate_serial_report(report, *, expected_commit, expected_root):
             or report.get("returncode") != (0 if not observed_skips else 1)):
         raise ReleaseSuiteError("normalized serial result fields are inconsistent")
     return outcomes, environment["environment_sha256"]
+
+
+def certify_candidate_admission(admission, *, mechanism, authority_policy,
+                                manifest, workload, expected_commit,
+                                expected_tree, expected_root):
+    """Consume one exact v2 admission without rerunning candidate behavior."""
+    try:
+        admission = loom_qualification_v2.verify_candidate(
+            admission, expected_commit=expected_commit,
+            expected_tree=expected_tree, expected_public_root=expected_root,
+            mechanism=mechanism, policy=authority_policy,
+            manifest=manifest, workload=workload)
+        authority_policy = loom_suite_plan.validate_authority_policy(
+            authority_policy)
+    except (loom_qualification_v2.QualificationV2Error,
+            loom_suite_plan.SuitePlanError) as exc:
+        raise ReleaseSuiteError(
+            f"candidate admission is invalid: {exc}") from exc
+    body = {
+        "schema_version": 3, "status": "certified",
+        "mode": authority_policy["authority_mode"],
+        "subject": {
+            "source_commit": admission["source_commit"],
+            "source_tree_sha256": admission[
+                "repository_source_tree_sha256"],
+            "public_root_sha256": admission["public_root_sha256"],
+        },
+        "authority_policy_sha256": authority_policy["policy_sha256"],
+        "mechanism_manifest_sha256": admission[
+            "mechanism_manifest_sha256"],
+        "mechanism_qualification_sha256": admission[
+            "mechanism_qualification_sha256"],
+        "candidate_admission_sha256": admission[
+            "candidate_admission_sha256"],
+        "matrices": admission["matrix_certificates"],
+    }
+    return {**body, "suite_certificate_sha256":
+            loom_suite_plan.digest(body)}
+
+
+def verify_candidate_admission(value, *, admission, mechanism,
+                               authority_policy, manifest, workload,
+                               expected_commit, expected_tree, expected_root):
+    if not isinstance(value, dict) or set(value) != CANDIDATE_SUITE_FIELDS:
+        raise ReleaseSuiteError("candidate suite certificate is not closed")
+    body = {key: item for key, item in value.items()
+            if key != "suite_certificate_sha256"}
+    if value.get("schema_version") != 3 \
+            or value.get("status") != "certified" \
+            or value.get("suite_certificate_sha256") != \
+            loom_suite_plan.digest(body):
+        raise ReleaseSuiteError("candidate suite certificate is invalid")
+    expected = certify_candidate_admission(
+        admission, mechanism=mechanism, authority_policy=authority_policy,
+        manifest=manifest, workload=workload,
+        expected_commit=expected_commit, expected_tree=expected_tree,
+        expected_root=expected_root)
+    if expected != value:
+        raise ReleaseSuiteError("candidate suite certificate is inconsistent")
+    return value
 
 
 def certify(local_report, matrix_paths, *, expected_commit, expected_root):

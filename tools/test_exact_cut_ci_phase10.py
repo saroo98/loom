@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest import mock
 
 import loom_exact_cut_ci
+import loom_exact_cut_receipt
 import loom_lint
 import loom_operation_envelope
 
@@ -115,7 +116,9 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
                     loom_exact_cut_ci.loom_release, "build_public",
                     return_value={"root_sha256": "a" * 64}), mock.patch.object(
                         loom_exact_cut_ci.loom_release, "verify_cut",
-                        return_value=verified):
+                        return_value=verified), mock.patch.dict(
+                            loom_exact_cut_ci.os.environ,
+                            {"GITHUB_SHA": "1" * 40}):
                 result = loom_exact_cut_ci.run(
                     source, cut, output, suite_output=suite_output,
                     failure_diagnostic_output=diagnostic_output)
@@ -133,6 +136,12 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
             self.assertIn("requested_label", suite["binding"]["environment"])
             self.assertEqual(result["receipt_sha256"], json.loads(
                 output.read_text(encoding="utf-8"))["receipt_sha256"])
+            self.assertEqual(
+                result, loom_exact_cut_receipt.verify_receipt(
+                    result, require_static=False))
+            self.assertEqual(
+                result, loom_exact_cut_ci.verify_receipt(
+                    result, require_static=False))
             self.assertFalse(diagnostic_output.exists())
             report = loom_lint.Report()
             loom_lint.validate_schema(

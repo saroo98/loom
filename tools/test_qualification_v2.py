@@ -2,9 +2,11 @@
 
 import copy
 import contextlib
+import hashlib
 import io
 import json
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -12,13 +14,22 @@ from unittest import mock
 import loom_qualification_manifest
 import loom_qualification_v2
 import loom_qualification_workload
+import loom_exact_cut_receipt
 import loom_lint
+import loom_release_suite
 import loom_suite_certificate_core
 import loom_suite_plan
 import loom_suite_worker
+import loom_subject_identity
 
 
 class QualificationV2Tests(unittest.TestCase):
+    @staticmethod
+    def git(root, *args):
+        return subprocess.run(
+            ["git", *args], cwd=root, capture_output=True, text=True,
+            check=True).stdout.strip()
+
     def inputs(self):
         root = Path(__file__).resolve().parents[1]
         boundary = json.loads((
@@ -37,8 +48,12 @@ class QualificationV2Tests(unittest.TestCase):
     def evidence(self, manifest, workload, timing, *, consumer="quality",
                  label="ubuntu-latest", image_os="ubuntu24",
                  architecture="x86_64", python_minor="3.10", index=1,
-                 event_name="workflow_dispatch", timing_digest=None):
-        workflow = f".github/workflows/qualification-{consumer}.yml"
+                 event_name="workflow_dispatch", timing_digest=None,
+                 source_commit=None, source_tree_sha256=None,
+                 public_root_sha256=None, public_manifest_sha256=None,
+                 workflow_path=None):
+        workflow = (f".github/workflows/qualification-{consumer}.yml"
+                    if workflow_path is None else workflow_path)
         environment = {
             "requested_label": label, "image_os": image_os,
             "image_version": f"202608{index:02d}.1", "os": (
@@ -56,10 +71,14 @@ class QualificationV2Tests(unittest.TestCase):
         }
         subject = {
             "repository": "https://github.com/saroo98/loom",
-            "source_commit": f"{index:040x}",
-            "source_tree_sha256": manifest["manifest_sha256"],
-            "public_root_sha256": "c" * 64,
-            "public_manifest_sha256": "d" * 64,
+            "source_commit": f"{index:040x}" if source_commit is None
+            else source_commit,
+            "source_tree_sha256": manifest["manifest_sha256"]
+            if source_tree_sha256 is None else source_tree_sha256,
+            "public_root_sha256": "c" * 64 if public_root_sha256 is None
+            else public_root_sha256,
+            "public_manifest_sha256": "d" * 64
+            if public_manifest_sha256 is None else public_manifest_sha256,
             "public_file_count": 32,
         }
         tests_by_module = {module: [] for module in workload["modules"]}
@@ -166,6 +185,240 @@ class QualificationV2Tests(unittest.TestCase):
         return loom_qualification_v2.compile_observation(
             serial, shadow, comparison, manifest=manifest,
             workload=workload, context=context)
+
+    def candidate_matrix_bundle(self, manifest, workload, timing, *,
+                                consumer, source_commit, source_tree_sha256,
+                                public_root_sha256, start_index=1):
+        labels = {
+            "quality": (
+                ("ubuntu-latest", "ubuntu24", "x86_64"),
+                ("macos-latest", "macos-26", "arm64"),
+                ("windows-latest", "win25-vs2026", "x86_64"),
+            ),
+            "compatibility": (
+                ("ubuntu-24.04", "ubuntu24", "x86_64"),
+                ("macos-15", "macos-15", "arm64"),
+                ("windows-2025", "win25-vs2026", "x86_64"),
+            ),
+        }
+        cells = []
+        receipts = []
+        clean_suite = None
+        index = start_index
+        for label, image_os, architecture in labels[consumer]:
+            for python_minor in ("3.10", "3.11", "3.12", "3.13", "3.14"):
+                serial, shadow, _comparison, _context = self.evidence(
+                    manifest, workload, timing, consumer=consumer,
+                    label=label, image_os=image_os,
+                    architecture=architecture, python_minor=python_minor,
+                    index=index, event_name="pull_request",
+                    source_commit=source_commit,
+                    source_tree_sha256=source_tree_sha256,
+                    public_root_sha256=public_root_sha256,
+                    workflow_path=f".github/workflows/{consumer}.yml")
+                cell = shadow["cell_certificate"]
+                environment_body = {
+                    "evidence_class": "ci-reproduced", **cell["environment"],
+                }
+                environment = {
+                    **environment_body,
+                    "environment_sha256": loom_suite_plan.digest(
+                        environment_body),
+                }
+                normalized_suite = {
+                    "schema_version": 2, "passed": True,
+                    "capability_complete": True,
+                    "capability_status": "complete", "returncode": 0,
+                    "primary_failure_sha256": None,
+                    "operation_receipt_sha256": f"{index + 800:064x}",
+                    "elapsed_microseconds": serial["elapsed_microseconds"],
+                    "tests_run": serial["tests_run"], "failure_count": 0,
+                    "error_count": 0, "failed_tests": [],
+                    "skip_receipts": [],
+                    "timings": [{
+                        "test": row["test"], "status": row["status"],
+                        "duration_microseconds": int(round(
+                            row["seconds"] * 1_000_000)),
+                    } for row in serial["timings"]],
+                    "binding": {
+                        "source_commit": source_commit,
+                        "public_root_sha256": public_root_sha256,
+                        "environment": environment,
+                        "platform": image_os + ":" + environment["image_version"],
+                        "architecture": architecture,
+                        "python": environment["python_version"],
+                        "runner": environment["environment_sha256"],
+                    },
+                }
+                receipt = loom_exact_cut_receipt.seal_receipt({
+                    "schema_version": 2, "status": "verified",
+                    "platform": environment["os"],
+                    "architecture": architecture,
+                    "python": environment["python_version"],
+                    "source_commit": source_commit,
+                    "build_root_sha256": public_root_sha256,
+                    "verified_root_sha256": public_root_sha256,
+                    "public_manifest_sha256": "d" * 64,
+                    "public_file_count": 32, "suite": normalized_suite,
+                    "error_type": None, "error_sha256": None,
+                    "operation_id": f"candidate-{consumer}-{index}",
+                    "environment": environment,
+                })
+                cells.append(cell)
+                receipts.append(receipt)
+                if consumer == "compatibility" \
+                        and label == "ubuntu-24.04" \
+                        and python_minor == "3.11":
+                    clean_suite = normalized_suite
+                index += 1
+        matrix = loom_suite_certificate_core.compile_matrix(
+            cells, consumer=consumer,
+            required_environments=[row["environment_sha256"] for row in cells])
+        clean_room = None
+        if consumer == "compatibility":
+            clean_body = {
+                "schema_version": 1, "evidence_class": "mechanical-local",
+                "status": "passed", "subject_sha256": "7" * 64,
+                "returncode": 0, "stdout_sha256": "8" * 64,
+                "stderr_sha256": "9" * 64,
+                "disposable_home": {
+                    "file_count": 0, "bytes": 0,
+                    "tree_sha256": "a" * 64, "path_sample": [],
+                },
+                "maintainer_state_loaded": False,
+                "network_isolation_proven": False,
+                "rust_toolchain": {
+                    "rustc_sha256": "b" * 64, "cargo_sha256": "c" * 64,
+                    "rustc_version_sha256": "d" * 64,
+                    "cargo_version_sha256": "e" * 64,
+                    "locked_dependencies_vendored": True,
+                    "dependency_provisioning_network_blocked": False,
+                },
+                "operation_receipt_sha256": "f" * 64,
+                "containment_provider": "linux-process-group",
+                "verification_mode": "serial-evidence",
+                "suite_certificate_sha256": None,
+                "suite_evidence_sha256": loom_suite_plan.digest(clean_suite),
+                "limitations": [
+                    "Standard-library execution does not prove host-level network isolation.",
+                    "Locked public Rust dependencies may be fetched into the disposable workspace before the verification subprocess is forced offline.",
+                ],
+            }
+            clean_room = {
+                "receipt": {**clean_body, "receipt_sha256":
+                            loom_suite_plan.digest(clean_body)},
+                "suite": clean_suite,
+            }
+        return {
+            "schema_version": 2, "consumer": consumer,
+            "exact_cut_receipts": receipts,
+            "matrix_certificate": matrix, "clean_room": clean_room,
+        }
+
+    @staticmethod
+    def native_receipts(source_commit):
+        platforms = {
+            "linux-arm64": ("ubuntu-24.04-arm", "ubuntu24", "linux", "arm64"),
+            "linux-x64": ("ubuntu-24.04", "ubuntu24", "linux", "x86_64"),
+            "macos-arm64": ("macos-15", "macos-15", "macos", "arm64"),
+            "macos-x64": ("macos-15-intel", "macos-15", "macos", "x86_64"),
+            "windows-arm64": ("windows-11-arm", "win11", "windows", "arm64"),
+            "windows-x64": ("windows-2025", "win25-vs2026", "windows", "x86_64"),
+        }
+        values = []
+        for index, (platform, identity) in enumerate(platforms.items(), 1):
+            label, image_os, os_name, architecture = identity
+            environment_body = {
+                "evidence_class": "ci-reproduced", "requested_label": label,
+                "image_os": image_os, "image_version": f"native-{index}",
+                "os": os_name, "os_release": "fixture",
+                "os_version": "fixture", "architecture": architecture,
+                "python_implementation": "CPython",
+                "python_version": "3.11.9",
+                "workflow_path": ".github/workflows/build-helper.yml",
+                "workflow_digest": "3" * 64,
+                "action_manifest_digest": "4" * 64,
+                "event_name": "pull_request", "run_id": "native-run",
+                "run_attempt": "1",
+            }
+            environment = {
+                **environment_body,
+                "environment_sha256": loom_suite_plan.digest(environment_body),
+            }
+            provenance = {
+                "schema_version": 1,
+                "repository": "https://github.com/saroo98/loom",
+                "commit": source_commit, "platform": platform,
+                "binary_sha256": f"{index:064x}",
+                "source_sha256": "1" * 64,
+                "cargo_lock_sha256": "2" * 64,
+                "independent_build": True,
+                "builder": {
+                    "id": "github-actions-native-helper",
+                    "run_id": "native-run",
+                },
+            }
+            provenance_sha256 = hashlib.sha256(
+                json.dumps(provenance, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False).encode("utf-8") + b"\n").hexdigest()
+            body = {
+                "schema_version": 2, "platform": platform,
+                "source_commit": source_commit,
+                "binary_sha256": f"{index:064x}",
+                "rebuild_sha256": f"{index:064x}",
+                "source_sha256": "1" * 64,
+                "cargo_lock_sha256": "2" * 64,
+                "sbom_sha256": f"{index + 10:064x}",
+                "provenance_sha256": provenance_sha256,
+                "environment_sha256": environment["environment_sha256"],
+                "workflow_digest": "3" * 64,
+                "action_manifest_digest": "4" * 64,
+            }
+            values.append({
+                "receipt": {**body, "receipt_sha256":
+                            loom_suite_plan.digest(body)},
+                "environment": environment, "provenance": provenance,
+            })
+        return values
+
+    def mechanism_record(self, manifest, workload, timing, authority):
+        labels = {
+            "quality": (
+                ("ubuntu-latest", "ubuntu24", "x86_64"),
+                ("macos-latest", "macos-26", "arm64"),
+                ("windows-latest", "win25-vs2026", "x86_64"),
+            ),
+            "compatibility": (
+                ("ubuntu-24.04", "ubuntu24", "x86_64"),
+                ("macos-15", "macos-15", "arm64"),
+                ("windows-2025", "win25-vs2026", "x86_64"),
+            ),
+        }
+        families = []
+        index = 1
+        for consumer, environments in labels.items():
+            for label, image_os, architecture in environments:
+                for python_minor in (
+                        "3.10", "3.11", "3.12", "3.13", "3.14"):
+                    observations = [self.observation(
+                        manifest, workload, timing, consumer=consumer,
+                        label=label, image_os=image_os,
+                        architecture=architecture,
+                        python_minor=python_minor,
+                        index=index * 100 + sequence)
+                        for sequence in range(1, 11)]
+                    families.append(loom_qualification_v2.compile_family(
+                        observations, manifest=manifest, workload=workload))
+                    index += 1
+        faults = [loom_qualification_v2.compile_fault_receipt(
+            platform,
+            {code: True for code in loom_qualification_v2.FAULT_CODES},
+            manifest=manifest, workload=workload)
+            for platform in ("linux", "macos", "windows")]
+        record = loom_qualification_v2.compile_mechanism(
+            families, faults, policy=authority, manifest=manifest,
+            workload=workload)
+        return record, families
 
     def test_observation_reverifies_closed_evidence_and_allows_product_tree_change(self):
         _root, manifest, workload, timing, _authority = self.inputs()
@@ -327,41 +580,8 @@ class QualificationV2Tests(unittest.TestCase):
 
     def test_complete_mechanism_record_requires_all_families_faults_and_current_graph(self):
         _root, manifest, workload, timing, authority = self.inputs()
-        labels = {
-            "quality": (
-                ("ubuntu-latest", "ubuntu24", "x86_64"),
-                ("macos-latest", "macos-26", "arm64"),
-                ("windows-latest", "win25-vs2026", "x86_64"),
-            ),
-            "compatibility": (
-                ("ubuntu-24.04", "ubuntu24", "x86_64"),
-                ("macos-15", "macos-15", "arm64"),
-                ("windows-2025", "win25-vs2026", "x86_64"),
-            ),
-        }
-        families = []
-        index = 1
-        for consumer, environments in labels.items():
-            for label, image_os, architecture in environments:
-                for python_minor in ("3.10", "3.11", "3.12", "3.13", "3.14"):
-                    observations = []
-                    for sequence in range(1, 11):
-                        observations.append(self.observation(
-                            manifest, workload, timing, consumer=consumer,
-                            label=label, image_os=image_os,
-                            architecture=architecture,
-                            python_minor=python_minor,
-                            index=index * 100 + sequence))
-                    families.append(loom_qualification_v2.compile_family(
-                        observations, manifest=manifest, workload=workload))
-                    index += 1
-        faults = [loom_qualification_v2.compile_fault_receipt(
-            platform, {code: True for code in loom_qualification_v2.FAULT_CODES},
-            manifest=manifest, workload=workload)
-            for platform in ("linux", "macos", "windows")]
-        record = loom_qualification_v2.compile_mechanism(
-            families, faults, policy=authority, manifest=manifest,
-            workload=workload)
+        record, families = self.mechanism_record(
+            manifest, workload, timing, authority)
         current = [loom_qualification_v2.family_identity(row) for row in families]
         self.assertEqual(30, record["family_count"])
         self.assertEqual(
@@ -375,7 +595,8 @@ class QualificationV2Tests(unittest.TestCase):
         self.assertEqual([], report.errors)
         with self.assertRaises(loom_qualification_v2.QualificationV2Error):
             loom_qualification_v2.compile_mechanism(
-                families[:-1], faults, policy=authority, manifest=manifest,
+                families[:-1], record["fault_receipts"], policy=authority,
+                manifest=manifest,
                 workload=workload)
         stale = copy.deepcopy(manifest)
         stale["nodes"][0]["sha256"] = "0" * 64
@@ -395,6 +616,242 @@ class QualificationV2Tests(unittest.TestCase):
             loom_qualification_v2.verify_mechanism(
                 record, policy=authority, manifest=manifest,
                 workload=workload, current_families=changed_family)
+
+    def test_exact_candidate_admission_rebinds_product_bytes_without_resetting_mechanism(self):
+        _root, manifest, workload, timing, authority = self.inputs()
+        commit = "5" * 40
+        source_tree = "6" * 64
+        public_root = "7" * 64
+        quality = self.candidate_matrix_bundle(
+            manifest, workload, timing, consumer="quality",
+            source_commit=commit, source_tree_sha256=source_tree,
+            public_root_sha256=public_root, start_index=1)
+        compatibility = self.candidate_matrix_bundle(
+            manifest, workload, timing, consumer="compatibility",
+            source_commit=commit, source_tree_sha256=source_tree,
+            public_root_sha256=public_root, start_index=101)
+        native = self.native_receipts(commit)
+        admission = loom_qualification_v2.compile_candidate(
+            quality, compatibility, native, mechanism=None, policy=authority,
+            manifest=manifest)
+        self.assertEqual("admitted", admission["status"])
+        self.assertEqual(30, admission["cell_count"])
+        self.assertEqual(6, len(admission["native_subjects"]))
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "candidate-admission", admission,
+            "release-candidate-admission-v2.schema.json")
+        self.assertEqual([], report.errors)
+        self.assertEqual(
+            admission, loom_qualification_v2.verify_candidate(
+                admission, expected_commit=commit,
+                expected_tree=source_tree, expected_public_root=public_root,
+                mechanism=None, policy=authority, manifest=manifest))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "candidate-admission.json"
+            path.write_text(json.dumps(admission), encoding="utf-8")
+            self.assertEqual(
+                admission, loom_qualification_v2.load_candidate(
+                    path, expected_commit=commit, expected_tree=source_tree,
+                    expected_public_root=public_root, mechanism=None,
+                    policy=authority, manifest=manifest))
+        suite = loom_release_suite.certify_candidate_admission(
+            admission, mechanism=None, authority_policy=authority,
+            manifest=manifest, workload=None, expected_commit=commit,
+            expected_tree=source_tree, expected_root=public_root)
+        self.assertEqual(
+            suite, loom_release_suite.verify_candidate_admission(
+                suite, admission=admission, mechanism=None,
+                authority_policy=authority, manifest=manifest, workload=None,
+                expected_commit=commit, expected_tree=source_tree,
+                expected_root=public_root))
+        missing_cell = copy.deepcopy(quality)
+        missing_cell["exact_cut_receipts"].pop()
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.compile_candidate(
+                missing_cell, compatibility, native, mechanism=None,
+                policy=authority, manifest=manifest)
+        mixed_run = copy.deepcopy(quality)
+        mixed_run["exact_cut_receipts"][0] = copy.deepcopy(
+            compatibility["exact_cut_receipts"][0])
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.compile_candidate(
+                mixed_run, compatibility, native, mechanism=None,
+                policy=authority, manifest=manifest)
+
+        corrected_commit = "8" * 40
+        corrected_tree = "9" * 64
+        corrected_root = "a" * 64
+        corrected_quality = self.candidate_matrix_bundle(
+            manifest, workload, timing, consumer="quality",
+            source_commit=corrected_commit,
+            source_tree_sha256=corrected_tree,
+            public_root_sha256=corrected_root, start_index=201)
+        corrected_compatibility = self.candidate_matrix_bundle(
+            manifest, workload, timing, consumer="compatibility",
+            source_commit=corrected_commit,
+            source_tree_sha256=corrected_tree,
+            public_root_sha256=corrected_root, start_index=301)
+        corrected = loom_qualification_v2.compile_candidate(
+            corrected_quality, corrected_compatibility,
+            self.native_receipts(corrected_commit), mechanism=None,
+            policy=authority, manifest=manifest)
+        self.assertNotEqual(
+            admission["candidate_admission_sha256"],
+            corrected["candidate_admission_sha256"])
+        self.assertEqual(
+            manifest["manifest_sha256"],
+            corrected["mechanism_manifest_sha256"])
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.verify_candidate(
+                admission, expected_commit=corrected_commit,
+                expected_tree=corrected_tree,
+                expected_public_root=corrected_root,
+                mechanism=None, policy=authority, manifest=manifest)
+
+    def test_certificate_candidate_requires_current_mechanism_and_exact_native_evidence(self):
+        _root, manifest, workload, timing, serial_authority = self.inputs()
+        mechanism, _families = self.mechanism_record(
+            manifest, workload, timing, serial_authority)
+        certificate_authority = loom_suite_plan.seal_authority_policy({
+            key: ("certificate" if key == "authority_mode" else value)
+            for key, value in serial_authority.items()
+            if key != "policy_sha256"
+        })
+        commit = "b" * 40
+        source_tree = "c" * 64
+        public_root = "d" * 64
+        quality = self.candidate_matrix_bundle(
+            manifest, workload, timing, consumer="quality",
+            source_commit=commit, source_tree_sha256=source_tree,
+            public_root_sha256=public_root, start_index=401)
+        compatibility = self.candidate_matrix_bundle(
+            manifest, workload, timing, consumer="compatibility",
+            source_commit=commit, source_tree_sha256=source_tree,
+            public_root_sha256=public_root, start_index=501)
+        admission = loom_qualification_v2.compile_candidate(
+            quality, compatibility, self.native_receipts(commit),
+            mechanism=mechanism, policy=certificate_authority,
+            manifest=manifest, workload=workload)
+        self.assertEqual(
+            mechanism["qualification_sha256"],
+            admission["mechanism_qualification_sha256"])
+        self.assertEqual(
+            admission, loom_qualification_v2.verify_candidate(
+                admission, expected_commit=commit,
+                expected_tree=source_tree, expected_public_root=public_root,
+                mechanism=mechanism, policy=certificate_authority,
+                manifest=manifest, workload=workload))
+
+        damaged_native = self.native_receipts(commit)
+        damaged_native[0]["receipt"]["rebuild_sha256"] = "0" * 64
+        damaged_body = {
+            key: value for key, value in damaged_native[0]["receipt"].items()
+            if key != "receipt_sha256"
+        }
+        damaged_native[0]["receipt"]["receipt_sha256"] = \
+            loom_suite_plan.digest(damaged_body)
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.compile_candidate(
+                quality, compatibility, damaged_native,
+                mechanism=mechanism, policy=certificate_authority,
+                manifest=manifest, workload=workload)
+
+        wrong_runner = self.native_receipts(commit)
+        environment = wrong_runner[0]["environment"]
+        environment["requested_label"] = "ubuntu-latest"
+        environment_body = {
+            key: value for key, value in environment.items()
+            if key != "environment_sha256"
+        }
+        environment["environment_sha256"] = loom_suite_plan.digest(
+            environment_body)
+        wrong_runner[0]["receipt"]["environment_sha256"] = environment[
+            "environment_sha256"]
+        receipt_body = {
+            key: value for key, value in wrong_runner[0]["receipt"].items()
+            if key != "receipt_sha256"
+        }
+        wrong_runner[0]["receipt"]["receipt_sha256"] = \
+            loom_suite_plan.digest(receipt_body)
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2.compile_candidate(
+                quality, compatibility, wrong_runner,
+                mechanism=mechanism, policy=certificate_authority,
+                manifest=manifest, workload=workload)
+
+    def test_merge_equivalence_reuses_only_an_identical_committed_tree(self):
+        _root, manifest, workload, timing, authority = self.inputs()
+        with tempfile.TemporaryDirectory() as temporary:
+            repository = Path(temporary)
+            self.git(repository, "init", "-b", "main")
+            self.git(repository, "config", "user.email", "loom@example.invalid")
+            self.git(repository, "config", "user.name", "Loom Test")
+            self.git(repository, "commit", "--allow-empty", "-m", "base")
+            self.git(repository, "checkout", "-b", "feature")
+            docs = repository / "docs"
+            docs.mkdir()
+            (docs / "capabilities.json").write_text(
+                '{"fixture":1}\n', encoding="utf-8")
+            (docs / "generated-evidence.json").write_text(
+                '{"fixture":2}\n', encoding="utf-8")
+            self.git(repository, "add", "docs")
+            self.git(repository, "commit", "-m", "reviewed")
+            reviewed = self.git(repository, "rev-parse", "HEAD")
+            reviewed_tree = loom_subject_identity.git_tree_inventory(
+                repository, reviewed)
+            public_root = "e" * 64
+            quality = self.candidate_matrix_bundle(
+                manifest, workload, timing, consumer="quality",
+                source_commit=reviewed,
+                source_tree_sha256=reviewed_tree["tree_sha256"],
+                public_root_sha256=public_root, start_index=601)
+            compatibility = self.candidate_matrix_bundle(
+                manifest, workload, timing, consumer="compatibility",
+                source_commit=reviewed,
+                source_tree_sha256=reviewed_tree["tree_sha256"],
+                public_root_sha256=public_root, start_index=701)
+            admission = loom_qualification_v2.compile_candidate(
+                quality, compatibility, self.native_receipts(reviewed),
+                mechanism=None, policy=authority, manifest=manifest)
+
+            self.git(repository, "checkout", "main")
+            self.git(repository, "merge", "--no-ff", "feature", "-m", "merge")
+            merge_commit = self.git(repository, "rev-parse", "HEAD")
+            context = {
+                "repository": "https://github.com/saroo98/loom",
+                "workflow_path": ".github/workflows/candidate-equivalence.yml",
+                "workflow_digest": "1" * 64,
+                "action_manifest_digest": "2" * 64,
+                "event_name": "push", "run_id": "123", "run_attempt": "1",
+            }
+            equivalence = loom_qualification_v2.compile_equivalence(
+                admission, reviewed_commit=reviewed,
+                merge_commit=merge_commit, repository=repository,
+                context=context)
+            report = loom_lint.Report()
+            loom_lint.validate_schema(
+                report, "candidate-equivalence", equivalence,
+                "release-candidate-equivalence-v2.schema.json")
+            self.assertEqual([], report.errors)
+            self.assertEqual(
+                equivalence, loom_qualification_v2.verify_equivalence(
+                    equivalence, admission=admission,
+                    expected_commit=merge_commit, repository=repository))
+            self.assertEqual(
+                equivalence["reviewed_git_tree_oid"],
+                equivalence["merge_git_tree_oid"])
+
+            (docs / "generated-evidence.json").write_text(
+                '{"fixture":3}\n', encoding="utf-8")
+            self.git(repository, "add", "docs/generated-evidence.json")
+            self.git(repository, "commit", "-m", "changed bytes")
+            changed = self.git(repository, "rev-parse", "HEAD")
+            with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+                loom_qualification_v2.compile_equivalence(
+                    admission, reviewed_commit=reviewed,
+                    merge_commit=changed, repository=repository,
+                    context=context)
 
 
 if __name__ == "__main__":
