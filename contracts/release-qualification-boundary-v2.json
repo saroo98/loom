@@ -1,5 +1,5 @@
 {
-  "boundary_sha256": "82f760705363669a842a096501eb50fdc209b581277db1b760b6da1b1e2f21e2",
+  "boundary_sha256": "6d76c1ace9b47fd11676c39f833f95e37bbe8cb62aa754fc6b8dc9ba0aea7d27",
   "data_sets": [
     {
       "pattern": "qualification/workload-v2/*.py",
@@ -74,6 +74,26 @@
     },
     {
       "kind": "declared-data",
+      "source": "tools/loom_release_certificate.py",
+      "target": "schemas/release-certificate-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_promotion.py",
+      "target": "schemas/release-promotion-receipt-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_reproducibility.py",
+      "target": "schemas/release-reproducibility-receipt-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_rollback.py",
+      "target": "schemas/release-rollback-evidence.schema.json"
+    },
+    {
+      "kind": "declared-data",
       "source": "tools/loom_suite_certificate_core.py",
       "target": "schemas/suite-cell-certificate-v1.schema.json"
     },
@@ -117,6 +137,7 @@
     "tools/loom_qualification_manifest.py",
     "tools/loom_qualification_v2.py",
     "tools/loom_qualification_workload.py",
+    "tools/loom_release_certificate.py",
     "tools/loom_suite_certificate_core.py"
   ],
   "roles": [
@@ -173,7 +194,15 @@
       "role": "shared-interface"
     },
     {
+      "path": "schemas/release-certificate-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
       "path": "schemas/release-mechanism-qualification-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-promotion-receipt-v1.schema.json",
       "role": "shared-interface"
     },
     {
@@ -194,6 +223,14 @@
     },
     {
       "path": "schemas/release-qualification-workload-policy-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-reproducibility-receipt-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-rollback-evidence.schema.json",
       "role": "shared-interface"
     },
     {
@@ -250,6 +287,22 @@
     },
     {
       "path": "tools/loom_qualification_workload.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_certificate.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_promotion.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_reproducibility.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_rollback.py",
       "role": "mechanism-repeat"
     },
     {

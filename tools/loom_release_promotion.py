@@ -321,6 +321,103 @@ def verify_public(asset, gate, *, installed_subject_sha256=None,
         body, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()}
 
 
+def verify_receipt(value, *, expected_sha256, expected_bytes,
+                   required_status=None):
+    """Validate one closed same-byte draft or public promotion receipt."""
+    common = {
+        "schema_version", "status", "asset_sha256", "asset_bytes", "gate",
+        "receipt_sha256",
+    }
+    public = {
+        "installed_subject_sha256", "represented_installed_subjects",
+        "behavior_rerun_required",
+    }
+    if not isinstance(value, dict) \
+            or value.get("status") not in {"verified-draft", "verified-public"} \
+            or required_status is not None \
+            and value.get("status") != required_status:
+        raise PromotionError("promotion receipt status is invalid")
+    expected_fields = common | (public if value["status"] == "verified-public"
+                                else set())
+    body = {key: item for key, item in value.items()
+            if key != "receipt_sha256"}
+    gate = value.get("gate")
+    if set(value) != expected_fields or value.get("schema_version") != 1 \
+            or not isinstance(gate, dict) or set(gate) != _GATE_FIELDS \
+            or any(gate.get(field) is not True for field in _GATE_FIELDS - {
+                "expected_sha256", "release_asset_sha256"}) \
+            or value.get("asset_sha256") != _digest(expected_sha256) \
+            or type(value.get("asset_bytes")) is not int \
+            or value["asset_bytes"] != expected_bytes or expected_bytes < 1 \
+            or _digest(gate.get("expected_sha256")) != value["asset_sha256"] \
+            or _digest(gate.get("release_asset_sha256")) != value["asset_sha256"] \
+            or value.get("receipt_sha256") != hashlib.sha256(json.dumps(
+                body, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=False, allow_nan=False).encode("utf-8")).hexdigest():
+        raise PromotionError("promotion receipt identity is invalid")
+    if value["status"] == "verified-public":
+        installed = value.get("installed_subject_sha256")
+        represented = value.get("represented_installed_subjects")
+        if _digest(installed) != installed \
+                or not isinstance(represented, list) \
+                or any(not isinstance(item, str) for item in represented) \
+                or represented != sorted(set(represented)) \
+                or any(_digest(item) != item for item in represented) \
+                or type(value.get("behavior_rerun_required")) is not bool \
+                or value["behavior_rerun_required"] is not (
+                    installed != value["asset_sha256"]
+                    and installed not in represented):
+            raise PromotionError("public installation receipt is invalid")
+    return value
+
+
+def verify_draft_with_certificate(asset, gate, release_certificate,
+                                  candidate_admission, *, expected_tag):
+    """Verify draft bytes only after a current release-ready certificate."""
+    import loom_release_certificate as release_core
+
+    try:
+        release_core.verify_release(
+            release_certificate, candidate_admission=candidate_admission,
+            expected_tag=expected_tag, expected_asset=None)
+    except release_core.ReleaseCertificateError as exc:
+        raise PromotionError("release certificate is invalid") from exc
+    if release_certificate["status"] != "release-ready":
+        raise PromotionError("draft transition requires a release-ready certificate")
+    receipt = verify_draft(asset, gate)
+    return verify_receipt(
+        receipt, expected_sha256=release_certificate["archive"]["sha256"],
+        expected_bytes=release_certificate["archive"]["bytes"],
+        required_status="verified-draft")
+
+
+def verify_public_with_certificate(
+        asset, gate, release_certificate, candidate_admission, *, expected_tag,
+        installed_subject_sha256, represented_installed_subjects=()):
+    """Verify public/install bytes only after the exact draft certificate."""
+    import loom_release_certificate as release_core
+
+    expected_asset = {
+        "sha256": release_certificate.get("archive", {}).get("sha256"),
+        "bytes": release_certificate.get("archive", {}).get("bytes"),
+    }
+    try:
+        release_core.verify_release(
+            release_certificate, candidate_admission=candidate_admission,
+            expected_tag=expected_tag, expected_asset=expected_asset)
+    except release_core.ReleaseCertificateError as exc:
+        raise PromotionError("release certificate is invalid") from exc
+    if release_certificate["status"] != "draft-verified":
+        raise PromotionError("public transition requires a draft certificate")
+    receipt = verify_public(
+        asset, gate, installed_subject_sha256=installed_subject_sha256,
+        represented_installed_subjects=represented_installed_subjects)
+    return verify_receipt(
+        receipt, expected_sha256=expected_asset["sha256"],
+        expected_bytes=expected_asset["bytes"],
+        required_status="verified-public")
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
