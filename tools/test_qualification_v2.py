@@ -1127,8 +1127,11 @@ class QualificationV2Tests(unittest.TestCase):
 
     def test_fault_corpus_executes_real_fail_closed_paths_and_binds_host(self):
         root, manifest, workload, _timing, _authority = self.inputs()
+        host_platform = loom_qualification_v2._fault_platform(
+            loom_platform_probe.platform.system())
         environment = loom_platform_probe.release_environment(
-            requested_label="windows-2025", image_os="win25-vs2026",
+            requested_label=loom_qualification_v2.FAULT_LABELS[
+                host_platform], image_os=f"{host_platform}-fixture",
             image_version="fixture", workflow_path=(
                 ".github/workflows/qualification-faults.yml"),
             workflow_digest="a" * 64, action_manifest_digest="b" * 64,
@@ -1142,7 +1145,7 @@ class QualificationV2Tests(unittest.TestCase):
                     "_run_git", return_value="1" * 40):
             output = Path(temporary) / "fault-receipt.json"
             receipt = loom_qualification_v2.run_fault_corpus(
-                root, platform="windows", output=output,
+                root, platform=host_platform, output=output,
                 logical_cpus=2, timeout=60, fault_timeout=1)
             self.assertEqual(
                 receipt, loom_qualification_v2.verify_fault_receipt(
@@ -1165,6 +1168,29 @@ class QualificationV2Tests(unittest.TestCase):
         with self.assertRaises(loom_qualification_v2.QualificationV2Error):
             loom_qualification_v2.verify_fault_receipt(
                 forged, manifest=manifest, workload=workload)
+
+    def test_fault_receipt_normalizes_real_macos_host_identity(self):
+        _root, manifest, workload, _timing, _authority = self.inputs()
+        with mock.patch.object(
+                loom_platform_probe.platform, "system",
+                return_value="Darwin"):
+            environment = loom_platform_probe.release_environment(
+                requested_label="macos-15", image_os="macos-15",
+                image_version="fixture", workflow_path=(
+                    ".github/workflows/qualification-faults.yml"),
+                workflow_digest="a" * 64,
+                action_manifest_digest="b" * 64,
+                event_name="workflow_dispatch", run_id="fault-run",
+                run_attempt="1")
+        results = {
+            code: f"{index:064x}"
+            for index, code in enumerate(
+                loom_qualification_v2.FAULT_CODES, 1)
+        }
+        receipt = loom_qualification_v2.compile_fault_receipt(
+            environment, results, manifest=manifest, workload=workload)
+        self.assertEqual("macos", receipt["platform"])
+        self.assertEqual(environment, receipt["environment"])
 
     def test_merge_equivalence_reuses_only_an_identical_committed_tree(self):
         _root, manifest, workload, timing, authority = self.inputs()

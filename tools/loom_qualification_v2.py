@@ -109,6 +109,10 @@ FAULT_LABELS = {
     "linux": "ubuntu-24.04", "macos": "macos-15",
     "windows": "windows-2025",
 }
+FAULT_OS_NAMES = {
+    "linux": "linux", "darwin": "macos", "macos": "macos",
+    "windows": "windows",
+}
 FAULT_CASE_DOMAIN = b"loom.release-qualification-fault-case.v2\0"
 MECHANISM_FIELDS = {
     "schema_version", "status", "evidence_domain", "required_observations",
@@ -739,6 +743,14 @@ def verify_family(value, *, manifest, workload):
     return value
 
 
+def _fault_platform(os_name):
+    platform = FAULT_OS_NAMES.get(str(os_name).casefold())
+    if platform is None:
+        raise QualificationV2Error(
+            "qualification fault environment is untrusted")
+    return platform
+
+
 def _fault_environment(value, platform):
     if not isinstance(value, dict) \
             or set(value) != loom_exact_cut_receipt.ENVIRONMENT_FIELDS:
@@ -749,7 +761,7 @@ def _fault_environment(value, platform):
     if platform not in FAULT_LABELS \
             or value.get("evidence_class") != "ci-reproduced" \
             or value.get("requested_label") != FAULT_LABELS[platform] \
-            or str(value.get("os", "")).casefold() != platform \
+            or _fault_platform(value.get("os")) != platform \
             or value.get("workflow_path") != \
             ".github/workflows/qualification-faults.yml" \
             or value.get("event_name") != "workflow_dispatch" \
@@ -762,7 +774,7 @@ def _fault_environment(value, platform):
 def compile_fault_receipt(environment, results, *, manifest, workload):
     manifest = _manifest(manifest)
     workload = _workload(workload)
-    platform = str(environment.get("os", "")).casefold() \
+    platform = _fault_platform(environment.get("os")) \
         if isinstance(environment, dict) else ""
     environment = _fault_environment(environment, platform)
     if not isinstance(results, dict) \
