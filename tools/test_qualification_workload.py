@@ -109,6 +109,12 @@ class QualificationWorkloadTests(unittest.TestCase):
             self.assertTrue(serial["successful"])
             self.assertEqual("matched", shadow["comparison"]["status"])
             self.assertEqual("certified", shadow["cell_certificate"]["status"])
+            self.assertLessEqual(
+                shadow["cell_certificate"]["execution_microseconds"],
+                serial["elapsed_microseconds"],
+                "the fixed workload must make bounded parallel execution "
+                "measurably nonregressing",
+            )
             self.assertEqual(
                 policy["expected_tests"],
                 sorted(row["test"] for row in shadow[
