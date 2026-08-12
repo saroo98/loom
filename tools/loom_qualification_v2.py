@@ -109,7 +109,7 @@ FAULT_LABELS = {
     "linux": "ubuntu-24.04", "macos": "macos-15",
     "windows": "windows-2025",
 }
-FAULT_OS_NAMES = {
+HOST_OS_NAMES = {
     "linux": "linux", "darwin": "macos", "macos": "macos",
     "windows": "windows",
 }
@@ -743,8 +743,12 @@ def verify_family(value, *, manifest, workload):
     return value
 
 
+def _host_platform(os_name):
+    return HOST_OS_NAMES.get(str(os_name).casefold())
+
+
 def _fault_platform(os_name):
-    platform = FAULT_OS_NAMES.get(str(os_name).casefold())
+    platform = _host_platform(os_name)
     if platform is None:
         raise QualificationV2Error(
             "qualification fault environment is untrusted")
@@ -1441,7 +1445,7 @@ def _native_evidence(values, source_commit):
                 or expected is None \
                 or environment.get("evidence_class") != "ci-reproduced" \
                 or environment.get("requested_label") != expected[0] \
-                or str(environment.get("os", "")).casefold() != expected[1] \
+                or _host_platform(environment.get("os")) != expected[1] \
                 or architecture != expected[2] \
                 or environment.get("workflow_path") != \
                 ".github/workflows/build-helper.yml" \

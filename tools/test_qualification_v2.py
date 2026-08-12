@@ -855,6 +855,61 @@ class QualificationV2Tests(unittest.TestCase):
                 mechanism=mechanism, policy=certificate_authority,
                 manifest=manifest, workload=workload)
 
+    def test_native_candidate_normalizes_real_macos_host_identity(self):
+        commit = "e" * 40
+        native = self.native_receipts(commit)
+        for value in native:
+            if value["receipt"]["platform"].startswith("macos-"):
+                environment = value["environment"]
+                environment["os"] = "Darwin"
+                environment_body = {
+                    key: item for key, item in environment.items()
+                    if key != "environment_sha256"
+                }
+                environment["environment_sha256"] = \
+                    loom_suite_plan.digest(environment_body)
+                receipt = value["receipt"]
+                receipt["environment_sha256"] = environment[
+                    "environment_sha256"]
+                receipt_body = {
+                    key: item for key, item in receipt.items()
+                    if key != "receipt_sha256"
+                }
+                receipt["receipt_sha256"] = loom_suite_plan.digest(
+                    receipt_body)
+
+        normalized, subjects = loom_qualification_v2._native_evidence(
+            native, commit)
+
+        self.assertEqual(6, len(normalized))
+        self.assertEqual(6, len(subjects))
+        self.assertEqual(
+            ["Darwin", "Darwin"],
+            [row["environment"]["os"] for row in normalized
+             if row["receipt"]["platform"].startswith("macos-")])
+
+        untrusted = copy.deepcopy(native)
+        macos = next(
+            value for value in untrusted
+            if value["receipt"]["platform"] == "macos-arm64")
+        macos["environment"]["os"] = "Plan9"
+        environment_body = {
+            key: item for key, item in macos["environment"].items()
+            if key != "environment_sha256"
+        }
+        macos["environment"]["environment_sha256"] = \
+            loom_suite_plan.digest(environment_body)
+        macos["receipt"]["environment_sha256"] = macos[
+            "environment"]["environment_sha256"]
+        receipt_body = {
+            key: item for key, item in macos["receipt"].items()
+            if key != "receipt_sha256"
+        }
+        macos["receipt"]["receipt_sha256"] = loom_suite_plan.digest(
+            receipt_body)
+        with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+            loom_qualification_v2._native_evidence(untrusted, commit)
+
     def test_qualification_batch_requires_one_complete_single_run_topology(self):
         _root, manifest, workload, timing, _authority = self.inputs()
         observations = []

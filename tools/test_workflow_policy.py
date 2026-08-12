@@ -115,6 +115,10 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertIn('"rebuild_sha256": digest(rebuild)', helper)
         self.assertIn('"provenance_sha256": digest(provenance_path)', helper)
         self.assertIn('"independent_build": True', helper)
+        self.assertIn("provenance_path.write_bytes(", helper)
+        self.assertIn('.encode("utf-8") + b"\\n"', helper)
+        self.assertIn("ensure_ascii=False", helper)
+        self.assertNotIn("provenance_path.write_text(", helper)
         self.assertIn(
             'Path(".").resolve(), os.environ["LOOM_SOURCE_SHA"], source_digest,',
             helper,
