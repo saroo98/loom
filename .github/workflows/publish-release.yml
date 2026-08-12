@@ -145,6 +145,7 @@ jobs:
             test ! -f contracts/release-mechanism-qualification-v2.json
           fi
           python -B tools/loom_release_certificate.py verify \
+            --repository . \
             --candidate "$CANDIDATE" \
             --certificate release-assets/release-certificate-v2.json \
             --expected-tag "$RELEASE_TAG" --asset "$ASSET"
@@ -155,6 +156,7 @@ jobs:
             --release-authority release-assets/release-authority-v2.json \
             --expected-tag "$RELEASE_TAG" --asset "$ASSET"
           python -B tools/loom_release_certificate.py compile \
+            --repository . \
             --candidate "$CANDIDATE" \
             --reproducibility release-assets/reproducibility-receipt.json \
             --rollback release-assets/rollback.json \
@@ -162,6 +164,7 @@ jobs:
             --promotion draft-promotion-receipt.json \
             --output draft-release-certificate-v2.json
           python -B tools/loom_release_certificate.py verify \
+            --repository . \
             --candidate "$CANDIDATE" \
             --certificate draft-release-certificate-v2.json \
             --expected-tag "$RELEASE_TAG" --asset "$ASSET"

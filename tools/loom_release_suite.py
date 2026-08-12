@@ -178,14 +178,16 @@ def _validate_serial_report(report, *, expected_commit, expected_root):
 
 def certify_candidate_admission(admission, *, mechanism, authority_policy,
                                 manifest, workload, expected_commit,
-                                expected_tree, expected_root):
+                                expected_tree, expected_root,
+                                repository=None):
     """Consume one exact v2 admission without rerunning candidate behavior."""
     try:
-        admission = loom_qualification_v2.verify_candidate(
+        admission = loom_qualification_v2.verify_candidate_evidence(
             admission, expected_commit=expected_commit,
             expected_tree=expected_tree, expected_public_root=expected_root,
             mechanism=mechanism, policy=authority_policy,
-            manifest=manifest, workload=workload)
+            manifest=manifest, workload=workload, repository=repository)
+        admission = loom_qualification_v2.candidate_projection(admission)
         authority_policy = loom_suite_plan.validate_authority_policy(
             authority_policy)
     except (loom_qualification_v2.QualificationV2Error,
@@ -216,7 +218,8 @@ def certify_candidate_admission(admission, *, mechanism, authority_policy,
 
 def verify_candidate_admission(value, *, admission, mechanism,
                                authority_policy, manifest, workload,
-                               expected_commit, expected_tree, expected_root):
+                               expected_commit, expected_tree, expected_root,
+                               repository=None):
     if not isinstance(value, dict) or set(value) != CANDIDATE_SUITE_FIELDS:
         raise ReleaseSuiteError("candidate suite certificate is not closed")
     body = {key: item for key, item in value.items()
@@ -230,7 +233,7 @@ def verify_candidate_admission(value, *, admission, mechanism,
         admission, mechanism=mechanism, authority_policy=authority_policy,
         manifest=manifest, workload=workload,
         expected_commit=expected_commit, expected_tree=expected_tree,
-        expected_root=expected_root)
+        expected_root=expected_root, repository=repository)
     if expected != value:
         raise ReleaseSuiteError("candidate suite certificate is inconsistent")
     return value
@@ -238,7 +241,7 @@ def verify_candidate_admission(value, *, admission, mechanism,
 
 def certify_release_authority(candidate_suite, release_certificate, *,
                               candidate_admission, expected_tag,
-                              expected_asset=None):
+                              expected_asset=None, repository=None):
     """Require both exact candidate and release certificates for authority."""
     if not isinstance(candidate_suite, dict) \
             or set(candidate_suite) != CANDIDATE_SUITE_FIELDS:
@@ -255,7 +258,8 @@ def certify_release_authority(candidate_suite, release_certificate, *,
     try:
         release_certificate = loom_release_certificate.verify_release(
             release_certificate, candidate_admission=candidate_admission,
-            expected_tag=expected_tag, expected_asset=expected_asset)
+            expected_tag=expected_tag, expected_asset=expected_asset,
+            repository=repository)
     except loom_release_certificate.ReleaseCertificateError as exc:
         raise ReleaseSuiteError(f"release certificate is invalid: {exc}") from exc
     subject = candidate_suite.get("subject")
@@ -304,7 +308,7 @@ def certify_release_authority(candidate_suite, release_certificate, *,
 
 def verify_release_authority(value, *, candidate_suite, release_certificate,
                              candidate_admission, expected_tag,
-                             expected_asset=None):
+                             expected_asset=None, repository=None):
     if not isinstance(value, dict) or set(value) != RELEASE_AUTHORITY_FIELDS:
         raise ReleaseSuiteError("release authority receipt is not closed")
     body = {key: item for key, item in value.items()
@@ -317,7 +321,7 @@ def verify_release_authority(value, *, candidate_suite, release_certificate,
     expected = certify_release_authority(
         candidate_suite, release_certificate,
         candidate_admission=candidate_admission, expected_tag=expected_tag,
-        expected_asset=expected_asset)
+        expected_asset=expected_asset, repository=repository)
     if expected != value:
         raise ReleaseSuiteError("release authority receipt is inconsistent")
     return value

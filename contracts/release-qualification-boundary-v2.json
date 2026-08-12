@@ -1,5 +1,5 @@
 {
-  "boundary_sha256": "4c16f5ba923d04b045bed2250de6aeabf54da9005208c219a5094b13de0219c4",
+  "boundary_sha256": "f1b8bb9d277dbeeea15072e4e176aa449bbba8c75fe95a0189b083dca8d68086",
   "data_sets": [
     {
       "pattern": "qualification/workload-v2/*.py",
@@ -41,6 +41,11 @@
       "kind": "declared-data",
       "source": "tools/loom_qualification_v2.py",
       "target": "schemas/release-candidate-equivalence-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-candidate-rebinding-v2.schema.json"
     },
     {
       "kind": "declared-data",
@@ -223,6 +228,10 @@
     },
     {
       "path": "schemas/release-candidate-equivalence-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-candidate-rebinding-v2.schema.json",
       "role": "shared-interface"
     },
     {

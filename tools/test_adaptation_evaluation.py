@@ -1,9 +1,12 @@
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_adaptation_eval
+import loom_memory
 
 
 EXPECTED = {
@@ -21,7 +24,24 @@ class AdaptationEvaluationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.tmp = tempfile.TemporaryDirectory()
-        cls.report = loom_adaptation_eval.run_suite(Path(cls.tmp.name))
+        real_lock_init = loom_memory.FileLock.__init__
+        real_atomic_store = loom_memory._atomic_store
+
+        def short_external_lock_bound(lock, path, timeout=5.0,
+                                      stale_after=None):
+            real_lock_init(lock, path, timeout=0.2,
+                           stale_after=stale_after)
+
+        def bounded_slow_store(path, value):
+            if "concurrent-memory-writers" in Path(path).parts:
+                time.sleep(0.04)
+            return real_atomic_store(path, value)
+
+        with mock.patch.object(
+                loom_memory.FileLock, "__init__", short_external_lock_bound), \
+                mock.patch.object(
+                    loom_memory, "_atomic_store", bounded_slow_store):
+            cls.report = loom_adaptation_eval.run_suite(Path(cls.tmp.name))
 
     @classmethod
     def tearDownClass(cls):

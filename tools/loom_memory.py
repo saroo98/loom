@@ -11,8 +11,10 @@ import re
 import stat
 import sys
 import tempfile
+import threading
 import time
 import uuid
+import weakref
 from collections import deque
 from pathlib import Path
 
@@ -78,6 +80,9 @@ FEEDBACK_ACTIONS = {
     "tighten-scope", "batch-decisions", "discover-domain", "observe-real-medium",
     "rewrite-criterion",
 }
+
+_PROCESS_LOCKS_GUARD = threading.Lock()
+_PROCESS_LOCKS = weakref.WeakValueDictionary()
 OUTCOME_METRICS = {
     "confidence", "tier-estimate", "effort-estimate", "rework-rate",
     "verification-escape-rate",
@@ -158,37 +163,56 @@ class FileLock:
         self.path = Path(path)
         self.timeout = timeout
         self.fd = None
+        self.process_lock = None
         self.token = f"{os.getpid()}:{uuid.uuid4().hex}\n"
 
     def __enter__(self):
-        deadline = time.monotonic() + self.timeout
         self.path = _reject_link_ancestors(self.path, "lock path")
         self.path.parent.mkdir(parents=True, exist_ok=True)
         _reject_link_ancestors(self.path, "lock path")
-        while True:
-            try:
-                self.fd = os.open(
-                    self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-                os.write(self.fd, self.token.encode("ascii"))
-                return self
-            except (FileExistsError, PermissionError) as exc:
-                # Windows can report transient sharing denial while a just-released lock is
-                # being unlinked. Both existence observations race with that transition, so
-                # retry either contention form until the same bounded deadline.
-                if time.monotonic() >= deadline:
-                    raise MemoryError(
-                        f"memory store is busy or a prior process left {self.path}; "
-                        "verify no writer is active before removing that lock") from exc
-                time.sleep(0.05)
+        key = (os.getpid(), os.path.normcase(os.fspath(self.path)))
+        with _PROCESS_LOCKS_GUARD:
+            self.process_lock = _PROCESS_LOCKS.get(key)
+            if self.process_lock is None:
+                self.process_lock = threading.RLock()
+                _PROCESS_LOCKS[key] = self.process_lock
+        self.process_lock.acquire()
+        deadline = time.monotonic() + self.timeout
+        try:
+            while True:
+                try:
+                    self.fd = os.open(
+                        self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                    os.write(self.fd, self.token.encode("ascii"))
+                    return self
+                except (FileExistsError, PermissionError) as exc:
+                    # Same-process writers queue before this cross-process deadline. Windows can
+                    # still report transient sharing denial while another process releases the
+                    # lock, so retry either contention form until the same bounded deadline.
+                    if time.monotonic() >= deadline:
+                        raise MemoryError(
+                            f"memory store is busy or a prior process left {self.path}; "
+                            "verify no writer is active before removing that lock") from exc
+                    time.sleep(0.05)
+        except BaseException:
+            self.process_lock.release()
+            self.process_lock = None
+            raise
 
     def __exit__(self, exc_type, exc, tb):
-        if self.fd is not None:
-            os.close(self.fd)
         try:
-            if self.path.read_text(encoding="ascii") == self.token:
-                self.path.unlink()
-        except FileNotFoundError:
-            pass
+            if self.fd is not None:
+                os.close(self.fd)
+                self.fd = None
+            try:
+                if self.path.read_text(encoding="ascii") == self.token:
+                    self.path.unlink()
+            except FileNotFoundError:
+                pass
+        finally:
+            if self.process_lock is not None:
+                self.process_lock.release()
+                self.process_lock = None
 
 
 def _now():

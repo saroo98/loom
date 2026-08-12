@@ -35,6 +35,7 @@ MECHANISM_DOMAIN = b"loom.release-mechanism-qualification.v2\0"
 BATCH_DOMAIN = b"loom.release-qualification-batch.v2\0"
 CANDIDATE_DOMAIN = b"loom.release-candidate-admission.v2\0"
 EQUIVALENCE_DOMAIN = b"loom.release-candidate-equivalence.v2\0"
+CANDIDATE_REBINDING_DOMAIN = b"loom.release-candidate-rebinding.v2\0"
 AUTHORITY_SEMANTICS_DOMAIN = b"loom.release-authority-semantics.v2\0"
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -184,8 +185,20 @@ CANDIDATE_FIELDS = {
     "matrix_certificates", "cell_comparisons", "clean_room_receipt_sha256",
     "native_evidence", "native_subjects", "candidate_admission_sha256",
 }
+REBOUND_CANDIDATE_FIELDS = {
+    "schema_version", "status", "evidence_domain", "source_commit",
+    "repository_source_tree_sha256", "public_root_sha256",
+    "public_manifest_sha256", "public_file_count",
+    "reviewed_candidate_admission", "candidate_equivalence",
+    "native_evidence", "native_subjects", "candidate_admission_sha256",
+}
 EQUIVALENCE_CONTEXT_FIELDS = {
     "repository", "workflow_path", "workflow_digest",
+    "action_manifest_digest", "event_name", "run_id", "run_attempt",
+    "reviewed_admission",
+}
+ADMISSION_CONTEXT_FIELDS = {
+    "source_commit", "workflow_path", "workflow_digest",
     "action_manifest_digest", "event_name", "run_id", "run_attempt",
 }
 EQUIVALENCE_FIELDS = {
@@ -209,6 +222,7 @@ MAX_BATCH_BYTES = 64 * 1024 * 1024
 MAX_MECHANISM_BYTES = 95_000_000
 MAX_CANDIDATE_BYTES = 64 * 1024 * 1024
 MAX_EQUIVALENCE_BYTES = 4 * 1024 * 1024
+MAX_WORKFLOW_BYTES = 1024 * 1024
 
 
 def _canonical(value):
@@ -1613,12 +1627,13 @@ def verify_candidate(value, *, expected_commit, expected_tree,
 
 def load_candidate(path, *, expected_commit, expected_tree,
                    expected_public_root, mechanism, policy, manifest,
-                   workload=None):
-    return verify_candidate(
+                   workload=None, repository=None):
+    return verify_candidate_evidence(
         _load_json(path, MAX_CANDIDATE_BYTES),
         expected_commit=expected_commit, expected_tree=expected_tree,
         expected_public_root=expected_public_root, mechanism=mechanism,
-        policy=policy, manifest=manifest, workload=workload)
+        policy=policy, manifest=manifest, workload=workload,
+        repository=repository)
 
 
 def compile_candidate_bundle(consumer, exact_receipts, matrix_certificate, *,
@@ -1679,7 +1694,7 @@ def _write_output(path, value, label):
     loom_reliability.atomic_write_json(path, value)
 
 
-def _candidate_seal(value):
+def _exact_candidate_seal(value):
     if not isinstance(value, dict) or set(value) != CANDIDATE_FIELDS \
             or value.get("schema_version") != 2 \
             or value.get("status") != "admitted" \
@@ -1693,23 +1708,79 @@ def _candidate_seal(value):
     return value
 
 
+def _candidate_seal(value):
+    if isinstance(value, dict) \
+            and value.get("evidence_domain") == "candidate-admission-v2":
+        return _exact_candidate_seal(value)
+    if not isinstance(value, dict) or set(value) != REBOUND_CANDIDATE_FIELDS \
+            or value.get("schema_version") != 2 \
+            or value.get("status") != "admitted" \
+            or value.get("evidence_domain") != "candidate-rebinding-v2":
+        raise QualificationV2Error("candidate admission fields are invalid")
+    body = {key: item for key, item in value.items()
+            if key != "candidate_admission_sha256"}
+    reviewed = _exact_candidate_seal(value.get("reviewed_candidate_admission"))
+    equivalence = _equivalence_seal(value.get("candidate_equivalence"))
+    native, native_subjects = _native_evidence(
+        value.get("native_evidence"), value.get("source_commit"))
+    if value.get("candidate_admission_sha256") != _digest(
+            CANDIDATE_REBINDING_DOMAIN, body) \
+            or equivalence.get("candidate_admission_sha256") != reviewed.get(
+                "candidate_admission_sha256") \
+            or equivalence.get("reviewed_commit") != reviewed.get(
+                "source_commit") \
+            or value.get("source_commit") != equivalence.get("merge_commit") \
+            or value.get("repository_source_tree_sha256") != equivalence.get(
+                "merge_tree_sha256") \
+            or value.get("public_root_sha256") != reviewed.get(
+                "public_root_sha256") \
+            or value.get("public_manifest_sha256") != reviewed.get(
+                "public_manifest_sha256") \
+            or value.get("public_file_count") != reviewed.get(
+                "public_file_count") \
+            or native != value.get("native_evidence") \
+            or native_subjects != value.get("native_subjects") \
+            or any(row["receipt"]["source_sha256"] != equivalence.get(
+                "native_source_sha256") or row["receipt"][
+                    "cargo_lock_sha256"] != equivalence.get(
+                        "cargo_lock_sha256") for row in native):
+        raise QualificationV2Error("candidate rebinding identity is invalid")
+    return value
+
+
 def _equivalence_context(value):
+    admission = (value.get("reviewed_admission")
+                 if isinstance(value, dict) else None)
     if not isinstance(value, dict) or set(value) != EQUIVALENCE_CONTEXT_FIELDS \
             or value.get("repository") != \
             "https://github.com/saroo98/loom" \
             or value.get("workflow_path") != \
             ".github/workflows/candidate-equivalence.yml" \
-            or value.get("event_name") != "push" \
+            or value.get("event_name") != "workflow_run" \
             or any(HEX64.fullmatch(str(value.get(field, ""))) is None
                    for field in ("workflow_digest",
                                  "action_manifest_digest")) \
             or not isinstance(value.get("run_id"), str) \
             or not value["run_id"] \
             or not isinstance(value.get("run_attempt"), str) \
-            or not value["run_attempt"]:
+            or not value["run_attempt"] \
+            or not isinstance(admission, dict) \
+            or set(admission) != ADMISSION_CONTEXT_FIELDS \
+            or HEX40.fullmatch(str(admission.get("source_commit", ""))) \
+            is None \
+            or admission.get("workflow_path") != \
+            ".github/workflows/candidate-admission.yml" \
+            or any(HEX64.fullmatch(str(admission.get(field, ""))) is None
+                   for field in ("workflow_digest",
+                                 "action_manifest_digest")) \
+            or admission.get("event_name") != "workflow_dispatch" \
+            or not isinstance(admission.get("run_id"), str) \
+            or not admission["run_id"] \
+            or not isinstance(admission.get("run_attempt"), str) \
+            or not admission["run_attempt"]:
         raise QualificationV2Error(
             "candidate equivalence workflow identity is invalid")
-    return dict(value)
+    return {**value, "reviewed_admission": dict(admission)}
 
 
 def _git_value(repository, *arguments):
@@ -1723,9 +1794,45 @@ def _git_value(repository, *arguments):
     return value
 
 
+def _git_workflow_identity(repository, commit, workflow_path):
+    """Derive an exact committed workflow and pinned-action identity."""
+    try:
+        raw = loom_subject_identity._run_git(
+            repository, "show", f"{commit}:{workflow_path}", binary=True)
+    except loom_subject_identity.SubjectIdentityError as exc:
+        raise QualificationV2Error(
+            "candidate equivalence workflow identity failed") from exc
+    if not isinstance(raw, bytes) or not raw or len(raw) > MAX_WORKFLOW_BYTES \
+            or b"\x00" in raw:
+        raise QualificationV2Error(
+            "candidate equivalence workflow identity is invalid")
+    try:
+        text = raw.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as exc:
+        raise QualificationV2Error(
+            "candidate equivalence workflow identity is invalid") from exc
+    actions = []
+    for used in loom_qualification_manifest.WORKFLOW_USES.findall(text):
+        if used.startswith("./"):
+            continue
+        matched = loom_qualification_manifest.ACTION.fullmatch(used)
+        if matched is None or HEX40.fullmatch(matched.group(2)) is None:
+            raise QualificationV2Error(
+                "candidate equivalence workflow action is not pinned")
+        actions.append(used)
+    if not actions:
+        raise QualificationV2Error(
+            "candidate equivalence workflow action identity is empty")
+    action_bytes = ("\n".join(actions) + "\n").encode("utf-8")
+    return {
+        "workflow_digest": hashlib.sha256(raw).hexdigest(),
+        "action_manifest_digest": hashlib.sha256(action_bytes).hexdigest(),
+    }
+
+
 def compile_equivalence(admission, *, reviewed_commit, merge_commit,
                         repository, context):
-    admission = _candidate_seal(admission)
+    admission = _exact_candidate_seal(admission)
     repository = Path(repository).resolve()
     context = _equivalence_context(context)
     if not repository.is_dir() \
@@ -1733,10 +1840,25 @@ def compile_equivalence(admission, *, reviewed_commit, merge_commit,
             or HEX40.fullmatch(str(merge_commit)) is None \
             or reviewed_commit == merge_commit \
             or admission.get("source_commit") != reviewed_commit \
+            or context["reviewed_admission"]["source_commit"] != \
+            reviewed_commit \
             or admission.get("quality", {}).get(
                 "matrix_certificate", {}).get("subject", {}).get(
                     "repository") != context["repository"]:
         raise QualificationV2Error("candidate equivalence input is invalid")
+    equivalence_workflow = _git_workflow_identity(
+        repository, merge_commit, context["workflow_path"])
+    admission_workflow = _git_workflow_identity(
+        repository, reviewed_commit,
+        context["reviewed_admission"]["workflow_path"])
+    if any(context[field] != equivalence_workflow[field]
+           for field in ("workflow_digest", "action_manifest_digest")) \
+            or any(context["reviewed_admission"][field] !=
+                   admission_workflow[field]
+                   for field in (
+                       "workflow_digest", "action_manifest_digest")):
+        raise QualificationV2Error(
+            "candidate equivalence workflow identity is inconsistent")
     reviewed_tree_oid = _git_value(
         repository, "rev-parse", f"{reviewed_commit}^{{tree}}")
     merge_tree_oid = _git_value(
@@ -1833,6 +1955,106 @@ def verify_equivalence(value, *, admission, expected_commit, repository):
     return value
 
 
+def _equivalence_seal(value):
+    if not isinstance(value, dict) or set(value) != EQUIVALENCE_FIELDS \
+            or value.get("schema_version") != 2 \
+            or value.get("status") != "equivalent" \
+            or value.get("evidence_domain") != "candidate-equivalence-v2":
+        raise QualificationV2Error("candidate equivalence fields are invalid")
+    body = {key: item for key, item in value.items()
+            if key != "equivalence_sha256"}
+    if value.get("equivalence_sha256") != _digest(
+            EQUIVALENCE_DOMAIN, body):
+        raise QualificationV2Error("candidate equivalence digest is invalid")
+    return value
+
+
+def compile_rebound_candidate(admission, equivalence, native, *,
+                              expected_commit, repository):
+    """Bind reviewed behavioral evidence to identical merge bytes and natives."""
+    admission = _exact_candidate_seal(admission)
+    equivalence = verify_equivalence(
+        equivalence, admission=admission, expected_commit=expected_commit,
+        repository=repository)
+    native, native_subjects = _native_evidence(native, expected_commit)
+    native_receipts = [row["receipt"] for row in native]
+    if any(row["source_sha256"] != equivalence["native_source_sha256"]
+           or row["cargo_lock_sha256"] != equivalence["cargo_lock_sha256"]
+           for row in native_receipts):
+        raise QualificationV2Error(
+            "candidate rebound native source identity changed")
+    body = {
+        "schema_version": 2, "status": "admitted",
+        "evidence_domain": "candidate-rebinding-v2",
+        "source_commit": expected_commit,
+        "repository_source_tree_sha256": equivalence["merge_tree_sha256"],
+        "public_root_sha256": admission["public_root_sha256"],
+        "public_manifest_sha256": admission["public_manifest_sha256"],
+        "public_file_count": admission["public_file_count"],
+        "reviewed_candidate_admission": admission,
+        "candidate_equivalence": equivalence,
+        "native_evidence": native, "native_subjects": native_subjects,
+    }
+    return {**body, "candidate_admission_sha256": _digest(
+        CANDIDATE_REBINDING_DOMAIN, body)}
+
+
+def candidate_projection(value):
+    """Return the exact effective candidate identity after sealed rebinding."""
+    value = _candidate_seal(value)
+    if value["evidence_domain"] == "candidate-admission-v2":
+        return value
+    projected = copy.deepcopy(value["reviewed_candidate_admission"])
+    projected.update({
+        "source_commit": value["source_commit"],
+        "repository_source_tree_sha256": value[
+            "repository_source_tree_sha256"],
+        "public_root_sha256": value["public_root_sha256"],
+        "public_manifest_sha256": value["public_manifest_sha256"],
+        "public_file_count": value["public_file_count"],
+        "native_evidence": copy.deepcopy(value["native_evidence"]),
+        "native_subjects": copy.deepcopy(value["native_subjects"]),
+        "candidate_admission_sha256": value["candidate_admission_sha256"],
+    })
+    return projected
+
+
+def verify_candidate_evidence(value, *, expected_commit, expected_tree,
+                              expected_public_root, mechanism, policy,
+                              manifest, workload=None, repository=None):
+    if isinstance(value, dict) \
+            and value.get("evidence_domain") == "candidate-admission-v2":
+        return verify_candidate(
+            value, expected_commit=expected_commit,
+            expected_tree=expected_tree,
+            expected_public_root=expected_public_root,
+            mechanism=mechanism, policy=policy, manifest=manifest,
+            workload=workload)
+    value = _candidate_seal(value)
+    if repository is None:
+        raise QualificationV2Error(
+            "candidate rebinding requires repository identity")
+    reviewed = value["reviewed_candidate_admission"]
+    verify_candidate(
+        reviewed, expected_commit=reviewed["source_commit"],
+        expected_tree=reviewed["repository_source_tree_sha256"],
+        expected_public_root=reviewed["public_root_sha256"],
+        mechanism=mechanism, policy=policy, manifest=manifest,
+        workload=workload)
+    verify_equivalence(
+        value["candidate_equivalence"], admission=reviewed,
+        expected_commit=expected_commit, repository=repository)
+    expected = compile_rebound_candidate(
+        reviewed, value["candidate_equivalence"], value["native_evidence"],
+        expected_commit=expected_commit, repository=repository)
+    if value != expected:
+        raise QualificationV2Error("candidate rebinding is inconsistent")
+    if value.get("repository_source_tree_sha256") != expected_tree \
+            or value.get("public_root_sha256") != expected_public_root:
+        raise QualificationV2Error("candidate rebinding subject is invalid")
+    return value
+
+
 def load_equivalence(path, *, admission, expected_commit, repository):
     return verify_equivalence(
         _load_json(path, MAX_EQUIVALENCE_BYTES), admission=admission,
@@ -1918,6 +2140,43 @@ def main(argv=None):
     candidate_parser.add_argument("--mechanism")
     candidate_parser.add_argument("--policy", required=True)
     candidate_parser.add_argument("--output", required=True)
+    equivalence_parser = subparsers.add_parser("compile-equivalence")
+    equivalence_parser.add_argument("--root", required=True)
+    equivalence_parser.add_argument("--candidate", required=True)
+    equivalence_parser.add_argument("--reviewed-commit", required=True)
+    equivalence_parser.add_argument("--merge-commit", required=True)
+    equivalence_parser.add_argument("--repository")
+    equivalence_parser.add_argument("--workflow-digest", required=True)
+    equivalence_parser.add_argument(
+        "--action-manifest-digest", required=True)
+    equivalence_parser.add_argument(
+        "--event-name", choices=("workflow_run",), required=True)
+    equivalence_parser.add_argument("--run-id", required=True)
+    equivalence_parser.add_argument("--run-attempt", required=True)
+    equivalence_parser.add_argument(
+        "--admission-workflow-digest", required=True)
+    equivalence_parser.add_argument(
+        "--admission-action-manifest-digest", required=True)
+    equivalence_parser.add_argument("--admission-run-id", required=True)
+    equivalence_parser.add_argument("--admission-run-attempt", required=True)
+    equivalence_parser.add_argument("--output", required=True)
+    verify_equivalence_parser = subparsers.add_parser("verify-equivalence")
+    verify_equivalence_parser.add_argument("--root", required=True)
+    verify_equivalence_parser.add_argument("--candidate", required=True)
+    verify_equivalence_parser.add_argument("--equivalence", required=True)
+    verify_equivalence_parser.add_argument("--expected-commit", required=True)
+    verify_equivalence_parser.add_argument("--repository")
+    rebound_parser = subparsers.add_parser("compile-rebound-candidate")
+    rebound_parser.add_argument("--root", required=True)
+    rebound_parser.add_argument("--candidate", required=True)
+    rebound_parser.add_argument("--equivalence", required=True)
+    rebound_parser.add_argument(
+        "--native-directory", action="append", required=True)
+    rebound_parser.add_argument("--expected-commit", required=True)
+    rebound_parser.add_argument("--repository")
+    rebound_parser.add_argument("--mechanism")
+    rebound_parser.add_argument("--policy", required=True)
+    rebound_parser.add_argument("--output", required=True)
     verify_candidate_parser = subparsers.add_parser("verify-candidate")
     verify_candidate_parser.add_argument("--root", required=True)
     verify_candidate_parser.add_argument("--candidate", required=True)
@@ -1927,6 +2186,7 @@ def main(argv=None):
         "--expected-public-root", required=True)
     verify_candidate_parser.add_argument("--mechanism")
     verify_candidate_parser.add_argument("--policy", required=True)
+    verify_candidate_parser.add_argument("--repository")
     args = parser.parse_args(argv)
     try:
         if args.command == "run-observation":
@@ -2002,7 +2262,9 @@ def main(argv=None):
                 "matrix_certificate_sha256": value[
                     "matrix_certificate"]["matrix_certificate_sha256"],
             }
-        elif args.command in {"compile-candidate", "verify-candidate"}:
+        elif args.command in {
+                "compile-candidate", "compile-rebound-candidate",
+                "verify-candidate"}:
             policy = loom_suite_plan.load_authority_policy(args.policy)
             mechanism = (_load_json(args.mechanism, MAX_MECHANISM_BYTES)
                          if args.mechanism else None)
@@ -2019,18 +2281,77 @@ def main(argv=None):
                     policy=policy, manifest=manifest,
                     workload=qualification_workload)
                 _write_output(args.output, value, "candidate admission")
+            elif args.command == "compile-rebound-candidate":
+                reviewed = _load_json(
+                    args.candidate, MAX_CANDIDATE_BYTES)
+                verify_candidate(
+                    reviewed, expected_commit=reviewed.get("source_commit"),
+                    expected_tree=reviewed.get(
+                        "repository_source_tree_sha256"),
+                    expected_public_root=reviewed.get("public_root_sha256"),
+                    mechanism=mechanism, policy=policy, manifest=manifest,
+                    workload=qualification_workload)
+                native = [load_native_directory(path)
+                          for path in args.native_directory]
+                value = compile_rebound_candidate(
+                    reviewed, _load_json(
+                        args.equivalence, MAX_EQUIVALENCE_BYTES), native,
+                    expected_commit=args.expected_commit,
+                    repository=(args.repository or root))
+                _write_output(args.output, value, "candidate rebinding")
             else:
                 value = load_candidate(
                     args.candidate, expected_commit=args.expected_commit,
                     expected_tree=args.expected_tree,
                     expected_public_root=args.expected_public_root,
                     mechanism=mechanism, policy=policy, manifest=manifest,
-                    workload=qualification_workload)
+                    workload=qualification_workload,
+                    repository=(args.repository or root))
             result = {
                 "status": "verified" if args.command == "verify-candidate"
                 else "admitted",
                 "candidate_admission_sha256": value[
                     "candidate_admission_sha256"],
+            }
+        elif args.command == "compile-equivalence":
+            reviewed = _load_json(args.candidate, MAX_CANDIDATE_BYTES)
+            value = compile_equivalence(
+                reviewed, reviewed_commit=args.reviewed_commit,
+                merge_commit=args.merge_commit,
+                repository=(args.repository or root), context={
+                    "repository": "https://github.com/saroo98/loom",
+                    "workflow_path":
+                    ".github/workflows/candidate-equivalence.yml",
+                    "workflow_digest": args.workflow_digest,
+                    "action_manifest_digest": args.action_manifest_digest,
+                    "event_name": args.event_name, "run_id": args.run_id,
+                    "run_attempt": args.run_attempt,
+                    "reviewed_admission": {
+                        "source_commit": args.reviewed_commit,
+                        "workflow_path":
+                        ".github/workflows/candidate-admission.yml",
+                        "workflow_digest": args.admission_workflow_digest,
+                        "action_manifest_digest":
+                        args.admission_action_manifest_digest,
+                        "event_name": "workflow_dispatch",
+                        "run_id": args.admission_run_id,
+                        "run_attempt": args.admission_run_attempt,
+                    },
+                })
+            _write_output(args.output, value, "candidate equivalence")
+            result = {
+                "status": "equivalent",
+                "equivalence_sha256": value["equivalence_sha256"],
+            }
+        elif args.command == "verify-equivalence":
+            value = load_equivalence(
+                args.equivalence,
+                admission=_load_json(args.candidate, MAX_CANDIDATE_BYTES),
+                expected_commit=args.expected_commit,
+                repository=(args.repository or root))
+            result = {
+                "status": "verified",
+                "equivalence_sha256": value["equivalence_sha256"],
             }
         elif args.command == "compile-mechanism":
             policy = loom_suite_plan.load_authority_policy(args.policy)

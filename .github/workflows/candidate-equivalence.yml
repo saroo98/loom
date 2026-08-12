@@ -1,0 +1,188 @@
+name: rebind-byte-identical-candidate
+
+on:
+  workflow_run:
+    workflows: [native-compatibility]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: candidate-equivalence-v2-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  rebind-reviewed-candidate:
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Resolve one byte-identical reviewed merge parent
+        id: identity
+        env:
+          MERGE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$MERGE_COMMIT"
+          read -ra ROW <<< "$(git rev-list --parents -n 1 "$MERGE_COMMIT")"
+          if test "${#ROW[@]}" -ne 3; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          MERGE_TREE="$(git rev-parse "${MERGE_COMMIT}^{tree}")"
+          MATCHES=()
+          for parent in "${ROW[@]:1}"; do
+            if test "$(git rev-parse "${parent}^{tree}")" = "$MERGE_TREE"; then
+              MATCHES+=("$parent")
+            fi
+          done
+          if test "${#MATCHES[@]}" -ne 1; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          echo "reviewed_commit=${MATCHES[0]}" >> "$GITHUB_OUTPUT"
+      - name: Resolve the sealed reviewed candidate admission
+        if: steps.identity.outputs.eligible == 'true'
+        id: admission
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_COMMIT: ${{ steps.identity.outputs.reviewed_commit }}
+        shell: bash
+        run: |
+          IFS=: read -r RUN_ID RUN_ATTEMPT <<< "$(python -B - <<'PY'
+          import json
+          import os
+          import subprocess
+
+          commit = os.environ["REVIEWED_COMMIT"]
+          completed = subprocess.run(
+              ["gh", "run", "list", "--workflow", "candidate-admission.yml",
+               "--commit", commit, "--event", "workflow_dispatch",
+               "--limit", "50", "--json",
+               "databaseId,attempt,headSha,status,conclusion"],
+              check=True, capture_output=True, text=True,
+          )
+          rows = json.loads(completed.stdout)
+          matches = [
+              row for row in rows
+              if row["headSha"] == commit and row["status"] == "completed"
+              and row["conclusion"] == "success"
+          ]
+          if len(matches) != 1:
+              raise SystemExit(0)
+          selected = matches[0]
+          print(f'{selected["databaseId"]}:{selected["attempt"]}')
+          PY
+          )"
+          if test -z "$RUN_ID" -o -z "$RUN_ATTEMPT"; then
+            echo "eligible=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=$RUN_ATTEMPT" >> "$GITHUB_OUTPUT"
+      - name: Download only reviewed admission and exact merge natives
+        if: steps.identity.outputs.eligible == 'true' && steps.admission.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_COMMIT: ${{ steps.identity.outputs.reviewed_commit }}
+          MERGE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+          NATIVE_RUN_ID: ${{ github.event.workflow_run.id }}
+          ADMISSION_RUN_ID: ${{ steps.admission.outputs.run_id }}
+        shell: bash
+        run: |
+          gh run download "$ADMISSION_RUN_ID" \
+            --pattern "candidate-admission-v2-${REVIEWED_COMMIT}" \
+            --dir reviewed-admission
+          gh run download "$NATIVE_RUN_ID" \
+            --pattern "native-helper-*-${MERGE_COMMIT}" --dir native-evidence
+          test "$(find reviewed-admission -name candidate-admission-v2.json -type f | wc -l)" -eq 1
+          test "$(find native-evidence -name receipt.json -type f | wc -l)" -eq 6
+      - name: Compile and verify the closed merge candidate rebinding
+        if: steps.identity.outputs.eligible == 'true' && steps.admission.outputs.eligible == 'true'
+        env:
+          REVIEWED_COMMIT: ${{ steps.identity.outputs.reviewed_commit }}
+          MERGE_COMMIT: ${{ github.event.workflow_run.head_sha }}
+          EQUIVALENCE_RUN_ID: ${{ github.run_id }}
+          EQUIVALENCE_RUN_ATTEMPT: ${{ github.run_attempt }}
+          ADMISSION_RUN_ID: ${{ steps.admission.outputs.run_id }}
+          ADMISSION_RUN_ATTEMPT: ${{ steps.admission.outputs.run_attempt }}
+        shell: bash
+        run: |
+          CANDIDATE="$(find reviewed-admission -name candidate-admission-v2.json -type f -print -quit)"
+          WORKFLOW_DIGEST="$(sha256sum .github/workflows/candidate-equivalence.yml | cut -d' ' -f1)"
+          ACTION_MANIFEST_DIGEST="$(printf '%s\n' \
+            'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+            'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
+            'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
+          ADMISSION_WORKFLOW_DIGEST="$(git show "${REVIEWED_COMMIT}:.github/workflows/candidate-admission.yml" | sha256sum | cut -d' ' -f1)"
+          ADMISSION_ACTION_MANIFEST_DIGEST="$(printf '%s\n' \
+            'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+            'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
+            'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
+          python -B tools/loom_qualification_v2.py compile-equivalence \
+            --root . --candidate "$CANDIDATE" \
+            --reviewed-commit "$REVIEWED_COMMIT" \
+            --merge-commit "$MERGE_COMMIT" \
+            --workflow-digest "$WORKFLOW_DIGEST" \
+            --action-manifest-digest "$ACTION_MANIFEST_DIGEST" \
+            --event-name workflow_run --run-id "$EQUIVALENCE_RUN_ID" \
+            --run-attempt "$EQUIVALENCE_RUN_ATTEMPT" \
+            --admission-workflow-digest "$ADMISSION_WORKFLOW_DIGEST" \
+            --admission-action-manifest-digest "$ADMISSION_ACTION_MANIFEST_DIGEST" \
+            --admission-run-id "$ADMISSION_RUN_ID" \
+            --admission-run-attempt "$ADMISSION_RUN_ATTEMPT" \
+            --output candidate-equivalence-v2.json
+          python -B tools/loom_qualification_v2.py verify-equivalence \
+            --root . --candidate "$CANDIDATE" \
+            --equivalence candidate-equivalence-v2.json \
+            --expected-commit "$MERGE_COMMIT"
+          ARGS=(compile-rebound-candidate --root . --candidate "$CANDIDATE" \
+            --equivalence candidate-equivalence-v2.json \
+            --expected-commit "$MERGE_COMMIT" \
+            --policy contracts/release-authority-policy-v2.json \
+            --output candidate-admission-v2.json)
+          while IFS= read -r receipt; do
+            ARGS+=(--native-directory "$(dirname "$receipt")")
+          done < <(find native-evidence -name receipt.json -type f | sort)
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$MODE" = certificate; then
+            ARGS+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          else
+            test "$MODE" = serial
+          fi
+          python -B tools/loom_qualification_v2.py "${ARGS[@]}"
+          SOURCE_TREE="$(python -B -c 'import os,sys; sys.path.insert(0,"tools"); import loom_subject_identity as s; print(s.git_tree_inventory(".",os.environ["MERGE_COMMIT"])["tree_sha256"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json; print(json.load(open("candidate-admission-v2.json",encoding="utf-8"))["public_root_sha256"])')"
+          VERIFY=(verify-candidate --root . --candidate candidate-admission-v2.json \
+            --expected-commit "$MERGE_COMMIT" --expected-tree "$SOURCE_TREE" \
+            --expected-public-root "$PUBLIC_ROOT" \
+            --policy contracts/release-authority-policy-v2.json)
+          if test "$MODE" = certificate; then
+            VERIFY+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          fi
+          python -B tools/loom_qualification_v2.py "${VERIFY[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.identity.outputs.eligible == 'true' && steps.admission.outputs.eligible == 'true'
+        with:
+          name: candidate-admission-v2-${{ github.event.workflow_run.head_sha }}
+          path: |
+            candidate-admission-v2.json
+            candidate-equivalence-v2.json
+          retention-days: 30
+          if-no-files-found: error
