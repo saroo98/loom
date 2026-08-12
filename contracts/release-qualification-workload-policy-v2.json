@@ -15,7 +15,7 @@
     "test_qual_general_b",
     "test_qual_serial"
   ],
-  "policy_sha256": "99a8b869df755d02cb0ef49c7fff756fd7eca42822f6914b1c2ab8857a84e417",
+  "policy_sha256": "ecd431ea659931ba754e8e68c5ca2718be4a31bfd9698ba90c5e20638d9cd941",
   "required_observations": 10,
   "schema_version": 2,
   "source_files": [
@@ -26,5 +26,5 @@
     "qualification/workload-v2/test_qual_serial.py"
   ],
   "workload_kind": "mechanism-v2",
-  "workload_source_sha256": "d72f37b8a5531859344f383456b71bae328933b2a572b5397d448e0bd85efe45"
+  "workload_source_sha256": "2ea31608332ece12c9fd985147a4a3b084cb098fd4cc364ff848878a3420cbd9"
 }
