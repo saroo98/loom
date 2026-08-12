@@ -246,11 +246,14 @@ class SuitePlanTests(unittest.TestCase):
 
             marker = root.parent / "late-discovery-descendant.txt"
             child = (
-                "import time; from pathlib import Path; time.sleep(1); "
+                "import sys,time; from pathlib import Path; "
+                "sys.stdin.buffer.read(); time.sleep(1); "
                 f"Path({str(marker)!r}).write_text('survived')")
             (root / "test_waits.py").write_text(
-                "import subprocess,sys,unittest\n"
-                f"subprocess.Popen([sys.executable, '-c', {child!r}])\n"
+                "import atexit,subprocess,sys,unittest\n"
+                f"CHILD = subprocess.Popen([sys.executable, '-c', {child!r}], "
+                "stdin=subprocess.PIPE)\n"
+                "atexit.register(lambda stream=CHILD.stdin: None)\n"
                 "class Waits(unittest.TestCase):\n"
                 "    def test_loaded(self): pass\n",
                 encoding="utf-8")
