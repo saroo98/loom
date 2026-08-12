@@ -11,10 +11,73 @@ from pathlib import Path
 from unittest import mock
 
 import loom_operation_supervisor
+import loom_suite_harness
 import loom_test
 
 
 class TestRunnerTests(unittest.TestCase):
+    def test_generic_harness_is_product_independent_and_legacy_runner_delegates(self):
+        forbidden = {
+            "loom_lifecycle", "loom_memory", "loom_owner",
+            "loom_orchestrator", "loom_runtime", "loom_update",
+            "loom_vault", "v11_test_support",
+        }
+        tree = __import__("ast").parse((
+            Path(loom_suite_harness.__file__).read_text(encoding="utf-8")))
+        imports = {
+            alias.name
+            for node in __import__("ast").walk(tree)
+            if isinstance(node, __import__("ast").Import)
+            for alias in node.names
+        }
+        self.assertTrue(forbidden.isdisjoint(imports))
+        self.assertIs(loom_suite_harness.TimingResult, loom_test.TimingResult)
+        self.assertIs(loom_suite_harness.run_modules, loom_test.run_modules)
+        self.assertEqual(
+            loom_suite_harness.PUBLIC_ERROR_CODES,
+            loom_test.PUBLIC_ERROR_CODES)
+        self.assertEqual(
+            loom_suite_harness.AUTHORIZED_SKIP_REASON_CODES,
+            loom_test.AUTHORIZED_SKIP_REASON_CODES)
+
+    def test_diagnostic_policy_is_closed_current_and_rejects_forgery(self):
+        root = Path(__file__).resolve().parents[1]
+        current = loom_suite_harness.load_diagnostic_policy(root)
+        self.assertIn("HOST_UNVERIFIED", current["public_error_codes"])
+        self.assertIn(
+            "NATIVE_HELPER_BUILD_TIMEOUT", current["public_error_codes"])
+        forged = {**current, "policy_sha256": "0" * 64}
+        with self.assertRaisesRegex(
+                loom_suite_harness.SuiteHarnessError, "digest"):
+            loom_suite_harness.validate_diagnostic_policy(forged)
+        unknown = {**current, "private_messages": ["forbidden"]}
+        with self.assertRaisesRegex(
+                loom_suite_harness.SuiteHarnessError, "fields"):
+            loom_suite_harness.validate_diagnostic_policy(unknown)
+
+    def test_progress_checkpoint_is_closed_and_non_authorizing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "test_progress.py").write_text(
+                "import unittest\n"
+                "class Progress(unittest.TestCase):\n"
+                "    def test_first(self): pass\n"
+                "    def test_second(self): pass\n",
+                encoding="utf-8")
+            checkpoint = root / "progress.json"
+            report = loom_suite_harness.run_modules(
+                ["test_progress"], start_dir=root, verbosity=0,
+                progress_path=checkpoint)
+            value = loom_suite_harness.load_progress_checkpoint(checkpoint)
+        self.assertTrue(report["successful"])
+        self.assertEqual("completed", value["status"])
+        self.assertEqual(2, value["completed_test_count"])
+        self.assertEqual(
+            "test_progress.Progress.test_second",
+            value["last_started_test"])
+        self.assertEqual(value["last_started_test"], value["last_completed_test"])
+        self.assertFalse(value["authorizing"])
+
     @staticmethod
     def _supervisor_receipt(primary_failure, *, survivors=True, protected=True,
                             operation_id="00000000-0000-4000-8000-000000000001"):

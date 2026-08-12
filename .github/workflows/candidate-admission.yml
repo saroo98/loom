@@ -1,0 +1,118 @@
+name: compile-exact-candidate-admission-v2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: candidate-admission-v2-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  compile-exact-admission:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+      - name: Resolve successful exact-head candidate evidence runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          python -B - <<'PY' > "$RUNNER_TEMP/candidate-runs.env"
+          import json
+          import os
+          import subprocess
+
+          sha = os.environ["GITHUB_SHA"]
+
+          def exact_success(workflow):
+              completed = subprocess.run(
+                  ["gh", "run", "list", "--workflow", workflow,
+                   "--commit", sha, "--limit", "50", "--json",
+                   "databaseId,headSha,status,conclusion"],
+                  check=True, capture_output=True, text=True,
+              )
+              rows = json.loads(completed.stdout)
+              matches = [
+                  row for row in rows
+                  if row["headSha"] == sha and row["status"] == "completed"
+                  and row["conclusion"] == "success"
+              ]
+              if not matches:
+                  raise SystemExit(f"no successful exact-head {workflow} run")
+              return max(int(row["databaseId"]) for row in matches)
+
+          print(f"QUALITY_RUN={exact_success('quality.yml')}")
+          print(f"COMPATIBILITY_RUN={exact_success('compatibility.yml')}")
+          PY
+          source "$RUNNER_TEMP/candidate-runs.env"
+          test -n "$QUALITY_RUN" -a -n "$COMPATIBILITY_RUN"
+          echo "QUALITY_RUN=$QUALITY_RUN" >> "$GITHUB_ENV"
+          echo "COMPATIBILITY_RUN=$COMPATIBILITY_RUN" >> "$GITHUB_ENV"
+      - name: Download only the sealed exact-head admission inputs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh run download "$QUALITY_RUN" \
+            --pattern quality-candidate-evidence-v2 --dir quality-evidence
+          gh run download "$COMPATIBILITY_RUN" \
+            --pattern compatibility-candidate-evidence-v2 \
+            --dir compatibility-evidence
+          gh run download "$COMPATIBILITY_RUN" \
+            --pattern "native-helper-*-${GITHUB_SHA}" --dir native-evidence
+          test "$(find quality-evidence -name quality-candidate-bundle-v2.json -type f | wc -l)" -eq 1
+          test "$(find compatibility-evidence -name compatibility-candidate-bundle-v2.json -type f | wc -l)" -eq 1
+          test "$(find native-evidence -name receipt.json -type f | wc -l)" -eq 6
+      - name: Compile and independently verify exact candidate admission
+        shell: bash
+        run: |
+          QUALITY_BUNDLE="$(find quality-evidence -name quality-candidate-bundle-v2.json -type f -print -quit)"
+          COMPATIBILITY_BUNDLE="$(find compatibility-evidence -name compatibility-candidate-bundle-v2.json -type f -print -quit)"
+          ARGS=(compile-candidate --root . \
+            --quality-bundle "$QUALITY_BUNDLE" \
+            --compatibility-bundle "$COMPATIBILITY_BUNDLE" \
+            --policy contracts/release-authority-policy-v2.json \
+            --output candidate-admission-v2.json)
+          while IFS= read -r receipt; do
+            ARGS+=(--native-directory "$(dirname "$receipt")")
+          done < <(find native-evidence -name receipt.json -type f | sort)
+          MODE="$(python -B -c 'import json; print(json.load(open("contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$MODE" = certificate; then
+            test -f contracts/release-mechanism-qualification-v2.json
+            ARGS+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          else
+            test "$MODE" = serial
+            test ! -f contracts/release-mechanism-qualification-v2.json
+          fi
+          python -B tools/loom_qualification_v2.py "${ARGS[@]}"
+          SOURCE_TREE="$(python -B -c 'import os; import sys; sys.path.insert(0,"tools"); import loom_subject_identity as s; print(s.git_tree_inventory(".",os.environ["GITHUB_SHA"])["tree_sha256"])')"
+          PUBLIC_ROOT="$(python -B -c 'import json; print(json.load(open("candidate-admission-v2.json",encoding="utf-8"))["public_root_sha256"])')"
+          VERIFY=(verify-candidate --root . \
+            --candidate candidate-admission-v2.json \
+            --expected-commit "$GITHUB_SHA" --expected-tree "$SOURCE_TREE" \
+            --expected-public-root "$PUBLIC_ROOT" \
+            --policy contracts/release-authority-policy-v2.json)
+          if test "$MODE" = certificate; then
+            VERIFY+=(--mechanism contracts/release-mechanism-qualification-v2.json)
+          fi
+          python -B tools/loom_qualification_v2.py "${VERIFY[@]}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: candidate-admission-v2-${{ github.sha }}
+          path: candidate-admission-v2.json
+          retention-days: 30
+          if-no-files-found: error

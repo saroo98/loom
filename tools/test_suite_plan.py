@@ -34,6 +34,81 @@ ENVIRONMENT = {
 
 
 class SuitePlanTests(unittest.TestCase):
+    AUTHORITY_POLICY_BODY = {
+        "schema_version": 2,
+        "authority_mode": "serial",
+        "mechanism_schema": "release-mechanism-qualification-v2",
+        "candidate_schema": "release-candidate-admission-v2",
+        "release_schema": "release-certificate-v2",
+    }
+
+    def test_v2_authority_policy_is_closed_and_domain_separated(self):
+        policy = loom_suite_plan.seal_authority_policy(
+            self.AUTHORITY_POLICY_BODY)
+        self.assertEqual(
+            policy,
+            loom_suite_plan.validate_authority_policy(policy))
+        self.assertNotEqual(
+            loom_suite_plan.digest(self.AUTHORITY_POLICY_BODY),
+            policy["policy_sha256"])
+
+        for label, mutation in (
+                ("unknown", {**self.AUTHORITY_POLICY_BODY, "workers": 4}),
+                ("missing", {
+                    key: value for key, value in self.AUTHORITY_POLICY_BODY.items()
+                    if key != "release_schema"}),
+                ("mode", {
+                    **self.AUTHORITY_POLICY_BODY,
+                    "authority_mode": "shadow"}),
+                ("schema", {
+                    **self.AUTHORITY_POLICY_BODY,
+                    "candidate_schema": "release-candidate-admission-v1"})):
+            with self.subTest(label=label), self.assertRaises(
+                    loom_suite_plan.SuitePlanError):
+                loom_suite_plan.seal_authority_policy(mutation)
+
+        forged = {
+            **self.AUTHORITY_POLICY_BODY,
+            "policy_sha256": loom_suite_plan.digest(
+                self.AUTHORITY_POLICY_BODY),
+        }
+        with self.assertRaisesRegex(
+                loom_suite_plan.SuitePlanError, "authority policy digest"):
+            loom_suite_plan.validate_authority_policy(forged)
+
+    def test_v2_authority_and_v1_candidate_policy_loaders_are_distinct(self):
+        candidate = loom_suite_plan.seal_policy({
+            "schema_version": 1,
+            "authority_mode": "certificate",
+            "exclusive_modules": [],
+        })
+        authority = loom_suite_plan.seal_authority_policy(
+            self.AUTHORITY_POLICY_BODY)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            authority_path = root / "authority.json"
+            candidate_path = root / "candidate.json"
+            authority_path.write_text(
+                json.dumps(authority), encoding="utf-8")
+            candidate_path.write_text(
+                json.dumps(candidate), encoding="utf-8")
+            self.assertEqual(
+                "serial",
+                loom_suite_plan.load_authority_policy(
+                    authority_path)["authority_mode"])
+            self.assertEqual(
+                "certificate",
+                loom_suite_plan.load_candidate_policy(
+                    candidate_path)["authority_mode"])
+
+            authority_path.write_text(
+                '{"schema_version":2,"schema_version":2}',
+                encoding="utf-8")
+            with self.assertRaisesRegex(
+                    loom_suite_plan.SuitePlanError,
+                    "release authority policy is invalid"):
+                loom_suite_plan.load_authority_policy(authority_path)
+
     def test_inventory_is_complete_ordered_and_fails_on_import_errors(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

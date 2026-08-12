@@ -1,0 +1,30 @@
+{
+  "exclusive_modules": [
+    "test_qual_exclusive"
+  ],
+  "expected_tests": [
+    "test_qual_exclusive.QualificationExclusiveTests.test_exclusive_lane",
+    "test_qual_general_a.QualificationGeneralATests.test_canonical_projection",
+    "test_qual_general_a.QualificationGeneralATests.test_skip_policy_projection",
+    "test_qual_general_b.QualificationGeneralBTests.test_disposable_writable_root",
+    "test_qual_serial.QualificationSerialTests.test_serial_baseline"
+  ],
+  "modules": [
+    "test_qual_exclusive",
+    "test_qual_general_a",
+    "test_qual_general_b",
+    "test_qual_serial"
+  ],
+  "policy_sha256": "99a8b869df755d02cb0ef49c7fff756fd7eca42822f6914b1c2ab8857a84e417",
+  "required_observations": 10,
+  "schema_version": 2,
+  "source_files": [
+    "qualification/workload-v2/fixture_support.py",
+    "qualification/workload-v2/test_qual_exclusive.py",
+    "qualification/workload-v2/test_qual_general_a.py",
+    "qualification/workload-v2/test_qual_general_b.py",
+    "qualification/workload-v2/test_qual_serial.py"
+  ],
+  "workload_kind": "mechanism-v2",
+  "workload_source_sha256": "d72f37b8a5531859344f383456b71bae328933b2a572b5397d448e0bd85efe45"
+}

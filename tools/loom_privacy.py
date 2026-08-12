@@ -25,6 +25,10 @@ MAX_SCAN_FILE_BYTES = 64 * 1024 * 1024
 MAX_QUALIFICATION_SCAN_BYTES = 95_000_000
 QUALIFICATION_CONTRACT_PATH = (
     "contracts/release-suite-qualification-v1.json")
+QUALIFICATION_CONTRACT_PATHS = frozenset({
+    QUALIFICATION_CONTRACT_PATH,
+    "contracts/release-mechanism-qualification-v2.json",
+})
 MAX_EXPORT_BYTES = 64 * 1024 * 1024
 SAFE_RECEIVER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 TOKEN_ENCODINGS = ("utf-8", "utf-16-le", "utf-16-be")
@@ -78,7 +82,7 @@ class PrivacyError(RuntimeError):
 
 def _publication_file_scan_limit(relative):
     return (MAX_QUALIFICATION_SCAN_BYTES
-            if relative == QUALIFICATION_CONTRACT_PATH
+            if relative in QUALIFICATION_CONTRACT_PATHS
             else MAX_SCAN_FILE_BYTES)
 
 

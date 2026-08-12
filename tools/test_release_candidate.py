@@ -167,6 +167,9 @@ class ReleaseCandidateTests(unittest.TestCase):
                              result["candidate_b"]["sha256"])
             self.assertEqual(expected, result["public_cut"]["root_sha256"])
             self.assertRegex(result["receipt_sha256"], r"^[0-9a-f]{64}$")
+            self.assertEqual(
+                result,
+                loom_release_candidate.verify_reproducibility_receipt(result))
             report = loom_lint.Report()
             loom_lint.validate_schema(
                 report, __file__, result,

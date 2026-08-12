@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-qualification-batch-v2.schema.json",
+  "title": "One complete single-run mechanism qualification batch",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "evidence_domain", "consumer",
+    "source_commit", "repository_source_tree_sha256",
+    "mechanism_manifest_sha256", "boundary_sha256",
+    "workload_policy_sha256", "workload_source_sha256",
+    "timing_profile_sha256", "fixture_sha256", "workflow_path",
+    "workflow_digest", "action_manifest_digest", "run_id", "run_attempt",
+    "observations", "observation_count", "family_ids", "batch_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"const": "certified"},
+    "evidence_domain": {"const": "mechanism-qualification-batch-v2"},
+    "consumer": {"enum": ["quality", "compatibility"]},
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "repository_source_tree_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "boundary_sha256": {"$ref": "#/$defs/digest"},
+    "workload_policy_sha256": {"$ref": "#/$defs/digest"},
+    "workload_source_sha256": {"$ref": "#/$defs/digest"},
+    "timing_profile_sha256": {"$ref": "#/$defs/digest"},
+    "fixture_sha256": {"$ref": "#/$defs/digest"},
+    "workflow_path": {
+      "enum": [
+        ".github/workflows/qualification-quality.yml",
+        ".github/workflows/qualification-compatibility.yml"
+      ]
+    },
+    "workflow_digest": {"$ref": "#/$defs/digest"},
+    "action_manifest_digest": {"$ref": "#/$defs/digest"},
+    "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "run_attempt": {"type": "string", "minLength": 1, "maxLength": 128},
+    "observations": {
+      "type": "array", "minItems": 15, "maxItems": 15,
+      "items": {"$ref": "release-qualification-observation-v2.schema.json"}
+    },
+    "observation_count": {"const": 15},
+    "family_ids": {
+      "type": "array", "minItems": 15, "maxItems": 15,
+      "uniqueItems": true, "items": {"$ref": "#/$defs/digest"}
+    },
+    "batch_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

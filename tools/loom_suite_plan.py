@@ -2,6 +2,7 @@
 """Closed test inventories and deterministic release-suite shard plans."""
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -12,7 +13,7 @@ import unittest
 from pathlib import Path
 
 import loom_operation_supervisor
-import loom_privacy
+import loom_publication_privacy
 import loom_subject_identity
 import loom_reliability
 
@@ -40,6 +41,16 @@ DEFAULT_EXCLUSIVE_MODULES = (
     "test_recovery_contract_schemas",
     "test_loom_mutation",
 )
+AUTHORITY_POLICY_FIELDS = {
+    "schema_version", "authority_mode", "mechanism_schema",
+    "candidate_schema", "release_schema",
+}
+AUTHORITY_POLICY_SCHEMA_IDENTIFIERS = {
+    "mechanism_schema": "release-mechanism-qualification-v2",
+    "candidate_schema": "release-candidate-admission-v2",
+    "release_schema": "release-certificate-v2",
+}
+AUTHORITY_POLICY_DIGEST_DOMAIN = b"loom.release-authority-policy.v2\0"
 
 SUITE_PLAN_ERROR_CODES = {
     "test discovery failed": "SUITE_INVENTORY_DISCOVERY_FAILED",
@@ -358,10 +369,10 @@ def inventory(test_root, *, subject, environment, harness_sha256,
         if not runtime_clean:
             raise SuitePlanError("inventory runtime cleanup failed")
         try:
-            if any(loom_privacy._isolated_secret_signature_match(stream)
+            if any(loom_publication_privacy._isolated_secret_signature_match(stream)
                    is not None for stream in (stdout, stderr)):
                 raise SuitePlanError("inventory privacy validation failed")
-        except loom_privacy.PrivacyError as exc:
+        except loom_publication_privacy.PrivacyError as exc:
             raise SuitePlanError("inventory privacy validation failed") from exc
         expected_entries = {"operation", "request.json", "inventory.json"}
         observed_entries = {entry.name for entry in discovery_root.iterdir()}
@@ -378,10 +389,10 @@ def inventory(test_root, *, subject, environment, harness_sha256,
         inventory_value = _validate_seal(
             inventory_value, "inventory_sha256", seal_inventory)
         try:
-            if loom_privacy._isolated_secret_signature_match(
+            if loom_publication_privacy._isolated_secret_signature_match(
                     canonical(inventory_value)) is not None:
                 raise SuitePlanError("inventory privacy validation failed")
-        except loom_privacy.PrivacyError as exc:
+        except loom_publication_privacy.PrivacyError as exc:
             raise SuitePlanError("inventory privacy validation failed") from exc
         if inventory_value["subject"] != subject \
                 or inventory_value["environment"] != environment \
@@ -442,6 +453,50 @@ def seal_policy(value):
         "schema_version": 1, "authority_mode": value["authority_mode"],
         "exclusive_modules": sorted(modules),
     }, "policy_sha256")
+
+
+def seal_authority_policy(value):
+    """Seal the v2 release-authority decision in its own digest domain."""
+    if not isinstance(value, dict) or set(value) != AUTHORITY_POLICY_FIELDS \
+            or value.get("schema_version") != 2 \
+            or value.get("authority_mode") not in {"serial", "certificate"} \
+            or any(value.get(field) != expected for field, expected in
+                   AUTHORITY_POLICY_SCHEMA_IDENTIFIERS.items()):
+        raise SuitePlanError("release authority policy fields are invalid")
+    body = {
+        "schema_version": 2,
+        "authority_mode": value["authority_mode"],
+        **AUTHORITY_POLICY_SCHEMA_IDENTIFIERS,
+    }
+    return {
+        **body,
+        "policy_sha256": hashlib.sha256(
+            AUTHORITY_POLICY_DIGEST_DOMAIN + canonical(body)).hexdigest(),
+    }
+
+
+def validate_authority_policy(value):
+    if not isinstance(value, dict) or "policy_sha256" not in value:
+        raise SuitePlanError("release authority policy digest is missing")
+    body = {key: item for key, item in value.items()
+            if key != "policy_sha256"}
+    try:
+        expected = seal_authority_policy(body)
+    except SuitePlanError as exc:
+        raise SuitePlanError("release authority policy fields are invalid") from exc
+    if value != expected:
+        raise SuitePlanError("release authority policy digest is invalid")
+    return value
+
+
+def load_authority_policy(path):
+    return validate_authority_policy(_load(path, "release authority policy"))
+
+
+def load_candidate_policy(path):
+    return _validate_seal(
+        _load(path, "candidate shard policy"),
+        "policy_sha256", seal_policy)
 
 
 def _validate_seal(value, field, sealer):

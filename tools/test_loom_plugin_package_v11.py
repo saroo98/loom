@@ -1,22 +1,69 @@
 """Deterministic marketplace runtime packaging and opaque-artifact firewall tests."""
 
+import ast
 import hashlib
 import json
 import os
+import shutil
 import stat
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest import mock
 
 import loom_plugin_package
 import loom_privacy
+import loom_product_interface
 import loom_vault
 import v11_test_support
 from v11_test_support import build_vault_helper, package_evidence, package_source_commit
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+class PluginPackageProjectionTests(unittest.TestCase):
+    def test_product_interface_is_current_and_packaging_has_no_vault_import(self):
+        value = loom_product_interface.load(ROOT)
+        self.assertEqual(1, value["vault_schema_min"])
+        self.assertEqual(
+            loom_vault.VAULT_SCHEMA_VERSION, value["vault_schema_max"])
+        imports = {
+            alias.name
+            for node in ast.walk(ast.parse(
+                (ROOT / "tools" / "loom_plugin_package.py").read_text(
+                    encoding="utf-8")))
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        }
+        self.assertNotIn("loom_vault", imports)
+
+    def test_product_interface_rejects_stale_forged_and_unknown_fields(self):
+        current = loom_product_interface.derive(ROOT)
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "interface.json"
+            stale_body = {
+                key: value for key, value in current.items()
+                if key != "interface_sha256"}
+            stale_body["vault_schema_max"] -= 1
+            stale = loom_product_interface.seal(stale_body)
+            path.write_text(json.dumps(stale), encoding="utf-8")
+            with self.assertRaisesRegex(
+                    loom_product_interface.ProductInterfaceError, "stale"):
+                loom_product_interface.load(ROOT, path=path)
+
+            forged = {**current, "interface_sha256": "0" * 64}
+            path.write_text(json.dumps(forged), encoding="utf-8")
+            with self.assertRaisesRegex(
+                    loom_product_interface.ProductInterfaceError, "digest"):
+                loom_product_interface.load(ROOT, path=path)
+
+            unknown = {**current, "private_runtime_state": "forbidden"}
+            path.write_text(json.dumps(unknown), encoding="utf-8")
+            with self.assertRaisesRegex(
+                    loom_product_interface.ProductInterfaceError, "fields"):
+                loom_product_interface.load(ROOT, path=path)
 
 
 class PluginPackageTests(unittest.TestCase):
@@ -110,6 +157,38 @@ class PluginPackageTests(unittest.TestCase):
                     ROOT, temp / "bad-evidence", helpers, receipts, evidence,
                     version="1.1.0", release_sequence=2,
                     source_commit=package_source_commit(ROOT))
+
+    def test_near_95mb_v2_authority_record_never_enters_plugin_or_runtime_archives(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            temp = Path(temporary)
+            source = temp / "source"
+            shutil.copytree(
+                ROOT, source,
+                ignore=shutil.ignore_patterns(
+                    ".git", "__pycache__", "*.pyc", "*.pyo"))
+            authority = (
+                source / "contracts" /
+                "release-mechanism-qualification-v2.json")
+            with authority.open("wb") as stream:
+                stream.truncate(90_000_000)
+            helpers, receipts, evidence = package_evidence(
+                source, temp / "evidence", loom_plugin_package.PLATFORMS)
+            output = temp / "plugin"
+
+            loom_plugin_package.build(
+                source, output, helpers, receipts, evidence,
+                version="1.9.0", release_sequence=31,
+                source_commit=package_source_commit(source))
+
+            relative = "contracts/release-mechanism-qualification-v2.json"
+            self.assertTrue(authority.is_file())
+            self.assertEqual(90_000_000, authority.stat().st_size)
+            self.assertFalse((output / relative).exists())
+            for platform in loom_plugin_package.PLATFORMS:
+                runtime = output / "runtime-payload" / platform / \
+                    "loom-runtime.zip"
+                with zipfile.ZipFile(runtime) as archive:
+                    self.assertNotIn(relative, archive.namelist())
 
     def test_exact_native_receipts_are_self_bound_and_legacy_receipts_still_read(self):
         with tempfile.TemporaryDirectory() as temporary:

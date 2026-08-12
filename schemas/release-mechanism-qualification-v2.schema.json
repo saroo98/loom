@@ -1,0 +1,165 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-mechanism-qualification-v2.schema.json",
+  "title": "Complete repeated release-mechanism qualification",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "evidence_domain",
+    "required_observations",
+    "mechanism_manifest_sha256",
+    "boundary_sha256",
+    "workload_policy_sha256",
+    "workload_source_sha256",
+    "timing_profile_sha256",
+    "authority_semantics_sha256",
+    "families",
+    "family_count",
+    "fault_receipts",
+    "all_families_nonregressing",
+    "qualification_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"const": "qualified"},
+    "evidence_domain": {"const": "mechanism-qualification-v2"},
+    "required_observations": {"const": 10},
+    "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "boundary_sha256": {"$ref": "#/$defs/digest"},
+    "workload_policy_sha256": {"$ref": "#/$defs/digest"},
+    "workload_source_sha256": {"$ref": "#/$defs/digest"},
+    "timing_profile_sha256": {"$ref": "#/$defs/digest"},
+    "authority_semantics_sha256": {"$ref": "#/$defs/digest"},
+    "families": {
+      "type": "array",
+      "minItems": 30,
+      "maxItems": 30,
+      "items": {"$ref": "#/$defs/family"}
+    },
+    "family_count": {"const": 30},
+    "fault_receipts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {"$ref": "#/$defs/faultReceipt"}
+    },
+    "all_families_nonregressing": {"const": true},
+    "qualification_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "family": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "evidence_domain", "consumer", "requested_label",
+        "image_os", "architecture", "python_implementation", "python_minor",
+        "family_id", "mechanism_manifest_sha256", "boundary_sha256",
+        "workload_policy_sha256", "workload_source_sha256",
+        "timing_profile_sha256", "observation_count", "observations",
+        "source_commits", "repository_source_tree_sha256s",
+        "serial_microseconds", "sharded_microseconds", "paired_deltas",
+        "serial_observed_median_microseconds",
+        "serial_observed_max_microseconds",
+        "sharded_observed_median_microseconds",
+        "sharded_observed_max_microseconds", "all_observations_nonregressing",
+        "family_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "evidence_domain": {"const": "mechanism-qualification-v2"},
+        "consumer": {"enum": ["quality", "compatibility"]},
+        "requested_label": {"type": "string", "minLength": 1, "maxLength": 128},
+        "image_os": {"type": "string", "minLength": 1, "maxLength": 128},
+        "architecture": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_implementation": {"type": "string", "minLength": 1, "maxLength": 128},
+        "python_minor": {"enum": ["3.10", "3.11", "3.12", "3.13", "3.14"]},
+        "family_id": {"$ref": "#/$defs/digest"},
+        "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+        "boundary_sha256": {"$ref": "#/$defs/digest"},
+        "workload_policy_sha256": {"$ref": "#/$defs/digest"},
+        "workload_source_sha256": {"$ref": "#/$defs/digest"},
+        "timing_profile_sha256": {"$ref": "#/$defs/digest"},
+        "observation_count": {"const": 10},
+        "observations": {
+          "type": "array", "minItems": 10, "maxItems": 10,
+          "items": {"$ref": "release-qualification-observation-v2.schema.json"}
+        },
+        "source_commits": {
+          "type": "array", "minItems": 1, "maxItems": 10,
+          "items": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+        },
+        "repository_source_tree_sha256s": {
+          "type": "array", "minItems": 1, "maxItems": 10,
+          "items": {"$ref": "#/$defs/digest"}
+        },
+        "serial_microseconds": {
+          "type": "array", "minItems": 10, "maxItems": 10,
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "sharded_microseconds": {
+          "type": "array", "minItems": 10, "maxItems": 10,
+          "items": {"type": "integer", "minimum": 1}
+        },
+        "paired_deltas": {
+          "type": "array", "minItems": 10, "maxItems": 10,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["observation_sha256", "delta_microseconds"],
+            "properties": {
+              "observation_sha256": {"$ref": "#/$defs/digest"},
+              "delta_microseconds": {"type": "integer"}
+            }
+          }
+        },
+        "serial_observed_median_microseconds": {"type": "integer", "minimum": 1},
+        "serial_observed_max_microseconds": {"type": "integer", "minimum": 1},
+        "sharded_observed_median_microseconds": {"type": "integer", "minimum": 1},
+        "sharded_observed_max_microseconds": {"type": "integer", "minimum": 1},
+        "all_observations_nonregressing": {"const": true},
+        "family_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "faultReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "evidence_domain", "platform",
+        "mechanism_manifest_sha256", "boundary_sha256",
+        "workload_policy_sha256", "workload_source_sha256", "environment",
+        "faults", "fault_receipt_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "evidence_domain": {"const": "mechanism-qualification-v2"},
+        "platform": {"enum": ["linux", "macos", "windows"]},
+        "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+        "boundary_sha256": {"$ref": "#/$defs/digest"},
+        "workload_policy_sha256": {"$ref": "#/$defs/digest"},
+        "workload_source_sha256": {"$ref": "#/$defs/digest"},
+        "environment": {
+          "$ref": "exact-cut-ci-receipt-v2.schema.json#/properties/environment"
+        },
+        "faults": {
+          "type": "array", "minItems": 9, "maxItems": 9,
+          "items": {
+            "type": "object", "additionalProperties": false,
+            "required": ["code", "passed", "evidence_sha256"],
+            "properties": {
+              "code": {"enum": [
+                "candidate-mutation", "malformed-evidence", "missing-test",
+                "privacy-leakage", "survivor-cleanup", "timeout",
+                "unauthorized-skip", "unexpected-test", "wrong-subject"
+              ]},
+              "passed": {"const": true},
+              "evidence_sha256": {"$ref": "#/$defs/digest"}
+            }
+          }
+        },
+        "fault_receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

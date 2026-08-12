@@ -8,6 +8,8 @@ from pathlib import Path
 
 import loom_capability
 import loom_exact_cut_ci
+import loom_qualification_v2
+import loom_release_certificate
 import loom_reliability
 import loom_test
 import loom_suite_certificate
@@ -19,6 +21,30 @@ class ReleaseSuiteError(RuntimeError):
 
 
 MAX_QUALIFICATION_BYTES = 95_000_000
+CANDIDATE_SUITE_FIELDS = {
+    "schema_version", "status", "mode", "subject",
+    "authority_policy_sha256", "mechanism_manifest_sha256",
+    "mechanism_qualification_sha256", "candidate_admission_sha256",
+    "matrices", "suite_certificate_sha256",
+}
+RELEASE_AUTHORITY_FIELDS = {
+    "schema_version", "status", "mode", "release_status", "subject",
+    "authority_policy_sha256", "mechanism_manifest_sha256",
+    "mechanism_qualification_sha256", "candidate_admission_sha256",
+    "candidate_suite_certificate_sha256", "release_certificate_sha256",
+    "tag", "archive_sha256", "release_authority_sha256",
+}
+
+
+def load_v2_policies(*, authority_path, candidate_path):
+    """Load v2 authority and legacy candidate-sharding policy independently."""
+    try:
+        return {
+            "authority": loom_suite_plan.load_authority_policy(authority_path),
+            "candidate": loom_suite_plan.load_candidate_policy(candidate_path),
+        }
+    except loom_suite_plan.SuitePlanError as exc:
+        raise ReleaseSuiteError(f"release policy is invalid: {exc}") from exc
 
 
 def _strict_object(pairs):
@@ -148,6 +174,153 @@ def _validate_serial_report(report, *, expected_commit, expected_root):
             or report.get("returncode") != (0 if not observed_skips else 1)):
         raise ReleaseSuiteError("normalized serial result fields are inconsistent")
     return outcomes, environment["environment_sha256"]
+
+
+def certify_candidate_admission(admission, *, mechanism, authority_policy,
+                                manifest, workload, expected_commit,
+                                expected_tree, expected_root):
+    """Consume one exact v2 admission without rerunning candidate behavior."""
+    try:
+        admission = loom_qualification_v2.verify_candidate(
+            admission, expected_commit=expected_commit,
+            expected_tree=expected_tree, expected_public_root=expected_root,
+            mechanism=mechanism, policy=authority_policy,
+            manifest=manifest, workload=workload)
+        authority_policy = loom_suite_plan.validate_authority_policy(
+            authority_policy)
+    except (loom_qualification_v2.QualificationV2Error,
+            loom_suite_plan.SuitePlanError) as exc:
+        raise ReleaseSuiteError(
+            f"candidate admission is invalid: {exc}") from exc
+    body = {
+        "schema_version": 3, "status": "certified",
+        "mode": authority_policy["authority_mode"],
+        "subject": {
+            "source_commit": admission["source_commit"],
+            "source_tree_sha256": admission[
+                "repository_source_tree_sha256"],
+            "public_root_sha256": admission["public_root_sha256"],
+        },
+        "authority_policy_sha256": authority_policy["policy_sha256"],
+        "mechanism_manifest_sha256": admission[
+            "mechanism_manifest_sha256"],
+        "mechanism_qualification_sha256": admission[
+            "mechanism_qualification_sha256"],
+        "candidate_admission_sha256": admission[
+            "candidate_admission_sha256"],
+        "matrices": admission["matrix_certificates"],
+    }
+    return {**body, "suite_certificate_sha256":
+            loom_suite_plan.digest(body)}
+
+
+def verify_candidate_admission(value, *, admission, mechanism,
+                               authority_policy, manifest, workload,
+                               expected_commit, expected_tree, expected_root):
+    if not isinstance(value, dict) or set(value) != CANDIDATE_SUITE_FIELDS:
+        raise ReleaseSuiteError("candidate suite certificate is not closed")
+    body = {key: item for key, item in value.items()
+            if key != "suite_certificate_sha256"}
+    if value.get("schema_version") != 3 \
+            or value.get("status") != "certified" \
+            or value.get("suite_certificate_sha256") != \
+            loom_suite_plan.digest(body):
+        raise ReleaseSuiteError("candidate suite certificate is invalid")
+    expected = certify_candidate_admission(
+        admission, mechanism=mechanism, authority_policy=authority_policy,
+        manifest=manifest, workload=workload,
+        expected_commit=expected_commit, expected_tree=expected_tree,
+        expected_root=expected_root)
+    if expected != value:
+        raise ReleaseSuiteError("candidate suite certificate is inconsistent")
+    return value
+
+
+def certify_release_authority(candidate_suite, release_certificate, *,
+                              candidate_admission, expected_tag,
+                              expected_asset=None):
+    """Require both exact candidate and release certificates for authority."""
+    if not isinstance(candidate_suite, dict) \
+            or set(candidate_suite) != CANDIDATE_SUITE_FIELDS:
+        raise ReleaseSuiteError("candidate suite certificate is not closed")
+    candidate_body = {
+        key: item for key, item in candidate_suite.items()
+        if key != "suite_certificate_sha256"
+    }
+    if candidate_suite.get("schema_version") != 3 \
+            or candidate_suite.get("status") != "certified" \
+            or candidate_suite.get("suite_certificate_sha256") != \
+            loom_suite_plan.digest(candidate_body):
+        raise ReleaseSuiteError("candidate suite certificate is invalid")
+    try:
+        release_certificate = loom_release_certificate.verify_release(
+            release_certificate, candidate_admission=candidate_admission,
+            expected_tag=expected_tag, expected_asset=expected_asset)
+    except loom_release_certificate.ReleaseCertificateError as exc:
+        raise ReleaseSuiteError(f"release certificate is invalid: {exc}") from exc
+    subject = candidate_suite.get("subject")
+    expected_subject = {
+        "source_commit": release_certificate["source_commit"],
+        "source_tree_sha256": release_certificate[
+            "repository_source_tree_sha256"],
+        "public_root_sha256": release_certificate["public_root_sha256"],
+    }
+    if subject != expected_subject \
+            or candidate_suite.get("mode") != release_certificate[
+                "authority_mode"] \
+            or candidate_suite.get("authority_policy_sha256") != \
+            release_certificate["authority_policy_sha256"] \
+            or candidate_suite.get("mechanism_manifest_sha256") != \
+            release_certificate["mechanism_manifest_sha256"] \
+            or candidate_suite.get("mechanism_qualification_sha256") != \
+            release_certificate["mechanism_qualification_sha256"] \
+            or candidate_suite.get("candidate_admission_sha256") != \
+            release_certificate["candidate_admission_sha256"]:
+        raise ReleaseSuiteError(
+            "candidate and release certificates name different authority")
+    body = {
+        "schema_version": 4, "status": "authorized",
+        "mode": candidate_suite["mode"],
+        "release_status": release_certificate["status"],
+        "subject": expected_subject,
+        "authority_policy_sha256": candidate_suite[
+            "authority_policy_sha256"],
+        "mechanism_manifest_sha256": candidate_suite[
+            "mechanism_manifest_sha256"],
+        "mechanism_qualification_sha256": candidate_suite[
+            "mechanism_qualification_sha256"],
+        "candidate_admission_sha256": candidate_suite[
+            "candidate_admission_sha256"],
+        "candidate_suite_certificate_sha256": candidate_suite[
+            "suite_certificate_sha256"],
+        "release_certificate_sha256": release_certificate[
+            "release_certificate_sha256"],
+        "tag": release_certificate["tag"]["tag"],
+        "archive_sha256": release_certificate["archive"]["sha256"],
+    }
+    return {**body, "release_authority_sha256":
+            loom_suite_plan.digest(body)}
+
+
+def verify_release_authority(value, *, candidate_suite, release_certificate,
+                             candidate_admission, expected_tag,
+                             expected_asset=None):
+    if not isinstance(value, dict) or set(value) != RELEASE_AUTHORITY_FIELDS:
+        raise ReleaseSuiteError("release authority receipt is not closed")
+    body = {key: item for key, item in value.items()
+            if key != "release_authority_sha256"}
+    if value.get("schema_version") != 4 \
+            or value.get("status") != "authorized" \
+            or value.get("release_authority_sha256") != \
+            loom_suite_plan.digest(body):
+        raise ReleaseSuiteError("release authority receipt is invalid")
+    expected = certify_release_authority(
+        candidate_suite, release_certificate,
+        candidate_admission=candidate_admission, expected_tag=expected_tag,
+        expected_asset=expected_asset)
+    if expected != value:
+        raise ReleaseSuiteError("release authority receipt is inconsistent")
+    return value
 
 
 def certify(local_report, matrix_paths, *, expected_commit, expected_root):

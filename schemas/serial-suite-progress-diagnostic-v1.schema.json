@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/serial-suite-progress-diagnostic-v1.schema.json",
+  "title": "Non-authorizing serial suite interruption progress diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "authorizing", "exact_cut_receipt_sha256", "operation", "checkpoint", "progress_diagnostic_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "authorizing": {"const": false},
+    "exact_cut_receipt_sha256": {"$ref": "#/$defs/digest"},
+    "operation": {"$ref": "#/$defs/operation"},
+    "checkpoint": {"$ref": "#/$defs/checkpoint"},
+    "progress_diagnostic_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "testId": {"type": ["string", "null"], "pattern": "^[A-Za-z_][A-Za-z0-9_.]{2,511}$"},
+    "operation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "returncode", "primary_failure", "survivors_confirmed_zero", "protected_roots_unchanged", "network_isolation_proven", "containment_provider", "receipt_sha256"],
+      "properties": {
+        "status": {"const": "failed"},
+        "returncode": {"type": ["integer", "null"]},
+        "primary_failure": {"enum": ["cancelled", "nonzero-exit", "protected-root-changed", "start-failed", "survivor-census-indeterminate", "timed-out", "transcript-limit"]},
+        "survivors_confirmed_zero": {"type": "boolean"},
+        "protected_roots_unchanged": {"type": "boolean"},
+        "network_isolation_proven": {"type": "boolean"},
+        "containment_provider": {"enum": ["windows-job-object", "posix-process-group"]},
+        "receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "status", "authorizing", "diagnostic_policy_sha256", "selected_modules_sha256", "checkpoint_sequence", "completed_test_count", "last_started_test", "last_completed_test", "checkpoint_sha256"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "status": {"const": "running"},
+        "authorizing": {"const": false},
+        "diagnostic_policy_sha256": {"$ref": "#/$defs/digest"},
+        "selected_modules_sha256": {"anyOf": [{"$ref": "#/$defs/digest"}, {"type": "null"}]},
+        "checkpoint_sequence": {"type": "integer", "minimum": 1, "maximum": 10000000},
+        "completed_test_count": {"type": "integer", "minimum": 0, "maximum": 1000000},
+        "last_started_test": {"$ref": "#/$defs/testId"},
+        "last_completed_test": {"$ref": "#/$defs/testId"},
+        "checkpoint_sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

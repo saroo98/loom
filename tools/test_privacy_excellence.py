@@ -9,6 +9,7 @@ from unittest import mock
 
 import loom_memory
 import loom_privacy
+import loom_publication_privacy
 import loom_lifecycle
 
 
@@ -19,6 +20,35 @@ class PrivacyExcellenceTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def test_extracted_publication_core_matches_legacy_firewall_semantics(self):
+        cut = self.root / "projection-parity"
+        cut.mkdir()
+        (cut / "safe.md").write_text("public", encoding="utf-8")
+        (cut / "opaque.bin").write_bytes(b"\x00\xffopaque")
+        opaque_sha = __import__("hashlib").sha256(
+            (cut / "opaque.bin").read_bytes()).hexdigest()
+        arguments = {
+            "forbidden_tokens": ["PrivateOwnerSentinel"],
+            "verified_opaque_hashes": {opaque_sha},
+        }
+        legacy = loom_privacy.scan_publication(cut, **arguments)
+        extracted = loom_publication_privacy.scan_publication(cut, **arguments)
+        self.assertEqual(legacy, extracted)
+        text = f"prefix {self.root} suffix"
+        self.assertEqual(
+            loom_privacy.minimize_evidence(
+                text, roots=[self.root], max_chars=80),
+            loom_publication_privacy.minimize_evidence(
+                text, roots=[self.root], max_chars=80))
+
+        tools = self.root / "offline-tools"
+        tools.mkdir()
+        (tools / "loom_fixture.py").write_text(
+            "import json\nVALUE = 1\n", encoding="utf-8")
+        self.assertEqual(
+            loom_privacy.audit_offline_modules(tools),
+            loom_publication_privacy.audit_offline_modules(tools))
 
     def test_firewall_scans_binary_content_and_every_filename(self):
         cut = self.root / "cut"
@@ -167,6 +197,27 @@ class PrivacyExcellenceTests(unittest.TestCase):
                     r"safe scan limit \(96 bytes\): contracts/"):
                 loom_privacy.scan_publication(
                     oversized_cut, forbidden_tokens=[])
+
+    def test_v1_and_v2_authority_records_share_only_the_explicit_large_scan_boundary(self):
+        cases = (
+            (loom_privacy,
+             "contracts/release-suite-qualification-v1.json"),
+            (loom_privacy,
+             "contracts/release-mechanism-qualification-v2.json"),
+            (loom_publication_privacy,
+             "contracts/release-suite-qualification-v1.json"),
+            (loom_publication_privacy,
+             "contracts/release-mechanism-qualification-v2.json"),
+        )
+        for module, relative in cases:
+            with self.subTest(module=module.__name__, relative=relative):
+                self.assertEqual(
+                    module.MAX_QUALIFICATION_SCAN_BYTES,
+                    module._publication_file_scan_limit(relative))
+                self.assertEqual(
+                    module.MAX_SCAN_FILE_BYTES,
+                    module._publication_file_scan_limit(
+                        "contracts/ordinary.json"))
 
     def test_firewall_fails_closed_on_opaque_binary_content(self):
         cut = self.root / "cut"

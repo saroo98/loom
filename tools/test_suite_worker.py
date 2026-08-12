@@ -32,6 +32,22 @@ ENVIRONMENT = {
 
 
 class SuiteWorkerTests(unittest.TestCase):
+    def test_worker_import_boundary_excludes_broad_product_modules(self):
+        source = Path(loom_suite_worker.__file__).read_text(encoding="utf-8")
+        tree = __import__("ast").parse(source)
+        imports = {
+            alias.name
+            for node in __import__("ast").walk(tree)
+            if isinstance(node, __import__("ast").Import)
+            for alias in node.names
+        }
+        self.assertTrue({
+            "loom_lifecycle", "loom_memory", "loom_owner",
+            "loom_orchestrator", "loom_release", "loom_release_subject",
+            "loom_runtime", "loom_test", "loom_update", "loom_vault",
+            "v11_test_support",
+        }.isdisjoint(imports))
+
     def fixture(self, root, source):
         cut = root / "cut"
         tools = cut / "tools"

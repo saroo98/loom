@@ -130,9 +130,11 @@ jobs:
               },
           }
           provenance_path = Path("native-evidence/provenance.json")
-          provenance_path.write_text(
-              json.dumps(provenance, sort_keys=True, separators=(",", ":")) + "\n",
-              encoding="utf-8",
+          provenance_path.write_bytes(
+              json.dumps(
+                  provenance, sort_keys=True, separators=(",", ":"),
+                  ensure_ascii=False,
+              ).encode("utf-8") + b"\n"
           )
           body = {
               "schema_version": 2,

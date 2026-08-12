@@ -1,0 +1,260 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-candidate-admission-v2.schema.json",
+  "title": "Exact per-candidate release admission",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "evidence_domain", "authority_mode",
+    "authority_policy_sha256", "mechanism_manifest_sha256", "boundary_sha256",
+    "mechanism_qualification_sha256", "source_commit",
+    "repository_source_tree_sha256", "public_root_sha256",
+    "public_manifest_sha256", "public_file_count", "test_inventory_sha256",
+    "test_count", "cell_count", "harness_sha256", "candidate_policy_sha256",
+    "candidate_timing_profile_sha256", "quality", "compatibility",
+    "matrix_certificates", "cell_comparisons", "clean_room_receipt_sha256",
+    "native_evidence", "native_subjects", "candidate_admission_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"const": "admitted"},
+    "evidence_domain": {"const": "candidate-admission-v2"},
+    "authority_mode": {"enum": ["serial", "certificate"]},
+    "authority_policy_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "boundary_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_qualification_sha256": {
+      "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"
+    },
+    "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "repository_source_tree_sha256": {"$ref": "#/$defs/digest"},
+    "public_root_sha256": {"$ref": "#/$defs/digest"},
+    "public_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "public_file_count": {"type": "integer", "minimum": 1, "maximum": 8192},
+    "test_inventory_sha256": {"$ref": "#/$defs/digest"},
+    "test_count": {"type": "integer", "minimum": 1, "maximum": 100000},
+    "cell_count": {"const": 30},
+    "harness_sha256": {"$ref": "#/$defs/digest"},
+    "candidate_policy_sha256": {"$ref": "#/$defs/digest"},
+    "candidate_timing_profile_sha256": {"$ref": "#/$defs/digest"},
+    "quality": {"$ref": "#/$defs/bundle"},
+    "compatibility": {"$ref": "#/$defs/bundle"},
+    "matrix_certificates": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {"$ref": "#/$defs/matrixSummary"}
+    },
+    "cell_comparisons": {
+      "type": "array", "minItems": 30, "maxItems": 30,
+      "items": {"$ref": "#/$defs/comparisonSummary"}
+    },
+    "clean_room_receipt_sha256": {"$ref": "#/$defs/digest"},
+    "native_evidence": {
+      "type": "array", "minItems": 6, "maxItems": 6,
+      "items": {"$ref": "#/$defs/nativeEvidence"}
+    },
+    "native_subjects": {
+      "type": "array", "minItems": 6, "maxItems": 6,
+      "items": {"$ref": "#/$defs/nativeSubject"}
+    },
+    "candidate_admission_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"authority_mode": {"const": "serial"}}},
+      "then": {"properties": {"mechanism_qualification_sha256": {"type": "null"}}},
+      "else": {"properties": {"mechanism_qualification_sha256": {"$ref": "#/$defs/digest"}}}
+    }
+  ],
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "consumer", "exact_cut_receipts",
+        "matrix_certificate", "clean_room"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "consumer": {"enum": ["quality", "compatibility"]},
+        "exact_cut_receipts": {
+          "type": "array", "minItems": 15, "maxItems": 15,
+          "items": {"$ref": "exact-cut-ci-receipt-v2.schema.json"}
+        },
+        "matrix_certificate": {"$ref": "suite-matrix-certificate-v1.schema.json"},
+        "clean_room": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/cleanRoomBundle"}
+          ]
+        }
+      }
+    },
+    "cleanRoomBundle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["receipt", "suite"],
+      "properties": {
+        "receipt": {"$ref": "#/$defs/cleanRoomReceipt"},
+        "suite": {"$ref": "exact-cut-ci-receipt-v2.schema.json#/$defs/suite"}
+      }
+    },
+    "cleanRoomReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "schema_version", "evidence_class", "status", "subject_sha256",
+        "returncode", "stdout_sha256", "stderr_sha256", "disposable_home",
+        "maintainer_state_loaded", "network_isolation_proven", "rust_toolchain",
+        "operation_receipt_sha256", "containment_provider", "verification_mode",
+        "suite_certificate_sha256", "suite_evidence_sha256", "limitations",
+        "receipt_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 1},
+        "evidence_class": {"const": "mechanical-local"},
+        "status": {"const": "passed"},
+        "subject_sha256": {"$ref": "#/$defs/digest"},
+        "returncode": {"const": 0},
+        "stdout_sha256": {"$ref": "#/$defs/digest"},
+        "stderr_sha256": {"$ref": "#/$defs/digest"},
+        "disposable_home": {
+          "type": "object", "additionalProperties": false,
+          "required": ["file_count", "bytes", "tree_sha256", "path_sample"],
+          "properties": {
+            "file_count": {"type": "integer", "minimum": 0},
+            "bytes": {"type": "integer", "minimum": 0},
+            "tree_sha256": {"$ref": "#/$defs/digest"},
+            "path_sample": {
+              "type": "array", "maxItems": 32,
+              "items": {"type": "string", "minLength": 1, "maxLength": 512}
+            }
+          }
+        },
+        "maintainer_state_loaded": {"const": false},
+        "network_isolation_proven": {"type": "boolean"},
+        "rust_toolchain": {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "rustc_sha256", "cargo_sha256", "rustc_version_sha256",
+            "cargo_version_sha256", "locked_dependencies_vendored",
+            "dependency_provisioning_network_blocked"
+          ],
+          "properties": {
+            "rustc_sha256": {"$ref": "#/$defs/digest"},
+            "cargo_sha256": {"$ref": "#/$defs/digest"},
+            "rustc_version_sha256": {"$ref": "#/$defs/digest"},
+            "cargo_version_sha256": {"$ref": "#/$defs/digest"},
+            "locked_dependencies_vendored": {"const": true},
+            "dependency_provisioning_network_blocked": {"type": "boolean"}
+          }
+        },
+        "operation_receipt_sha256": {"$ref": "#/$defs/digest"},
+        "containment_provider": {"type": "string", "minLength": 1, "maxLength": 128},
+        "verification_mode": {"enum": ["serial-evidence", "certificate"]},
+        "suite_certificate_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "suite_evidence_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "limitations": {
+          "type": "array", "minItems": 1, "maxItems": 8,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        },
+        "receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "matrixSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["consumer", "matrix_certificate_sha256"],
+      "properties": {
+        "consumer": {"enum": ["quality", "compatibility"]},
+        "matrix_certificate_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "comparisonSummary": {
+      "type": "object", "additionalProperties": false,
+      "required": ["environment_sha256", "comparison_sha256"],
+      "properties": {
+        "environment_sha256": {"$ref": "#/$defs/digest"},
+        "comparison_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "nativeReceipt": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "schema_version", "platform", "source_commit", "binary_sha256",
+        "rebuild_sha256", "source_sha256", "cargo_lock_sha256", "sbom_sha256",
+        "provenance_sha256", "environment_sha256", "workflow_digest",
+        "action_manifest_digest", "receipt_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": 2},
+        "platform": {"enum": [
+          "linux-arm64", "linux-x64", "macos-arm64", "macos-x64",
+          "windows-arm64", "windows-x64"
+        ]},
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "binary_sha256": {"$ref": "#/$defs/digest"},
+        "rebuild_sha256": {"$ref": "#/$defs/digest"},
+        "source_sha256": {"$ref": "#/$defs/digest"},
+        "cargo_lock_sha256": {"$ref": "#/$defs/digest"},
+        "sbom_sha256": {"$ref": "#/$defs/digest"},
+        "provenance_sha256": {"$ref": "#/$defs/digest"},
+        "environment_sha256": {"$ref": "#/$defs/digest"},
+        "workflow_digest": {"$ref": "#/$defs/digest"},
+        "action_manifest_digest": {"$ref": "#/$defs/digest"},
+        "receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "nativeEvidence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["receipt", "environment", "provenance"],
+      "properties": {
+        "receipt": {"$ref": "#/$defs/nativeReceipt"},
+        "environment": {"$ref": "exact-cut-ci-receipt-v2.schema.json#/properties/environment"},
+        "provenance": {
+          "type": "object", "additionalProperties": false,
+          "required": [
+            "schema_version", "repository", "commit", "platform",
+            "binary_sha256", "source_sha256", "cargo_lock_sha256",
+            "independent_build", "builder"
+          ],
+          "properties": {
+            "schema_version": {"const": 1},
+            "repository": {"const": "https://github.com/saroo98/loom"},
+            "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+            "platform": {"enum": [
+              "linux-arm64", "linux-x64", "macos-arm64", "macos-x64",
+              "windows-arm64", "windows-x64"
+            ]},
+            "binary_sha256": {"$ref": "#/$defs/digest"},
+            "source_sha256": {"$ref": "#/$defs/digest"},
+            "cargo_lock_sha256": {"$ref": "#/$defs/digest"},
+            "independent_build": {"const": true},
+            "builder": {
+              "type": "object", "additionalProperties": false,
+              "required": ["id", "run_id"],
+              "properties": {
+                "id": {"const": "github-actions-native-helper"},
+                "run_id": {"type": "string", "minLength": 1, "maxLength": 128}
+              }
+            }
+          }
+        }
+      }
+    },
+    "nativeSubject": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "platform", "binary_sha256", "sbom_sha256", "provenance_sha256",
+        "receipt_sha256"
+      ],
+      "properties": {
+        "platform": {"enum": [
+          "linux-arm64", "linux-x64", "macos-arm64", "macos-x64",
+          "windows-arm64", "windows-x64"
+        ]},
+        "binary_sha256": {"$ref": "#/$defs/digest"},
+        "sbom_sha256": {"$ref": "#/$defs/digest"},
+        "provenance_sha256": {"$ref": "#/$defs/digest"},
+        "receipt_sha256": {"$ref": "#/$defs/digest"}
+      }
+    }
+  }
+}

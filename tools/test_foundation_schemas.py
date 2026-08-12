@@ -9,6 +9,10 @@ import loom_execution_chain
 import loom_operation_envelope
 import loom_operation_supervisor
 import loom_path_authority
+import loom_product_interface
+import loom_qualification_manifest
+import loom_qualification_workload
+import loom_suite_harness
 import loom_suite_plan
 import loom_test
 
@@ -26,6 +30,45 @@ class FoundationSchemaTests(unittest.TestCase):
                 subject_digest="1" * 64, sidecar_type="fixture-receipt",
                 sidecar_id="fixture.json", sidecar_digest="2" * 64)
             self.assert_schema(envelope, "operation-envelope.schema.json")
+
+    def test_qualification_boundary_and_manifest_match_closed_v2_schemas(self):
+        boundary = loom_qualification_manifest.seal_boundary({
+            "schema_version": 2,
+            "python_entrypoints": ["tools/fixture.py"],
+            "workflow_entrypoints": [],
+            "roles": [{
+                "path": "tools/fixture.py", "role": "mechanism-repeat",
+            }],
+            "declared_data_edges": [], "data_sets": [],
+            "runtime_process_sources": [],
+        })
+        self.assert_schema(
+            boundary, "release-qualification-boundary-v2.schema.json")
+        node = {
+            "path": "tools/fixture.py", "role": "mechanism-repeat",
+            "kind": "python", "sha256": "1" * 64,
+            "dependencies": [],
+        }
+        body = {
+            "schema_version": 2,
+            "boundary_sha256": boundary["boundary_sha256"],
+            "entrypoints": ["tools/fixture.py"], "nodes": [node],
+        }
+        manifest = {
+            **body, "manifest_sha256": loom_qualification_manifest._digest(
+                loom_qualification_manifest.MANIFEST_DOMAIN, body),
+        }
+        self.assert_schema(
+            manifest, "release-qualification-manifest-v2.schema.json")
+
+    def test_qualification_workload_policy_and_timing_profile_are_closed(self):
+        root = Path(__file__).resolve().parents[1]
+        self.assert_schema(
+            loom_qualification_workload.load_policy(root),
+            "release-qualification-workload-policy-v2.schema.json")
+        self.assert_schema(
+            loom_qualification_workload.load_timing_profile(root),
+            "release-qualification-timing-profile-v2.schema.json")
 
     def test_suite_failure_diagnostic_matches_its_closed_schema(self):
         value = {
@@ -223,6 +266,53 @@ class FoundationSchemaTests(unittest.TestCase):
             key.endswith("_workers") for key in validated_policy))
         self.assert_schema(inventory, "suite-inventory-v1.schema.json")
         self.assert_schema(plan, "suite-shard-plan-v1.schema.json")
+
+    def test_release_authority_policy_v2_matches_its_closed_schema(self):
+        root = Path(__file__).resolve().parents[1]
+        policy_path = root / "contracts" / "release-authority-policy-v2.json"
+        policy = loom_suite_plan.load_authority_policy(policy_path)
+        self.assertEqual("serial", policy["authority_mode"])
+        self.assert_schema(policy, "release-authority-policy-v2.schema.json")
+
+    def test_release_product_interface_matches_its_closed_schema(self):
+        root = Path(__file__).resolve().parents[1]
+        value = loom_product_interface.load(root)
+        self.assert_schema(value, "release-product-interface-v1.schema.json")
+
+    def test_release_suite_diagnostics_match_their_closed_schema(self):
+        root = Path(__file__).resolve().parents[1]
+        value = loom_suite_harness.load_diagnostic_policy(root)
+        self.assert_schema(value, "release-suite-diagnostics-v1.schema.json")
+
+    def test_serial_suite_progress_diagnostic_matches_closed_schema(self):
+        value = {
+            "schema_version": 1,
+            "authorizing": False,
+            "exact_cut_receipt_sha256": "1" * 64,
+            "operation": {
+                "status": "failed", "returncode": None,
+                "primary_failure": "timed-out",
+                "survivors_confirmed_zero": True,
+                "protected_roots_unchanged": True,
+                "network_isolation_proven": False,
+                "containment_provider": "windows-job-object",
+                "receipt_sha256": "2" * 64,
+            },
+            "checkpoint": {
+                "schema_version": 1, "status": "running",
+                "authorizing": False,
+                "diagnostic_policy_sha256": "3" * 64,
+                "selected_modules_sha256": None,
+                "checkpoint_sequence": 8,
+                "completed_test_count": 700,
+                "last_started_test": "test_owner.OwnerTests.test_current",
+                "last_completed_test": "test_owner.OwnerTests.test_previous",
+                "checkpoint_sha256": "4" * 64,
+            },
+            "progress_diagnostic_sha256": "5" * 64,
+        }
+        self.assert_schema(
+            value, "serial-suite-progress-diagnostic-v1.schema.json")
 
     def test_claim_only_release_suite_qualification_is_outside_closed_schema(self):
         value = {

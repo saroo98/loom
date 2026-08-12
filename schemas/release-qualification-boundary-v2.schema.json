@@ -1,0 +1,86 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-qualification-boundary-v2.schema.json",
+  "title": "Closed repeated-qualification dependency boundary",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "python_entrypoints",
+    "workflow_entrypoints",
+    "roles",
+    "declared_data_edges",
+    "data_sets",
+    "runtime_process_sources",
+    "boundary_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "python_entrypoints": {"$ref": "#/$defs/paths"},
+    "workflow_entrypoints": {"$ref": "#/$defs/paths"},
+    "roles": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "role"],
+        "properties": {
+          "path": {"$ref": "#/$defs/path"},
+          "role": {
+            "enum": [
+              "mechanism-repeat",
+              "shared-interface",
+              "candidate-exact",
+              "historical-compatibility"
+            ]
+          }
+        }
+      }
+    },
+    "declared_data_edges": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "target", "kind"],
+        "properties": {
+          "source": {"$ref": "#/$defs/path"},
+          "target": {"$ref": "#/$defs/path"},
+          "kind": {"enum": ["declared-data", "candidate-projection"]}
+        }
+      }
+    },
+    "data_sets": {
+      "type": "array",
+      "maxItems": 256,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["source", "pattern"],
+        "properties": {
+          "source": {"$ref": "#/$defs/path"},
+          "pattern": {"$ref": "#/$defs/path"}
+        }
+      }
+    },
+    "runtime_process_sources": {"$ref": "#/$defs/paths"},
+    "boundary_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)[^\\u0000]+$"
+    },
+    "paths": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {"$ref": "#/$defs/path"}
+    }
+  }
+}

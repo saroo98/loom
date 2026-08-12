@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-candidate-suite-v2.schema.json",
+  "title": "Exact candidate suite certificate v2 authority path",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "mode", "subject",
+    "authority_policy_sha256", "mechanism_manifest_sha256",
+    "mechanism_qualification_sha256", "candidate_admission_sha256",
+    "matrices", "suite_certificate_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 3},
+    "status": {"const": "certified"},
+    "mode": {"enum": ["serial", "certificate"]},
+    "subject": {
+      "type": "object", "additionalProperties": false,
+      "required": [
+        "source_commit", "source_tree_sha256", "public_root_sha256"
+      ],
+      "properties": {
+        "source_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+        "source_tree_sha256": {"$ref": "#/$defs/digest"},
+        "public_root_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "authority_policy_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "mechanism_qualification_sha256": {
+      "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"
+    },
+    "candidate_admission_sha256": {"$ref": "#/$defs/digest"},
+    "matrices": {
+      "type": "array", "minItems": 2, "maxItems": 2,
+      "items": {
+        "type": "object", "additionalProperties": false,
+        "required": ["consumer", "matrix_certificate_sha256"],
+        "properties": {
+          "consumer": {"enum": ["quality", "compatibility"]},
+          "matrix_certificate_sha256": {"$ref": "#/$defs/digest"}
+        }
+      }
+    },
+    "suite_certificate_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

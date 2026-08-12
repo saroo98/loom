@@ -173,8 +173,16 @@ class CapabilityRegistryPhase7Tests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "contracts").mkdir()
+            (root / "tools").mkdir()
             output = root / "generated.json"
             (root / "VERSION").write_text("1.8.4\n", encoding="utf-8")
+            (root / "tools" / "loom_vault.py").write_text(
+                "VAULT_SCHEMA_VERSION = 3\n", encoding="utf-8")
+            for name in (
+                    "release-product-interface-v1.json",
+                    "release-suite-diagnostics-v1.json"):
+                (root / "contracts" / name).write_bytes(
+                    (ROOT / "contracts" / name).read_bytes())
             declarations = self.authoritative_declarations()
             declarations["capabilities"] = []
             (root / "contracts" / "capability-declarations-v1.json").write_text(

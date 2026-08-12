@@ -2,22 +2,15 @@
 """Deterministic fast PR gate and complete release test runner."""
 
 import argparse
-import contextlib
-import hashlib
-import io
 import json
 import os
-import re
-import sys
 import time
 import unittest
 from pathlib import Path
 
 import loom_docs
-import loom_lifecycle
 import loom_reliability
-import loom_suite_plan
-import v11_test_support
+import loom_suite_harness
 
 
 CONTAINMENT_FAST_TEST = (
@@ -28,46 +21,14 @@ CONTAINMENT_FAST_TEST = (
 )
 FAST_GATE_MAX_SECONDS = 30.0
 WINDOWS_FAST_GATE_MAX_SECONDS = 45.0
-TEST_MODULE = re.compile(r"^test_[A-Za-z0-9_]+$")
-EXCEPTION_TYPE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")
-PUBLIC_ERROR_CODES = frozenset({
-    "BOOTSTRAP_CONCURRENT_CHILD_FAILED",
-    "BOOTSTRAP_CONCURRENT_LAUNCHER_REWRITE",
-    "BOOTSTRAP_CONCURRENT_OUTPUT_INVALID",
-    "BOOTSTRAP_CONCURRENT_RUNTIME_INVALID",
-    "BOOTSTRAP_CONCURRENT_STAGING_SURVIVOR",
-    "BOOTSTRAP_INSTALLED_PROBE_TIMEOUT",
-    "BOOTSTRAP_SIGNED_ACTIVATION_TIMEOUT",
-    "HOST_UNVERIFIED", *loom_suite_plan.SUITE_PLAN_PUBLIC_ERROR_CODES,
-    *loom_lifecycle.LIFECYCLE_VERIFICATION_PUBLIC_ERROR_CODES,
-    *v11_test_support.NATIVE_HELPER_PUBLIC_ERROR_CODES,
-})
-PUBLIC_ERROR_CODE_REDACTED = "PUBLIC_ERROR_CODE_REDACTED"
-STATUS_SEVERITY = {
-    "passed": 0, "skipped": 1, "failed": 2, "error": 3,
-}
-FIXTURE_HOLDER = re.compile(
-    r"^(setUpClass|tearDownClass|setUpModule|tearDownModule) "
-    r"\(([A-Za-z_][A-Za-z0-9_.]*)\)$")
-AUTHORIZED_SKIP_REASON_CODES = {
-    "platform-boundary", "host-capability-unavailable", "tool-unavailable",
-}
-
-
-def skip_reason_code(reason):
-    """Map a private unittest reason onto one public, reviewable policy code."""
-    value = str(reason).casefold()
-    if re.search(
-            r"windows|non-windows|posix|ntfs|fifo|platform|macos|linux|darwin|"
-            r"chmod|alternate (?:data )?streams?|native", value):
-        return "platform-boundary"
-    if re.search(r"\b(?:git|cargo|rust|toolchain)\b.*unavailable", value):
-        return "tool-unavailable"
-    if re.search(
-            r"unavailable|unsupported|symlinks?|hardlinks?|xattrs?|key store|"
-            r"backend|privilege", value):
-        return "host-capability-unavailable"
-    return "unclassified"
+PUBLIC_ERROR_CODES = loom_suite_harness.PUBLIC_ERROR_CODES
+PUBLIC_ERROR_CODE_REDACTED = loom_suite_harness.PUBLIC_ERROR_CODE_REDACTED
+AUTHORIZED_SKIP_REASON_CODES = loom_suite_harness.AUTHORIZED_SKIP_REASON_CODES
+EXCEPTION_TYPE = loom_suite_harness.EXCEPTION_TYPE
+TimingResult = loom_suite_harness.TimingResult
+skip_reason_code = loom_suite_harness.skip_reason_code
+run_modules = loom_suite_harness.run_modules
+_execute_suite = loom_suite_harness.execute_suite
 
 
 def fast_gate_max_seconds(platform_name=None):
@@ -318,7 +279,7 @@ def _execute_suite(suite, *, mode, budget, verbosity, selected_modules=None):
     return report
 
 
-def run(mode, *, max_seconds=None, verbosity=1):
+def run(mode, *, max_seconds=None, verbosity=1, progress_path=None):
     if mode == "fast":
         suite = unittest.defaultTestLoader.loadTestsFromNames(FAST_TESTS)
         budget = fast_gate_max_seconds() if max_seconds is None else float(max_seconds)
@@ -329,7 +290,8 @@ def run(mode, *, max_seconds=None, verbosity=1):
     else:
         raise ValueError("mode must be fast or full")
     return _execute_suite(
-        suite, mode=mode, budget=budget, verbosity=verbosity)
+        suite, mode=mode, budget=budget, verbosity=verbosity,
+        progress_path=progress_path)
 
 
 def run_modules(modules, *, start_dir=None, max_seconds=None, verbosity=1):
@@ -357,6 +319,13 @@ def run_modules(modules, *, start_dir=None, max_seconds=None, verbosity=1):
             filename = getattr(module, "__file__", None)
             if filename and Path(filename).resolve().is_relative_to(root):
                 sys.modules.pop(name, None)
+
+
+# Preserve the historical loom_test surface while making the generic harness
+# the single implementation used by both the legacy CLI and isolated workers.
+TimingResult = loom_suite_harness.TimingResult
+run_modules = loom_suite_harness.run_modules
+_execute_suite = loom_suite_harness.execute_suite
 
 
 def refresh_final_evidence(root, report):
@@ -396,6 +365,7 @@ def main(argv=None):
     parser.add_argument("mode", choices=("fast", "full"))
     parser.add_argument("--max-seconds", type=float)
     parser.add_argument("--output")
+    parser.add_argument("--progress-output")
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument("--refresh-generated-evidence", action="store_true")
     args = parser.parse_args(argv)
@@ -403,11 +373,19 @@ def main(argv=None):
     if args.refresh_generated_evidence and args.mode != "full":
         parser.error("generated evidence refresh requires full mode")
     output_path = None
+    progress_path = None
     if args.output:
         try:
             output_path = _validated_output_path(args.output)
         except ValueError as exc:
             parser.error(str(exc))
+    if args.progress_output:
+        try:
+            progress_path = _validated_output_path(args.progress_output)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if output_path is not None and progress_path.resolve() == output_path.resolve():
+            parser.error("progress output must be distinct from suite output")
     evidence_path = evidence_root / "docs" / "generated-evidence.json"
     evidence_existed = evidence_path.is_file() and not evidence_path.is_symlink()
     evidence_before = evidence_path.read_bytes() if evidence_existed else None
@@ -430,7 +408,8 @@ def main(argv=None):
     try:
         report = run(
             args.mode, max_seconds=args.max_seconds,
-            verbosity=0 if args.quiet else 1)
+            verbosity=0 if args.quiet else 1,
+            progress_path=progress_path)
     except BaseException:
         if args.refresh_generated_evidence:
             restore_evidence()

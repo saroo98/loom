@@ -1,0 +1,6 @@
+{
+  "interface_sha256": "be2b06b1785ddaf4948cfba761ede11670b9dad194f73edf66f7227c1eebd3ef",
+  "schema_version": 1,
+  "vault_schema_max": 3,
+  "vault_schema_min": 1
+}

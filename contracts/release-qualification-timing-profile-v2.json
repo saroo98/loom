@@ -1,0 +1,12 @@
+{
+  "default_p75_microseconds": 100000,
+  "module_microseconds": {
+    "test_qual_exclusive": 100000,
+    "test_qual_general_a": 200000,
+    "test_qual_general_b": 150000,
+    "test_qual_serial": 100000
+  },
+  "profile_sha256": "c048fee89a9687204704b74f46b5108f9a789269eb0df9f709f9c39827bfbac2",
+  "schema_version": 2,
+  "workload_kind": "mechanism-v2"
+}

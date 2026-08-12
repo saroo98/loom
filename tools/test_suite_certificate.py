@@ -1,7 +1,9 @@
 """Fail-closed suite certificate compilation and shadow comparison."""
 
+import ast
 import copy
 import hashlib
+import importlib
 import json
 from pathlib import Path
 import tempfile
@@ -102,6 +104,54 @@ class SuiteCertificateTests(unittest.TestCase):
         return loom_suite_worker._seal({
             key: value for key, value in receipt.items()
             if key != "worker_receipt_sha256"})
+
+    def test_generic_certificate_core_has_closed_dependency_boundary_and_parity(self):
+        core = importlib.import_module("loom_suite_certificate_core")
+        tree = ast.parse(Path(core.__file__).read_text(encoding="utf-8"))
+        imports = {
+            alias.name.split(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Import)
+            for alias in node.names
+        } | {
+            (node.module or "").split(".")[0]
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ImportFrom)
+        }
+        self.assertTrue({
+            "loom_suite_harness", "loom_suite_plan", "loom_suite_worker",
+        }.issubset(imports))
+        self.assertTrue({
+            "loom_exact_cut_ci", "loom_release", "loom_release_candidate",
+            "loom_release_rollback", "loom_test", "loom_vault",
+        }.isdisjoint(imports))
+
+        inventory, _profile, policy, plan, receipts = self.fixture()
+        wrapper_cell = loom_suite_certificate.compile_cell(
+            inventory, plan, receipts, policy=policy)
+        core_cell = core.compile_cell(
+            inventory, plan, receipts, policy=policy)
+        self.assertEqual(wrapper_cell, core_cell)
+        self.assertEqual(core_cell, core.verify_cell(core_cell))
+        serial = {
+            "timings": [
+                {"test": row["test"], "status": row["status"]}
+                for row in core_cell["outcomes"]
+            ],
+            "skip_receipts": [],
+        }
+        self.assertEqual(
+            loom_suite_certificate.compare_shadow(serial, wrapper_cell),
+            core.compare_shadow(serial, core_cell))
+        environment_id = core_cell["environment_sha256"]
+        wrapper_matrix = loom_suite_certificate.compile_matrix(
+            [wrapper_cell], consumer="release",
+            required_environments=[environment_id])
+        core_matrix = core.compile_matrix(
+            [core_cell], consumer="release",
+            required_environments=[environment_id])
+        self.assertEqual(wrapper_matrix, core_matrix)
+        self.assertEqual(core_matrix, core.verify_matrix(core_matrix))
 
     def test_shadow_cell_sanitizes_supervisor_failure_as_mismatch_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:

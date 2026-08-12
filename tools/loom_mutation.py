@@ -46,7 +46,7 @@ MUTATIONS = (
      "observed_sender == expected_sender_fingerprint",
      "test_loom_transfer_v11.TransferTests."
      "test_pairing_requires_owner_authorized_sender_fingerprint"),
-    ("cut-root-hash", "tools/loom_release.py",
+    ("cut-root-hash", "tools/loom_cut_manifest.py",
      "manifest[\"root_sha256\"] != _canonical_hash(body)",
      "manifest[\"root_sha256\"] == _canonical_hash(body)",
      "test_release_standard.ReleaseStandardTests."

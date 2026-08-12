@@ -1,0 +1,69 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/release-candidate-equivalence-v2.schema.json",
+  "title": "Byte-identical reviewed-to-merge candidate equivalence",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "status", "evidence_domain", "repository",
+    "reviewed_commit", "merge_commit", "merge_base", "reviewed_git_tree_oid",
+    "merge_git_tree_oid", "reviewed_tree_sha256", "merge_tree_sha256",
+    "canonical_source_tree_sha256", "source_entry_count", "source_modes_sha256",
+    "generated_evidence_sha256", "public_root_sha256", "public_manifest_sha256",
+    "public_file_count", "candidate_admission_sha256", "test_inventory_sha256",
+    "test_count", "harness_sha256", "candidate_policy_sha256",
+    "candidate_timing_profile_sha256", "native_source_sha256",
+    "cargo_lock_sha256", "context", "equivalence_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 2},
+    "status": {"const": "equivalent"},
+    "evidence_domain": {"const": "candidate-equivalence-v2"},
+    "repository": {"const": "https://github.com/saroo98/loom"},
+    "reviewed_commit": {"$ref": "#/$defs/commit"},
+    "merge_commit": {"$ref": "#/$defs/commit"},
+    "merge_base": {"$ref": "#/$defs/commit"},
+    "reviewed_git_tree_oid": {"$ref": "#/$defs/commit"},
+    "merge_git_tree_oid": {"$ref": "#/$defs/commit"},
+    "reviewed_tree_sha256": {"$ref": "#/$defs/digest"},
+    "merge_tree_sha256": {"$ref": "#/$defs/digest"},
+    "canonical_source_tree_sha256": {"$ref": "#/$defs/digest"},
+    "source_entry_count": {"type": "integer", "minimum": 1, "maximum": 8192},
+    "source_modes_sha256": {"$ref": "#/$defs/digest"},
+    "generated_evidence_sha256": {"$ref": "#/$defs/digest"},
+    "public_root_sha256": {"$ref": "#/$defs/digest"},
+    "public_manifest_sha256": {"$ref": "#/$defs/digest"},
+    "public_file_count": {"type": "integer", "minimum": 1, "maximum": 8192},
+    "candidate_admission_sha256": {"$ref": "#/$defs/digest"},
+    "test_inventory_sha256": {"$ref": "#/$defs/digest"},
+    "test_count": {"type": "integer", "minimum": 1, "maximum": 100000},
+    "harness_sha256": {"$ref": "#/$defs/digest"},
+    "candidate_policy_sha256": {"$ref": "#/$defs/digest"},
+    "candidate_timing_profile_sha256": {"$ref": "#/$defs/digest"},
+    "native_source_sha256": {"$ref": "#/$defs/digest"},
+    "cargo_lock_sha256": {"$ref": "#/$defs/digest"},
+    "context": {"$ref": "#/$defs/context"},
+    "equivalence_sha256": {"$ref": "#/$defs/digest"}
+  },
+  "$defs": {
+    "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "repository", "workflow_path", "workflow_digest",
+        "action_manifest_digest", "event_name", "run_id", "run_attempt"
+      ],
+      "properties": {
+        "repository": {"const": "https://github.com/saroo98/loom"},
+        "workflow_path": {"const": ".github/workflows/candidate-equivalence.yml"},
+        "workflow_digest": {"$ref": "#/$defs/digest"},
+        "action_manifest_digest": {"$ref": "#/$defs/digest"},
+        "event_name": {"const": "push"},
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_attempt": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    }
+  }
+}

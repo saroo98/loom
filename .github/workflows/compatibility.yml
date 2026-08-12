@@ -58,39 +58,25 @@ jobs:
             'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
             'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
             'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
-          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
-          ARGS=(.. "${{ runner.temp }}/loom-public-cut" --output exact-cut-ci.json)
-          if test "$MODE" = serial; then
-            ARGS+=(--suite-output full-test-timings.json --failure-diagnostic-output serial-failure-diagnostic.json)
-          else
-            ARGS+=(--static-only)
-          fi
+          AUTHORITY_MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          test "$AUTHORITY_MODE" = serial -o "$AUTHORITY_MODE" = certificate
+          ARGS=(.. "${{ runner.temp }}/loom-public-cut" --output exact-cut-ci.json --suite-output full-test-timings.json --failure-diagnostic-output serial-failure-diagnostic.json --progress-diagnostic-output serial-progress-diagnostic.json)
           python -B loom_exact_cut_ci.py "${ARGS[@]}"
-      - name: Run isolated sharded shadow or certificate authority
+      - name: Run the exact isolated sharded candidate and compare to serial
         working-directory: tools
         shell: bash
         run: |
           SOURCE_TREE="$(python -B -c 'import os; import loom_subject_identity as s; print(s.git_tree_inventory("..", os.environ["GITHUB_SHA"])["tree_sha256"])')"
-          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
           ARGS=(--cut "${{ runner.temp }}/loom-public-cut" --test-root "${{ runner.temp }}/loom-public-cut/tools" --exact-receipt exact-cut-ci.json --policy ../contracts/release-suite-policy-v1.json --timing-profile ../contracts/release-suite-timing-profile-v1.json --source-tree-sha256 "$SOURCE_TREE" --output-root suite-shadow)
-          if test "$MODE" = serial; then
-            python -B loom_suite_certificate.py shadow-cell "${ARGS[@]}" \
-              --serial-report full-test-timings.json
-          else
-            python -B loom_suite_certificate.py run-cell "${ARGS[@]}"
-          fi
+          python -B loom_suite_certificate.py shadow-cell "${ARGS[@]}" \
+            --serial-report full-test-timings.json
       - name: Reuse exact cell evidence for the clean-room boundary
         if: matrix.os == 'ubuntu-24.04' && matrix.python == '3.11'
         working-directory: tools
         shell: bash
         run: |
-          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
           ARGS=("${{ runner.temp }}/loom-public-cut" --policy ../contracts/release-suite-policy-v1.json --output clean-room.json)
-          if test "$MODE" = serial; then
-            ARGS+=(--serial-suite full-test-timings.json)
-          else
-            ARGS+=(--suite-certificate suite-shadow/cell-certificate.json)
-          fi
+          ARGS+=(--serial-suite full-test-timings.json)
           python -B loom_clean_room.py "${ARGS[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: always()
@@ -100,6 +86,7 @@ jobs:
             tools/exact-cut-ci.json
             tools/full-test-timings.json
             tools/serial-failure-diagnostic.json
+            tools/serial-progress-diagnostic.json
             tools/clean-room.json
             tools/suite-shadow/workers/*/worker-receipt.json
             tools/suite-shadow/workers/*/failure-diagnostic.json
@@ -121,22 +108,19 @@ jobs:
           pattern: compatibility-suite-*
           path: compatibility-reports
           merge-multiple: false
-      - name: Compile non-authoritative compatibility matrix certificate
+      - name: Compile exact-candidate compatibility matrix certificate
         working-directory: tools
         shell: bash
         run: |
           mapfile -t CERTS < <(find ../compatibility-reports -name cell-certificate.json -type f | sort)
-          MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-suite-policy-v1.json",encoding="utf-8"))["authority_mode"])')"
           SHADOW_OK=1
-          if test "$MODE" = serial; then
-            mapfile -t COMPARISONS < <(find ../compatibility-reports -name shadow-comparison.json -type f | sort)
-            test "${#COMPARISONS[@]}" -eq 15 || SHADOW_OK=0
-            for comparison in "${COMPARISONS[@]}"; do
-              if ! test "$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "$comparison")" = matched; then
-                SHADOW_OK=0
-              fi
-            done
-          fi
+          mapfile -t COMPARISONS < <(find ../compatibility-reports -name shadow-comparison.json -type f | sort)
+          test "${#COMPARISONS[@]}" -eq 15 || SHADOW_OK=0
+          for comparison in "${COMPARISONS[@]}"; do
+            if ! test "$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "$comparison")" = matched; then
+              SHADOW_OK=0
+            fi
+          done
           if test "${#CERTS[@]}" -eq 15 && test "$SHADOW_OK" -eq 1; then
             ARGS=()
             for certificate in "${CERTS[@]}"; do
@@ -147,11 +131,35 @@ jobs:
               "${ARGS[@]}" --output compatibility-matrix-certificate.json
           else
             python -B -c 'import json; json.dump({"schema_version":1,"status":"mismatched","primary_reason":"INVENTORY_MISMATCH"}, open("compatibility-matrix-certificate.json","w",encoding="utf-8"), sort_keys=True)'
-            test "$MODE" = serial
+            false
           fi
+      - name: Seal the exact compatibility candidate evidence bundle
+        working-directory: tools
+        shell: bash
+        run: |
+          mapfile -t RECEIPTS < <(find ../compatibility-reports -name exact-cut-ci.json -type f | sort)
+          mapfile -t CLEAN_ROOMS < <(find ../compatibility-reports -name clean-room.json -type f | sort)
+          test "${#RECEIPTS[@]}" -eq 15
+          test "${#CLEAN_ROOMS[@]}" -eq 1
+          ARGS=(compile-candidate-bundle --root .. --consumer compatibility \
+            --matrix compatibility-matrix-certificate.json \
+            --clean-room "${CLEAN_ROOMS[0]}" \
+            --output compatibility-candidate-bundle-v2.json)
+          for receipt in "${RECEIPTS[@]}"; do
+            ARGS+=(--exact-receipt "$receipt")
+          done
+          python -B loom_qualification_v2.py "${ARGS[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: compatibility-matrix-certificate
           path: tools/compatibility-matrix-certificate.json
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: compatibility-candidate-evidence-v2
+          path: |
+            tools/compatibility-matrix-certificate.json
+            tools/compatibility-candidate-bundle-v2.json
           retention-days: 7
           if-no-files-found: error

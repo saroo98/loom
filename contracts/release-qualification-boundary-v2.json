@@ -1,0 +1,392 @@
+{
+  "boundary_sha256": "4c16f5ba923d04b045bed2250de6aeabf54da9005208c219a5094b13de0219c4",
+  "data_sets": [
+    {
+      "pattern": "qualification/workload-v2/*.py",
+      "source": "tools/loom_qualification_workload.py"
+    }
+  ],
+  "declared_data_edges": [
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_exact_cut_receipt.py",
+      "target": "schemas/exact-cut-ci-receipt-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_manifest.py",
+      "target": "contracts/release-qualification-boundary-v2.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_manifest.py",
+      "target": "schemas/release-qualification-boundary-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_manifest.py",
+      "target": "schemas/release-qualification-manifest-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-authority-policy-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-candidate-admission-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-candidate-equivalence-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-mechanism-qualification-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-qualification-batch-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_v2.py",
+      "target": "schemas/release-qualification-observation-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "contracts/release-qualification-timing-profile-v2.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "contracts/release-qualification-workload-policy-v2.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "schemas/release-qualification-timing-profile-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_qualification_workload.py",
+      "target": "schemas/release-qualification-workload-policy-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_authority.py",
+      "target": "schemas/release-authority-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_authority.py",
+      "target": "schemas/release-candidate-suite-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_certificate.py",
+      "target": "schemas/release-certificate-v2.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_promotion.py",
+      "target": "schemas/release-promotion-receipt-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_reproducibility.py",
+      "target": "schemas/release-reproducibility-receipt-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_release_rollback.py",
+      "target": "schemas/release-rollback-evidence.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_certificate_core.py",
+      "target": "schemas/suite-cell-certificate-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_certificate_core.py",
+      "target": "schemas/suite-matrix-certificate-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_harness.py",
+      "target": "contracts/release-suite-diagnostics-v1.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_harness.py",
+      "target": "schemas/release-suite-diagnostics-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_plan.py",
+      "target": "schemas/suite-inventory-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_plan.py",
+      "target": "schemas/suite-shard-plan-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_worker.py",
+      "target": "schemas/suite-failure-diagnostic-v1.schema.json"
+    },
+    {
+      "kind": "declared-data",
+      "source": "tools/loom_suite_worker.py",
+      "target": "schemas/suite-worker-receipt-v1.schema.json"
+    }
+  ],
+  "python_entrypoints": [
+    "tools/loom_qualification_manifest.py",
+    "tools/loom_qualification_v2.py",
+    "tools/loom_qualification_workload.py",
+    "tools/loom_release_authority.py",
+    "tools/loom_release_certificate.py",
+    "tools/loom_suite_certificate_core.py"
+  ],
+  "roles": [
+    {
+      "path": ".github/workflows/qualification-compatibility.yml",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": ".github/workflows/qualification-faults.yml",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": ".github/workflows/qualification-quality.yml",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "contracts/release-qualification-boundary-v2.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "contracts/release-qualification-timing-profile-v2.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "contracts/release-qualification-workload-policy-v2.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "contracts/release-suite-diagnostics-v1.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "qualification/workload-v2/fixture_support.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_exclusive.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_general_a.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_general_b.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "qualification/workload-v2/test_qual_serial.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "schemas/exact-cut-ci-receipt-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-authority-policy-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-authority-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-candidate-admission-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-candidate-equivalence-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-candidate-suite-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-certificate-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-mechanism-qualification-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-promotion-receipt-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-batch-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-boundary-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-manifest-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-observation-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-timing-profile-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-qualification-workload-policy-v2.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-reproducibility-receipt-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-rollback-evidence.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/release-suite-diagnostics-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-cell-certificate-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-failure-diagnostic-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-inventory-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-matrix-certificate-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-shard-plan-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "schemas/suite-worker-receipt-v1.schema.json",
+      "role": "shared-interface"
+    },
+    {
+      "path": "tools/loom_cut_manifest.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_exact_cut_receipt.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_operation_supervisor.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_platform_probe.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_publication_privacy.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_qualification_manifest.py",
+      "role": "shared-interface"
+    },
+    {
+      "path": "tools/loom_qualification_v2.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_qualification_workload.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_authority.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_certificate.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_promotion.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_reproducibility.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_release_rollback.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_reliability.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_subject_identity.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_certificate_core.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_harness.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_plan.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_suite_worker.py",
+      "role": "mechanism-repeat"
+    },
+    {
+      "path": "tools/loom_windows_acl.py",
+      "role": "mechanism-repeat"
+    }
+  ],
+  "runtime_process_sources": [],
+  "schema_version": 2,
+  "workflow_entrypoints": [
+    ".github/workflows/qualification-compatibility.yml",
+    ".github/workflows/qualification-faults.yml",
+    ".github/workflows/qualification-quality.yml"
+  ]
+}

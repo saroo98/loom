@@ -102,6 +102,11 @@ class ReleasePromotionTests(unittest.TestCase):
             result = loom_release_promotion.verify_draft(asset, self._gate(digest))
             self.assertEqual("verified-draft", result["status"])
             self.assertEqual(digest, result["asset_sha256"])
+            self.assertEqual(
+                result, loom_release_promotion.verify_receipt(
+                    result, expected_sha256=digest,
+                    expected_bytes=len(b"canonical"),
+                    required_status="verified-draft"))
             prefixed = self._gate(digest)
             prefixed["release_asset_sha256"] = "sha256:" + digest
             normalized = loom_release_promotion.verify_draft(asset, prefixed)
@@ -133,6 +138,11 @@ class ReleasePromotionTests(unittest.TestCase):
             self.assertFalse(unchanged["behavior_rerun_required"])
             self.assertTrue(changed["behavior_rerun_required"])
             self.assertFalse(represented["behavior_rerun_required"])
+            self.assertEqual(
+                represented, loom_release_promotion.verify_receipt(
+                    represented, expected_sha256=digest,
+                    expected_bytes=len(b"canonical"),
+                    required_status="verified-public"))
 
     def test_promotion_module_has_no_build_or_upload_surface(self):
         self.assertFalse(hasattr(loom_release_promotion, "build"))
