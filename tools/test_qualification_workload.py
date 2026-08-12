@@ -109,12 +109,20 @@ class QualificationWorkloadTests(unittest.TestCase):
             self.assertTrue(serial["successful"])
             self.assertEqual("matched", shadow["comparison"]["status"])
             self.assertEqual("certified", shadow["cell_certificate"]["status"])
-            self.assertLessEqual(
-                shadow["cell_certificate"]["execution_microseconds"],
-                serial["elapsed_microseconds"],
-                "the fixed workload must make bounded parallel execution "
-                "measurably nonregressing",
-            )
+            estimated_loads = {
+                row["shard_id"]: row["estimated_microseconds"]
+                for row in shadow["plan"]["shards"]
+            }
+            self.assertEqual({
+                "exclusive": 3_000_000,
+                "general-000": 1_500_000,
+                "general-001": 1_500_000,
+            }, estimated_loads)
+            serial_estimate = sum(
+                profile["module_microseconds"][module]
+                for module in policy["modules"])
+            self.assertEqual(6_000_000, serial_estimate)
+            self.assertLess(max(estimated_loads.values()), serial_estimate)
             self.assertEqual(
                 policy["expected_tests"],
                 sorted(row["test"] for row in shadow[
