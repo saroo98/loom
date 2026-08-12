@@ -293,6 +293,20 @@ class ReleaseStandardTests(unittest.TestCase):
                          result["progress_checkpoint"]["last_started_test"])
         self.assertTrue(result["operation"]["survivors_confirmed_zero"])
         self.assertTrue(result["operation"]["protected_roots_unchanged"])
+        static = {
+            "root_sha256": "b" * 64, "manifest_sha256": "c" * 64,
+            "files_verified": 1,
+        }
+        with mock.patch.object(
+                loom_release, "verify_cut_static", return_value=static), \
+                mock.patch.object(loom_release, "_suite", return_value=result):
+            with self.assertRaises(loom_release.ReleaseError) as raised:
+                loom_release.verify_cut(self.root, forbidden_tokens=[])
+
+        details = raised.exception.details["suite"]
+        self.assertEqual(result["progress_checkpoint"],
+                         details["progress_checkpoint"])
+        self.assertEqual(result["operation"], details["operation"])
 
     def test_verify_cut_failure_preserves_child_and_outer_operation_bindings(self):
         projections = []
