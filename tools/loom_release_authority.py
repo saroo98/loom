@@ -35,13 +35,16 @@ RELEASE_AUTHORITY_FIELDS = {
 
 def certify_candidate_admission(admission, *, mechanism, authority_policy,
                                 manifest, workload, expected_commit,
-                                expected_tree, expected_root):
+                                expected_tree, expected_root,
+                                repository=None):
     try:
-        admission = loom_qualification_v2.verify_candidate(
+        admission = loom_qualification_v2.verify_candidate_evidence(
             admission, expected_commit=expected_commit,
             expected_tree=expected_tree,
             expected_public_root=expected_root, mechanism=mechanism,
-            policy=authority_policy, manifest=manifest, workload=workload)
+            policy=authority_policy, manifest=manifest, workload=workload,
+            repository=repository)
+        admission = loom_qualification_v2.candidate_projection(admission)
         authority_policy = loom_suite_plan.validate_authority_policy(
             authority_policy)
     except (loom_qualification_v2.QualificationV2Error,
@@ -72,7 +75,8 @@ def certify_candidate_admission(admission, *, mechanism, authority_policy,
 
 def verify_candidate_admission(value, *, admission, mechanism,
                                authority_policy, manifest, workload,
-                               expected_commit, expected_tree, expected_root):
+                               expected_commit, expected_tree, expected_root,
+                               repository=None):
     if not isinstance(value, dict) or set(value) != CANDIDATE_SUITE_FIELDS:
         raise ReleaseAuthorityError(
             "candidate suite certificate is not closed")
@@ -87,7 +91,7 @@ def verify_candidate_admission(value, *, admission, mechanism,
         admission, mechanism=mechanism, authority_policy=authority_policy,
         manifest=manifest, workload=workload,
         expected_commit=expected_commit, expected_tree=expected_tree,
-        expected_root=expected_root)
+        expected_root=expected_root, repository=repository)
     if expected != value:
         raise ReleaseAuthorityError(
             "candidate suite certificate is inconsistent")
@@ -96,7 +100,7 @@ def verify_candidate_admission(value, *, admission, mechanism,
 
 def certify_release_authority(candidate_suite, release_certificate, *,
                               candidate_admission, expected_tag,
-                              expected_asset=None):
+                              expected_asset=None, repository=None):
     if not isinstance(candidate_suite, dict) \
             or set(candidate_suite) != CANDIDATE_SUITE_FIELDS:
         raise ReleaseAuthorityError(
@@ -113,7 +117,8 @@ def certify_release_authority(candidate_suite, release_certificate, *,
     try:
         release_certificate = loom_release_certificate.verify_release(
             release_certificate, candidate_admission=candidate_admission,
-            expected_tag=expected_tag, expected_asset=expected_asset)
+            expected_tag=expected_tag, expected_asset=expected_asset,
+            repository=repository)
     except loom_release_certificate.ReleaseCertificateError as exc:
         raise ReleaseAuthorityError(
             f"release certificate is invalid: {exc}") from exc
@@ -163,7 +168,7 @@ def certify_release_authority(candidate_suite, release_certificate, *,
 
 def verify_release_authority(value, *, candidate_suite, release_certificate,
                              candidate_admission, expected_tag,
-                             expected_asset=None):
+                             expected_asset=None, repository=None):
     if not isinstance(value, dict) or set(value) != RELEASE_AUTHORITY_FIELDS:
         raise ReleaseAuthorityError("release authority receipt is not closed")
     body = {key: item for key, item in value.items()
@@ -176,7 +181,7 @@ def verify_release_authority(value, *, candidate_suite, release_certificate,
     expected = certify_release_authority(
         candidate_suite, release_certificate,
         candidate_admission=candidate_admission, expected_tag=expected_tag,
-        expected_asset=expected_asset)
+        expected_asset=expected_asset, repository=repository)
     if expected != value:
         raise ReleaseAuthorityError(
             "release authority receipt is inconsistent")
@@ -228,7 +233,7 @@ def _inputs(args):
         expected_tree=args.expected_tree,
         expected_public_root=args.expected_public_root,
         mechanism=mechanism, policy=policy, manifest=manifest,
-        workload=qualification_workload)
+        workload=qualification_workload, repository=args.root)
     return admission, mechanism, policy, manifest, qualification_workload
 
 
@@ -261,7 +266,8 @@ def main(argv=None):
                 manifest=manifest, workload=workload,
                 expected_commit=args.expected_commit,
                 expected_tree=args.expected_tree,
-                expected_root=args.expected_public_root)
+                expected_root=args.expected_public_root,
+                repository=args.root)
             _write(args.output, value)
             result = {
                 "status": value["status"],
@@ -277,14 +283,16 @@ def main(argv=None):
                 authority_policy=policy, manifest=manifest,
                 workload=workload, expected_commit=args.expected_commit,
                 expected_tree=args.expected_tree,
-                expected_root=args.expected_public_root)
+                expected_root=args.expected_public_root,
+                repository=args.root)
             release_certificate = loom_release_certificate._load(
                 args.release_certificate)
             asset = _expected_asset(args.asset)
             value = certify_release_authority(
                 candidate_suite, release_certificate,
                 candidate_admission=admission,
-                expected_tag=args.expected_tag, expected_asset=asset)
+                expected_tag=args.expected_tag, expected_asset=asset,
+                repository=args.root)
             if args.command == "release-authority":
                 _write(args.output, value)
             else:
@@ -295,7 +303,8 @@ def main(argv=None):
                     candidate_suite=candidate_suite,
                     release_certificate=release_certificate,
                     candidate_admission=admission,
-                    expected_tag=args.expected_tag, expected_asset=asset)
+                    expected_tag=args.expected_tag, expected_asset=asset,
+                    repository=args.root)
             result = {
                 "status": value["status"],
                 "release_authority_sha256": value[

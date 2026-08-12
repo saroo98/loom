@@ -53,14 +53,33 @@
       "additionalProperties": false,
       "required": [
         "repository", "workflow_path", "workflow_digest",
-        "action_manifest_digest", "event_name", "run_id", "run_attempt"
+        "action_manifest_digest", "event_name", "run_id", "run_attempt",
+        "reviewed_admission"
       ],
       "properties": {
         "repository": {"const": "https://github.com/saroo98/loom"},
         "workflow_path": {"const": ".github/workflows/candidate-equivalence.yml"},
         "workflow_digest": {"$ref": "#/$defs/digest"},
         "action_manifest_digest": {"$ref": "#/$defs/digest"},
-        "event_name": {"const": "push"},
+        "event_name": {"const": "workflow_run"},
+        "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "run_attempt": {"type": "string", "minLength": 1, "maxLength": 128},
+        "reviewed_admission": {"$ref": "#/$defs/admissionContext"}
+      }
+    },
+    "admissionContext": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source_commit", "workflow_path", "workflow_digest",
+        "action_manifest_digest", "event_name", "run_id", "run_attempt"
+      ],
+      "properties": {
+        "source_commit": {"$ref": "#/$defs/commit"},
+        "workflow_path": {"const": ".github/workflows/candidate-admission.yml"},
+        "workflow_digest": {"$ref": "#/$defs/digest"},
+        "action_manifest_digest": {"$ref": "#/$defs/digest"},
+        "event_name": {"const": "workflow_dispatch"},
         "run_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "run_attempt": {"type": "string", "minLength": 1, "maxLength": 128}
       }

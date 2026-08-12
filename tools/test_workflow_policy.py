@@ -316,6 +316,41 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertNotIn("loom_test.py", admission)
         self.assertNotIn("cargo build", admission)
 
+        equivalence_path = WORKFLOWS / "candidate-equivalence.yml"
+        self.assertTrue(equivalence_path.is_file())
+        equivalence = equivalence_path.read_text(encoding="utf-8")
+        equivalence_trigger = equivalence[
+            equivalence.index("on:"):equivalence.index("permissions:")]
+        self.assertIn("workflow_run:", equivalence_trigger)
+        self.assertIn("native-compatibility", equivalence_trigger)
+        self.assertIn("types: [completed]", equivalence_trigger)
+        self.assertIn("branches: [main]", equivalence_trigger)
+        self.assertIn("actions: read", equivalence)
+        self.assertIn("contents: read", equivalence)
+        self.assertNotIn("contents: write", equivalence)
+        self.assertIn("github.event.workflow_run.conclusion == 'success'", equivalence)
+        self.assertIn("github.event.workflow_run.event == 'push'", equivalence)
+        self.assertIn("if len(matches) != 1:", equivalence)
+        self.assertNotIn("selected = max(matches", equivalence)
+        self.assertIn("candidate-admission-v2-${REVIEWED_COMMIT}", equivalence)
+        self.assertIn("native-helper-*-${MERGE_COMMIT}", equivalence)
+        self.assertIn("compile-equivalence", equivalence)
+        self.assertIn("compile-rebound-candidate", equivalence)
+        self.assertIn("verify-candidate", equivalence)
+        self.assertIn(
+            "candidate-admission-v2-${{ github.event.workflow_run.head_sha }}",
+            equivalence)
+        self.assertNotIn("loom_test.py", equivalence)
+        self.assertNotIn("cargo build", equivalence)
+
+        release = (WORKFLOWS / "release.yml").read_text(encoding="utf-8")
+        self.assertIn("candidate-equivalence.yml", release)
+        self.assertIn("candidate-admission.yml", release)
+        self.assertIn("candidate admission fallback", release)
+        self.assertIn("/actions/runs/{run_id}/artifacts", release)
+        self.assertIn("candidate-admission-v2-{sha}", release)
+        self.assertIn("not artifact.get('expired', False)", release)
+
     def test_publication_and_post_release_are_same_byte_gates(self):
         publish = (WORKFLOWS / "publish-release.yml").read_text(encoding="utf-8")
         post = (WORKFLOWS / "post-release.yml").read_text(encoding="utf-8")

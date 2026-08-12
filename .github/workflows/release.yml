@@ -135,6 +135,7 @@ jobs:
           import json
           import os
           import subprocess
+          import sys
 
           sha = os.environ["LOOM_SOURCE_SHA"]
 
@@ -153,10 +154,30 @@ jobs:
                   raise SystemExit(f"no successful exact-main {workflow} run")
               return max(int(row["databaseId"]) for row in matches)
 
-          def exact_dispatch_success(workflow):
+          def has_exact_artifact(run_id, artifact_name):
+              repository = os.environ["GITHUB_REPOSITORY"]
+              completed = subprocess.run(
+                  ["gh", "api",
+                   f"repos/{repository}/actions/runs/{run_id}/artifacts"
+                   "?per_page=100"],
+                  check=True, capture_output=True, text=True,
+              )
+              value = json.loads(completed.stdout)
+              artifacts = value.get("artifacts", [])
+              if value.get("total_count") != len(artifacts):
+                  return False
+              matches = [
+                  artifact for artifact in artifacts
+                  if artifact.get("name") == artifact_name
+                  and not artifact.get('expired', False)
+              ]
+              return len(matches) == 1
+
+          def exact_event_success(
+                  workflow, event, *, artifact_name, required=True):
               completed = subprocess.run(
                   ["gh", "run", "list", "--workflow", workflow,
-                   "--commit", sha, "--event", "workflow_dispatch",
+                   "--commit", sha, "--event", event,
                    "--limit", "20", "--json",
                    "databaseId,headBranch,headSha,status,conclusion"],
                   check=True, capture_output=True, text=True,
@@ -166,19 +187,34 @@ jobs:
                          and row["headSha"] == sha
                          and row["status"] == "completed"
                          and row["conclusion"] == "success"]
-              if not matches:
+              matches = [
+                  row for row in matches
+                  if has_exact_artifact(row["databaseId"], artifact_name)
+              ]
+              if not matches and required:
                   raise SystemExit(
-                      f"no successful exact-main {workflow} dispatch")
-              return max(int(row["databaseId"]) for row in matches)
+                      f"no successful exact-main {workflow} {event}")
+              return (max(int(row["databaseId"]) for row in matches)
+                      if matches else None)
 
           print(f"QUALITY_RUN={exact_success('quality.yml')}")
           print(f"COMPATIBILITY_RUN={exact_success('compatibility.yml')}")
-          print(
-              f"ADMISSION_RUN={exact_dispatch_success('candidate-admission.yml')}")
+          candidate = exact_event_success(
+              'candidate-equivalence.yml', 'workflow_run',
+              artifact_name=f'candidate-admission-v2-{sha}', required=False)
+          workflow = 'candidate-equivalence.yml'
+          if candidate is None:
+              print('candidate admission fallback', file=sys.stderr)
+              candidate = exact_event_success(
+                  'candidate-admission.yml', 'workflow_dispatch',
+                  artifact_name=f'candidate-admission-v2-{sha}')
+              workflow = 'candidate-admission.yml'
+          print(f"CANDIDATE_RUN={candidate}")
+          print(f"CANDIDATE_WORKFLOW={workflow}")
           PY
           source "$RUNNER_TEMP/main-runs.env"
           test -n "$QUALITY_RUN" -a -n "$COMPATIBILITY_RUN" \
-            -a -n "$ADMISSION_RUN"
+            -a -n "$CANDIDATE_RUN" -a -n "$CANDIDATE_WORKFLOW"
           gh run download "$QUALITY_RUN" --pattern 'full-test-timings-*' \
             --dir "$RUNNER_TEMP/capability-reports"
           gh run download "$QUALITY_RUN" --pattern 'quality-matrix-certificate' \
@@ -189,7 +225,7 @@ jobs:
             --dir "$RUNNER_TEMP/compatibility-certificate"
           gh run download "$COMPATIBILITY_RUN" --pattern "native-helper-*-${LOOM_SOURCE_SHA}" \
             --dir "$RUNNER_TEMP/native-downloaded"
-          gh run download "$ADMISSION_RUN" \
+          gh run download "$CANDIDATE_RUN" \
             --pattern "candidate-admission-v2-${LOOM_SOURCE_SHA}" \
             --dir "$RUNNER_TEMP/candidate-admission"
           test "$(find "$RUNNER_TEMP/native-downloaded" -name receipt.json -type f | wc -l)" -eq 6
@@ -450,12 +486,14 @@ jobs:
             --attestation "$ATTESTATION_BUNDLE" \
             --output "$RUNNER_TEMP/release-tag-evidence-v2.json"
           python -B tools/loom_release_certificate.py compile \
+            --repository . \
             --candidate "$RUNNER_TEMP/candidate-admission-v2.json" \
             --reproducibility "$RUNNER_TEMP/reproducibility-receipt.json" \
             --rollback "$RUNNER_TEMP/rollback.json" \
             --tag-evidence "$RUNNER_TEMP/release-tag-evidence-v2.json" \
             --output "$RUNNER_TEMP/release-certificate-v2.json"
           python -B tools/loom_release_certificate.py verify \
+            --repository . \
             --candidate "$RUNNER_TEMP/candidate-admission-v2.json" \
             --certificate "$RUNNER_TEMP/release-certificate-v2.json" \
             --expected-tag "$RELEASE_TAG" --asset "$ASSET"
@@ -664,6 +702,7 @@ jobs:
             --manifest-published
           ASSET="$RUNNER_TEMP/staged-release-assets/loom-plugin-${RELEASE_TAG}.zip"
           python -B tools/loom_release_certificate.py verify \
+            --repository . \
             --candidate release-passport/candidate-admission-v2.json \
             --certificate release-passport/release-certificate-v2.json \
             --expected-tag "$RELEASE_TAG" --asset "$ASSET"

@@ -372,14 +372,16 @@ def verify_receipt(value, *, expected_sha256, expected_bytes,
 
 
 def verify_draft_with_certificate(asset, gate, release_certificate,
-                                  candidate_admission, *, expected_tag):
+                                  candidate_admission, *, expected_tag,
+                                  repository=None):
     """Verify draft bytes only after a current release-ready certificate."""
     import loom_release_certificate as release_core
 
     try:
         release_core.verify_release(
             release_certificate, candidate_admission=candidate_admission,
-            expected_tag=expected_tag, expected_asset=None)
+            expected_tag=expected_tag, expected_asset=None,
+            repository=repository)
     except release_core.ReleaseCertificateError as exc:
         raise PromotionError("release certificate is invalid") from exc
     if release_certificate["status"] != "release-ready":
@@ -393,7 +395,8 @@ def verify_draft_with_certificate(asset, gate, release_certificate,
 
 def verify_public_with_certificate(
         asset, gate, release_certificate, candidate_admission, *, expected_tag,
-        installed_subject_sha256, represented_installed_subjects=()):
+        installed_subject_sha256, represented_installed_subjects=(),
+        repository=None):
     """Verify public/install bytes only after the exact draft certificate."""
     import loom_release_certificate as release_core
 
@@ -404,7 +407,8 @@ def verify_public_with_certificate(
     try:
         release_core.verify_release(
             release_certificate, candidate_admission=candidate_admission,
-            expected_tag=expected_tag, expected_asset=expected_asset)
+            expected_tag=expected_tag, expected_asset=expected_asset,
+            repository=repository)
     except release_core.ReleaseCertificateError as exc:
         raise PromotionError("release certificate is invalid") from exc
     if release_certificate["status"] != "draft-verified":

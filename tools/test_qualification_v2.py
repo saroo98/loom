@@ -17,6 +17,8 @@ import loom_qualification_workload
 import loom_exact_cut_receipt
 import loom_lint
 import loom_platform_probe
+import loom_release_authority
+import loom_release_certificate
 import loom_release_suite
 import loom_suite_certificate_core
 import loom_suite_plan
@@ -1262,7 +1264,29 @@ class QualificationV2Tests(unittest.TestCase):
                 '{"fixture":1}\n', encoding="utf-8")
             (docs / "generated-evidence.json").write_text(
                 '{"fixture":2}\n', encoding="utf-8")
-            self.git(repository, "add", "docs")
+            workflows = repository / ".github" / "workflows"
+            workflows.mkdir(parents=True)
+            admission_actions = (
+                "actions/checkout@" + "a" * 40,
+                "actions/setup-python@" + "b" * 40,
+                "actions/upload-artifact@" + "c" * 40,
+            )
+            equivalence_actions = (
+                "actions/checkout@" + "d" * 40,
+                "actions/setup-python@" + "e" * 40,
+                "actions/upload-artifact@" + "f" * 40,
+            )
+            admission_workflow = workflows / "candidate-admission.yml"
+            equivalence_workflow = workflows / "candidate-equivalence.yml"
+            admission_workflow.write_text(
+                "steps:\n" + "".join(
+                    f"  - uses: {action}\n" for action in admission_actions),
+                encoding="utf-8")
+            equivalence_workflow.write_text(
+                "steps:\n" + "".join(
+                    f"  - uses: {action}\n" for action in equivalence_actions),
+                encoding="utf-8")
+            self.git(repository, "add", "docs", ".github/workflows")
             self.git(repository, "commit", "-m", "reviewed")
             reviewed = self.git(repository, "rev-parse", "HEAD")
             reviewed_tree = loom_subject_identity.git_tree_inventory(
@@ -1285,17 +1309,57 @@ class QualificationV2Tests(unittest.TestCase):
             self.git(repository, "checkout", "main")
             self.git(repository, "merge", "--no-ff", "feature", "-m", "merge")
             merge_commit = self.git(repository, "rev-parse", "HEAD")
+            merge_tree = loom_subject_identity.git_tree_inventory(
+                repository, merge_commit)
             context = {
                 "repository": "https://github.com/saroo98/loom",
                 "workflow_path": ".github/workflows/candidate-equivalence.yml",
-                "workflow_digest": "1" * 64,
-                "action_manifest_digest": "2" * 64,
-                "event_name": "push", "run_id": "123", "run_attempt": "1",
+                "workflow_digest": hashlib.sha256(
+                    loom_subject_identity._run_git(
+                        repository, "show",
+                        f"{merge_commit}:.github/workflows/"
+                        "candidate-equivalence.yml", binary=True)).hexdigest(),
+                "action_manifest_digest": hashlib.sha256(
+                    ("\n".join(equivalence_actions) + "\n").encode(
+                        "utf-8")).hexdigest(),
+                "event_name": "workflow_run", "run_id": "123",
+                "run_attempt": "1",
+                "reviewed_admission": {
+                    "source_commit": reviewed,
+                    "workflow_path": ".github/workflows/candidate-admission.yml",
+                    "workflow_digest": hashlib.sha256(
+                        loom_subject_identity._run_git(
+                            repository, "show",
+                            f"{reviewed}:.github/workflows/"
+                            "candidate-admission.yml", binary=True)).hexdigest(),
+                    "action_manifest_digest": hashlib.sha256(
+                        ("\n".join(admission_actions) + "\n").encode(
+                            "utf-8")).hexdigest(),
+                    "event_name": "workflow_dispatch",
+                    "run_id": "122", "run_attempt": "1",
+                },
             }
             equivalence = loom_qualification_v2.compile_equivalence(
                 admission, reviewed_commit=reviewed,
                 merge_commit=merge_commit, repository=repository,
                 context=context)
+            forged_context = copy.deepcopy(context)
+            forged_context["reviewed_admission"][
+                "action_manifest_digest"] = "9" * 64
+            with self.assertRaises(
+                    loom_qualification_v2.QualificationV2Error):
+                loom_qualification_v2.compile_equivalence(
+                    admission, reviewed_commit=reviewed,
+                    merge_commit=merge_commit, repository=repository,
+                    context=forged_context)
+            forged_context = copy.deepcopy(context)
+            forged_context["event_name"] = "push"
+            with self.assertRaises(
+                    loom_qualification_v2.QualificationV2Error):
+                loom_qualification_v2.compile_equivalence(
+                    admission, reviewed_commit=reviewed,
+                    merge_commit=merge_commit, repository=repository,
+                    context=forged_context)
             report = loom_lint.Report()
             loom_lint.validate_schema(
                 report, "candidate-equivalence", equivalence,
@@ -1308,6 +1372,80 @@ class QualificationV2Tests(unittest.TestCase):
             self.assertEqual(
                 equivalence["reviewed_git_tree_oid"],
                 equivalence["merge_git_tree_oid"])
+
+            rebound = loom_qualification_v2.compile_rebound_candidate(
+                admission, equivalence, self.native_receipts(merge_commit),
+                expected_commit=merge_commit, repository=repository)
+            report = loom_lint.Report()
+            loom_lint.validate_schema(
+                report, "candidate-rebinding", rebound,
+                "release-candidate-rebinding-v2.schema.json")
+            self.assertEqual([], report.errors)
+            self.assertEqual(
+                rebound, loom_qualification_v2.verify_candidate_evidence(
+                    rebound, expected_commit=merge_commit,
+                    expected_tree=merge_tree["tree_sha256"],
+                    expected_public_root=public_root, mechanism=None,
+                    policy=authority, manifest=manifest, repository=repository))
+            projection = loom_qualification_v2.candidate_projection(rebound)
+            self.assertEqual(merge_commit, projection["source_commit"])
+            self.assertEqual(
+                rebound["candidate_admission_sha256"],
+                projection["candidate_admission_sha256"])
+            self.assertEqual(
+                merge_commit,
+                projection["native_evidence"][0]["receipt"]["source_commit"])
+            suite = loom_release_suite.certify_candidate_admission(
+                rebound, mechanism=None, authority_policy=authority,
+                manifest=manifest, workload=None,
+                expected_commit=merge_commit,
+                expected_tree=merge_tree["tree_sha256"],
+                expected_root=public_root, repository=repository)
+            self.assertEqual(merge_commit, suite["subject"]["source_commit"])
+            self.assertEqual(
+                rebound["candidate_admission_sha256"],
+                suite["candidate_admission_sha256"])
+            authority_suite = loom_release_authority.certify_candidate_admission(
+                rebound, mechanism=None, authority_policy=authority,
+                manifest=manifest, workload=None,
+                expected_commit=merge_commit,
+                expected_tree=merge_tree["tree_sha256"],
+                expected_root=public_root, repository=repository)
+            self.assertEqual(suite, authority_suite)
+            self.assertEqual(
+                merge_commit,
+                loom_release_certificate._candidate(
+                    rebound, repository=repository)["source_commit"])
+            with self.assertRaises(
+                    loom_qualification_v2.QualificationV2Error):
+                loom_qualification_v2.verify_candidate_evidence(
+                    rebound, expected_commit=merge_commit,
+                    expected_tree=merge_tree["tree_sha256"],
+                    expected_public_root=public_root, mechanism=None,
+                    policy=authority, manifest=manifest)
+            rebound_path = repository / "candidate-rebinding-v2.json"
+            rebound_path.write_text(
+                json.dumps(rebound, sort_keys=True, separators=(",", ":"))
+                + "\n", encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                self.assertEqual(0, loom_qualification_v2.main([
+                    "verify-candidate", "--root", str(_root),
+                    "--candidate", str(rebound_path),
+                    "--expected-commit", merge_commit,
+                    "--expected-tree", merge_tree["tree_sha256"],
+                    "--expected-public-root", public_root,
+                    "--policy", str(_root / "contracts" /
+                                    "release-authority-policy-v2.json"),
+                    "--repository", str(repository),
+                ]))
+            self.assertEqual("verified", json.loads(
+                output.getvalue())["status"])
+
+            wrong_native = self.native_receipts(reviewed)
+            with self.assertRaises(loom_qualification_v2.QualificationV2Error):
+                loom_qualification_v2.compile_rebound_candidate(
+                    admission, equivalence, wrong_native,
+                    expected_commit=merge_commit, repository=repository)
 
             (docs / "generated-evidence.json").write_text(
                 '{"fixture":3}\n', encoding="utf-8")

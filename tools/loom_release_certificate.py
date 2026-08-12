@@ -157,9 +157,19 @@ def _tag(value, source_commit):
     return dict(value)
 
 
-def _candidate(value):
+def _candidate(value, *, repository=None):
     try:
-        return loom_qualification_v2._candidate_seal(value)
+        value = loom_qualification_v2._candidate_seal(value)
+        if value.get("evidence_domain") == "candidate-rebinding-v2":
+            if repository is None:
+                raise loom_qualification_v2.QualificationV2Error(
+                    "candidate rebinding requires repository identity")
+            loom_qualification_v2.verify_equivalence(
+                value["candidate_equivalence"],
+                admission=value["reviewed_candidate_admission"],
+                expected_commit=value["source_commit"],
+                repository=repository)
+        return loom_qualification_v2.candidate_projection(value)
     except loom_qualification_v2.QualificationV2Error as exc:
         raise ReleaseCertificateError(
             "exact candidate admission is invalid") from exc
@@ -202,9 +212,9 @@ def _promotion(value, archive):
 
 
 def compile_release(candidate_admission, reproducibility, rollback, *, tag,
-                    promotion=None):
+                    promotion=None, repository=None):
     """Compile exact release evidence without reusing old candidate subjects."""
-    candidate = _candidate(candidate_admission)
+    candidate = _candidate(candidate_admission, repository=repository)
     reproducibility = _reproducibility(reproducibility)
     rollback = _rollback(rollback, candidate)
     tag = _tag(tag, candidate["source_commit"])
@@ -258,7 +268,7 @@ def compile_release(candidate_admission, reproducibility, rollback, *, tag,
 
 
 def verify_release(value, *, candidate_admission, expected_tag,
-                   expected_asset=None):
+                   expected_asset=None, repository=None):
     if not isinstance(value, dict) or set(value) != RELEASE_FIELDS \
             or value.get("schema_version") != 2 \
             or value.get("status") not in {
@@ -273,7 +283,7 @@ def verify_release(value, *, candidate_admission, expected_tag,
     expected = compile_release(
         candidate_admission, value.get("reproducibility"),
         value.get("rollback"), tag=value.get("tag"),
-        promotion=value.get("promotion"))
+        promotion=value.get("promotion"), repository=repository)
     if expected != value:
         raise ReleaseCertificateError("release certificate is inconsistent")
     if expected_asset is None:
@@ -289,10 +299,11 @@ def verify_release(value, *, candidate_admission, expected_tag,
 
 
 def load_release(path, *, candidate_admission, expected_tag,
-                 expected_asset=None):
+                 expected_asset=None, repository=None):
     return verify_release(
         _load(path), candidate_admission=candidate_admission,
-        expected_tag=expected_tag, expected_asset=expected_asset)
+        expected_tag=expected_tag, expected_asset=expected_asset,
+        repository=repository)
 
 
 def _write(path, value):
@@ -318,12 +329,14 @@ def main(argv=None):
     compile_parser.add_argument("--rollback", required=True)
     compile_parser.add_argument("--tag-evidence", required=True)
     compile_parser.add_argument("--promotion")
+    compile_parser.add_argument("--repository")
     compile_parser.add_argument("--output", required=True)
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--candidate", required=True)
     verify_parser.add_argument("--certificate", required=True)
     verify_parser.add_argument("--expected-tag", required=True)
     verify_parser.add_argument("--asset")
+    verify_parser.add_argument("--repository")
     args = parser.parse_args(argv)
     try:
         if args.command == "record-tag":
@@ -344,7 +357,8 @@ def main(argv=None):
                     candidate, _load(args.reproducibility),
                     _load(args.rollback), tag=_load(args.tag_evidence),
                     promotion=(_load(args.promotion)
-                               if args.promotion else None))
+                               if args.promotion else None),
+                    repository=args.repository)
                 _write(args.output, value)
             else:
                 expected_asset = None
@@ -361,7 +375,8 @@ def main(argv=None):
                 value = load_release(
                     args.certificate, candidate_admission=candidate,
                     expected_tag=args.expected_tag,
-                    expected_asset=expected_asset)
+                    expected_asset=expected_asset,
+                    repository=args.repository)
             result = {
                 "status": value["status"],
                 "release_certificate_sha256": value[
