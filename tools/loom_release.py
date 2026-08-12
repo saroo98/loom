@@ -480,6 +480,8 @@ def verify_cut(root, *, forbidden_tokens):
                 "failed_tests": failed_tests,
                 "failure_diagnostics": suite.get(
                     "failure_diagnostics", []),
+                "progress_checkpoint": suite.get("progress_checkpoint"),
+                "operation": suite.get("operation"),
                 "skip_receipts": suite.get("skip_receipts", []),
             },
         })
