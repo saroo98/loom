@@ -1,8 +1,8 @@
 {
-  "authority_mode": "serial",
+  "authority_mode": "certificate",
   "candidate_schema": "release-candidate-admission-v2",
   "mechanism_schema": "release-mechanism-qualification-v2",
-  "policy_sha256": "b1aedc4bc995ad491b51fb059d2900a7b5e778414381851fbf1d042501c499aa",
+  "policy_sha256": "4d2f75d74c8fc6b4d43501187e15ef612a5f74b4382bc0ca31029968da4be75b",
   "release_schema": "release-certificate-v2",
   "schema_version": 2
 }
