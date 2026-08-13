@@ -464,7 +464,7 @@ jobs:
               encoding="utf-8")
           PY
       - id: attest-evidence-subject
-        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/release-evidence-subject.json
       - name: Verify attestation and compile the exact release passport
@@ -613,10 +613,10 @@ jobs:
       - name: Verify generated operational truth is current
         working-directory: tools
         run: python -B loom_readiness.py .. --check
-      - uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-checksums: ${{ runner.temp }}/release-passport/SHA256SUMS
-      - uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/release-passport/SHA256SUMS
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
