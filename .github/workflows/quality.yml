@@ -170,7 +170,27 @@ jobs:
       - name: Audit network imports and literal subprocesses
         working-directory: tools
         run: python loom_privacy.py offline-audit .
-      - name: Build and verify the exact public cut
+      - name: Resolve candidate-suite authority route
+        id: suite-route
+        working-directory: tools
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          AUTHORITY_MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$AUTHORITY_MODE" = serial; then
+            EXECUTION=serial-shadow
+          elif test "$AUTHORITY_MODE" = certificate && test "$EVENT_NAME" = workflow_dispatch; then
+            EXECUTION=serial-shadow
+          elif test "$AUTHORITY_MODE" = certificate && test "$EVENT_NAME" = push; then
+            EXECUTION=certificate
+          else
+            echo "candidate-suite authority route is unsupported" >&2
+            exit 1
+          fi
+          echo "execution=$EXECUTION" >> "$GITHUB_OUTPUT"
+      - name: Build and serially verify the exact public cut
+        if: steps.suite-route.outputs.execution == 'serial-shadow'
         working-directory: tools
         shell: bash
         env:
@@ -182,11 +202,26 @@ jobs:
             'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
             'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
             'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
-          AUTHORITY_MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
-          test "$AUTHORITY_MODE" = serial -o "$AUTHORITY_MODE" = certificate
           ARGS=(.. "${{ runner.temp }}/loom-public-cut" --forbidden-token "loom-ci-${{ github.sha }}" --output exact-cut-ci.json --suite-output full-test-timings.json --failure-diagnostic-output serial-failure-diagnostic.json --progress-diagnostic-output serial-progress-diagnostic.json)
           python -B loom_exact_cut_ci.py "${ARGS[@]}"
+      - name: Build and statically verify the exact public cut
+        if: steps.suite-route.outputs.execution == 'certificate'
+        working-directory: tools
+        shell: bash
+        env:
+          LOOM_REQUESTED_RUNNER_LABEL: ${{ matrix.os }}
+          LOOM_WORKFLOW_PATH: .github/workflows/quality.yml
+        run: |
+          export LOOM_WORKFLOW_DIGEST="$(sha256sum ../.github/workflows/quality.yml | cut -d' ' -f1)"
+          export LOOM_ACTION_MANIFEST_DIGEST="$(printf '%s\n' \
+            'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' \
+            'actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97' \
+            'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a' | sha256sum | cut -d' ' -f1)"
+          python -B loom_exact_cut_ci.py .. "${{ runner.temp }}/loom-public-cut" \
+            --forbidden-token "loom-ci-${{ github.sha }}" \
+            --output exact-cut-ci.json --static-only
       - name: Run the exact isolated sharded candidate and compare to serial
+        if: steps.suite-route.outputs.execution == 'serial-shadow'
         working-directory: tools
         shell: bash
         run: |
@@ -194,8 +229,30 @@ jobs:
           ARGS=(--cut "${{ runner.temp }}/loom-public-cut" --test-root "${{ runner.temp }}/loom-public-cut/tools" --exact-receipt exact-cut-ci.json --policy ../contracts/release-suite-policy-v1.json --timing-profile ../contracts/release-suite-timing-profile-v1.json --source-tree-sha256 "$SOURCE_TREE" --output-root suite-shadow)
           python -B loom_suite_certificate.py shadow-cell "${ARGS[@]}" \
             --serial-report full-test-timings.json
+      - name: Run the authoritative isolated certificate cell once
+        if: steps.suite-route.outputs.execution == 'certificate'
+        working-directory: tools
+        shell: bash
+        run: |
+          python -B - "${{ runner.temp }}/release-suite-certificate-policy-v1.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+          import loom_reliability
+          import loom_suite_plan
+
+          source = json.load(open(
+              "../contracts/release-suite-policy-v1.json", encoding="utf-8"))
+          source.pop("policy_sha256", None)
+          source["authority_mode"] = "certificate"
+          loom_reliability.atomic_write_json(
+              pathlib.Path(sys.argv[1]), loom_suite_plan.seal_policy(source))
+          PY
+          SOURCE_TREE="$(python -B -c 'import os; import loom_subject_identity as s; print(s.git_tree_inventory("..", os.environ["GITHUB_SHA"])["tree_sha256"])')"
+          ARGS=(--cut "${{ runner.temp }}/loom-public-cut" --test-root "${{ runner.temp }}/loom-public-cut/tools" --exact-receipt exact-cut-ci.json --policy "${{ runner.temp }}/release-suite-certificate-policy-v1.json" --timing-profile ../contracts/release-suite-timing-profile-v1.json --source-tree-sha256 "$SOURCE_TREE" --output-root suite-shadow)
+          python -B loom_suite_certificate.py run-cell "${ARGS[@]}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: always()
+        if: always() && steps.suite-route.outputs.execution == 'serial-shadow'
         with:
           name: full-test-timings-${{ matrix.os }}-py${{ matrix.python }}
           path: |
@@ -209,6 +266,17 @@ jobs:
             tools/suite-shadow/shadow-comparison.json
           retention-days: 7
           if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.suite-route.outputs.execution == 'certificate'
+        with:
+          name: full-test-timings-${{ matrix.os }}-py${{ matrix.python }}
+          path: |
+            tools/exact-cut-ci.json
+            tools/suite-shadow/workers/*/worker-receipt.json
+            tools/suite-shadow/workers/*/failure-diagnostic.json
+            tools/suite-shadow/cell-certificate.json
+          retention-days: 7
+          if-no-files-found: error
 
   aggregate-capability-coverage:
     if: github.event_name != 'pull_request'
@@ -219,29 +287,52 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Resolve candidate-suite authority route
+        id: suite-route
+        working-directory: tools
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          AUTHORITY_MODE="$(python -B -c 'import json; print(json.load(open("../contracts/release-authority-policy-v2.json",encoding="utf-8"))["authority_mode"])')"
+          if test "$AUTHORITY_MODE" = serial; then
+            EXECUTION=serial-shadow
+          elif test "$AUTHORITY_MODE" = certificate && test "$EVENT_NAME" = workflow_dispatch; then
+            EXECUTION=serial-shadow
+          elif test "$AUTHORITY_MODE" = certificate && test "$EVENT_NAME" = push; then
+            EXECUTION=certificate
+          else
+            echo "candidate-suite authority route is unsupported" >&2
+            exit 1
+          fi
+          echo "execution=$EXECUTION" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: full-test-timings-*
-          path: capability-reports
-          merge-multiple: false
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          pattern: full-test-timings-*
-          path: suite-shadow-reports
+          path: suite-reports
           merge-multiple: false
       - name: Require every skipped capability to pass in another bound job
+        if: steps.suite-route.outputs.execution == 'serial-shadow'
         working-directory: tools
         shell: bash
         run: |
-          python -B loom_capability.py ../capability-reports/*/full-test-timings.json
+          python -B loom_capability.py ../suite-reports/*/full-test-timings.json
       - name: Compile exact-candidate quality matrix certificate
         working-directory: tools
         shell: bash
+        env:
+          EXECUTION: ${{ steps.suite-route.outputs.execution }}
         run: |
-          mapfile -t CERTS < <(find ../suite-shadow-reports -name cell-certificate.json -type f | sort)
+          mapfile -t CERTS < <(find ../suite-reports -name cell-certificate.json -type f | sort)
           SHADOW_OK=1
-          mapfile -t COMPARISONS < <(find ../suite-shadow-reports -name shadow-comparison.json -type f | sort)
-          test "${#COMPARISONS[@]}" -eq 15 || SHADOW_OK=0
+          EXPECTED_COMPARISONS=0
+          if test "$EXECUTION" = serial-shadow; then
+            EXPECTED_COMPARISONS=15
+          else
+            test "$EXECUTION" = certificate
+          fi
+          mapfile -t COMPARISONS < <(find ../suite-reports -name shadow-comparison.json -type f | sort)
+          test "${#COMPARISONS[@]}" -eq "$EXPECTED_COMPARISONS" || SHADOW_OK=0
           for comparison in "${COMPARISONS[@]}"; do
             if ! test "$(python -B -c 'import json,sys; print(json.load(open(sys.argv[1],encoding="utf-8"))["status"])' "$comparison")" = matched; then
               SHADOW_OK=0
@@ -259,11 +350,43 @@ jobs:
             python -B -c 'import json; json.dump({"schema_version":1,"status":"mismatched","primary_reason":"INVENTORY_MISMATCH"}, open("quality-matrix-certificate.json","w",encoding="utf-8"), sort_keys=True)'
             false
           fi
-      - name: Seal the exact quality candidate evidence bundle
+      - name: Verify certificate authority against current quality families
+        if: steps.suite-route.outputs.execution == 'certificate'
         working-directory: tools
         shell: bash
         run: |
-          mapfile -t RECEIPTS < <(find ../suite-shadow-reports -name exact-cut-ci.json -type f | sort)
+          python -B - quality-matrix-certificate.json current-quality-families.json <<'PY'
+          import json
+          import sys
+          import loom_qualification_v2
+
+          matrix = json.load(open(sys.argv[1], encoding="utf-8"))
+          record = json.load(open(
+              "../contracts/release-mechanism-qualification-v2.json",
+              encoding="utf-8"))
+          current = [
+              loom_qualification_v2.family_identity(row)
+              for row in record["families"]
+              if row["consumer"] != "quality"
+          ]
+          current.extend(
+              loom_qualification_v2.family_identity(
+                  loom_qualification_v2._family(cell["environment"], "quality"))
+              for cell in matrix["cells"])
+          with open(sys.argv[2], "w", encoding="utf-8", newline="\n") as stream:
+              json.dump(current, stream, sort_keys=True, separators=(",", ":"))
+              stream.write("\n")
+          PY
+          python -B loom_qualification_v2.py verify-mechanism --root .. \
+            --qualification ../contracts/release-mechanism-qualification-v2.json \
+            --current-families current-quality-families.json \
+            --policy ../contracts/release-authority-policy-v2.json
+      - name: Seal the exact quality candidate evidence bundle
+        if: steps.suite-route.outputs.execution == 'serial-shadow'
+        working-directory: tools
+        shell: bash
+        run: |
+          mapfile -t RECEIPTS < <(find ../suite-reports -name exact-cut-ci.json -type f | sort)
           test "${#RECEIPTS[@]}" -eq 15
           ARGS=(compile-candidate-bundle --root .. --consumer quality \
             --matrix quality-matrix-certificate.json \
@@ -279,6 +402,7 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.suite-route.outputs.execution == 'serial-shadow'
         with:
           name: quality-candidate-evidence-v2
           path: |
