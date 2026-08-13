@@ -196,7 +196,7 @@ class WorkflowPolicyTests(unittest.TestCase):
                 "refs/remotes/origin/main"))
         self.assertNotIn("refs/remotes/origin/main-staging", combined)
 
-    def test_serial_authority_and_shadow_topology_are_explicit(self):
+    def test_active_authority_routes_normal_ci_without_losing_serial_admission(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
         compatibility = (WORKFLOWS / "compatibility.yml").read_text(encoding="utf-8")
         authority = json.loads((
@@ -226,12 +226,33 @@ class WorkflowPolicyTests(unittest.TestCase):
         self.assertEqual("serial", historical["authority_mode"])
         for text in (quality, compatibility):
             self.assertIn("release-authority-policy-v2.json", text)
+            self.assertEqual(2, text.count("id: suite-route"))
+            self.assertIn("EXECUTION=serial-shadow", text)
+            self.assertIn("EXECUTION=certificate", text)
+            self.assertIn('echo "execution=$EXECUTION"', text)
+            self.assertIn('test "$EVENT_NAME" = workflow_dispatch', text)
+            self.assertIn('test "$EVENT_NAME" = push', text)
             self.assertIn("loom_suite_certificate.py shadow-cell", text)
-            self.assertNotIn("loom_suite_certificate.py run-cell", text)
-            self.assertNotIn("--static-only", text)
+            self.assertIn("loom_suite_certificate.py run-cell", text)
+            self.assertIn("--static-only", text)
+            self.assertIn(
+                "steps.suite-route.outputs.execution == 'serial-shadow'", text)
+            self.assertIn(
+                "steps.suite-route.outputs.execution == 'certificate'", text)
+            self.assertIn("release-mechanism-qualification-v2.json", text)
+            self.assertIn("verify-mechanism", text)
+            self.assertIn("EXPECTED_COMPARISONS=0", text)
+            self.assertIn("EXPECTED_COMPARISONS=15", text)
             self.assertIn("release-suite-timing-profile-v1.json", text)
+            self.assertNotIn("cancel-in-progress: true", text)
+        self.assertNotIn('test "$EVENT_NAME" = schedule', quality)
+        self.assertIn('test "$EVENT_NAME" = schedule', compatibility)
         self.assertIn("quality-matrix-certificate", quality)
         self.assertIn("compatibility-matrix-certificate", compatibility)
+        self.assertIn("--serial-suite full-test-timings.json", compatibility)
+        self.assertIn(
+            "--suite-certificate suite-shadow/cell-certificate.json",
+            compatibility)
 
     def test_full_suite_cells_transport_closed_failure_diagnostics(self):
         quality = (WORKFLOWS / "quality.yml").read_text(encoding="utf-8")
@@ -306,10 +327,10 @@ class WorkflowPolicyTests(unittest.TestCase):
             self.assertIn("loom_suite_certificate.py shadow-cell", text)
             self.assertIn("compile-candidate-bundle --root", text)
             self.assertIn("loom_qualification_v2.py \"${ARGS[@]}\"", text)
-            self.assertNotIn("loom_suite_certificate.py run-cell", text)
-            self.assertNotIn("--static-only", text)
+            self.assertIn("loom_suite_certificate.py run-cell", text)
+            self.assertIn("--static-only", text)
             self.assertNotIn("loom_qualification_v2.py run-observation", text)
-            self.assertNotIn("mechanism-qualification-v2", text)
+            self.assertIn("release-mechanism-qualification-v2.json", text)
         self.assertEqual(6, candidate_compatibility.count("- {runner:"))
         admission_path = WORKFLOWS / "candidate-admission.yml"
         self.assertTrue(admission_path.is_file())
