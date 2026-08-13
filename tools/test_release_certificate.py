@@ -314,6 +314,11 @@ class ReleaseCertificateTests(unittest.TestCase):
         _archive_bytes, reproducibility, rollback, tag = self.evidence(admission)
         with tempfile.TemporaryDirectory() as temporary:
             temporary = Path(temporary)
+            _root, _manifest, _workload, _timing, fixture_policy = \
+                test_qualification_v2.QualificationV2Tests().inputs()
+            fixture_policy_path = temporary / "authority-policy.json"
+            fixture_policy_path.write_text(
+                json.dumps(fixture_policy), encoding="utf-8")
             paths = {}
             for name, value in (
                     ("candidate", admission),
@@ -345,8 +350,7 @@ class ReleaseCertificateTests(unittest.TestCase):
                 "--expected-tree",
                 admission["repository_source_tree_sha256"],
                 "--expected-public-root", admission["public_root_sha256"],
-                "--policy", str(
-                    root / "contracts" / "release-authority-policy-v2.json"),
+                "--policy", str(fixture_policy_path),
             ]
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(0, loom_release_authority.main([
