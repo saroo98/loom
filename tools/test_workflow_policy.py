@@ -208,9 +208,21 @@ class WorkflowPolicyTests(unittest.TestCase):
         qualification = (
             ROOT / "contracts" / "release-mechanism-qualification-v2.json"
         )
-        self.assertEqual(
-            "certificate" if qualification.is_file() else "serial",
-            authority["authority_mode"])
+        public_manifest = ROOT / "BUILD-MANIFEST.json"
+        if public_manifest.is_file():
+            self.assertFalse((ROOT / ".git").exists())
+            manifest = json.loads(public_manifest.read_text(encoding="utf-8"))
+            paths = {
+                row["path"] for row in manifest["files"]
+                if isinstance(row, dict) and isinstance(row.get("path"), str)
+            }
+            self.assertFalse(qualification.is_file())
+            self.assertNotIn(
+                "contracts/release-mechanism-qualification-v2.json", paths)
+        else:
+            self.assertEqual(
+                "certificate" if qualification.is_file() else "serial",
+                authority["authority_mode"])
         self.assertEqual("serial", historical["authority_mode"])
         for text in (quality, compatibility):
             self.assertIn("release-authority-policy-v2.json", text)

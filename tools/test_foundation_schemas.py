@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import copy
+import json
 from pathlib import Path
 
 import loom_lint
@@ -274,9 +275,21 @@ class FoundationSchemaTests(unittest.TestCase):
         qualification = (
             root / "contracts" / "release-mechanism-qualification-v2.json"
         )
-        self.assertEqual(
-            "certificate" if qualification.is_file() else "serial",
-            policy["authority_mode"])
+        public_manifest = root / "BUILD-MANIFEST.json"
+        if public_manifest.is_file():
+            self.assertFalse((root / ".git").exists())
+            manifest = json.loads(public_manifest.read_text(encoding="utf-8"))
+            paths = {
+                row["path"] for row in manifest["files"]
+                if isinstance(row, dict) and isinstance(row.get("path"), str)
+            }
+            self.assertFalse(qualification.is_file())
+            self.assertNotIn(
+                "contracts/release-mechanism-qualification-v2.json", paths)
+        else:
+            self.assertEqual(
+                "certificate" if qualification.is_file() else "serial",
+                policy["authority_mode"])
         self.assert_schema(policy, "release-authority-policy-v2.schema.json")
 
     def test_release_product_interface_matches_its_closed_schema(self):
