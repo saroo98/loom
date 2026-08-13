@@ -44,8 +44,13 @@ class QualificationV2Tests(unittest.TestCase):
         manifest = loom_qualification_manifest.verify(root, boundary, manifest)
         workload = loom_qualification_workload.load_policy(root)
         timing = loom_qualification_workload.load_timing_profile(root)
-        authority = loom_suite_plan.load_authority_policy(
+        active_authority = loom_suite_plan.load_authority_policy(
             root / "contracts" / "release-authority-policy-v2.json")
+        authority = loom_suite_plan.seal_authority_policy({
+            key: ("serial" if key == "authority_mode" else value)
+            for key, value in active_authority.items()
+            if key != "policy_sha256"
+        })
         return root, manifest, workload, timing, authority
 
     def evidence(self, manifest, workload, timing, *, consumer="quality",
@@ -1036,6 +1041,9 @@ class QualificationV2Tests(unittest.TestCase):
         }
         with tempfile.TemporaryDirectory() as temporary:
             temporary = Path(temporary)
+            authority_path = temporary / "serial-authority-policy-v2.json"
+            authority_path.write_text(
+                json.dumps(authority), encoding="utf-8")
             bundle_paths = {}
             for consumer, bundle in bundles.items():
                 inputs = temporary / consumer
@@ -1088,8 +1096,7 @@ class QualificationV2Tests(unittest.TestCase):
                 "--quality-bundle", str(bundle_paths["quality"]),
                 "--compatibility-bundle",
                 str(bundle_paths["compatibility"]),
-                "--policy",
-                str(root / "contracts" / "release-authority-policy-v2.json"),
+                "--policy", str(authority_path),
                 "--output", str(candidate_path),
             ]
             for directory in native_directories:
@@ -1106,9 +1113,7 @@ class QualificationV2Tests(unittest.TestCase):
                     "--expected-commit", commit,
                     "--expected-tree", source_tree,
                     "--expected-public-root", public_root,
-                    "--policy", str(
-                        root / "contracts" /
-                        "release-authority-policy-v2.json"),
+                    "--policy", str(authority_path),
                 ]))
 
     def test_mechanism_cli_requires_ten_complete_paired_batches_and_faults(self):
@@ -1253,6 +1258,9 @@ class QualificationV2Tests(unittest.TestCase):
         _root, manifest, workload, timing, authority = self.inputs()
         with tempfile.TemporaryDirectory() as temporary:
             repository = Path(temporary)
+            authority_path = repository / ".serial-authority-policy-v2.json"
+            authority_path.write_text(
+                json.dumps(authority), encoding="utf-8")
             self.git(repository, "init", "-b", "main")
             self.git(repository, "config", "user.email", "loom@example.invalid")
             self.git(repository, "config", "user.name", "Loom Test")
@@ -1434,8 +1442,7 @@ class QualificationV2Tests(unittest.TestCase):
                     "--expected-commit", merge_commit,
                     "--expected-tree", merge_tree["tree_sha256"],
                     "--expected-public-root", public_root,
-                    "--policy", str(_root / "contracts" /
-                                    "release-authority-policy-v2.json"),
+                    "--policy", str(authority_path),
                     "--repository", str(repository),
                 ]))
             self.assertEqual("verified", json.loads(

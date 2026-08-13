@@ -205,11 +205,13 @@ class WorkflowPolicyTests(unittest.TestCase):
         historical = json.loads((
             ROOT / "contracts" / "release-suite-policy-v1.json").read_text(
                 encoding="utf-8"))
-        self.assertEqual("serial", authority["authority_mode"])
-        self.assertEqual("serial", historical["authority_mode"])
-        self.assertFalse((
+        qualification = (
             ROOT / "contracts" / "release-mechanism-qualification-v2.json"
-        ).exists())
+        )
+        self.assertEqual(
+            "certificate" if qualification.is_file() else "serial",
+            authority["authority_mode"])
+        self.assertEqual("serial", historical["authority_mode"])
         for text in (quality, compatibility):
             self.assertIn("release-authority-policy-v2.json", text)
             self.assertIn("loom_suite_certificate.py shadow-cell", text)

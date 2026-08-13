@@ -271,7 +271,12 @@ class FoundationSchemaTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[1]
         policy_path = root / "contracts" / "release-authority-policy-v2.json"
         policy = loom_suite_plan.load_authority_policy(policy_path)
-        self.assertEqual("serial", policy["authority_mode"])
+        qualification = (
+            root / "contracts" / "release-mechanism-qualification-v2.json"
+        )
+        self.assertEqual(
+            "certificate" if qualification.is_file() else "serial",
+            policy["authority_mode"])
         self.assert_schema(policy, "release-authority-policy-v2.schema.json")
 
     def test_release_product_interface_matches_its_closed_schema(self):
