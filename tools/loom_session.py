@@ -33,6 +33,7 @@ RECEIPT_SCHEMA_VERSION = 2
 LEGACY_RECEIPT_SCHEMA_VERSION = 1
 JOURNAL_FILE = "session-journal.json"
 MAX_JOURNAL_BYTES = 8 * 1024 * 1024
+MAX_LIFECYCLE_WITNESS_BYTES = 128 * 1024
 MAX_EVENTS = 4096
 SAFE_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,127}$")
 RECEIPT_STATUSES = {"completed", "blocked", "interrupted"}
@@ -1237,6 +1238,48 @@ class SessionController:
         opener = getattr(self.memory, "open_session_payload", None)
         return opener(operation_id, payload) if opener is not None else payload
 
+    def _lifecycle_head_witness(self, project_id):
+        """Read one exact private anti-rollback witness for preparation."""
+        if not isinstance(project_id, str) \
+                or re.fullmatch(r"p-[0-9a-f]{32}", project_id) is None:
+            raise SessionBlocked(
+                "LIFECYCLE_WITNESS_INVALID",
+                "lifecycle witness project identity is invalid")
+        reader = getattr(self.memory, "read_lifecycle_head_witness", None)
+        if reader is not None:
+            if not callable(reader):
+                raise SessionBlocked(
+                    "LIFECYCLE_WITNESS_INVALID",
+                    "lifecycle witness reader is invalid")
+            try:
+                return reader(project_id)
+            except Exception as exc:
+                raise SessionBlocked(
+                    "LIFECYCLE_WITNESS_INVALID",
+                    "encrypted lifecycle witness cannot be read safely") from exc
+        path = (
+            self.owner_home / "instances" / self.instance_id / "runtime" /
+            "projects" / project_id / "orchestrations" /
+            "lifecycle-head-witness.json")
+        if not os.path.lexists(path):
+            return None
+        try:
+            if loom_runtime._path_has_link_or_junction(path) \
+                    or not path.is_file() \
+                    or not 1 <= path.stat().st_size <= MAX_LIFECYCLE_WITNESS_BYTES:
+                raise SessionBlocked(
+                    "LIFECYCLE_WITNESS_INVALID",
+                    "file lifecycle witness is redirected, missing, or oversized")
+            return json.loads(
+                path.read_text(encoding="utf-8"),
+                object_pairs_hook=_strict_object)
+        except SessionBlocked:
+            raise
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+            raise SessionBlocked(
+                "LIFECYCLE_WITNESS_INVALID",
+                "file lifecycle witness cannot be read safely") from exc
+
     def open(self, request, *, invocation_id, cwd, explicit_target=None,
              explicit_config=None, now=None, bound_intent=None):
         """Open an authenticated host-agent action without sealing a false result."""
@@ -1244,7 +1287,8 @@ class SessionController:
         prepared = loom_runtime.prepare_invocation(
             request, instance_id=self.instance_id, invocation_id=invocation_id,
             cwd=cwd, explicit_target=explicit_target, explicit_config=explicit_config,
-            owner_home=self.owner_home, now=instant, bound_intent=bound_intent)
+            owner_home=self.owner_home, now=instant, bound_intent=bound_intent,
+            lifecycle_witness_reader=self._lifecycle_head_witness)
         path = self._journal_path(prepared.project_id)
         with _SessionFileLock(path.with_name(".session.lock")):
             journal = _load_journal(path, self.instance_id, prepared.project_id)
@@ -1472,6 +1516,7 @@ class SessionController:
                 explicit_config=explicit_config,
                 owner_home=self.owner_home,
                 now=instant,
+                lifecycle_witness_reader=self._lifecycle_head_witness,
             )
         else:
             if not continue_open or not isinstance(

@@ -18,6 +18,7 @@ import loom_domain_evidence
 import loom_domain_invariants
 import loom_gate
 import loom_lifecycle
+import loom_lifecycle_kernel
 import loom_lint
 import loom_plan_presentation
 import loom_planning_intelligence
@@ -113,6 +114,9 @@ DOMAIN_DRAFT_LIMITS = {
         "revision_characters": 128,
     },
 }
+EXECUTION_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / "contracts" /
+    "plan-execution-policy-v1.json")
 
 
 class PlanAuthorError(ValueError):
@@ -121,6 +125,51 @@ class PlanAuthorError(ValueError):
         self.message = message
         self.diagnostics = list(diagnostics or [])
         super().__init__(message)
+
+
+def _execution_policy():
+    path = EXECUTION_POLICY_PATH
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+        raise PlanAuthorError(
+            "PLAN_EXECUTION_POLICY_INVALID",
+            "shared execution policy is missing, redirected, or oversized")
+    try:
+        value = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=_strict_object)
+        return loom_lifecycle_kernel.validate_execution_policy(value)
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            loom_lifecycle_kernel.LifecycleKernelError) as exc:
+        raise PlanAuthorError(
+            "PLAN_EXECUTION_POLICY_INVALID",
+            f"shared execution policy is invalid: {exc}") from exc
+
+
+def execution_projection(work_orders):
+    """Return the exact owner-reviewed strict serial execution projection."""
+    policy = _execution_policy()
+    if not isinstance(work_orders, list) \
+            or len(work_orders) > policy.max_work_orders:
+        raise PlanAuthorError(
+            "PLAN_DRAFT_INVALID", "work-order execution sequence is invalid")
+    sequence = [item.get("id") if isinstance(item, dict) else None
+                for item in work_orders]
+    try:
+        graph = loom_lifecycle_kernel.validate_work_order_graph(
+            [{"id": item["id"], "depends_on": item["depends_on"]}
+             for item in work_orders],
+            sequence,
+        )
+        statuses = loom_lifecycle_kernel.project_work_order_statuses(graph)
+    except (KeyError, loom_lifecycle_kernel.LifecycleKernelError) as exc:
+        raise PlanAuthorError(
+            "PLAN_DRAFT_INVALID", f"work-order execution sequence is invalid: {exc}") \
+            from exc
+    return {
+        "policy": policy.execution_policy,
+        "policy_sha256": policy.policy_sha256,
+        "sequence": sequence,
+        "statuses": statuses,
+    }
 
 
 def _canonical_bytes(value):
@@ -156,6 +205,23 @@ def _safe_touch(value):
         raise PlanAuthorError(
             "PLAN_DRAFT_INVALID", f"unsafe work-order touch: {value}")
     return normalized
+
+
+def _bounded_touch_patterns(value, label):
+    """Apply the shared executable scope bound before pack rendering."""
+    maximum = _execution_policy().max_touch_patterns_per_work_order
+    try:
+        values = _bounded_list(
+            value, label, maximum_items=maximum,
+            maximum_characters=300, minimum_items=1)
+    except PlanAuthorError as exc:
+        if isinstance(value, list) and len(value) > maximum:
+            raise PlanAuthorError(
+                "PLAN_SPLIT_REQUIRED",
+                f"{label} exceeds the executable bound of {maximum}; split the "
+                "outcome into serial work orders before rendering") from exc
+        raise
+    return [_safe_touch(item) for item in values]
 
 
 def _observable_criterion(value, *, negative=False):
@@ -671,9 +737,8 @@ def validate_draft(value, contract, *, now=None, repo=None, request=None):
         if routing not in ROUTING or size not in SIZE:
             raise PlanAuthorError(
                 "PLAN_DRAFT_INVALID", f"{identities[index]} routing or size is invalid")
-        touches = [_safe_touch(touch) for touch in _bounded_list(
-            item["touches"], "work-order touches", maximum_items=32,
-            maximum_characters=300, minimum_items=1)]
+        touches = _bounded_touch_patterns(
+            item["touches"], "work-order touches")
         if len(touches) != len(set(touches)):
             raise PlanAuthorError(
                 "PLAN_DRAFT_INVALID", f"{identities[index]} touches are duplicated")
@@ -845,6 +910,7 @@ def _write_json(path, value):
 
 
 def _write_work_orders(stage, contract, draft, today, atoms_by_wo):
+    projected_statuses = execution_projection(draft["work_orders"])["statuses"]
     invariant_bindings = []
     if draft["domain_bundle"] is not None:
         invariant_bindings = [
@@ -882,7 +948,7 @@ def _write_work_orders(stage, contract, draft, today, atoms_by_wo):
             _write(path, f"""---
 id: {work_order['id']}
 title: {_yaml(work_order['title'])}
-status: ready
+status: {projected_statuses[work_order['id']]}
 depends_on: {_yaml(work_order['depends_on'])}
 blocks: {_yaml(blocks)}
 routing: {work_order['routing']}
@@ -919,7 +985,7 @@ Pending real implementation evidence.
         _write(path, f"""---
 id: {work_order['id']}
 title: {_yaml(work_order['title'])}
-status: ready
+status: {projected_statuses[work_order['id']]}
 depends_on: {_yaml(work_order['depends_on'])}
 blocks: {_yaml(blocks)}
 routing: {work_order['routing']}
@@ -1042,8 +1108,10 @@ def _render_known_or_bound_pack(stage, *, contract, draft, request, version, tod
         rows.append(
             f"| {item['artifact']} | {item['action']} | {item['consumer']} | "
             f"{item['decision']} | {item['reason']} | {artifact_status} | {status} |")
+    execution = execution_projection(draft["work_orders"])
     frontier = "\n".join(
-        f"| {item['id']} | ready | {item['routing']} | — | — | — |"
+        f"| {item['id']} | {execution['statuses'][item['id']]} | "
+        f"{item['routing']} | — | — | — |"
         for item in draft["work_orders"])
     routing_snapshot = ""
     if any(item["artifact"] == "routing" and item["action"] == "produce"
@@ -1066,6 +1134,9 @@ project: {_yaml(draft['title'])}
 tier: {contract['tier']}
 status: draft
 execution_mode: planned
+execution_policy: {execution['policy']}
+execution_sequence: {_yaml(execution['sequence'])}
+execution_policy_sha256: {execution['policy_sha256']}
 last_verified: {today}
 loom_version: {_yaml(version)}
 plan_contract_version: {contract["schema_version"]}

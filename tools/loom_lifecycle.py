@@ -34,6 +34,15 @@ MAX_SECTIONS = 128
 SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 WO_ID = re.compile(r"^WO-[0-9]{3,}$")
 GENERIC_MEDIA = {"checklist", "generic", "unknown", "document-review", "self-report"}
+MEDIUM_ALIASES = {
+    "cli process": "cli-process",
+    "command line process": "cli-process",
+    "powershell process": "powershell-process",
+    "pytest process": "pytest-process",
+    "python unit test": "python-unittest",
+    "python unittest": "python-unittest",
+    "python unittest process": "python-unittest",
+}
 LIFECYCLE_VERIFICATION_PUBLIC_ERROR_CODES = frozenset({
     "LIFECYCLE_VERIFICATION_COMMAND_NONZERO",
     "LIFECYCLE_VERIFICATION_CONTAINMENT_FAILED",
@@ -137,6 +146,22 @@ def _validate_medium(medium):
         raise LifecycleError("acceptance evidence requires a named real medium")
 
 
+def canonical_medium_input(value):
+    """Resolve only closed display aliases; never slugify arbitrary evidence labels."""
+    if not isinstance(value, str):
+        raise LifecycleError(
+            "acceptance real medium must be a canonical ID or supported alias")
+    normalized = " ".join(value.strip().split())
+    if SAFE_ID.fullmatch(normalized) and normalized.casefold() not in GENERIC_MEDIA:
+        return normalized
+    canonical = MEDIUM_ALIASES.get(normalized.casefold())
+    if canonical is None:
+        raise LifecycleError(
+            "acceptance real medium must be a canonical ID or supported alias")
+    _validate_medium(canonical)
+    return canonical
+
+
 def _validate_command(command):
     if not isinstance(command, list) or not 1 <= len(command) <= MAX_COMMAND_ITEMS \
             or not all(isinstance(item, str) and 0 < len(item) <= 1000
@@ -215,6 +240,7 @@ def _copy_verification_snapshot(source, destination, excluded):
 
 def _capture_real_medium(pack, repo, *, medium, command, timeout, now):
     pack, repo = Path(pack).absolute(), Path(repo).absolute()
+    medium = canonical_medium_input(medium)
     _validate_medium(medium)
     _validate_command(command)
     if type(timeout) not in (int, float) or not 0 < timeout <= 300:
@@ -621,7 +647,9 @@ def main(argv=None):
     capture.add_argument("--repo", required=True)
     capture.add_argument("--pack", required=True)
     capture.add_argument("--wo", required=True)
-    capture.add_argument("--medium", required=True)
+    medium = capture.add_mutually_exclusive_group(required=True)
+    medium.add_argument("--medium")
+    medium.add_argument("--medium-id")
     capture.add_argument("--timeout", type=float, default=120)
     capture.add_argument("verification_command", nargs=argparse.REMAINDER)
     policy = commands.add_parser(
@@ -640,7 +668,8 @@ def main(argv=None):
             if command[:1] == ["--"]:
                 command = command[1:]
             result = capture_acceptance(
-                args.pack, args.repo, args.wo, medium=args.medium,
+                args.pack, args.repo, args.wo,
+                medium=(args.medium_id or args.medium),
                 command=command, timeout=args.timeout)
         else:
             inputs = dict(

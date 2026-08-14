@@ -214,14 +214,27 @@ def _touch_patterns(values):
     return patterns
 
 
-def _snapshot_files(repo, pack):
+def _snapshot_files(repo, pack=None, *, exclude_prefixes=()):
     """Hash every Git-visible file (or every non-Git file), excluding the private pack."""
-    repo, pack = Path(repo).resolve(), Path(pack).resolve()
-    excluded = None
-    try:
-        excluded = pack.relative_to(repo).as_posix()
-    except ValueError:
-        pass
+    repo = Path(repo).resolve()
+    excluded = []
+    if pack is not None:
+        try:
+            excluded.append(Path(pack).resolve().relative_to(repo).as_posix())
+        except ValueError:
+            pass
+    for item in exclude_prefixes:
+        path = Path(item)
+        try:
+            relative = (
+                path.resolve().relative_to(repo).as_posix()
+                if path.is_absolute() else PurePosixPath(str(path).replace("\\", "/")).as_posix())
+        except (OSError, RuntimeError, ValueError):
+            raise loom_survey.SurveyError("lifecycle snapshot exclusion is invalid")
+        if not relative or relative == "." or relative.startswith("../"):
+            raise loom_survey.SurveyError("lifecycle snapshot exclusion is invalid")
+        excluded.append(relative.strip("/"))
+    excluded = tuple(sorted(set(excluded), key=os.fsencode))
     try:
         probe = loom_survey.run_git(
             repo, "rev-parse", "--is-inside-work-tree", allowed=(0, 128))
@@ -249,9 +262,12 @@ def _snapshot_files(repo, pack):
         except OSError as exc:
             raise loom_survey.SurveyError(
                 f"cannot enumerate lifecycle baseline: {exc}") from exc
-    filtered = sorted(set(path.replace("\\", "/") for path in paths
-                          if not excluded
-                          or not (path == excluded or path.startswith(excluded + "/"))))
+    filtered = sorted(set(
+        path.replace("\\", "/") for path in paths
+        if not any(
+            path.replace("\\", "/") == prefix
+            or path.replace("\\", "/").startswith(prefix + "/")
+            for prefix in excluded)))
     if len(filtered) > SNAPSHOT_FILE_CAP:
         raise loom_survey.SurveyError(
             f"file snapshot exceeds hard cap {SNAPSHOT_FILE_CAP}")
@@ -413,6 +429,182 @@ def _work_order_contract(wo, required_status=None, *, compact=False):
 def _standalone_wo_contract(wo, required_status):
     return _work_order_contract(
         wo, required_status=required_status, compact=True)
+
+
+def validate_work_order_completion_evidence(value):
+    fields = {
+        "schema_version", "project_id", "generation_id", "work_order_id",
+        "work_order_file", "work_order_sha256",
+        "reviewed_world_observation_sha256", "prior_completion_sha256",
+        "repo_state_mode", "completed_world_sha256", "repo_head",
+        "causal_scope", "changed_paths", "after_hashes",
+        "acceptance_evidence", "acceptance_evidence_sha256",
+        "completion_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or not isinstance(value.get("project_id"), str) \
+            or not isinstance(value.get("generation_id"), str) \
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                                value["project_id"]) \
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,127}",
+                                value["generation_id"]) \
+            or not isinstance(value.get("work_order_id"), str) \
+            or not re.fullmatch(r"WO-[0-9]{3,}", value["work_order_id"]) \
+            or not _safe_relative_path(value.get("work_order_file")) \
+            or value.get("causal_scope") not in {"implementation", "verification-only"} \
+            or value.get("repo_state_mode") not in {"git", "filesystem"} \
+            or value.get("repo_head") is not None \
+            and (not isinstance(value["repo_head"], str)
+                 or not re.fullmatch(r"[0-9a-f]{7,64}", value["repo_head"])) \
+            or value.get("prior_completion_sha256") is not None \
+            and (not isinstance(value["prior_completion_sha256"], str)
+                 or not re.fullmatch(r"[0-9a-f]{64}",
+                                     value["prior_completion_sha256"])) \
+            or any(
+                not isinstance(value.get(key), str)
+                or re.fullmatch(r"[0-9a-f]{64}", value[key]) is None
+                for key in (
+                    "work_order_sha256", "reviewed_world_observation_sha256",
+                    "completed_world_sha256", "acceptance_evidence_sha256",
+                    "completion_sha256")) \
+            or not _safe_relative_path(value.get("acceptance_evidence")) \
+            or not isinstance(value.get("changed_paths"), list) \
+            or len(value["changed_paths"]) > 100_000 \
+            or value["changed_paths"] != sorted(
+                set(value["changed_paths"]), key=os.fsencode) \
+            or any(not _safe_relative_path(item) for item in value["changed_paths"]) \
+            or not isinstance(value.get("after_hashes"), dict) \
+            or set(value["after_hashes"]) != set(value["changed_paths"]) \
+            or any(
+                item is not None and (
+                    not isinstance(item, str)
+                    or re.fullmatch(r"[0-9a-f]{64}", item) is None)
+                for item in value["after_hashes"].values()):
+        raise ValueError("work-order completion evidence is invalid")
+    unsigned = {
+        key: item for key, item in value.items()
+        if key != "completion_sha256"}
+    if value["completion_sha256"] != _mapping_hash(unsigned):
+        raise ValueError("work-order completion evidence digest does not match")
+    return value
+
+
+def evaluate_work_order_completion(
+        pack, repo, wo, *, project_id, generation_id,
+        reviewed_world_observation_sha256, baseline_files,
+        prior_completions=()):
+    """Evaluate one v3 completion without mutating lifecycle authority."""
+    pack, repo, wo = Path(pack).resolve(), Path(repo).resolve(), Path(wo).resolve()
+    try:
+        wo_rel = wo.relative_to(pack).as_posix()
+    except ValueError as exc:
+        raise ValueError("work order must live inside the generation") from exc
+    compact_work_order = wo_rel == "WO-001.md"
+    if not (compact_work_order or wo_rel.startswith("work-orders/")) \
+            or not wo.is_file() or wo.is_symlink():
+        raise ValueError("work order is missing or redirected")
+    if not isinstance(baseline_files, dict) or len(baseline_files) > 100_000 \
+            or any(
+                not _safe_relative_path(path)
+                or not isinstance(digest_value, str)
+                or re.fullmatch(r"[0-9a-f]{64}", digest_value) is None
+                for path, digest_value in baseline_files.items()):
+        raise ValueError("reviewed-world file baseline is invalid")
+    prior = []
+    expected_prior = None
+    reference = dict(baseline_files)
+    for item in prior_completions:
+        validate_work_order_completion_evidence(item)
+        if item["project_id"] != project_id \
+                or item["generation_id"] != generation_id \
+                or item["reviewed_world_observation_sha256"] != \
+                reviewed_world_observation_sha256 \
+                or item["prior_completion_sha256"] != expected_prior:
+            raise ValueError("prior completion evidence chain is invalid")
+        reference.update(item["after_hashes"])
+        expected_prior = item["completion_sha256"]
+        prior.append(item)
+    import loom_lint
+    try:
+        text = wo.read_text(encoding="utf-8")
+        frontmatter, _ = loom_lint.parse_frontmatter(text)
+    except (OSError, UnicodeError) as exc:
+        raise ValueError(f"work order cannot be read: {exc}") from exc
+    identifier = str((frontmatter or {}).get("id", ""))
+    if not frontmatter or frontmatter.get("status") != "done" \
+            or not loom_lint.WO_ID_RE.fullmatch(identifier):
+        raise ValueError("work order must declare a valid done projection")
+    if any(item["work_order_id"] == identifier for item in prior):
+        raise ValueError("work order already has sealed completion evidence")
+    criteria = re.findall(r"(?m)^\s*-\s*\[([ xX])\]\s+(.+)$", text)
+    if not criteria or any(mark == " " for mark, _ in criteria):
+        raise ValueError("every acceptance criterion must be checked")
+    closeout = re.search(
+        r"(?ms)^##\s+Close-out\s*$\n(.*?)(?=^##\s|\Z)", text)
+    if not closeout or re.search(r"(?i)\bpending\b", closeout.group(1)) \
+            or not re.search(
+                r"(?i)\b(evidence|exit\s+0|observed|transcript|screenshot)\b",
+                closeout.group(1)):
+        raise ValueError("work-order close-out lacks reproducible evidence")
+    touches = frontmatter.get("touches", [])
+    if isinstance(touches, str):
+        touches = [touches] if touches else []
+    if not isinstance(touches, list) or not touches:
+        raise ValueError("work-order touches are empty")
+    patterns = _touch_patterns(touches)
+    verification_only = _verification_only_touches(pack, touches)
+    try:
+        current_state, current_files = _stable_snapshot(repo, repo / "plans")
+        loom_lifecycle.validate_acceptance_evidence(
+            pack, identifier, repo, require_current=True)
+    except (loom_survey.SurveyError, loom_lifecycle.LifecycleError) as exc:
+        raise ValueError(f"completion evidence is not current: {exc}") from exc
+    candidate_paths = sorted(
+        set(reference) | set(current_files), key=os.fsencode)
+    all_changed = [
+        path for path in candidate_paths
+        if reference.get(path) != current_files.get(path)]
+    changed = [
+        path for path in all_changed
+        if any(
+            fnmatch.fnmatchcase(path, pattern)
+            or pattern.endswith("/**")
+            and path.startswith(pattern[:-3].rstrip("/") + "/")
+            for pattern in patterns)]
+    outside = sorted(set(all_changed) - set(changed), key=os.fsencode)
+    if outside:
+        raise ValueError(
+            "repository changes fall outside declared touches: "
+            + ", ".join(outside[:20]))
+    if not changed and not verification_only:
+        raise ValueError("no declared target changed after authorization")
+    evidence_rel = f"evidence/{identifier}.json"
+    evidence_path = pack / evidence_rel
+    value = {
+        "schema_version": 1,
+        "project_id": project_id,
+        "generation_id": generation_id,
+        "work_order_id": identifier,
+        "work_order_file": wo_rel,
+        "work_order_sha256": _canonical_wo_hash(wo),
+        "reviewed_world_observation_sha256":
+            reviewed_world_observation_sha256,
+        "prior_completion_sha256": expected_prior,
+        "repo_state_mode": current_state.mode,
+        "completed_world_sha256": current_state.state_hash,
+        "repo_head": current_state.head or None,
+        "causal_scope": (
+            "verification-only" if verification_only and not changed
+            else "implementation"),
+        "changed_paths": changed,
+        "after_hashes": {path: current_files.get(path) for path in changed},
+        "acceptance_evidence": evidence_rel,
+        "acceptance_evidence_sha256": _file_hash(evidence_path),
+    }
+    value["completion_sha256"] = _mapping_hash(value)
+    validate_work_order_completion_evidence(value)
+    return value
 
 
 def _pack_work_order_contracts(pack):

@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/reviewed-plan-semantics-v1.schema.json",
+  "title": "Loom immutable reviewed plan semantics v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "project_id", "generation_id", "revision_number",
+    "title", "summary", "assumptions", "decisions", "execution_policy",
+    "execution_sequence", "work_orders", "plan_contract_sha256",
+    "domain_bindings_sha256", "reviewed_world_sha256",
+    "reviewed_world_observation_sha256", "plan_semantics_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "project_id": {"$ref": "#/$defs/id"},
+    "generation_id": {"$ref": "#/$defs/id"},
+    "revision_number": {"type": "integer", "minimum": 1, "maximum": 1000000},
+    "title": {"type": "string", "minLength": 1, "maxLength": 100},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
+    "assumptions": {"$ref": "#/$defs/texts16"},
+    "decisions": {"$ref": "#/$defs/texts16"},
+    "execution_policy": {"const": "strict-serial-sequence-v1"},
+    "execution_sequence": {
+      "type": "array", "minItems": 1, "maxItems": 64,
+      "uniqueItems": true, "items": {"$ref": "#/$defs/workOrderId"}
+    },
+    "work_orders": {
+      "type": "array", "minItems": 1, "maxItems": 64,
+      "items": {"$ref": "#/$defs/workOrder"}
+    },
+    "plan_contract_sha256": {"$ref": "#/$defs/sha256"},
+    "domain_bindings_sha256": {
+      "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+    },
+    "reviewed_world_sha256": {"$ref": "#/$defs/sha256"},
+    "reviewed_world_observation_sha256": {"$ref": "#/$defs/sha256"},
+    "plan_semantics_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "workOrderId": {"type": "string", "pattern": "^WO-[0-9]{3,}$"},
+    "text500": {"type": "string", "minLength": 1, "maxLength": 500},
+    "texts16": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/text500"}},
+    "workOrder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "title", "outcome", "tasks", "acceptance",
+        "negative_acceptance", "out_of_scope", "escalation", "touches",
+        "depends_on"
+      ],
+      "properties": {
+        "id": {"$ref": "#/$defs/workOrderId"},
+        "title": {"type": "string", "minLength": 1, "maxLength": 100},
+        "outcome": {"$ref": "#/$defs/text500"},
+        "tasks": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/text500"}},
+        "acceptance": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/text500"}},
+        "negative_acceptance": {"type": "array", "maxItems": 8, "items": {"$ref": "#/$defs/text500"}},
+        "out_of_scope": {"$ref": "#/$defs/texts16"},
+        "escalation": {"$ref": "#/$defs/texts16"},
+        "touches": {
+          "type": "array", "maxItems": 5,
+          "items": {"type": "string", "minLength": 1, "maxLength": 300, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"}
+        },
+        "depends_on": {
+          "type": "array", "maxItems": 16, "uniqueItems": true,
+          "items": {"$ref": "#/$defs/workOrderId"}
+        }
+      }
+    }
+  }
+}

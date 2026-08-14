@@ -68,6 +68,7 @@ import loom_domain
 import loom_domain_bundle
 import loom_domain_contract
 import loom_lifecycle
+import loom_lifecycle_kernel
 import loom_planning_intelligence
 
 ENUMS = {
@@ -119,7 +120,7 @@ SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schemas"
 
 # W13 heft thresholds — generous on purpose: only real smells fire (plan-sharpening.md)
 HEFT_MAX_CRITERIA = 8
-HEFT_MAX_TOUCHES = 5
+HEFT_MAX_TOUCHES = loom_lifecycle_kernel.MAX_TOUCH_PATTERNS
 HEFT_MAX_BODY_LINES = 150
 
 # W14 — hedge markers in epistemic notes that make a shared-term criterion suspect
@@ -200,6 +201,64 @@ class Report:
     @property
     def errors(self):
         return [f for f in self.findings if f["sev"] == "ERROR"]
+
+
+def validate_execution_projection(rep, manifest, manifest_frontmatter, work_orders):
+    """Require a strict-serial pack projection to match its reviewed sequence."""
+    policy = manifest_frontmatter.get("execution_policy")
+    sequence = manifest_frontmatter.get("execution_sequence")
+    if policy is None and sequence is None:
+        return
+    if policy != "strict-serial-sequence-v1":
+        rep.add("ERROR", "E27", manifest, 1,
+                "execution policy is missing or unsupported")
+        return
+    try:
+        policy_path = (
+            Path(__file__).resolve().parents[1] / "contracts" /
+            "plan-execution-policy-v1.json")
+        if policy_path.is_symlink() or not policy_path.is_file() \
+                or policy_path.stat().st_size > 64 * 1024:
+            raise loom_lifecycle_kernel.LifecycleKernelError(
+                "shared execution policy is unavailable")
+        policy_value = json.loads(
+            policy_path.read_text(encoding="utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+        shared_policy = loom_lifecycle_kernel.validate_execution_policy(policy_value)
+        if manifest_frontmatter.get("execution_policy_sha256") \
+                != shared_policy.policy_sha256:
+            raise loom_lifecycle_kernel.LifecycleKernelError(
+                "execution policy digest does not match the shared contract")
+        graph = loom_lifecycle_kernel.validate_work_order_graph(
+            [{"id": identity, "depends_on": item.get("deps", [])}
+             for identity, item in work_orders.items()],
+            sequence,
+        )
+        completed = {
+            identity for identity, item in work_orders.items()
+            if item.get("status") == "done"}
+        in_progress = [
+            identity for identity, item in work_orders.items()
+            if item.get("status") == "in-progress"]
+        if len(in_progress) > 1:
+            raise loom_lifecycle_kernel.LifecycleKernelError(
+                "more than one work order is in progress")
+        expected = loom_lifecycle_kernel.project_work_order_statuses(
+            graph, completed=completed,
+            in_progress=(in_progress[0] if in_progress else None),
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            loom_lifecycle_kernel.LifecycleKernelError) as exc:
+        rep.add("ERROR", "E27", manifest, 1,
+                f"reviewed execution sequence is invalid: {exc}")
+        return
+    for identity, status in expected.items():
+        observed = work_orders[identity].get("status")
+        if observed != status:
+            rep.add(
+                "ERROR", "E27", work_orders[identity].get("path", manifest), 1,
+                f"{identity} status '{observed}' differs from reviewed-sequence "
+                f"projection '{status}'")
 
 
 def parse_frontmatter(text):
@@ -1329,7 +1388,11 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                 if not touches:
                     rep.add("ERROR", "E19", f, 1,
                             f"{wid or f.name} is active but touches is empty")
-            if fm.get("status") == "blocked" and not deps:
+            sequence = mfm.get("execution_sequence", []) \
+                if isinstance(mfm, dict) else []
+            sequence_blocked = isinstance(sequence, list) \
+                and wid in sequence and sequence.index(wid) > 0
+            if fm.get("status") == "blocked" and not deps and not sequence_blocked:
                 rep.add("ERROR", "E19", f, 1,
                         f"{wid or f.name} is blocked but names no dependency/blocker")
             in_criteria = False
@@ -1403,6 +1466,7 @@ def lint(pack_path, repo_path=None, strict_staleness=False,
                     rep.add("ERROR", "E19", f, 1,
                             f"{wid} is done without reproducible close-out evidence")
         check_wo_graph(rep, wos)
+        validate_execution_projection(rep, manifest, mfm, wos)
 
         if mfm.get("tier") in {"M", "L", "XL"} and execution_mode == "planned" \
                 and not historical and mfm.get("plan_contract_version") == 3:

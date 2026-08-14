@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest import mock
 
 import loom_vault
+import loom_reliability
 
 
 class TestCrypto:
@@ -82,6 +83,37 @@ class OwnerVaultTests(unittest.TestCase):
             "confidence": 0.9, "evidence_count": 3, "created_at": "2026-07-15T12:00:00Z",
             "preference_key": None, "preference_value": None,
         }
+
+    def generation_archive(self, *, project_id, generation_id="generation-1",
+                           terminal_phase="terminal-completed"):
+        root = self.home / f"archive-{generation_id}"
+        root.mkdir()
+        raw = b"# Reviewed generation\n"
+        (root / "MANIFEST.md").write_bytes(raw)
+        tree_manifest = loom_reliability.exact_tree_manifest(
+            root, max_entries=1024, max_file_bytes=4 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        payload = {
+            "schema_version": 1,
+            "project_id": project_id,
+            "generation_id": generation_id,
+            "terminal_phase": terminal_phase,
+            "active_index_sha256": "1" * 64,
+            "lifecycle_sha256": "2" * 64,
+            "plan_semantics_sha256": "3" * 64,
+            "tree_sha256": tree_manifest["root_sha256"],
+            "tree_manifest": tree_manifest,
+            "files": [{
+                "path": "MANIFEST.md",
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "size": len(raw),
+                "content_base64": base64.b64encode(raw).decode("ascii"),
+            }],
+        }
+        payload["archive_sha256"] = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode("utf-8")).hexdigest()
+        return payload
 
     def test_owner_identity_is_stable_while_device_and_runtime_identities_are_distinct(self):
         identity = self.vault.identity()
@@ -336,6 +368,43 @@ class OwnerVaultTests(unittest.TestCase):
                     "archive_sha256": "6" * 64,
                 },
                 created_at="2026-07-30T12:00:00Z")
+
+    def test_plan_generation_archive_is_exact_idempotent_and_forgotten(self):
+        record_id = "00000000-0000-4000-8000-00000000b701"
+        project_id = "p-" + "7" * 32
+        archive = self.generation_archive(project_id=project_id)
+
+        stored = self.vault.put_plan_generation_archive(
+            record_id=record_id, project_id=project_id, payload=archive,
+            created_at="2026-08-14T12:00:00Z")
+        repeated = self.vault.put_plan_generation_archive(
+            record_id=record_id, project_id=project_id, payload=archive,
+            created_at="2026-08-14T12:00:00Z")
+
+        self.assertFalse(stored["idempotent"])
+        self.assertTrue(repeated["idempotent"])
+        self.assertEqual(archive, self.vault.get_plan_generation_archive(record_id))
+        forgotten = self.vault.forget_memory(record_id, reason="owner-request")
+        self.assertEqual("complete", forgotten["status"])
+        self.assertIsNone(self.vault.get_plan_generation_archive(record_id))
+
+    def test_plan_generation_archive_rejects_a_self_bound_false_tree(self):
+        project_id = "p-" + "8" * 32
+        archive = self.generation_archive(project_id=project_id)
+        archive["tree_sha256"] = "f" * 64
+        archive["archive_sha256"] = hashlib.sha256(json.dumps(
+            {key: value for key, value in archive.items()
+             if key != "archive_sha256"},
+            sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode("utf-8")).hexdigest()
+
+        with self.assertRaisesRegex(
+                loom_vault.VaultError,
+                "plan generation archive tree identity is invalid"):
+            self.vault.put_plan_generation_archive(
+                record_id="00000000-0000-4000-8000-00000000b702",
+                project_id=project_id, payload=archive,
+                created_at="2026-08-14T12:00:00Z")
 
     def test_ten_concurrent_writers_commit_unique_signed_events(self):
         errors = []

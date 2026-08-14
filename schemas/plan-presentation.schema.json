@@ -25,8 +25,8 @@
     "presentation_sha256"
   ],
   "properties": {
-    "schema_version": {"const": 1},
-    "format": {"const": "plan-presentation-v1"},
+    "schema_version": {"enum": [1, 2]},
+    "format": {"enum": ["plan-presentation-v1", "plan-presentation-v2"]},
     "title": {"type": "string", "minLength": 1, "maxLength": 100},
     "summary": {"type": "string", "minLength": 1, "maxLength": 1000},
     "tier": {"enum": ["S", "M", "L"]},
@@ -55,6 +55,14 @@
       "type": "array",
       "maxItems": 1024,
       "items": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "execution_policy": {"const": "strict-serial-sequence-v1"},
+    "execution_sequence": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 64,
+      "uniqueItems": true,
+      "items": {"type": "string", "pattern": "^WO-[0-9]{3,}$"}
     },
     "full_plan": {
       "type": "object",
@@ -101,6 +109,18 @@
           "maxLength": 256
         },
         "manifest_sha256": {"$ref": "#/$defs/sha256"}
+        ,
+        "generation_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+        },
+        "plan_semantics_sha256": {"$ref": "#/$defs/sha256"},
+        "execution_policy": {"const": "strict-serial-sequence-v1"},
+        "execution_sequence_sha256": {"$ref": "#/$defs/sha256"},
+        "reviewed_world_observation_sha256": {"$ref": "#/$defs/sha256"},
+        "domain_bindings_sha256": {
+          "oneOf": [{"type": "null"}, {"$ref": "#/$defs/sha256"}]
+        }
       }
     },
     "actions": {
@@ -120,6 +140,28 @@
     "presentation_sha256": {"$ref": "#/$defs/sha256"}
   },
   "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": 1}}},
+      "then": {
+        "properties": {"format": {"const": "plan-presentation-v1"}},
+        "not": {"anyOf": [
+          {"required": ["execution_policy"]},
+          {"required": ["execution_sequence"]}
+        ]}
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": 2}}},
+      "then": {
+        "required": ["execution_policy", "execution_sequence"],
+        "properties": {
+          "format": {"const": "plan-presentation-v2"},
+          "binding": {
+            "required": ["generation_id", "plan_semantics_sha256", "execution_policy", "execution_sequence_sha256", "reviewed_world_observation_sha256", "domain_bindings_sha256"]
+          }
+        }
+      }
+    },
     {
       "if": {"properties": {"tier": {"const": "S"}}},
       "then": {

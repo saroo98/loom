@@ -8,9 +8,13 @@ import os
 import re
 from pathlib import Path, PurePosixPath
 
+import loom_lifecycle_kernel
+
 
 FORMAT = "plan-presentation-v1"
 SCHEMA_VERSION = 1
+FORMAT_V2 = "plan-presentation-v2"
+SCHEMA_VERSION_V2 = 2
 TIERS = {"S", "M", "L"}
 PREVIEW_LIMIT = 5
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
@@ -56,7 +60,7 @@ def _relative_plan_path(value):
     return path.as_posix()
 
 
-def _binding(value):
+def _binding_v1(value):
     required = {
         "action_id", "project_id", "world_fingerprint", "plan_contract_hash",
         "pack_sha256", "revision", "relative_path", "manifest_sha256",
@@ -87,7 +91,50 @@ def _binding(value):
     }
 
 
-def _work_order(value, index):
+def _binding(value):
+    v1_fields = {
+        "action_id", "project_id", "world_fingerprint", "plan_contract_hash",
+        "pack_sha256", "revision", "relative_path", "manifest_sha256",
+    }
+    if isinstance(value, dict) and set(value) == v1_fields:
+        return {**_binding_v1(value), "binding_version": 1}
+    required = v1_fields | {
+        "generation_id", "plan_semantics_sha256", "execution_policy",
+        "execution_sequence_sha256", "domain_bindings_sha256",
+        "reviewed_world_observation_sha256",
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise PresentationError("plan binding fields are unknown or missing")
+    common = _binding_v1({key: value[key] for key in v1_fields})
+    generation_id = _text(value["generation_id"], "generation ID", 128)
+    if ACTION_ID.fullmatch(generation_id) is None:
+        raise PresentationError("generation identity is invalid")
+    for key in (
+            "plan_semantics_sha256", "execution_sequence_sha256",
+            "reviewed_world_observation_sha256"):
+        if not isinstance(value[key], str) or HEX64.fullmatch(value[key]) is None:
+            raise PresentationError(f"{key.replace('_', ' ')} is invalid")
+    domain_bindings = value["domain_bindings_sha256"]
+    if domain_bindings is not None \
+            and (not isinstance(domain_bindings, str)
+                 or HEX64.fullmatch(domain_bindings) is None):
+        raise PresentationError("domain bindings digest is invalid")
+    if value["execution_policy"] != "strict-serial-sequence-v1":
+        raise PresentationError("execution policy is unsupported")
+    return {
+        **common,
+        "generation_id": generation_id,
+        "plan_semantics_sha256": value["plan_semantics_sha256"],
+        "execution_policy": value["execution_policy"],
+        "execution_sequence_sha256": value["execution_sequence_sha256"],
+        "domain_bindings_sha256": domain_bindings,
+        "reviewed_world_observation_sha256": value[
+            "reviewed_world_observation_sha256"],
+        "binding_version": 2,
+    }
+
+
+def _work_order(value, index, *, require_generated_identity=False):
     required = {
         "id", "title", "outcome", "tasks", "acceptance",
         "negative_acceptance", "out_of_scope", "escalation", "touches",
@@ -97,12 +144,14 @@ def _work_order(value, index):
         raise PresentationError(f"work order {index} fields are unknown or missing")
     identity = _text(value["id"], "work-order ID", 16)
     expected = f"WO-{index:03d}"
-    if identity != expected:
+    if loom_lifecycle_kernel.WORK_ORDER_ID.fullmatch(identity) is None \
+            or require_generated_identity and identity != expected:
         raise PresentationError("work-order order or identity is invalid")
     touches = [
         _relative_plan_path("plans/" + item)[len("plans/"):]
         for item in _texts(
-            value["touches"], "touch paths", maximum_items=32,
+            value["touches"], "touch paths",
+            maximum_items=loom_lifecycle_kernel.MAX_TOUCH_PATTERNS,
             maximum_characters=300)
     ]
     return {
@@ -157,7 +206,7 @@ def extract_semantics(draft):
     return value
 
 
-def validate_semantics(value):
+def validate_semantics(value, *, require_generated_identity=False):
     required = {
         "schema_version", "title", "summary", "assumptions", "decisions",
         "work_orders",
@@ -179,7 +228,44 @@ def validate_semantics(value):
     for index, item in enumerate(value["work_orders"], start=1):
         _work_order({
             **item, "routing": "strong-coding", "size": "S",
-        }, index)
+        }, index, require_generated_identity=require_generated_identity)
+    return value
+
+
+def compile_reviewed_semantics(
+        draft, *, project_id, generation_id, revision,
+        reviewed_world_sha256, plan_contract_sha256,
+        reviewed_world_observation_sha256, domain_bindings_sha256=None):
+    """Seal the complete execution-relevant meaning of one reviewed v3 plan."""
+    semantics = (
+        draft if isinstance(draft, dict) and set(draft) == {
+            "schema_version", "title", "summary", "assumptions", "decisions",
+            "work_orders",
+        } else extract_semantics(draft))
+    validate_semantics(semantics)
+    value = {
+        "schema_version": 1,
+        "project_id": project_id,
+        "generation_id": generation_id,
+        "revision_number": revision,
+        "title": semantics["title"],
+        "summary": semantics["summary"],
+        "assumptions": semantics["assumptions"],
+        "decisions": semantics["decisions"],
+        "execution_policy": "strict-serial-sequence-v1",
+        "execution_sequence": [item["id"] for item in semantics["work_orders"]],
+        "work_orders": semantics["work_orders"],
+        "plan_contract_sha256": plan_contract_sha256,
+        "domain_bindings_sha256": domain_bindings_sha256,
+        "reviewed_world_sha256": reviewed_world_sha256,
+        "reviewed_world_observation_sha256":
+            reviewed_world_observation_sha256,
+    }
+    value["plan_semantics_sha256"] = loom_lifecycle_kernel.digest(value)
+    try:
+        loom_lifecycle_kernel.validate_reviewed_plan_semantics(value)
+    except loom_lifecycle_kernel.LifecycleKernelError as exc:
+        raise PresentationError(f"reviewed plan semantics are invalid: {exc}") from exc
     return value
 
 
@@ -202,15 +288,25 @@ def _lines(items, *, prefix="- "):
     return [prefix + _inert_markdown(item) for item in items]
 
 
-def _complete_markdown(title, summary, work_orders, assumptions, decisions):
+def _complete_markdown(
+        title, summary, work_orders, assumptions, decisions,
+        execution_sequence=None):
     lines = [
         f"## {_inert_markdown(title)}",
         "",
         _inert_markdown(summary),
         "",
-        "### Plan",
-        "",
     ]
+    if execution_sequence is not None:
+        by_id = {item["id"]: item for item in work_orders}
+        lines.extend(["### Execution sequence", ""])
+        lines.extend(
+            f"{index}. {_inert_markdown(identifier)}: "
+            f"{_inert_markdown(by_id[identifier]['title'])}"
+            for index, identifier in enumerate(execution_sequence, start=1))
+        lines.extend(["", "This reviewed order is authoritative. Dependencies must "
+                      "be satisfied and later entries cannot bypass an earlier blocker.", ""])
+    lines.extend(["### Plan", ""])
     for item in work_orders:
         lines.extend([
             f"#### {item['id']}: {_inert_markdown(item['title'])}",
@@ -250,13 +346,33 @@ def compile_presentation(draft, *, tier, binding):
             "schema_version", "title", "summary", "assumptions", "decisions",
             "work_orders",
         } else extract_semantics(draft))
-    validate_semantics(semantics)
+    bound = _binding(binding)
+    binding_version = bound.pop("binding_version")
+    validate_semantics(
+        semantics, require_generated_identity=binding_version == 1)
     title = semantics["title"]
     summary = semantics["summary"]
     assumptions = semantics["assumptions"]
     decisions = semantics["decisions"]
     work_orders = semantics["work_orders"]
-    bound = _binding(binding)
+    execution_sequence = [item["id"] for item in work_orders]
+    if binding_version == 2:
+        reviewed = compile_reviewed_semantics(
+            semantics,
+            project_id=bound["project_id"],
+            generation_id=bound["generation_id"],
+            revision=bound["revision"],
+            reviewed_world_sha256=bound["world_fingerprint"],
+            plan_contract_sha256=bound["plan_contract_hash"],
+            reviewed_world_observation_sha256=bound[
+                "reviewed_world_observation_sha256"],
+            domain_bindings_sha256=bound["domain_bindings_sha256"],
+        )
+        if reviewed["plan_semantics_sha256"] != bound["plan_semantics_sha256"] \
+                or loom_lifecycle_kernel.digest(execution_sequence) != \
+                bound["execution_sequence_sha256"]:
+            raise PresentationError(
+                "reviewed plan semantic or execution-sequence binding does not match")
     mode = "complete" if tier == "S" else "bounded" if tier == "M" else "frontier"
     preview_steps = work_orders if tier == "S" else work_orders[:PREVIEW_LIMIT]
     touch_paths = sorted({
@@ -269,10 +385,12 @@ def compile_presentation(draft, *, tier, binding):
         item for work_order in work_orders for item in work_order["escalation"]
     ]
     complete_markdown = _complete_markdown(
-        title, summary, work_orders, assumptions, decisions)
+        title, summary, work_orders, assumptions, decisions,
+        execution_sequence if binding_version == 2 else None)
     value = {
-        "schema_version": SCHEMA_VERSION,
-        "format": FORMAT,
+        "schema_version": (
+            SCHEMA_VERSION_V2 if binding_version == 2 else SCHEMA_VERSION),
+        "format": FORMAT_V2 if binding_version == 2 else FORMAT,
         "title": title,
         "summary": summary,
         "tier": tier,
@@ -301,6 +419,9 @@ def compile_presentation(draft, *, tier, binding):
         },
         "complete_inline_markdown": complete_markdown,
     }
+    if binding_version == 2:
+        value["execution_policy"] = bound["execution_policy"]
+        value["execution_sequence"] = execution_sequence
     digest_source = dict(value)
     value["presentation_sha256"] = hashlib.sha256(
         _canonical_bytes(digest_source)).hexdigest()
@@ -309,21 +430,41 @@ def compile_presentation(draft, *, tier, binding):
 
 
 def validate(value):
-    required = {
+    common = {
         "schema_version", "format", "title", "summary", "tier", "preview_mode",
         "steps", "omitted_step_count", "expected_touch_paths", "assumptions",
         "decisions", "risks", "verification", "full_plan", "binding", "actions",
         "complete_inline_markdown", "presentation_sha256",
     }
+    version = value.get("schema_version") if isinstance(value, dict) else None
+    required = common | ({"execution_policy", "execution_sequence"}
+                         if version == SCHEMA_VERSION_V2 else set())
+    expected_format = FORMAT_V2 if version == SCHEMA_VERSION_V2 else FORMAT
     if not isinstance(value, dict) or set(value) != required \
-            or value.get("schema_version") != SCHEMA_VERSION \
-            or value.get("format") != FORMAT \
+            or version not in {SCHEMA_VERSION, SCHEMA_VERSION_V2} \
+            or value.get("format") != expected_format \
             or value.get("tier") not in TIERS \
             or value.get("preview_mode") not in {"complete", "bounded", "frontier"}:
         raise PresentationError("plan presentation fields are unknown or invalid")
     _text(value["title"], "plan title", 100)
     _text(value["summary"], "plan summary", 1000)
-    _binding(value["binding"])
+    bound = _binding(value["binding"])
+    if bound["binding_version"] != version:
+        raise PresentationError("plan presentation and binding versions disagree")
+    if version == SCHEMA_VERSION_V2:
+        sequence = value["execution_sequence"]
+        if value["execution_policy"] != "strict-serial-sequence-v1" \
+                or not isinstance(sequence, list) or not sequence \
+                or len(sequence) > 64 or len(sequence) != len(set(sequence)) \
+                or any(not isinstance(item, str)
+                       or loom_lifecycle_kernel.WORK_ORDER_ID.fullmatch(item) is None
+                       for item in sequence) \
+                or len(sequence) != len(value["steps"]) + value["omitted_step_count"] \
+                or sequence[:len(value["steps"])] != [
+                    item.get("id") for item in value["steps"]] \
+                or loom_lifecycle_kernel.digest(sequence) != \
+                bound["execution_sequence_sha256"]:
+            raise PresentationError("reviewed execution sequence is invalid")
     full_plan = value["full_plan"]
     if not isinstance(full_plan, dict) or set(full_plan) != {"relative_path", "sha256"} \
             or _relative_plan_path(full_plan["relative_path"]) != \
@@ -359,7 +500,7 @@ def validate(value):
     for index, step in enumerate(value["steps"], start=1):
         _work_order({
             **step, "routing": "strong-coding", "size": "S",
-        }, index)
+        }, index, require_generated_identity=version == SCHEMA_VERSION)
     if not isinstance(value["actions"], dict) \
             or set(value["actions"]) != {"revise", "start"}:
         raise PresentationError("plan actions are invalid")
@@ -400,7 +541,9 @@ def project_for_host(value, *, project_root, host_id):
     if value["preview_mode"] != "complete":
         preview = _complete_markdown(
             value["title"], value["summary"], value["steps"],
-            value["assumptions"], value["decisions"])
+            value["assumptions"], value["decisions"],
+            (value["execution_sequence"][:len(value["steps"])]
+             if value["schema_version"] == SCHEMA_VERSION_V2 else None))
         if value["omitted_step_count"]:
             preview += (
                 f"\n_{value['omitted_step_count']} more validated step(s) are in the "

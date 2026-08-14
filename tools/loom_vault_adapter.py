@@ -77,6 +77,38 @@ class VaultMemoryAdapter:
         self._bound_project_id = project_id
         self._bound_state_mode = state_mode
 
+    def read_lifecycle_head_witness(self, project_id):
+        """Return only the exact encrypted witness for one resolved project.
+
+        The runtime kernel owns semantic validation of the closed witness.  This
+        adapter is deliberately limited to exact, bounded vault selection and a
+        strict JSON copy so private vault records cannot be confused across
+        projects or exposed by reference.
+        """
+        if not isinstance(project_id, str) \
+                or re.fullmatch(r"p-[0-9a-f]{32}", project_id) is None:
+            raise VaultAdapterError("lifecycle witness project identity is invalid")
+        try:
+            matches = [
+                item for item in self.vault.list_entities(
+                    "lifecycle-head-witness-v1", limit=512)
+                if item.get("id") == project_id
+            ]
+        except Exception as exc:
+            raise VaultAdapterError(
+                "lifecycle head witness could not be read") from exc
+        if not matches:
+            return None
+        if len(matches) != 1 or not isinstance(matches[0].get("value"), dict):
+            raise VaultAdapterError(
+                "lifecycle head witness is missing or ambiguous")
+        try:
+            return json.loads(json.dumps(
+                matches[0]["value"], ensure_ascii=False, allow_nan=False))
+        except (TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise VaultAdapterError(
+                "lifecycle head witness is not strict JSON") from exc
+
     def protect_session_payload(self, operation_id, payload):
         """Encrypt mutable session details while leaving the journal chain inspectable."""
         if not isinstance(operation_id, str) or not isinstance(payload, dict):
@@ -257,6 +289,17 @@ class VaultMemoryAdapter:
         except loom_vault.VaultError as exc:
             raise VaultAdapterError(
                 f"private plan revision could not be retained safely: {exc}") from exc
+
+    def archive_plan_generation(
+            self, *, record_id, project_id, payload, created_at):
+        """Retain one terminal generation inside the managed owner-vault lifecycle."""
+        try:
+            return self.vault.put_plan_generation_archive(
+                record_id=record_id, project_id=project_id,
+                payload=payload, created_at=created_at)
+        except loom_vault.VaultError as exc:
+            raise VaultAdapterError(
+                f"private plan generation could not be retained safely: {exc}") from exc
 
     def record_outcome(self, context, result):
         if context.intent in {"why", "status", "undo", "forget", "remember"}:

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "loom/schemas/orchestration-action.schema.json",
-  "title": "Decrypted Loom orchestration action v10",
+  "title": "Decrypted Loom orchestration action v10/v11",
   "description": "Closed contract for the authenticated plaintext inside a loom-encrypted-action-v1 envelope. This schema does not describe the persisted encrypted file.",
   "type": "object",
   "additionalProperties": false,
@@ -17,7 +17,7 @@
     "recovery_receipt", "assurance"
   ],
   "properties": {
-    "schema_version": {"const": 10},
+    "schema_version": {"enum": [10, 11]},
     "action_id": {"type": "string", "format": "uuid"},
     "status": {"enum": ["initializing", "pending", "completed", "cancelled", "expired", "failed", "abandoned", "superseded"]},
     "instance_id": {"type": "string", "format": "uuid"},
@@ -75,8 +75,46 @@
         {"type": "null"}
       ]
     },
-    "assurance": {"$ref": "#/$defs/assurance"}
+    "assurance": {"$ref": "#/$defs/assurance"},
+    "generation_id": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"}
+      ]
+    },
+    "request_control": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "request-control-v1.schema.json"}
+      ]
+    },
+    "lifecycle_transition": {
+      "oneOf": [
+        {"type": "null"},
+        {"$ref": "lifecycle-transition-receipt-v1.schema.json"}
+      ]
+    }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"schema_version": {"const": 11}}},
+      "then": {
+        "required": ["generation_id", "request_control", "lifecycle_transition"]
+      }
+    },
+    {
+      "if": {"properties": {"schema_version": {"const": 10}}},
+      "then": {
+        "not": {
+          "anyOf": [
+            {"required": ["generation_id"]},
+            {"required": ["request_control"]},
+            {"required": ["lifecycle_transition"]}
+          ]
+        }
+      }
+    }
+  ],
   "$defs": {
     "lifecycleCapabilities": {
       "type": "object", "additionalProperties": false,

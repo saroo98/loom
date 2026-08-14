@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/reviewed-world-observation-v1.schema.json",
+  "title": "Loom immutable reviewed repository observation v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "project_id", "generation_id", "state_mode",
+    "state_sha256", "repo_head", "files", "observation_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "project_id": {"$ref": "#/$defs/id"},
+    "generation_id": {"$ref": "#/$defs/id"},
+    "state_mode": {"enum": ["git", "filesystem"]},
+    "state_sha256": {"$ref": "#/$defs/sha256"},
+    "repo_head": {
+      "oneOf": [
+        {"type": "null"},
+        {"type": "string", "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$"}
+      ]
+    },
+    "files": {
+      "type": "object",
+      "maxProperties": 100000,
+      "propertyNames": {
+        "minLength": 1,
+        "maxLength": 1024,
+        "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+      },
+      "additionalProperties": {"$ref": "#/$defs/sha256"}
+    },
+    "observation_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

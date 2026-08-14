@@ -168,6 +168,10 @@ class RecoveryContractSchemaTests(unittest.TestCase):
         "repair_plan", "host_result", "plan_contract", "domain_contract",
         "context_manifest", "continuation_authority", "owner_message",
         "action_hash", "pack_seed", "recovery_receipt", "assurance",
+        "generation_id", "request_control", "lifecycle_transition",
+    }
+    ACTION_V11_FIELDS = {
+        "generation_id", "request_control", "lifecycle_transition",
     }
 
     @classmethod
@@ -261,19 +265,24 @@ class RecoveryContractSchemaTests(unittest.TestCase):
             encoding="utf-8"))
         self.assertEqual("https://json-schema.org/draft/2020-12/schema", schema["$schema"])
         self.assertEqual(
-            f"Decrypted Loom orchestration action "
-            f"v{loom_orchestrator.ACTION_SCHEMA_VERSION}",
+            "Decrypted Loom orchestration action v10/v11",
             schema["title"])
         self.assertIn("authenticated plaintext", schema["description"])
         self.assertIn("does not describe the persisted encrypted file",
                       schema["description"])
         self.assertEqual("object", schema["type"])
         self.assertIs(schema["additionalProperties"], False)
-        self.assertEqual(self.ACTION_FIELDS, set(schema["required"]))
+        self.assertEqual(
+            self.ACTION_FIELDS - self.ACTION_V11_FIELDS,
+            set(schema["required"]))
         self.assertEqual(self.ACTION_FIELDS, set(schema["properties"]))
         self.assertEqual(
-            loom_orchestrator.ACTION_SCHEMA_VERSION,
-            schema["properties"]["schema_version"]["const"])
+            [loom_orchestrator.PREVIOUS_ACTION_SCHEMA_VERSION,
+             loom_orchestrator.ACTION_SCHEMA_VERSION],
+            schema["properties"]["schema_version"]["enum"])
+        self.assertEqual(
+            self.ACTION_V11_FIELDS,
+            set(schema["allOf"][0]["then"]["required"]))
 
     def test_seed_manifest_v1_and_v2_are_both_strict(self):
         legacy = {

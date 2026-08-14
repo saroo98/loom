@@ -9,10 +9,12 @@ import types
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 
 import loom_vault
 import loom_vault_adapter
 import loom_orchestrator
+import loom_reliability
 import loom_session
 from test_loom_vault_v11 import TestCrypto
 
@@ -83,6 +85,50 @@ class VaultAdapterTests(unittest.TestCase):
                 loom_vault_adapter.VaultAdapterError, "binding changed"):
             adapter.bind_project_state("p-" + "2" * 32, "filesystem")
 
+    def test_runtime_reads_the_exact_encrypted_lifecycle_head_witness(self):
+        """Break caught: runtime cannot validate indexed lifecycle authority."""
+        project_id = "p-" + "3" * 32
+        witness = {
+            "schema_version": 1,
+            "project_id": project_id,
+            "generation_id": "generation-1",
+            "transition_id": "1" * 64,
+            "authoritative_sha256": "2" * 64,
+            "predecessor_witness_sha256": None,
+            "witness_sha256": "3" * 64,
+        }
+        self.vault.put_entity(
+            "lifecycle-head-witness-v1", project_id, witness)
+
+        self.assertEqual(
+            witness,
+            self.adapter.read_lifecycle_head_witness(project_id))
+        self.assertIsNone(
+            self.adapter.read_lifecycle_head_witness("p-" + "4" * 32))
+
+    def test_session_preparation_receives_the_vault_witness_reader(self):
+        """Break caught: the session controller strands encrypted authority."""
+        project = self.root / "project-witness-reader"
+        project.mkdir()
+        controller = loom_session.SessionController(
+            owner_home=self.root, instance_id=self.adapter.instance_id,
+            handlers={}, memory=self.adapter)
+        witness = {"private": "exact-witness-projection"}
+        with mock.patch.object(
+                self.adapter, "read_lifecycle_head_witness",
+                return_value=witness) as reader, mock.patch.object(
+                    loom_session.loom_runtime, "prepare_invocation",
+                    side_effect=RuntimeError("stop after argument capture")) as prepare:
+            with self.assertRaisesRegex(RuntimeError, "argument capture"):
+                controller.open(
+                    "Plan a tiny Python CLI.",
+                    invocation_id="00000000-0000-4000-8000-000000009801",
+                    cwd=project,
+                    now="2026-08-14T12:00:00Z")
+            witness_reader = prepare.call_args.kwargs["lifecycle_witness_reader"]
+            self.assertEqual(witness, witness_reader("p-" + "3" * 32))
+            reader.assert_called_once_with("p-" + "3" * 32)
+
     def test_production_revision_archive_uses_vault_without_sidecar(self):
         project_id = "p-" + "4" * 32
         action_id = "00000000-0000-4000-8000-00000000b601"
@@ -134,6 +180,46 @@ class VaultAdapterTests(unittest.TestCase):
         self.assertEqual(
             payload, self.vault.get_plan_revision_archive(record_id))
         self.assertFalse((action_path.parent / "plan-revisions").exists())
+
+    def test_terminal_generation_archive_uses_encrypted_chunked_vault_storage(self):
+        """Break caught: production rollover has no private archive authority."""
+        project_id = "p-" + "5" * 32
+        record_id = "00000000-0000-4000-8000-00000000b701"
+        raw = b"reviewed generation bytes\n"
+        generation = self.root / "generation-archive-fixture"
+        generation.mkdir()
+        (generation / "MANIFEST.md").write_bytes(raw)
+        tree_manifest = loom_reliability.exact_tree_manifest(
+            generation, max_entries=1024, max_file_bytes=4 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        payload = {
+            "schema_version": 1,
+            "project_id": project_id,
+            "generation_id": "generation-1",
+            "terminal_phase": "terminal-completed",
+            "active_index_sha256": "1" * 64,
+            "lifecycle_sha256": "2" * 64,
+            "plan_semantics_sha256": "3" * 64,
+            "tree_sha256": tree_manifest["root_sha256"],
+            "tree_manifest": tree_manifest,
+            "files": [{
+                "path": "MANIFEST.md",
+                "sha256": hashlib.sha256(raw).hexdigest(),
+                "size": len(raw),
+                "content_base64": base64.b64encode(raw).decode("ascii"),
+            }],
+        }
+        payload["archive_sha256"] = hashlib.sha256(json.dumps(
+            payload, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+
+        stored = self.adapter.archive_plan_generation(
+            record_id=record_id, project_id=project_id, payload=payload,
+            created_at="2026-08-14T12:00:00Z")
+
+        self.assertEqual(payload["archive_sha256"], stored["archive_sha256"])
+        self.assertEqual(
+            payload, self.vault.get_plan_generation_archive(record_id))
 
     def test_session_journal_encrypts_owner_statements_and_replays_receipt(self):
         self.adapter.remember(

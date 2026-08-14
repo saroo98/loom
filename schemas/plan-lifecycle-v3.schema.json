@@ -1,0 +1,215 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/plan-lifecycle-v3.schema.json",
+  "title": "Loom bounded plan-generation lifecycle ledger v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "project_id", "generation_id",
+    "plan_semantics_sha256", "execution_policy",
+    "execution_sequence_sha256", "events", "lifecycle_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 3},
+    "project_id": {"$ref": "#/$defs/id"},
+    "generation_id": {"$ref": "#/$defs/id"},
+    "plan_semantics_sha256": {"$ref": "#/$defs/sha256"},
+    "execution_policy": {"const": "strict-serial-sequence-v1"},
+    "execution_sequence_sha256": {"$ref": "#/$defs/sha256"},
+    "events": {
+      "type": "array", "minItems": 1, "maxItems": 512,
+      "items": {"$ref": "#/$defs/event"}
+    },
+    "lifecycle_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "workOrder": {"type": "string", "pattern": "^WO-[0-9]{3,}$"},
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sequence", "event_type", "command_id", "transition_id", "payload",
+        "previous_event_sha256", "event_sha256"
+      ],
+      "properties": {
+        "sequence": {"type": "integer", "minimum": 1, "maximum": 512},
+        "event_type": {
+          "enum": [
+            "generation-created", "plan-reviewed", "plan-revised",
+            "implementation-authorized", "work-order-started",
+            "work-order-resumed", "work-order-completed",
+            "repair-authorized", "repair-completed",
+            "generation-completed", "generation-cancelled",
+            "generation-superseded", "generation-quarantined"
+          ]
+        },
+        "command_id": {"$ref": "#/$defs/id"},
+        "transition_id": {"$ref": "#/$defs/sha256"},
+        "previous_event_sha256": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/sha256"}
+          ]
+        },
+        "event_sha256": {"$ref": "#/$defs/sha256"},
+        "payload": {"type": "object"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"event_type": {"const": "generation-created"}}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["predecessor_generation_id", "relation"],
+            "properties": {
+              "predecessor_generation_id": {
+                "oneOf": [
+                  {"type": "null"},
+                  {"$ref": "#/$defs/id"}
+                ]
+              },
+              "relation": {"enum": ["new", "repair-of", "supersedes"]}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "enum": ["plan-reviewed", "plan-revised"]
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": [
+              "plan_semantics_sha256", "revision_number",
+              "reviewed_world_sha256"
+            ],
+            "properties": {
+              "plan_semantics_sha256": {"$ref": "#/$defs/sha256"},
+              "revision_number": {
+                "type": "integer", "minimum": 1, "maximum": 1000000
+              },
+              "reviewed_world_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "const": "implementation-authorized"
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["work_order_id"],
+            "properties": {
+              "work_order_id": {"$ref": "#/$defs/workOrder"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "enum": ["work-order-started", "work-order-resumed"]
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["work_order_id", "action_id"],
+            "properties": {
+              "work_order_id": {"$ref": "#/$defs/workOrder"},
+              "action_id": {"$ref": "#/$defs/id"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "const": "work-order-completed"
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": [
+              "work_order_id", "completion_sha256", "completed_world_sha256"
+            ],
+            "properties": {
+              "work_order_id": {"$ref": "#/$defs/workOrder"},
+              "completion_sha256": {"$ref": "#/$defs/sha256"},
+              "completed_world_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "const": "repair-authorized"
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": [
+              "work_order_id", "affected_scope_sha256", "action_id",
+              "observed_world_sha256"
+            ],
+            "properties": {
+              "work_order_id": {"$ref": "#/$defs/workOrder"},
+              "affected_scope_sha256": {"$ref": "#/$defs/sha256"},
+              "action_id": {"$ref": "#/$defs/id"},
+              "observed_world_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "const": "repair-completed"
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": [
+              "work_order_id", "action_id", "repair_evidence_sha256",
+              "repaired_world_sha256"
+            ],
+            "properties": {
+              "work_order_id": {"$ref": "#/$defs/workOrder"},
+              "action_id": {"$ref": "#/$defs/id"},
+              "repair_evidence_sha256": {"$ref": "#/$defs/sha256"},
+              "repaired_world_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "const": "generation-completed"
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["completion_set_sha256"],
+            "properties": {
+              "completion_set_sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "enum": ["generation-cancelled", "generation-quarantined"]
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["reason_code"],
+            "properties": {
+              "reason_code": {"$ref": "#/$defs/id"}
+            }
+          }}}
+        },
+        {
+          "if": {"properties": {"event_type": {
+            "const": "generation-superseded"
+          }}},
+          "then": {"properties": {"payload": {
+            "type": "object", "additionalProperties": false,
+            "required": ["successor_generation_id", "reason_code"],
+            "properties": {
+              "successor_generation_id": {"$ref": "#/$defs/id"},
+              "reason_code": {"$ref": "#/$defs/id"}
+            }
+          }}}
+        }
+      ]
+    }
+  }
+}

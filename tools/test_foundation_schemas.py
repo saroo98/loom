@@ -32,6 +32,61 @@ class FoundationSchemaTests(unittest.TestCase):
                 sidecar_id="fixture.json", sidecar_digest="2" * 64)
             self.assert_schema(envelope, "operation-envelope.schema.json")
 
+    def test_active_generation_schema_accepts_an_immutable_revision_path(self):
+        value = {
+            "schema_version": 1,
+            "project_id": "project-1",
+            "generation_id": "generation-1",
+            "storage_kind": "generation-dir",
+            "generation_path": (
+                "plans/generations/revisions/generation-1/"
+                "r000002-" + "1" * 64),
+            "index_sha256": "2" * 64,
+        }
+        self.assert_schema(value, "active-plan-generation-v1.schema.json")
+
+    def test_lifecycle_schema_binds_the_world_accepted_by_completion(self):
+        value = {
+            "schema_version": 3,
+            "project_id": "project-1",
+            "generation_id": "generation-1",
+            "plan_semantics_sha256": "1" * 64,
+            "execution_policy": "strict-serial-sequence-v1",
+            "execution_sequence_sha256": "2" * 64,
+            "events": [{
+                "sequence": 1,
+                "event_type": "work-order-completed",
+                "command_id": "complete-1",
+                "transition_id": "3" * 64,
+                "payload": {
+                    "work_order_id": "WO-001",
+                    "completion_sha256": "4" * 64,
+                    "completed_world_sha256": "5" * 64,
+                },
+                "previous_event_sha256": None,
+                "event_sha256": "6" * 64,
+            }],
+            "lifecycle_sha256": "7" * 64,
+        }
+        self.assert_schema(value, "plan-lifecycle-v3.schema.json")
+
+    def test_invalid_plan_store_quarantine_receipt_is_closed_and_path_free(self):
+        value = {
+            "schema_version": 1,
+            "project_id": "project-1",
+            "command_id": "quarantine-command-1",
+            "quarantine_id": "quarantine-" + "1" * 32,
+            "reason_code": "invalid-plan-store",
+            "status": "completed",
+            "source_tree_sha256": "2" * 64,
+            "source_file_count": 2,
+            "source_directory_count": 1,
+            "source_total_bytes": 128,
+            "durability_scope": "process-crash-confirmed",
+            "receipt_sha256": "3" * 64,
+        }
+        self.assert_schema(value, "plan-store-quarantine-v1.schema.json")
+
     def test_qualification_boundary_and_manifest_match_closed_v2_schemas(self):
         boundary = loom_qualification_manifest.seal_boundary({
             "schema_version": 2,
