@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import re
+import stat
 from pathlib import Path
 
 import loom_lifecycle_kernel as kernel
@@ -662,16 +663,17 @@ def _validate_prepared_legacy_adoption(value):
                 value["source_lifecycle_sha256"]:
             raise LifecycleTransitionError(
                 "prepared legacy lifecycle bytes are invalid")
+        loom_reliability.validate_exact_tree_manifest(
+            value["source_manifest"], max_entries=1024,
+            max_file_bytes=4 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        _legacy_source_manifest_entry(value, source_bytes)
         state = kernel.fold(
             value["index"], value["semantics"], value["ledger"],
             value["witness"])
         index = kernel.validate_generation_index(value["index"])
         reviewed_world = kernel.validate_reviewed_world_observation(
             value["reviewed_world"])
-        loom_reliability.validate_exact_tree_manifest(
-            value["source_manifest"], max_entries=1024,
-            max_file_bytes=4 * 1024 * 1024,
-            max_total_bytes=16 * 1024 * 1024)
     except (ValueError, kernel.LifecycleKernelError,
             loom_reliability.ReliabilityError) as exc:
         if isinstance(exc, LifecycleTransitionError):
@@ -1116,6 +1118,67 @@ def _legacy_target_controls_match(plans, prepared):
     ))
 
 
+def _legacy_source_manifest_entry(prepared, source_bytes):
+    source_name = prepared["source_lifecycle_name"]
+    matches = [
+        entry for entry in prepared["source_manifest"]["entries"]
+        if entry.get("path") == source_name
+    ]
+    if len(matches) != 1:
+        raise LifecycleTransitionError(
+            "prepared legacy lifecycle is absent from its source manifest")
+    entry = matches[0]
+    if entry.get("kind") != "file" or entry.get("links") != 1 \
+            or entry.get("bytes") != len(source_bytes) \
+            or entry.get("sha256") != prepared["source_lifecycle_sha256"]:
+        raise LifecycleTransitionError(
+            "prepared legacy lifecycle differs from its source manifest")
+    return entry
+
+
+def _restore_exact_regular_file_mode(path, expected_mode):
+    """Restore one sealed POSIX mode through a no-follow file descriptor."""
+    if os.name != "posix":
+        return
+    path = Path(path)
+    descriptor = None
+    try:
+        no_follow = getattr(os, "O_NOFOLLOW", None)
+        if no_follow is None:
+            raise LifecycleTransitionError(
+                "no-follow legacy lifecycle recovery is unavailable")
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | no_follow
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or int(before.st_nlink) != 1:
+            raise LifecycleTransitionError(
+                "restored legacy lifecycle is not one regular file")
+        if stat.S_IMODE(before.st_mode) != expected_mode:
+            os.fchmod(descriptor, expected_mode)
+            os.fsync(descriptor)
+        after = os.fstat(descriptor)
+        if not stat.S_ISREG(after.st_mode) or int(after.st_nlink) != 1 \
+                or stat.S_IMODE(after.st_mode) != expected_mode:
+            raise LifecycleTransitionError(
+                "restored legacy lifecycle mode does not match its sealed source")
+        latest = path.lstat()
+        if not stat.S_ISREG(latest.st_mode) \
+                or int(latest.st_dev) != int(after.st_dev) \
+                or int(latest.st_ino) != int(after.st_ino) \
+                or int(latest.st_nlink) != 1 \
+                or stat.S_IMODE(latest.st_mode) != expected_mode:
+            raise LifecycleTransitionError(
+                "restored legacy lifecycle identity changed during mode recovery")
+    except LifecycleTransitionError:
+        raise
+    except OSError as exc:
+        raise LifecycleTransitionError(
+            "legacy lifecycle mode could not be restored") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _restore_legacy_source(plans, prepared):
     """Remove only exact staged controls and restore the exact legacy lifecycle."""
     plans = Path(plans)
@@ -1136,6 +1199,7 @@ def _restore_legacy_source(plans, prepared):
                 "staged legacy adoption control could not be removed") from exc
     source_bytes = base64.b64decode(
         prepared["source_lifecycle_base64"], validate=True)
+    source_entry = _legacy_source_manifest_entry(prepared, source_bytes)
     source_name = prepared["source_lifecycle_name"]
     lifecycle_target = plans / "lifecycle.json"
     if source_name == "lifecycle.json":
@@ -1153,6 +1217,8 @@ def _restore_legacy_source(plans, prepared):
             except loom_reliability.ReliabilityError as exc:
                 raise LifecycleTransitionError(
                     "legacy lifecycle could not be restored") from exc
+        _restore_exact_regular_file_mode(
+            lifecycle_target, source_entry["mode"])
     else:
         source_path = plans / source_name
         if not _exact_file_bytes(source_path, source_bytes):

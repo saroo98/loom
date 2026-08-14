@@ -1076,6 +1076,18 @@ class LegacyGenerationAdoptionTests(unittest.TestCase):
         self.assertEqual(source_lifecycle, self.legacy_lifecycle.read_bytes())
         self.assertEqual(source, loom_reliability.exact_tree_manifest(self.plans))
 
+    def test_prepared_adoption_rejects_a_malformed_source_manifest_closed(self):
+        """A sealed adoption cannot bypass closed manifest validation."""
+        prepared = self._prepare()
+        prepared["source_manifest"] = {}
+        prepared["prepared_sha256"] = kernel.digest({
+            key: value for key, value in prepared.items()
+            if key != "prepared_sha256"
+        })
+
+        with self.assertRaises(self.transition.LifecycleTransitionError):
+            self.transition._validate_prepared_legacy_adoption(prepared)
+
     def test_post_index_adoption_crash_rolls_the_witness_forward(self):
         """Break caught: committed historical authority remains unwitnessed."""
         prepared = self._prepare()
