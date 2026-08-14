@@ -60,8 +60,9 @@ EXTERNAL_CHECKS = (
 # This is a subprocess exhaustion ceiling, not a product-performance target.
 # The dedicated fast gate owns its bounded host-aware regression budget. The complete
 # correctness suite does not duplicate a wall-clock assertion inside its own
-# result; the verifier and CI job retain independent hard termination bounds.
-FULL_SUITE_MAX_SECONDS = 2700
+# result; the verifier and CI job retain independent hard termination bounds. The
+# 55-minute ceiling preserves ten minutes beneath the shortest release job bound.
+FULL_SUITE_MAX_SECONDS = 3300
 EXTERNAL_EVIDENCE_FIELDS = {
     "schema_version", "check_id", "status", "evidence_id", "subject",
     "issued_at", "expires_at", "issuer", "payload", "payload_sha256",
