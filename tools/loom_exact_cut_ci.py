@@ -574,7 +574,8 @@ def run(source, cut, output, *, suite_output=None,
                     failure_diagnostic_output, diagnostic)
             if progress_diagnostic_output is not None \
                     and progress_checkpoint is not None \
-                    and progress_operation is not None:
+                    and progress_operation is not None \
+                    and progress_checkpoint.get("status") == "running":
                 diagnostic_finalization_started = True
                 progress_diagnostic = _serial_progress_diagnostic(
                     progress_checkpoint, progress_operation, base)
