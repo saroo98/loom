@@ -92,13 +92,16 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 self.assertNotEqual("supersede-generation", control["relation"])
                 self.assertNotIn("explicit-supersession", control["evidence"])
 
-    def test_real_plan_and_implementation_contradiction_still_blocks(self):
-        """Break caught: parser improvement accidentally makes authority permissive."""
+    def test_real_plan_and_implementation_contradiction_stays_provisional(self):
+        """Break caught: a contradiction blocks planning or authorizes execution."""
         decision = loom_runtime.resolve_intent(
             "Plan only and do not implement, but also implement the project now.")
 
-        self.assertTrue(decision["blocked"])
-        self.assertEqual("INTENT_AMBIGUOUS", decision["code"])
+        self.assertFalse(decision["blocked"], decision)
+        self.assertEqual("plan", decision["intent"])
+        self.assertTrue(decision["needs_owner"], decision)
+        self.assertEqual(1, decision["routine_question_count"])
+        self.assertTrue(decision["recommendation"].strip())
 
     def test_structured_control_preserves_explicit_new_relation_after_terminal_history(self):
         """Break caught: terminal history silently rewrites new work as repair."""
@@ -120,16 +123,17 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
             "request-control-v1.schema.json")
         self.assertEqual([], report.errors)
 
-    def test_active_unqualified_mutation_requires_typed_owner_choice(self):
-        """Break caught: unclear work attaches to an active generation by guessing."""
+    def test_active_unqualified_change_defaults_to_a_candidate_plan(self):
+        """Break caught: an ordinary planning request dead-ends on active history."""
         control = loom_runtime.request_control(
             "Add export support.",
             state={"generation_phase": "active"},
         )
 
-        self.assertTrue(control["blocked"])
-        self.assertEqual("unclear", control["relation"])
-        self.assertEqual("RELATION_REQUIRES_OWNER", control["block_reason"])
+        self.assertFalse(control["blocked"], control)
+        self.assertEqual("plan", control["primary_operation"])
+        self.assertEqual("supersede-generation", control["relation"])
+        self.assertIsNone(control["block_reason"])
 
     def test_active_explicit_new_work_becomes_an_explicit_supersession(self):
         """Break caught: explicit new work has no legal active-state relation."""

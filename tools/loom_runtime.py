@@ -25,6 +25,7 @@ import loom_lifecycle
 import loom_lifecycle_kernel
 import loom_lint
 import loom_memory
+import loom_owner_intent
 import loom_plan_store
 import loom_project_inspection
 import loom_survey
@@ -446,6 +447,18 @@ def _decision(intent, *, blocked=False, code="ROUTED", recommendation="",
     if value["blocked"]:
         value["block_reason"] = loom_block_reason.generic(
             value["code"], value["recommendation"], category="intent")
+    return value
+
+
+def _provisional_planning_clarification(evidence):
+    """Keep contradictory plan/execute wording non-authoritative but useful."""
+    value = _decision(
+        "plan", code="PLAN_EXECUTION_CONTRADICTION", needs_owner=True,
+        confidence=1.0, evidence=evidence,
+        recommendation=(
+            "A provisional plan can be prepared without implementation. Confirm "
+            "whether any implementation should begin after you review that plan."))
+    value["routine_question_count"] = 1
     return value
 
 
@@ -899,6 +912,9 @@ def _resolve_clause_roles(request, state):
         item["separator"] == "or" and not item["negated"]
         for item in classified[1:])
     conflicting_polarity = bool(positive_controls & negative_controls)
+    planning_requested = ("plan", "planning") in positive_controls
+    implementation_requested = ("plan", "implementation") in positive_controls
+    implementation_prohibited = ("plan", "implementation") in negative_controls
     status_with_why = positive_intents == {"status", "why"}
     multiple_positive_outcomes = len(positive_intents) > 1 and not status_with_why
     opposed_lifecycle = (
@@ -909,6 +925,11 @@ def _resolve_clause_roles(request, state):
             "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
             confidence=0.0, evidence=("negated-lifecycle",),
             recommendation="Keep lifecycle state unchanged; state one positive next action.")
+    if planning_requested and implementation_requested:
+        evidence = ["plan-execution-contradiction"]
+        if implementation_prohibited:
+            evidence.append("implementation-prohibited")
+        return _provisional_planning_clarification(evidence)
     if has_or and len(classified) > 1 \
             or conflicting_polarity or multiple_positive_outcomes:
         positive_labels = sorted(
@@ -1078,7 +1099,7 @@ def resolve_intent(request, state=None):
                 r"\bprogress\b|\bstatus\b|\btoken usage\b|\bperformance report\b|"
                 r"\bcost report\b", task_text)),
             "review": bool(re.search(
-                r"\breview\b|\binspect\b|\baudit\b", task_text)),
+                r"^(?:please\s+)?(?:review|inspect|audit)\b", task_text)),
             "repair": bool(re.search(
                 r"\brepair\b|\bfix (?:the )?(?:stale |broken )?plan\b|"
                 r"\bstale plan\b", task_text)),
@@ -1132,8 +1153,7 @@ def resolve_intent(request, state=None):
               and _ARTIFACT_NOUN_RE.search(text)):
             decision = _route(text, "plan", _ARTIFACT_NOUN_RE.search(text))
         else:
-            intent = "repair" if state.get("drift") or state.get("failed") else "plan"
-            decision = _route(text, intent, None)
+            decision = _route(text, "plan", None)
     high_consequence = _high_consequence_match(text)
     if high_consequence and memory_direct is None:
         decision.update({
@@ -1190,16 +1210,17 @@ def request_control(request, state=None, *, host_control=None):
             and re.search(r"\b(?:invalid|corrupt|mixed|blocking)\b", text))
         if explicit_quarantine:
             primary = "recover"
+        negated_supersession = bool(re.search(
+            r"\b(?:do not|don't|never)\s+(?:ever\s+)?(?:supersede|replace)\b|"
+            r"\b(?:do not|don't|never)\s+(?:ever\s+)?"
+            r"(?:create|draft|generate|prepare|present|produce|write)\b"
+            r"[^.!?;\r\n]{0,96}\breplacement\s+(?:action|plan)\b",
+            text))
         explicit_supersession = bool(re.search(
             r"\b(?:explicitly\s+)?(?:supersede|superseding|replace|replacing)\b"
             r"[^.!?;\r\n]{0,120}\b(?:plan\s+)?generation\b|"
             r"\b(?:fresh|new|updated)?\s*replacement\s+(?:action|plan)\b",
-            text)) and not bool(re.search(
-                r"\b(?:do not|don't|never)\s+(?:ever\s+)?(?:supersede|replace)\b|"
-                r"\b(?:do not|don't|never)\s+(?:ever\s+)?"
-                r"(?:create|draft|generate|prepare|present|produce|write)\b"
-                r"[^.!?;\r\n]{0,96}\breplacement\s+(?:action|plan)\b",
-                text))
+            text)) and not negated_supersession
         explicit_new = explicit_supersession or bool(re.search(
             r"\b(?:new|fresh)\s+standalone\b|"
             r"\b(?:new|fresh)\s+(?:standalone\s+)?(?:feature|action|work|task|plan)\b|"
@@ -1294,11 +1315,27 @@ def request_control(request, state=None, *, host_control=None):
         prohibitions.append("continuation")
     if re.search(r"\bnot\s+new\s+work\b", normalized):
         prohibitions.append("new-work")
+    prohibitions = sorted(set(prohibitions))
+    if host_control is None and primary == "plan" and not decision["blocked"] \
+            and not negated_supersession:
+        disposition = loom_owner_intent.resolve_planning_disposition(
+            primary_operation=primary,
+            generation_phase=state.get("generation_phase"),
+            state_error=state.get("state_error"),
+            prohibitions=prohibitions,
+            exact_reference=relation == "revise-exact",
+        )
+        relation = disposition.relation
+        evidence.append("planning-" + disposition.mode)
+        if block_reason == "RELATION_REQUIRES_OWNER" \
+                and relation != "unclear" and not decision["blocked"]:
+            blocked = False
+            block_reason = None
     value = {
         "schema_version": 1,
         "primary_operation": primary,
         "relation": relation,
-        "prohibitions": sorted(set(prohibitions)),
+        "prohibitions": prohibitions,
         "explicitness": explicitness,
         "evidence": sorted(set(evidence))[:16],
         "blocked": blocked,

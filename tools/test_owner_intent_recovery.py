@@ -1,7 +1,10 @@
 """Owner-visible recovery routing across lifecycle conditions."""
 
+import dataclasses
+import inspect
 import unittest
 
+import loom_owner_intent
 import loom_runtime
 
 
@@ -10,21 +13,157 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
         "Draft an approach for a minor warehouse barcode label adjustment. "
         "This is for review, not implementation.")
 
+    def test_planning_disposition_has_one_pure_closed_call_surface(self):
+        """Break caught: raw wording or an effectful dependency enters disposition."""
+        signature = inspect.signature(
+            loom_owner_intent.resolve_planning_disposition)
+
+        self.assertEqual(
+            [
+                "primary_operation", "generation_phase", "state_error",
+                "prohibitions", "exact_reference",
+            ],
+            list(signature.parameters),
+        )
+        self.assertTrue(all(
+            parameter.kind is inspect.Parameter.KEYWORD_ONLY
+            for parameter in signature.parameters.values()))
+        self.assertEqual(
+            {"Sequence", "dataclass"},
+            {
+                name for name in loom_owner_intent.__dict__
+                if name in {
+                    "Sequence", "dataclass", "os", "pathlib", "subprocess",
+                    "sqlite3", "loom_runtime", "loom_orchestrator",
+                }
+            },
+        )
+
+    def test_planning_disposition_is_frozen_and_closed(self):
+        """Break caught: an invalid relation or mode can escape the pure boundary."""
+        value = loom_owner_intent.PlanningDisposition(
+            relation="new",
+            mode="direct",
+            preserve_current=False,
+            reason_code="DIRECT_PLAN",
+        )
+
+        with self.assertRaises(dataclasses.FrozenInstanceError):
+            value.mode = "inline-recovery"
+        for field, invalid in (
+                ("relation", "invented-relation"),
+                ("relation", []),
+                ("mode", "invented-mode"),
+                ("mode", [])):
+            with self.subTest(field=field):
+                arguments = {
+                    "relation": "new",
+                    "mode": "direct",
+                    "preserve_current": False,
+                    "reason_code": "DIRECT_PLAN",
+                }
+                arguments[field] = invalid
+                with self.assertRaises(ValueError):
+                    loom_owner_intent.PlanningDisposition(**arguments)
+
+    def test_planning_disposition_uses_the_closed_state_matrix(self):
+        """Break caught: prompt-independent planning selects the wrong state mode."""
+        cases = (
+            ("absent", None, None, (), "new", "direct", False),
+            ("reviewable", "reviewable", None, (),
+             "supersede-generation", "candidate-successor", True),
+            ("active", "active", None, (),
+             "supersede-generation", "candidate-successor", True),
+            ("terminal", "terminal-completed", None, (),
+             "new", "direct", False),
+            ("stale-reviewable", "reviewable", "STALE_LIFECYCLE", (),
+             "supersede-generation", "current-world-replan", True),
+            ("stale-active", "active", "STALE_TIME", (),
+             "supersede-generation", "current-world-replan", True),
+            ("invalid", "invalid", "INVALID_LIFECYCLE", (),
+             "unclear", "inline-recovery", True),
+            ("writes-prohibited", "reviewable", None, ("mutation",),
+             "unclear", "inline-recovery", True),
+        )
+
+        for name, phase, error, prohibitions, relation, mode, preserve in cases:
+            with self.subTest(state=name):
+                disposition = loom_owner_intent.resolve_planning_disposition(
+                    primary_operation="plan",
+                    generation_phase=phase,
+                    state_error=error,
+                    prohibitions=prohibitions,
+                    exact_reference=False,
+                )
+                self.assertEqual(relation, disposition.relation)
+                self.assertEqual(mode, disposition.mode)
+                self.assertEqual(preserve, disposition.preserve_current)
+                self.assertRegex(disposition.reason_code, r"^[A-Z][A-Z0-9_]*$")
+
+    def test_exact_revision_never_becomes_an_ordinary_planning_relation(self):
+        """Break caught: exact revision falls through to state-derived supersession."""
+        cases = (
+            ("absent", "revise-exact", "inline-recovery", True),
+            ("reviewable", "revise-exact", "candidate-successor", True),
+            ("active", "revise-exact", "inline-recovery", True),
+            ("terminal-completed", "revise-exact", "inline-recovery", True),
+        )
+
+        for phase, relation, mode, preserve in cases:
+            with self.subTest(phase=phase):
+                disposition = loom_owner_intent.resolve_planning_disposition(
+                    primary_operation="plan",
+                    generation_phase=phase,
+                    state_error=None,
+                    prohibitions=(),
+                    exact_reference=True,
+                )
+                self.assertEqual(relation, disposition.relation)
+                self.assertEqual(mode, disposition.mode)
+                self.assertEqual(preserve, disposition.preserve_current)
+
+    def test_planning_disposition_rejects_unknown_inputs(self):
+        """Break caught: an open operation, state, error, or prohibition is inferred."""
+        defaults = {
+            "primary_operation": "plan",
+            "generation_phase": "absent",
+            "state_error": None,
+            "prohibitions": (),
+            "exact_reference": False,
+        }
+        cases = (
+            ("primary_operation", "invented-operation"),
+            ("primary_operation", []),
+            ("generation_phase", "invented-state"),
+            ("generation_phase", []),
+            ("state_error", "INVENTED_ERROR"),
+            ("state_error", []),
+            ("prohibitions", ("invented-prohibition",)),
+            ("prohibitions", ([],)),
+        )
+
+        for field, invalid in cases:
+            with self.subTest(field=field):
+                arguments = {**defaults, field: invalid}
+                with self.assertRaises(ValueError):
+                    loom_owner_intent.resolve_planning_disposition(**arguments)
+
     def test_planning_intent_has_no_execution_route_in_each_lifecycle_state(self):
         """Break caught: lifecycle state misclassifies ordinary planning language."""
         states = (
             ("absent", {"generation_phase": "absent"}, "new", False,
              "ROUTE_PLAN"),
-            ("reviewable", {"generation_phase": "reviewable"}, "unclear", False,
+            ("reviewable", {"generation_phase": "reviewable"},
+             "supersede-generation", False,
              "ROUTE_PLAN"),
-            ("active", {"generation_phase": "active"}, "unclear", True,
-             "RELATION_REQUIRES_OWNER"),
+            ("active", {"generation_phase": "active"},
+             "supersede-generation", False, "ROUTE_PLAN"),
             ("terminal", {"generation_phase": "terminal-completed"}, "new", False,
              "ROUTE_PLAN"),
             ("stale", {
                 "generation_phase": "reviewable",
                 "state_error": "STALE_LIFECYCLE",
-            }, "unclear", True, "PLAN_DECISION_STALE"),
+            }, "supersede-generation", True, "PLAN_DECISION_STALE"),
             ("corrupt", {
                 "generation_phase": "reviewable",
                 "state_error": "CORRUPT_LIFECYCLE",
