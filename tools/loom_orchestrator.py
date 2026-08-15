@@ -2289,6 +2289,9 @@ def _legacy_active_actions(directory, *, owner_home, install_root):
     return candidates
 
 
+_COMPLETED_PLAN_REPLAY_STALE = object()
+
+
 def _completed_plan_replay(directory, prepared, target, *, request, cwd,
                            owner_home, install_root):
     """Return one completed plan only when its exact post-plan world still exists."""
@@ -2335,6 +2338,7 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
                 "RECOVERY_CAPACITY",
                 "completed-action replay scan exceeds its action bound")
     matches = []
+    stale_match = False
     for path in sorted(entries, key=lambda item: item.name):
         _path, action, _security = _read_action(
             path, owner_home=owner_home, install_root=install_root)
@@ -2349,13 +2353,15 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
                 or action.get("cwd") != str(cwd) \
                 or action.get("explicit_target") != str(target) \
                 or action.get("project_id") != prepared.project_id \
-                or action.get("survey_hash") != current_survey_hash \
                 or sealed.get("request_hash") != prepared.request_hash \
                 or sealed.get("intent") != prepared.intent \
                 or sealed.get("domains") != list(prepared.domains) \
                 or not isinstance(plan_author, dict) \
-                or plan_author.get("state") != "active" \
+                or plan_author.get("state") != "active":
+            continue
+        if action.get("survey_hash") != current_survey_hash \
                 or plan_author.get("manifest") != current_manifest:
+            stale_match = True
             continue
         matches.append((
             str(plan_author.get("completed_at", "")),
@@ -2364,7 +2370,7 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
             result,
         ))
     if not matches:
-        return None
+        return _COMPLETED_PLAN_REPLAY_STALE if stale_match else None
     _completed_at, _action_id, action, result = max(
         matches, key=lambda item: (item[0], item[1]))
     presentation = result.get("plan_presentation")
@@ -8296,6 +8302,10 @@ def _rebind_revision_prepared(prepared, prior_action):
     """Preserve the sealed plan's domains while observing the current world."""
     prior_domains = list(prior_action["domains"])
     prior_route = prior_action["prepared"]["route_contract"]
+    current_semantic = loom_runtime.validate_semantic_outcome_evidence(
+        prepared.route_contract["evidence"], prepared.domains, required=True)
+    prior_semantic = loom_runtime.validate_semantic_outcome_evidence(
+        prior_route["evidence"], prior_domains, required=False)
     values = prepared.to_dict()
     values.pop("prepared_hash")
     route = values["route_contract"]
@@ -8303,8 +8313,14 @@ def _rebind_revision_prepared(prepared, prior_action):
     route["requires_domain_discovery"] = bool(
         prior_route["requires_domain_discovery"]
         or not values["project_inspection"]["relevant_coverage_complete"])
+    ordinary = [
+        item for item in route["evidence"]
+        if item != current_semantic["token"]
+        and item != "bound-plan-revision"]
     route["evidence"] = list(dict.fromkeys([
-        *route["evidence"][:15], "bound-plan-revision",
+        *ordinary[:14],
+        *([prior_semantic["token"]] if prior_semantic is not None else []),
+        "bound-plan-revision",
     ]))
     values["route_contract"] = route
     return loom_runtime.PreparedInvocation.build(
@@ -8491,7 +8507,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                         replay = _completed_plan_replay(
                             directory, prepared, target, request=request, cwd=cwd,
                             owner_home=home, install_root=install_root)
-                    if replay is not None:
+                    replay_stale = replay is _COMPLETED_PLAN_REPLAY_STALE
+                    if replay is not None and not replay_stale:
                         result = replay
                     else:
                         result = _invoke_under_lock(
@@ -8505,7 +8522,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             revision_context=revision_context,
                             bound_intent=bound_intent,
                             planning_state_override=planning_state_override,
-                            preserve_active_pointer=preserve_active_pointer)
+                            preserve_active_pointer=preserve_active_pointer,
+                            completed_plan_replay_stale=replay_stale)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
@@ -9662,7 +9680,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        transport_invocation_id=None, assurance=None,
                        expected_plan_decision=None, revision_context=None,
                        bound_intent=None, planning_state_override=None,
-                       preserve_active_pointer=False):
+                       preserve_active_pointer=False,
+                       completed_plan_replay_stale=False):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = transport_invocation_id or str(uuid.uuid4())
@@ -9783,7 +9802,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     planning_mode = None
     if prepared.intent == "plan" \
             and request_control["explicitness"] != "host-bound":
-        protected_block = prepared.route_contract["blocked"] \
+        protected_block = completed_plan_replay_stale \
+            or prepared.route_contract["blocked"] \
             and prepared.route_contract["code"] \
             not in _USEFUL_PLANNING_REBINDABLE_CODES
         if not protected_block:

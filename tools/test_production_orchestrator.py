@@ -1901,6 +1901,17 @@ class ProductionOrchestratorTests(unittest.TestCase):
             completed["plan_presentation"]["presentation_sha256"],
             revision["revision_context"]["parent_presentation_sha256"])
         self.assertEqual(request, revision["revision_context"]["request"])
+        _path, revised_action, _security = loom_orchestrator._read_action(
+            revision["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual(["accounting"], revised_action["domains"])
+        self.assertEqual(
+            ["semantic-outcome-v1.accounting.4"],
+            [
+                item for item in revised_action["prepared"][
+                    "route_contract"]["evidence"]
+                if item.startswith("semantic-outcome-")
+            ])
 
     def test_later_host_turn_recovery_rejects_project_drift(self):
         self.complete_machine_authored_plan()
@@ -4539,6 +4550,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_completed_plan_replays_only_in_the_exact_unchanged_world(self):
         action, completed = self.complete_machine_authored_plan()
+        pack = _active_pack(self.repo)
+        before = loom_reliability.exact_tree_manifest(pack)
         replayed = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -4559,6 +4572,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("blocked", changed["status"])
         self.assertEqual("plan_decision_stale", changed["code"])
         self.assertNotIn("action_id", changed)
+        self.assertTrue(loom_reliability.exact_tree_manifests_equal(
+            before, loom_reliability.exact_tree_manifest(pack)))
+        self.assertIsNone(loom_orchestrator._read_active_pointer(action_directory))
         self.assertEqual(
             2, len(list(action_directory.glob(
                 "????????-????-????-????-????????????.json"))))
@@ -6661,6 +6677,7 @@ planning_obligations: [{obligations}]
                 ["semantic-outcome-v1.accounting.01"],
                 ["semantic-outcome-v1.accounting.1 "],
                 ["semantic-outcome-v1.accounting.999999"],
+                ["semantic-outcome-v1.cli.0"],
                 ["semantic-outcome-v1.unknown.0"],
                 [
                     "semantic-outcome-v1.accounting.0",
