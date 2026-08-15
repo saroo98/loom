@@ -3138,7 +3138,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             source.joinpath("plan.md").read_text(encoding="utf-8"))
         self.assertFalse((self.root / "reserved-successor").exists())
 
-    def test_partial_successor_copy_cleans_only_its_proven_reservation(self):
+    def test_partial_successor_copy_preserves_nonempty_reservation(self):
         source = self.root / "owner-stage"
         source.mkdir()
         (source / "a.md").write_text("first\n", encoding="utf-8")
@@ -3162,8 +3162,30 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 source, destination, expected_source_identity=identity)
 
         self.assertEqual(
+            "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertTrue(destination.exists())
+        self.assertEqual(
+            "first\n", destination.joinpath("a.md").read_text(
+                encoding="utf-8"))
+
+    def test_empty_successor_reservation_is_removed_with_rmdir(self):
+        source = self.root / "empty-failure-source"
+        source.mkdir()
+        (source / "plan.md").write_text(
+            "reviewed candidate\n", encoding="utf-8")
+        destination = self.root / "empty-failure-reservation"
+        with mock.patch.object(
+                loom_orchestrator, "_copy_successor_entry",
+                side_effect=shutil.Error([
+                    ("source", "destination", "copy failed")])), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._copy_successor_install_stage(
+                source, destination,
+                expected_source_identity=
+                loom_reliability.observe_root_identity(source))
+        self.assertEqual(
             "SUCCESSOR_INSTALL_PREPARATION_FAILED", caught.exception.code)
-        self.assertFalse(destination.exists())
+        self.assertFalse(os.path.lexists(destination))
 
     def test_ambiguous_successor_reservation_is_preserved_and_blocks_cleanup(self):
         source = self.root / "owner-stage"
@@ -3279,7 +3301,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                     "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
                 self.assertTrue(destination.exists())
 
-    def test_successor_cleanup_detects_replacement_during_entry_unlink(self):
+    def test_successor_cleanup_never_pathname_deletes_nonempty_reservation(self):
         source = self.root / "unlink-race-source"
         source.mkdir()
         (source / "plan.md").write_text(
@@ -3290,42 +3312,50 @@ class ProductionOrchestratorTests(unittest.TestCase):
             expected_source_identity=loom_reliability.observe_root_identity(
                 source))
         target = destination / "plan.md"
-        original_inode = int(target.lstat().st_ino)
-        original_identity = loom_reliability._stat_identity
-        baseline_observations = 0
-
-        def count_target(info, **kwargs):
-            nonlocal baseline_observations
-            if int(info.st_ino) == original_inode:
-                baseline_observations += 1
-            return original_identity(info, **kwargs)
-
         with mock.patch.object(
-                loom_reliability, "_stat_identity",
-                side_effect=count_target):
-            loom_orchestrator._successor_reservation_ownership(
-                destination, copied["cleanup_ownership"]["root_identity"],
-                created_paths=copied["cleanup_ownership"]["created_paths"])
-        observations = 0
-
-        def replace_between_check_and_unlink(info, **kwargs):
-            nonlocal observations
-            if int(info.st_ino) == original_inode:
-                observations += 1
-                if observations == baseline_observations + 1:
-                    target.unlink()
-                    target.write_text(
-                        "reviewed candidate\n", encoding="utf-8")
-            return original_identity(info, **kwargs)
-
-        with mock.patch.object(
-                loom_reliability, "_stat_identity",
-                side_effect=replace_between_check_and_unlink), \
-                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+                Path, "unlink",
+                side_effect=AssertionError(
+                    "nonempty successor cleanup must never pathname-delete")) \
+                as unlink, self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as caught:
             loom_orchestrator._remove_owned_successor_reservation(
                 destination, copied["cleanup_ownership"])
         self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertEqual(0, unlink.call_count)
         self.assertTrue(destination.exists())
+        self.assertEqual(
+            "reviewed candidate\n", target.read_text(encoding="utf-8"))
+
+    def test_successor_attempt_reservations_are_unique_and_bounded(self):
+        action = {
+            "action_id": "a" * 32,
+            "attempts": 0,
+            "max_attempts": 3,
+            "explicit_target": str(self.root),
+            "cwd": str(self.root),
+        }
+        observed = []
+        quarantines = []
+        for attempt in range(action["max_attempts"]):
+            action["attempts"] = attempt
+            observed.append(loom_orchestrator._successor_install_reservation(
+                self.root, action))
+            quarantines.append(
+                loom_orchestrator._successor_reservation_quarantine(
+                    self.root / "orchestrations" / "action.json", action))
+        self.assertEqual(3, len(set(observed)))
+        self.assertEqual(3, len(set(quarantines)))
+        self.assertEqual(
+            [
+                self.root / "plans" / (
+                    f".successor-{action['action_id']}-attempt-{attempt}")
+                for attempt in range(3)
+            ],
+            observed)
+        action["attempts"] = action["max_attempts"]
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._successor_install_reservation(self.root, action)
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
 
     def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
         """Break caught: changed-world recovery requires parser-specific wording."""
@@ -3793,7 +3823,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                     completed["generation_id"],
                     loom_plan_store.resolve(self.repo).generation_id)
 
-    def test_precommit_failure_cleans_reservation_and_same_action_retries(self):
+    def test_precommit_failure_preserves_reservation_and_same_action_retries(self):
         self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
         request = "Outline a new accounting accessibility plan."
@@ -3812,8 +3842,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
             memory, action_path.parent, candidate_action["project_id"])
         source_witness = witness_store.read()
         source_pointer = loom_orchestrator._read_active_pointer(action_path.parent)
-        reservation = self.repo / "plans" / (
-            ".successor-" + candidate["action_id"])
+        first_reservation = self.repo / "plans" / (
+            ".successor-" + candidate["action_id"] + "-attempt-0")
+        retry_reservation = self.repo / "plans" / (
+            ".successor-" + candidate["action_id"] + "-attempt-1")
+        first_quarantine = action_path.parent.parent / \
+            loom_orchestrator.RECOVERY_DIRECTORY / candidate["action_id"] / \
+            "successor-reservation-attempt-0"
 
         with mock.patch.object(
                 loom_lifecycle_transition, "activate_successor",
@@ -3825,7 +3860,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 install_root=self.installed)
 
         self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
-        self.assertFalse(os.path.lexists(reservation))
+        self.assertFalse(os.path.lexists(first_reservation))
+        self.assertTrue(os.path.lexists(first_quarantine))
         self.assertEqual(
             source_index,
             (self.repo / "plans" / "active-generation.json").read_bytes())
@@ -3842,7 +3878,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         completed = loom_orchestrator.complete(
             action_path, owner_home=self.home, install_root=self.installed)
         self.assertEqual("plan-complete", completed["code"])
-        self.assertFalse(os.path.lexists(reservation))
+        self.assertFalse(os.path.lexists(first_reservation))
+        self.assertTrue(os.path.lexists(first_quarantine))
+        self.assertFalse(os.path.lexists(retry_reservation))
         self.assertNotEqual(
             predecessor.generation_id,
             loom_plan_store.resolve(self.repo).generation_id)
@@ -3856,7 +3894,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         _author_medium_action(candidate, request=request)
         reservation = self.repo / "plans" / (
-            ".successor-" + candidate["action_id"])
+            ".successor-" + candidate["action_id"] + "-attempt-0")
 
         def replace_reservation(_root, stage, _prepared, **_kwargs):
             shutil.rmtree(stage)

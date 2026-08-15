@@ -15,7 +15,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
@@ -5003,7 +5002,7 @@ def _successor_reservation_ownership(
 
 
 def _remove_owned_successor_reservation(path, ownership):
-    """Remove only unchanged entries sealed by one exact copy reservation."""
+    """Remove only one exact empty reservation; preserve every nonempty tree."""
     path = Path(path)
     try:
         fields = {
@@ -5018,64 +5017,6 @@ def _remove_owned_successor_reservation(path, ownership):
                 }):
             raise loom_reliability.ReliabilityError(
                 "successor cleanup ownership is invalid")
-        current = _successor_reservation_ownership(
-            path, ownership["root_identity"],
-            created_paths=ownership["created_paths"])
-        if current["manifest"] != ownership["manifest"] \
-                or current["entries"] != ownership["entries"]:
-            raise loom_reliability.ReliabilityError(
-                "successor reservation changed after ownership was sealed")
-        entries = []
-        for record in ownership["entries"]:
-            if record["path"] == ".":
-                continue
-            candidate = path.joinpath(*PurePosixPath(record["path"]).parts)
-            parent = path if record["parent_path"] == "." else path.joinpath(
-                *PurePosixPath(record["parent_path"]).parts)
-            candidate_info = candidate.lstat()
-            parent_info = parent.lstat()
-            parent_identity = record["parent_identity"]
-            if loom_reliability._is_redirect(candidate) \
-                    or loom_reliability._is_redirect(parent) \
-                    or (record["kind"] == "file" and list(
-                        loom_reliability._stat_identity(candidate_info)) !=
-                        record["identity"]) \
-                    or (record["kind"] == "directory" and (
-                        int(candidate_info.st_dev) != record["identity"][0]
-                        or int(candidate_info.st_ino) != record["identity"][1]
-                        or int(candidate_info.st_mode) != record["identity"][2])) \
-                    or int(parent_info.st_dev) != parent_identity[0] \
-                    or int(parent_info.st_ino) != parent_identity[1] \
-                    or stat.S_IFMT(parent_info.st_mode) != stat.S_IFMT(
-                        parent_identity[2]):
-                raise loom_reliability.ReliabilityError(
-                    "successor reservation identity changed before cleanup")
-            entries.append((candidate, parent, record))
-        for entry, parent, record in sorted(
-                entries, key=lambda item: len(item[0].parts), reverse=True):
-            latest = entry.lstat()
-            latest_parent = parent.lstat()
-            parent_identity = record["parent_identity"]
-            changed = loom_reliability._is_redirect(entry) \
-                or loom_reliability._is_redirect(parent) \
-                or (record["kind"] == "file" and list(
-                    loom_reliability._stat_identity(latest)) !=
-                    record["identity"]) \
-                or (record["kind"] == "directory" and (
-                    int(latest.st_dev) != record["identity"][0]
-                    or int(latest.st_ino) != record["identity"][1]
-                    or int(latest.st_mode) != record["identity"][2])) \
-                or int(latest_parent.st_dev) != parent_identity[0] \
-                or int(latest_parent.st_ino) != parent_identity[1] \
-                or stat.S_IFMT(latest_parent.st_mode) != stat.S_IFMT(
-                    parent_identity[2])
-            if changed:
-                raise loom_reliability.ReliabilityError(
-                    "successor reservation changed at cleanup boundary")
-            if record["kind"] == "directory":
-                entry.rmdir()
-            else:
-                entry.unlink()
         loom_reliability._validate_directory_object_continuity(
             path, ownership["root_identity"])
         path.rmdir()
@@ -5085,6 +5026,72 @@ def _remove_owned_successor_reservation(path, ownership):
             "SUCCESSOR_INSTALL_AMBIGUOUS",
             "the successor reservation could not be proven safe to clean; its "
             "bytes were preserved and the prior plan remains current") from exc
+
+
+def _successor_install_reservation(root, action):
+    """Return one bounded private reservation name for the current attempt."""
+    attempts = action.get("attempts")
+    max_attempts = action.get("max_attempts")
+    if type(attempts) is not int or max_attempts != 3 \
+            or not 0 <= attempts < max_attempts:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the successor reservation attempt is outside its bounded retry "
+            "inventory; the prior plan remains current")
+    return Path(root) / "plans" / (
+        ".successor-" + action["action_id"] + "-attempt-" + str(attempts))
+
+
+def _successor_reservation_quarantine(action_path, action):
+    """Return the bounded owner-private evidence path for one failed attempt."""
+    _successor_install_reservation(
+        Path(action["explicit_target"] or action["cwd"]), action)
+    return Path(action_path).parent.parent / RECOVERY_DIRECTORY / \
+        action["action_id"] / (
+            "successor-reservation-attempt-" + str(action["attempts"]))
+
+
+def _quarantine_failed_successor_reservation(
+        path, root_identity, *, quarantine=None, owner_root=None,
+        cause=None):
+    """Atomically detach one exact reservation without deleting its contents."""
+    if quarantine is None or owner_root is None:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the non-authoritative successor reservation was preserved; the "
+            "prior plan remains current and owner recovery is required") from cause
+    try:
+        quarantine = Path(quarantine)
+        _prepare_recovery_root(owner_root, quarantine.parent)
+        moved = _atomic_quarantine_tree(
+            path, quarantine, expected_source_identity=root_identity)
+    except OrchestratorError as quarantine_error:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the non-authoritative successor reservation was preserved; the "
+            "prior plan remains current and owner recovery is required") \
+            from quarantine_error
+    if not moved:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the non-authoritative successor reservation was preserved; the "
+            "prior plan remains current and owner recovery is required") from cause
+    raise OrchestratorError(
+        "SUCCESSOR_INSTALL_AMBIGUOUS",
+        "the failed successor reservation was preserved privately; the prior "
+        "plan remains current and the exact bounded retry may continue") from cause
+
+
+def _release_failed_successor_reservation(
+        path, ownership, *, quarantine=None, owner_root=None):
+    """Remove an empty reservation or atomically preserve the whole tree."""
+    try:
+        _remove_owned_successor_reservation(path, ownership)
+        return
+    except OrchestratorError as cleanup_error:
+        _quarantine_failed_successor_reservation(
+            path, ownership.get("root_identity"), quarantine=quarantine,
+            owner_root=owner_root, cause=cleanup_error)
 
 
 def _copy_successor_entry(source, destination):
@@ -5123,7 +5130,8 @@ def _copy_successor_tree(source, reserved, manifest, record_created):
 
 
 def _copy_successor_install_stage(
-        source, destination, *, expected_source_identity):
+        source, destination, *, expected_source_identity,
+        reservation_quarantine=None, owner_root=None):
     """Copy one sealed owner candidate to a no-replace same-volume reservation."""
     source = Path(source)
     destination = Path(destination)
@@ -5191,12 +5199,13 @@ def _copy_successor_install_stage(
                         reserved, reservation_identity, manifest=before,
                         created_paths=created_paths)
             except loom_reliability.ReliabilityError as cleanup_exc:
-                raise OrchestratorError(
-                    "SUCCESSOR_INSTALL_AMBIGUOUS",
-                    "the successor reservation could not be proven safe to "
-                    "clean; its bytes were preserved and the prior plan remains "
-                    "current") from cleanup_exc
-            _remove_owned_successor_reservation(reserved, cleanup_ownership)
+                _quarantine_failed_successor_reservation(
+                    reserved, reservation_identity,
+                    quarantine=reservation_quarantine,
+                    owner_root=owner_root, cause=cleanup_exc)
+            _release_failed_successor_reservation(
+                reserved, cleanup_ownership,
+                quarantine=reservation_quarantine, owner_root=owner_root)
         raise OrchestratorError(
             "SUCCESSOR_INSTALL_PREPARATION_FAILED",
             "the reviewed successor could not be reserved safely; the prior "
@@ -5584,8 +5593,9 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
     quiescence = _successor_executor_quiescence(
         source_state, source_ledger, directory=Path(action_path).parent,
         owner_home=action["owner_home"], install_root=action["install_root"])
-    install_parent = root / "plans"
-    install_stage = install_parent / (".successor-" + action["action_id"])
+    install_stage = _successor_install_reservation(root, action)
+    reservation_quarantine = _successor_reservation_quarantine(
+        action_path, action)
     try:
         semantics = loom_plan_presentation.compile_reviewed_semantics(
             review["semantics"], project_id=action["project_id"],
@@ -5614,7 +5624,9 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
             owner_stage)
         copied = _copy_successor_install_stage(
             owner_stage, install_stage,
-            expected_source_identity=owner_stage_identity)
+            expected_source_identity=owner_stage_identity,
+            reservation_quarantine=reservation_quarantine,
+            owner_root=action["owner_home"])
         source_index = {
             "schema_version": 1,
             "project_id": resolved.index.project_id,
@@ -5659,8 +5671,10 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
             loom_lifecycle_transition.LifecycleTransitionError,
             loom_reliability.ReliabilityError) as exc:
         if copied is not None and os.path.lexists(install_stage):
-            _remove_owned_successor_reservation(
-                install_stage, copied["cleanup_ownership"])
+            _release_failed_successor_reservation(
+                install_stage, copied["cleanup_ownership"],
+                quarantine=reservation_quarantine,
+                owner_root=action["owner_home"])
         if isinstance(exc, OrchestratorError):
             raise
         raise OrchestratorError(
@@ -5756,8 +5770,10 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
                 and os.path.lexists(install_stage) \
                 and loom_lifecycle_transition.successor_envelope_status(
                     envelope_root, prepared["command_id"]) is None:
-            _remove_owned_successor_reservation(
-                install_stage, copied["cleanup_ownership"])
+            _release_failed_successor_reservation(
+                install_stage, copied["cleanup_ownership"],
+                quarantine=reservation_quarantine,
+                owner_root=action["owner_home"])
         raise OrchestratorError(
             "GENERATION_ACTIVATION_INVALID",
             "reviewed successor activation failed closed; recover the sealed "
