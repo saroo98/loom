@@ -25,6 +25,7 @@ import loom_fault_harness  # noqa: E402
 import loom_install  # noqa: E402
 import loom_improvement  # noqa: E402
 import loom_lifecycle  # noqa: E402
+import loom_lifecycle_transition  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_adapter_protocol  # noqa: E402
 import loom_domain_discovery  # noqa: E402
@@ -3137,6 +3138,53 @@ class ProductionOrchestratorTests(unittest.TestCase):
             source.joinpath("plan.md").read_text(encoding="utf-8"))
         self.assertFalse((self.root / "reserved-successor").exists())
 
+    def test_partial_successor_copy_cleans_only_its_proven_reservation(self):
+        source = self.root / "owner-stage"
+        source.mkdir()
+        (source / "plan.md").write_text("reviewed candidate\n", encoding="utf-8")
+        identity = loom_reliability.observe_root_identity(source)
+        destination = self.root / "reserved-successor"
+
+        def partial_copy(_source, reserved, **_kwargs):
+            Path(reserved, "partial.txt").write_text("partial\n", encoding="utf-8")
+            raise shutil.Error([("source", "destination", "copy failed")])
+
+        with mock.patch.object(
+                shutil, "copytree", side_effect=partial_copy), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._copy_successor_install_stage(
+                source, destination, expected_source_identity=identity)
+
+        self.assertEqual(
+            "SUCCESSOR_INSTALL_PREPARATION_FAILED", caught.exception.code)
+        self.assertFalse(destination.exists())
+
+    def test_ambiguous_successor_reservation_is_preserved_and_blocks_cleanup(self):
+        source = self.root / "owner-stage"
+        source.mkdir()
+        (source / "plan.md").write_text("reviewed candidate\n", encoding="utf-8")
+        identity = loom_reliability.observe_root_identity(source)
+        destination = self.root / "reserved-successor"
+
+        def replace_reservation(_source, reserved, **_kwargs):
+            reserved = Path(reserved)
+            reserved.rmdir()
+            reserved.mkdir()
+            (reserved / "unrelated.txt").write_text(
+                "preserve ambiguous bytes\n", encoding="utf-8")
+            raise shutil.Error([("source", "destination", "copy failed")])
+
+        with mock.patch.object(
+                shutil, "copytree", side_effect=replace_reservation), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._copy_successor_install_stage(
+                source, destination, expected_source_identity=identity)
+
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertEqual(
+            "preserve ambiguous bytes\n",
+            destination.joinpath("unrelated.txt").read_text(encoding="utf-8"))
+
     def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
         """Break caught: changed-world recovery requires parser-specific wording."""
         _plan_action, _planned = self.complete_machine_authored_plan()
@@ -3298,6 +3346,255 @@ class ProductionOrchestratorTests(unittest.TestCase):
         pointer = loom_orchestrator._read_active_pointer(
             Path(started["action_path"]).parent)
         self.assertEqual(started["action_id"], pointer["action_id"])
+
+    def test_cancelled_execution_and_cleared_pointer_do_not_quiesce_active_generation(self):
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        cancelled = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(
+            Path(started["action_path"]).parent))
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual(
+            "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED", blocked.exception.code)
+        self.assertIn("retry completion", blocked.exception.message)
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_successor_recovery_finishes_exact_action_after_authority_commit(self):
+        boundaries = (
+            "after-index-commit",
+            "after-predecessor-terminalization",
+            "after-witness",
+            "after-plan-projection",
+            "after-action-projection",
+            "after-envelope-completion",
+        )
+        original_activate = loom_lifecycle_transition.activate_successor
+
+        for ordinal, boundary in enumerate(boundaries):
+            with self.subTest(boundary=boundary):
+                if ordinal:
+                    self.home = self.root / f"home-{ordinal}"
+                    self.home.mkdir(parents=True)
+                    (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
+                        loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
+                    self.repo = self.root / f"target-{ordinal}"
+                    loom_fault_harness.clone_git_fixture(
+                        self.repo_fixture, self.repo,
+                        self.home / "git-home")
+                self.complete_machine_authored_plan()
+                request = "Outline a new accounting accessibility plan."
+                candidate = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                _author_medium_action(candidate, request=request)
+
+                if boundary.startswith("after-") and boundary in {
+                        "after-index-commit",
+                        "after-predecessor-terminalization",
+                        "after-witness"}:
+                    def activate_with_fault(*args, **kwargs):
+                        kwargs["fault_at"] = boundary
+                        return original_activate(*args, **kwargs)
+                    patcher = mock.patch.object(
+                        loom_lifecycle_transition, "activate_successor",
+                        side_effect=activate_with_fault)
+                else:
+                    def inject_projection_fault(observed):
+                        if observed == boundary:
+                            raise loom_lifecycle_transition.LifecycleTransitionInterrupted(
+                                boundary)
+                    patcher = mock.patch.object(
+                        loom_orchestrator, "_successor_fault",
+                        side_effect=inject_projection_fault)
+                with patcher, self.assertRaises(
+                        loom_orchestrator.OrchestratorError) as interrupted:
+                    loom_orchestrator.complete(
+                        candidate["action_path"], owner_home=self.home,
+                        install_root=self.installed)
+                self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+
+                action_path = Path(candidate["action_path"])
+                _path, pending, _security = loom_orchestrator._read_action(
+                    action_path, owner_home=self.home,
+                    install_root=self.installed)
+                self.assertEqual("pending", pending["status"])
+                instance_id, memory = loom_orchestrator._memory_backend(
+                    self.home, self.installed, self.repo)
+                self.assertEqual(pending["instance_id"], instance_id)
+                with loom_reliability.exclusive_file_lock(
+                        loom_orchestrator._orchestration_lock(action_path.parent)):
+                    loom_orchestrator._recover_pending_v3_lifecycle(
+                        target=self.repo, directory=action_path.parent,
+                        memory=memory, project_id=pending["project_id"],
+                        owner_home=self.home, install_root=self.installed)
+
+                _path, completed, _security = loom_orchestrator._read_action(
+                    action_path, owner_home=self.home,
+                    install_root=self.installed)
+                self.assertEqual("completed", completed["status"])
+                self.assertEqual("installed", completed["pack_seed"]["state"])
+                self.assertEqual(
+                    "plan-complete", completed["result"]["code"])
+                self.assertIsNone(loom_orchestrator._read_active_pointer(
+                    action_path.parent))
+                self.assertEqual(
+                    completed["generation_id"],
+                    loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_precommit_failure_cleans_reservation_and_same_action_retries(self):
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        _path, candidate_action, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        source_index = (self.repo / "plans" / "active-generation.json").read_bytes()
+        source_ledger = (predecessor.generation_root / "lifecycle.json").read_bytes()
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        witness_store = loom_orchestrator._lifecycle_witness_store(
+            memory, action_path.parent, candidate_action["project_id"])
+        source_witness = witness_store.read()
+        source_pointer = loom_orchestrator._read_active_pointer(action_path.parent)
+        reservation = self.repo / "plans" / (
+            ".successor-" + candidate["action_id"])
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=loom_lifecycle_transition.LifecycleTransitionError(
+                    "precommit identity failed")), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+        self.assertFalse(os.path.lexists(reservation))
+        self.assertEqual(
+            source_index,
+            (self.repo / "plans" / "active-generation.json").read_bytes())
+        self.assertEqual(
+            source_ledger,
+            (predecessor.generation_root / "lifecycle.json").read_bytes())
+        self.assertEqual(source_witness, witness_store.read())
+        self.assertEqual(
+            source_pointer,
+            loom_orchestrator._read_active_pointer(action_path.parent))
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        completed = loom_orchestrator.complete(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        self.assertFalse(os.path.lexists(reservation))
+        self.assertNotEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_precommit_ambiguous_reservation_is_preserved_for_owner_recovery(self):
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        reservation = self.repo / "plans" / (
+            ".successor-" + candidate["action_id"])
+
+        def replace_reservation(_root, stage, _prepared, **_kwargs):
+            shutil.rmtree(stage)
+            stage.mkdir()
+            (stage / "owner-recovery-required.txt").write_text(
+                "ambiguous replacement\n", encoding="utf-8")
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "precommit identity failed")
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=replace_reservation), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+        self.assertEqual(
+            "ambiguous replacement\n",
+            (reservation / "owner-recovery-required.txt").read_text(
+                encoding="utf-8"))
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_preindex_abandonment_preserves_candidate_for_exact_retry(self):
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        original_activate = loom_lifecycle_transition.activate_successor
+
+        def activate_with_fault(*args, **kwargs):
+            kwargs["fault_at"] = "after-generation-install"
+            return original_activate(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=activate_with_fault), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+
+        _path, pending, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)):
+            recovered = loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=pending["project_id"],
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("abandoned", recovered[0]["status"])
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+        completed = loom_orchestrator.complete(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        self.assertNotEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
 
     def test_corrupt_lifecycle_returns_sealed_inline_plan_without_exposing_bytes(self):
         """Break caught: untrusted lifecycle storage prevents any useful planning output."""

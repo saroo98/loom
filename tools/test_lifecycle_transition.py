@@ -2,6 +2,7 @@ import ast
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 import unittest
@@ -10,6 +11,7 @@ from pathlib import Path
 from unittest import mock
 
 import loom_lifecycle_kernel as kernel
+import loom_operation_supervisor
 import loom_reliability
 from test_lifecycle_kernel import (
     HEX_A, HEX_B, _canonical_state_inputs, _canonical_world_observation,
@@ -687,7 +689,9 @@ class GenerationActivationTests(unittest.TestCase):
             lock_path=self.lock)
         return prepared
 
-    def _prepare_live_successor(self, generation_id="generation-2", source=None):
+    def _prepare_live_successor(
+            self, generation_id="generation-2", source=None,
+            executor_quiescence=None):
         if source is None:
             source = self._activate_reviewable_initial_generation()
         stage = self.root / ("." + generation_id + "-stage")
@@ -716,6 +720,7 @@ class GenerationActivationTests(unittest.TestCase):
             "generation_path": "plans/generations/" + generation_id,
         }
         index["index_sha256"] = kernel.digest(index)
+        owner_stage_manifest = loom_reliability.exact_tree_manifest(stage)
         prepared = self.transition.prepare_successor_authority(
             stage, index_value=index, semantics_value=semantics,
             reviewed_world_value=world,
@@ -725,9 +730,22 @@ class GenerationActivationTests(unittest.TestCase):
             candidate_action_id="candidate-action-1",
             candidate_action_sha256=HEX_A,
             project_world_sha256=HEX_B,
-            executor_quiescence={
+            executor_quiescence=executor_quiescence or {
                 "case": "no-active-executor", "action_id": None,
                 "receipt_sha256": None,
+            },
+            candidate_projection={
+                "schema_version": 1,
+                "action_id": "candidate-action-1",
+                "action_base_sha256": HEX_A,
+                "project_id": "project-1",
+                "generation_id": generation_id,
+                "session_id": "00000000-0000-4000-8000-000000000001",
+                "operation_id": "00000000-0000-4000-8000-000000000002",
+                "invocation_id": "00000000-0000-4000-8000-000000000003",
+                "journal_path_sha256": HEX_B,
+                "completion_instant": "2026-08-15T12:00:00+00:00",
+                "owner_stage_manifest": owner_stage_manifest,
             })
         return source, stage, prepared
 
@@ -879,7 +897,156 @@ class GenerationActivationTests(unittest.TestCase):
                 candidate_action_sha256=HEX_A, project_world_sha256=HEX_B,
                 executor_quiescence={
                     "case": "active-executor-indeterminate",
-                    "action_id": "action-1", "receipt_sha256": None})
+                    "action_id": "action-1", "receipt_sha256": None},
+                candidate_projection={
+                    "schema_version": 1,
+                    "action_id": "candidate-1",
+                    "action_base_sha256": HEX_A,
+                    "project_id": "project-1",
+                    "generation_id": "generation-2",
+                    "session_id": "session-1",
+                    "operation_id": "operation-1",
+                    "invocation_id": "invocation-1",
+                    "journal_path_sha256": HEX_B,
+                    "completion_instant": "2026-08-15T12:00:00+00:00",
+                    "owner_stage_manifest":
+                        loom_reliability.exact_tree_manifest(stage),
+                })
+
+    def test_successor_projection_rejects_nonobject_closed(self):
+        _source, _stage, prepared = self._prepare_live_successor()
+        malformed = json.loads(json.dumps(prepared))
+        malformed["candidate_projection"] = []
+        malformed["prepared_sha256"] = kernel.digest({
+            key: value for key, value in malformed.items()
+            if key != "prepared_sha256"})
+
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "action projection"):
+            self.transition._validate_prepared_generation(malformed)
+
+    def test_active_predecessor_cannot_claim_no_active_executor(self):
+        self._activate_reviewable_initial_generation()
+        self.transition.transition(
+            self.root,
+            self._command(
+                "start-exact", "activate-predecessor", action_id="action-1"),
+            witness_path=self.witness, envelope_root=self.envelopes,
+            lock_path=self.lock)
+        resolved, semantics, ledger, witness, state = self.transition._observe(
+            self.root,
+            self.transition._witness_store(witness_path=self.witness))
+        self.assertEqual("active", state.generation_phase)
+        source = {
+            "index": {
+                "schema_version": 1,
+                "project_id": resolved.index.project_id,
+                "generation_id": resolved.index.generation_id,
+                "storage_kind": resolved.index.storage_kind,
+                "generation_path": resolved.index.generation_path,
+                "index_sha256": resolved.index.index_sha256,
+            },
+            "semantics": semantics,
+            "ledger": ledger,
+            "witness": witness,
+        }
+
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "executor quiescence"):
+            self._prepare_live_successor(source=source)
+
+    def test_active_predecessor_receipt_binds_exact_lifecycle_action(self):
+        self._activate_reviewable_initial_generation()
+        self.transition.transition(
+            self.root,
+            self._command(
+                "start-exact", "activate-predecessor", action_id="action-1"),
+            witness_path=self.witness, envelope_root=self.envelopes,
+            lock_path=self.lock)
+        resolved, semantics, ledger, witness, state = self.transition._observe(
+            self.root,
+            self.transition._witness_store(witness_path=self.witness))
+        self.assertEqual("active", state.generation_phase)
+        source = {
+            "index": {
+                "schema_version": 1,
+                "project_id": resolved.index.project_id,
+                "generation_id": resolved.index.generation_id,
+                "storage_kind": resolved.index.storage_kind,
+                "generation_path": resolved.index.generation_path,
+                "index_sha256": resolved.index.index_sha256,
+            },
+            "semantics": semantics,
+            "ledger": ledger,
+            "witness": witness,
+        }
+        receipt = loom_operation_supervisor.run(
+            operation_class="successor-quiescence-test",
+            command=[sys.executable, "-c", "pass"], cwd=self.root,
+            timeout=10, allowed_roots=[self.root],
+            protected_roots=[resolved.generation_root])
+        quiescence = {
+            "case": "supervisor-terminal",
+            "action_id": "different-action",
+            "project_id": state.project_id,
+            "generation_id": state.generation_id,
+            "action_operation_id": "action-operation-1",
+            "supervisor_operation_id": receipt["operation_id"],
+            "project_world_sha256": HEX_B,
+            "terminal_state": "completed",
+            "receipt_sha256": receipt["receipt_sha256"],
+            "supervisor_receipt": receipt,
+        }
+        quiescence["binding_sha256"] = kernel.digest(quiescence)
+
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "executor quiescence"):
+            self._prepare_live_successor(
+                source=source, executor_quiescence=quiescence)
+
+        valid = json.loads(json.dumps(quiescence))
+        valid["action_id"] = "action-1"
+        valid["binding_sha256"] = kernel.digest({
+            key: value for key, value in valid.items()
+            if key != "binding_sha256"})
+        _source, _stage, prepared = self._prepare_live_successor(
+            "generation-3", source=source, executor_quiescence=valid)
+        self.assertEqual("action-1", prepared["executor_quiescence"]["action_id"])
+
+        nonterminal = json.loads(json.dumps(valid))
+        nonterminal_receipt = nonterminal["supervisor_receipt"]
+        nonterminal_receipt["status"] = "failed"
+        nonterminal_receipt["primary_failure"] = "start-failed"
+        nonterminal_receipt["returncode"] = None
+        nonterminal_receipt["receipt_sha256"] = loom_operation_supervisor._hash({
+            key: value for key, value in nonterminal_receipt.items()
+            if key != "receipt_sha256"})
+        nonterminal["receipt_sha256"] = nonterminal_receipt["receipt_sha256"]
+        nonterminal["terminal_state"] = None
+        nonterminal["binding_sha256"] = kernel.digest({
+            key: value for key, value in nonterminal.items()
+            if key != "binding_sha256"})
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "executor quiescence"):
+            self._prepare_live_successor(
+                "generation-4", source=source,
+                executor_quiescence=nonterminal)
+
+        forged = json.loads(json.dumps(valid))
+        forged["supervisor_receipt"]["operation_id"] = "fabricated-operation"
+        forged["binding_sha256"] = kernel.digest({
+            key: value for key, value in forged.items()
+            if key != "binding_sha256"})
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "executor quiescence"):
+            self._prepare_live_successor(
+                "generation-5", source=source,
+                executor_quiescence=forged)
 
     def test_two_live_successors_cannot_consume_one_reviewable_source(self):
         source, first_stage, first = self._prepare_live_successor("generation-2")
