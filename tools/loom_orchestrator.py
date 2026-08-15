@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import shutil
 import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
@@ -4260,6 +4261,7 @@ def _recover_pending_v3_lifecycle(
             envelope_root=envelope_root,
             lock_path=_orchestration_lock(directory),
             activation_projection=project_generation,
+            successor_projection=project_generation,
             legacy_projection=project_generation,
             recovery_projection=recover_projection,
             _lock_held=True)
@@ -4888,6 +4890,218 @@ def _activate_reviewed_generation(action, action_path, memory, instant):
         "reviewed_world": reviewed_world,
         "generation_root": resolved.generation_root,
         "generation_archive_sha256": generation_archive_sha256,
+    }
+
+
+def _copy_successor_install_stage(
+        source, destination, *, expected_source_identity):
+    """Copy one sealed owner candidate to a no-replace same-volume reservation."""
+    source = Path(source)
+    destination = Path(destination)
+    try:
+        source_identity = loom_reliability.validate_root_identity(
+            source, expected_source_identity)
+        before = loom_reliability.exact_tree_manifest(
+            source, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        loom_reliability.validate_exact_tree_manifest(
+            before, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        reserved = loom_reliability.reserve_directory_leaf(
+            destination.parent, destination.name, mode=0o700)
+        if reserved != destination:
+            raise loom_reliability.ReliabilityError(
+                "successor reservation resolved unexpectedly")
+        shutil.copytree(source, reserved, dirs_exist_ok=True, symlinks=True,
+                        copy_function=shutil.copy2)
+        loom_reliability._validate_directory_object_continuity(
+            source, source_identity)
+        after = loom_reliability.exact_tree_manifest(
+            source, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        copied = loom_reliability.exact_tree_manifest(
+            reserved, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        if not loom_reliability.exact_tree_manifests_equal(
+                before, after, max_entries=1024,
+                max_file_bytes=2 * 1024 * 1024,
+                max_total_bytes=16 * 1024 * 1024) \
+                or not loom_reliability.exact_tree_manifests_equal(
+                    before, copied, max_entries=1024,
+                    max_file_bytes=2 * 1024 * 1024,
+                    max_total_bytes=16 * 1024 * 1024):
+            raise loom_reliability.ReliabilityError(
+                "successor copy differs from its sealed source")
+        return before
+    except (OSError, shutil.Error, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_PREPARATION_FAILED",
+            "the reviewed successor could not be reserved safely; the prior "
+            "plan remains current") from exc
+
+
+def _activate_reviewed_successor(action, action_path, memory, instant):
+    """Switch one exact reviewable/idle-active predecessor to a sealed candidate."""
+    root = Path(action["explicit_target"] or action["cwd"])
+    owner_stage = _action_pack_root(action)
+    if not _uses_owner_candidate_stage(action) \
+            or owner_stage != _stage_path(action_path):
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "successor activation requires the exact owner-held candidate stage")
+    review = (action.get("host_result") or {}).get("plan_review")
+    _validate_plan_review_record(review, action=action)
+    reviewed_world = _staged_plan_world(action)
+    if reviewed_world["state_sha256"] != action["survey_hash"]:
+        raise OrchestratorError(
+            "TARGET_DRIFT", "product bytes changed before successor activation")
+    witness_store = _lifecycle_witness_store(
+        memory, Path(action_path).parent, action["project_id"])
+    try:
+        resolved, source_semantics, source_ledger, source_witness, source_state = \
+            loom_lifecycle_transition._observe(root, witness_store)
+    except loom_lifecycle_transition.LifecycleTransitionError as exc:
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "the exact predecessor cannot be observed safely") from exc
+    if source_state.generation_phase not in {"reviewable", "active"}:
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "successor activation requires one exact live predecessor")
+    pointer = _read_active_pointer(Path(action_path).parent)
+    if pointer is not None and pointer["action_id"] != action["action_id"]:
+        raise OrchestratorError(
+            "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED",
+            "the reviewed successor remains pending until the active executor has "
+            "sealed terminal containment evidence",
+            status="action-required")
+    quiescence = {
+        "case": "no-active-executor", "action_id": None,
+        "receipt_sha256": None,
+    }
+    try:
+        semantics = loom_plan_presentation.compile_reviewed_semantics(
+            review["semantics"], project_id=action["project_id"],
+            generation_id=action["generation_id"],
+            revision=review["revision"],
+            reviewed_world_sha256=reviewed_world["state_sha256"],
+            reviewed_world_observation_sha256=reviewed_world[
+                "observation_sha256"],
+            plan_contract_sha256=action["plan_contract"]["contract_hash"],
+            domain_bindings_sha256=action["domain_contract"][
+                "route_digest"].removeprefix("sha256:"))
+        index = {
+            "schema_version": 1,
+            "project_id": action["project_id"],
+            "generation_id": action["generation_id"],
+            "storage_kind": "generation-dir",
+            "generation_path": f"plans/generations/{action['generation_id']}",
+        }
+        index["index_sha256"] = loom_lifecycle_kernel.digest(index)
+        legacy_name = (
+            ".loom-small-lifecycle.json"
+            if action["tier"] == "S" else loom_gate.LIFECYCLE_FILE)
+        legacy_path = owner_stage / legacy_name
+        legacy_sha256 = hashlib.sha256(legacy_path.read_bytes()).hexdigest()
+        source_index = {
+            "schema_version": 1,
+            "project_id": resolved.index.project_id,
+            "generation_id": resolved.index.generation_id,
+            "storage_kind": resolved.index.storage_kind,
+            "generation_path": resolved.index.generation_path,
+            "index_sha256": resolved.index.index_sha256,
+        }
+        prepared = loom_lifecycle_transition.prepare_successor_authority(
+            owner_stage, index_value=index, semantics_value=semantics,
+            reviewed_world_value=reviewed_world,
+            source_index=source_index, source_semantics=source_semantics,
+            source_ledger=source_ledger, source_witness=source_witness,
+            command_id="review-successor-" + action["action_id"],
+            candidate_action_id=action["action_id"],
+            candidate_action_sha256=action["action_hash"],
+            project_world_sha256=reviewed_world["state_sha256"],
+            executor_quiescence=quiescence,
+            replace_lifecycle_sha256=legacy_sha256,
+            replace_lifecycle_name=legacy_name)
+        install_parent = root / "plans"
+        install_stage = install_parent / (
+            ".successor-" + action["action_id"])
+        copied = _copy_successor_install_stage(
+            owner_stage, install_stage,
+            expected_source_identity=prepared["owner_stage_identity"])
+        if copied != prepared["stage_manifest"]:
+            raise OrchestratorError(
+                "SUCCESSOR_INSTALL_PREPARATION_FAILED",
+                "the successor reservation does not match its transition evidence")
+    except (
+            OSError, loom_plan_presentation.PresentationError,
+            loom_lifecycle_transition.LifecycleTransitionError) as exc:
+        if isinstance(exc, OrchestratorError):
+            raise
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "reviewed successor preparation failed closed; the prior plan "
+            "remains current") from exc
+
+    def precommit_validation(prepared_value):
+        current_world = _staged_plan_world(action)
+        current_pointer = _read_active_pointer(Path(action_path).parent)
+        _current_path, current_action, _security = _read_action(
+            action_path, owner_home=action["owner_home"],
+            install_root=action["install_root"])
+        if current_world["state_sha256"] != prepared_value[
+                "project_world_sha256"] \
+                or current_action["action_hash"] != prepared_value[
+                    "candidate_action_sha256"] \
+                or current_pointer is not None \
+                and current_pointer["action_id"] != action["action_id"]:
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "successor bound identity changed before commit")
+
+    def verify_projection(prepared_value):
+        current = loom_plan_store.resolve(root)
+        state = loom_lifecycle_kernel.fold(
+            prepared_value["index"], prepared_value["semantics"],
+            prepared_value["ledger"], witness_store.read())
+        _verify_v3_pack_projection(current.generation_root, state)
+
+    try:
+        result = loom_lifecycle_transition.activate_successor(
+            root, install_stage, prepared, witness_store=witness_store,
+            envelope_root=Path(action_path).parent / "lifecycle-transitions",
+            lock_path=_orchestration_lock(Path(action_path).parent),
+            project_projection=verify_projection,
+            precommit_validation=precommit_validation, _lock_held=True)
+        if result["status"] != "completed":
+            raise OrchestratorError(
+                "SUCCESSOR_ACTIVATION_RECOVERED_TO_SOURCE",
+                "the interrupted successor was recovered to the exact prior plan; "
+                "that plan remains current and the reviewed candidate remains "
+                "non-authoritative",
+                status="action-required")
+        current = loom_plan_store.resolve(root)
+        if current.index.index_sha256 != prepared["index"]["index_sha256"]:
+            raise OrchestratorError(
+                "GENERATION_ACTIVATION_INVALID",
+                "successor activation did not resolve to its sealed target")
+        manifest = loom_reliability.exact_tree_manifest(current.generation_root)
+        loom_reliability.validate_exact_tree_manifest(manifest)
+        loom_lifecycle_transition._remove_exact_generation(
+            owner_stage, prepared["stage_manifest"])
+    except (
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError,
+            loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "reviewed successor activation failed closed; recover the sealed "
+            "transition before retrying") from exc
+    return {
+        "receipt": result["receipt"], "manifest": manifest,
+        "semantics": semantics, "reviewed_world": reviewed_world,
+        "generation_root": current.generation_root,
+        "generation_archive_sha256": None,
     }
 
 
@@ -7385,7 +7599,6 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             "REQUEST_CONTROL_INVALID",
             "plan-store quarantine cannot share exact plan or revision authority")
     effective_transport_invocation_id = transport_invocation_id
-    prior_generation_transition = None
     planning_state_override = None
     preserve_active_pointer = False
     lifecycle_recovery = []
@@ -7459,26 +7672,6 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                         directory=directory, request=request, owner_home=home,
                         install_root=install_root, now=instant)
             else:
-                if incoming_intent == "plan" \
-                        and lifecycle_state is not None \
-                        and not lifecycle_state.generation_phase.startswith("terminal-") \
-                        and lifecycle_control["relation"] == "supersede-generation" \
-                        and _extract_planning_mode(lifecycle_control) not in {
-                            "candidate-successor", "current-world-replan"}:
-                    effective_transport_invocation_id = (
-                        transport_invocation_id or str(uuid.uuid4()))
-                    successor_generation_id = _derived_generation_id(
-                        project.project_id, effective_transport_invocation_id)
-                    prior_generation_transition = \
-                        _transition_project_generation_terminal(
-                            directory=directory, target=target, memory=memory,
-                            project_id=project.project_id,
-                            relation="supersede-generation",
-                            command_id=(
-                                "supersede-generation:"
-                                + effective_transport_invocation_id),
-                            successor_generation_id=successor_generation_id,
-                            owner_home=home, install_root=install_root)
                 candidate_planning = (
                     incoming_intent == "plan"
                     and revision_context is None
@@ -7531,11 +7724,6 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
     if recovery is not None and isinstance(result, dict):
         result = {**result, "prior_recovery": recovery}
-    if prior_generation_transition is not None and isinstance(result, dict):
-        result = {
-            **result,
-            "prior_generation_transition": prior_generation_transition,
-        }
     if lifecycle_recovery and isinstance(result, dict):
         result = {
             **result,
@@ -9109,24 +9297,30 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     validated_domain_bundle = None
     if action["intent"] == "plan":
         validated_domain_bundle = _validate_authored_plan(action)
-        if action["request_control"].get("explicitness") != "host-bound" \
-                and _extract_planning_mode(action["request_control"]) in {
-                    "candidate-successor", "current-world-replan"}:
-            raise OrchestratorError(
-                "SUCCESSOR_AUTHORITY_SWITCH_PENDING",
-                "the reviewed candidate remains non-authoritative until the sealed "
-                "successor switch is available",
-                status="action-required")
+        if _extract_planning_mode(action["request_control"]) in {
+                "candidate-successor", "current-world-replan"}:
+            pointer = _read_active_pointer(path.parent)
+            if pointer is not None and pointer["action_id"] != action["action_id"]:
+                raise OrchestratorError(
+                    "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED",
+                    "the reviewed successor remains pending until the active executor "
+                    "has sealed terminal containment evidence",
+                    status="action-required")
     seal_plan_author = None
     if action["intent"] == "plan" and action["pack_seed"]["created_pack"]:
         def seal_plan_author(memory_adapter):
             revision_record = (action.get("host_result") or {}).get(
                 "plan_revision")
+            planning_mode = _extract_planning_mode(action["request_control"])
             activation = (
                 _activate_reviewed_revision(
                     action, path, memory_adapter, instant)
                 if isinstance(revision_record, dict)
                 and revision_record.get("schema_version") == 2
+                else _activate_reviewed_successor(
+                    action, path, memory_adapter, instant)
+                if planning_mode in {
+                    "candidate-successor", "current-world-replan"}
                 else _activate_reviewed_generation(
                     action, path, memory_adapter, instant))
             manifest = activation["manifest"]

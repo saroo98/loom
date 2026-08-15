@@ -3116,6 +3116,27 @@ class ProductionOrchestratorTests(unittest.TestCase):
             Path(started["action_path"]).parent)
         self.assertEqual(started["action_id"], pointer["action_id"])
 
+    def test_successor_copy_rejects_identical_bytes_from_replaced_owner_stage(self):
+        source = self.root / "owner-stage"
+        source.mkdir()
+        (source / "plan.md").write_text("reviewed candidate\n", encoding="utf-8")
+        identity = loom_reliability.observe_root_identity(source)
+        original = self.root / "original-owner-stage"
+        source.rename(original)
+        shutil.copytree(original, source)
+
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError,
+                "SUCCESSOR_INSTALL_PREPARATION_FAILED"):
+            loom_orchestrator._copy_successor_install_stage(
+                source, self.root / "reserved-successor",
+                expected_source_identity=identity)
+
+        self.assertEqual(
+            "reviewed candidate\n",
+            source.joinpath("plan.md").read_text(encoding="utf-8"))
+        self.assertFalse((self.root / "reserved-successor").exists())
+
     def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
         """Break caught: changed-world recovery requires parser-specific wording."""
         _plan_action, _planned = self.complete_machine_authored_plan()
@@ -3168,8 +3189,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         self.assertEqual("action-required", replacement["status"])
         self.assertEqual("plan", replacement["intent"])
-        self.assertIn("prior_generation_transition", replacement)
-        self.assertNotIn("work_order", replacement)
+        self.assertNotIn("prior_generation_transition", replacement)
+        self.assertIsNone(replacement["work_order"])
 
     def test_negated_alternative_design_keeps_the_reviewed_generation_unchanged(self):
         """Break caught: a no-change design discussion mutates the current lifecycle."""
@@ -3208,8 +3229,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(1, len(matching))
         self.assertEqual("read-only", matching[0]["request_control"]["relation"])
 
-    def test_existing_reviewable_pack_stages_a_candidate_successor(self):
-        """Break caught: an existing reviewed pack ends ordinary planning at PLAN_PACK_EXISTS."""
+    def test_existing_reviewable_pack_activates_only_after_candidate_review(self):
+        """A reviewed candidate supersedes only its exact still-current predecessor."""
         _action, _completed = self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
         predecessor_manifest = loom_reliability.exact_tree_manifest(
@@ -3232,20 +3253,51 @@ class ProductionOrchestratorTests(unittest.TestCase):
             predecessor_manifest,
             loom_reliability.exact_tree_manifest(current.generation_root))
 
+        candidate_stage = _owned_pack(candidate)
         _author_medium_action(candidate, request=candidate_request)
-        with self.assertRaises(
-                loom_orchestrator.OrchestratorError) as unavailable:
+        completed = loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        successor = loom_plan_store.resolve(self.repo)
+        self.assertNotEqual(predecessor.generation_id, successor.generation_id)
+        predecessor_ledger = json.loads(
+            (predecessor.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(
+            "generation-superseded",
+            predecessor_ledger["events"][-1]["event_type"])
+        self.assertEqual(
+            action["generation_id"], successor.generation_id)
+        self.assertFalse(candidate_stage.exists())
+
+    def test_active_executor_without_terminal_containment_keeps_candidate_pending(self):
+        """An action status cannot be mistaken for sealed executor quiescence."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a small accounting accessibility enhancement."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
             loom_orchestrator.complete(
                 candidate["action_path"], owner_home=self.home,
                 install_root=self.installed)
+
         self.assertEqual(
-            "SUCCESSOR_AUTHORITY_SWITCH_PENDING", unavailable.exception.code)
+            "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED", blocked.exception.code)
         self.assertEqual(
             predecessor.generation_id,
             loom_plan_store.resolve(self.repo).generation_id)
-        self.assertEqual(
-            predecessor_manifest,
-            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+        pointer = loom_orchestrator._read_active_pointer(
+            Path(started["action_path"]).parent)
+        self.assertEqual(started["action_id"], pointer["action_id"])
 
     def test_corrupt_lifecycle_returns_sealed_inline_plan_without_exposing_bytes(self):
         """Break caught: untrusted lifecycle storage prevents any useful planning output."""
