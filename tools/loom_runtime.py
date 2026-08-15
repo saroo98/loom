@@ -999,7 +999,7 @@ def _high_consequence_match(text):
     return match
 
 
-def resolve_intent(request, state=None):
+def _resolve_intent_from_text(request, state=None):
     """Resolve natural language plus lifecycle state; ambiguity returns one checkpoint."""
     if not isinstance(request, str) or not request.strip():
         raise RuntimeError("request must be non-empty natural language")
@@ -1171,6 +1171,174 @@ def resolve_intent(request, state=None):
     return _synchronize_block_reason(decision, category="intent")
 
 
+_SEMANTIC_QUOTED_SPAN_RE = re.compile(
+    r"`[^`\r\n]*`|\"[^\"\r\n]*\"|(?<!\w)'[^'\r\n]+'(?!\w)")
+_SEMANTIC_CLAUSE_BOUNDARY_RE = re.compile(
+    r"(?:\r?\n+|[.!?;]+|\bthen\b|"
+    r"\b(?:and|but)\b(?=\s+(?:also\s+)?(?:please\s+)?"
+    r"(?:do\s+not|don't|never|keep|leave)\b))", re.I)
+_SEMANTIC_HYPOTHETICAL_RE = re.compile(
+    r"^(?:what\s+if\b|"
+    r"what\s+(?:would|could|might)\b[^\r\n]{0,200}\bif\b|"
+    r"(?:can|could|would|might)\b(?!\s+you\b)[^\r\n]{0,160}"
+    r"\b(?:be|happen|work)\b|"
+    r"if\b[^\r\n]{0,240}\b(?:would|could|might)\b|"
+    r"suppose\b|supposing\b|imagine\b|hypothetically\b|"
+    r"in\s+a\s+hypothetical\b)", re.I)
+_SEMANTIC_REPORTED_RE = re.compile(
+    r"^(?:(?:the\s+)?(?:reviewer|agent|assistant|developer|team|owner|user|"
+    r"incident\s+report|report)|they|he|she|someone)\b[^\r\n]{0,120}"
+    r"\b(?:say|says|said|write|writes|wrote|report(?:s|ed)?|"
+    r"request(?:s|ed)?|suggest(?:s|ed)?|recommend(?:s|ed)?|"
+    r"ask(?:s|ed)?|tell|tells|told|note(?:s|d)?|claim(?:s|ed)?)\b", re.I)
+_SEMANTIC_OBSERVATION_RE = re.compile(
+    r"^(?:please\s+)?(?:explain|discuss|summarize|describe|compare|show|"
+    r"tell\s+me|review|inspect|audit)\b", re.I)
+_SEMANTIC_PLAN_NEGATION_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"(?:do\s+not|don't|never)\b[^\r\n]{0,200}"
+    r"\b(?:plan|approach|direction)\b|"
+    r"keep\b[^\r\n]{0,120}\b(?:plan|approach|direction)\b"
+    r"[^\r\n]{0,80}\bunchanged\b|"
+    r"leave\b[^\r\n]{0,120}\b(?:plan|approach|direction)\b"
+    r"[^\r\n]{0,80}\b(?:alone|unchanged)\b)", re.I)
+_SEMANTIC_NO_EFFECT_RE = re.compile(
+    r"^(?:please\s+)?(?:make\s+no\s+(?:changes|modifications)|"
+    r"do\s+not\s+act\b|take\s+no\s+action\b|read[- ]only\b|"
+    r"(?:do\s+not|don't|never)\s+"
+    r"(?:change|modify|write|apply|create|delete)\s+"
+    r"(?:anything|any\s+files?|the\s+(?:project|repository|current\s+state))\b)",
+    re.I)
+
+
+@dataclass(frozen=True)
+class _SemanticOperation:
+    """One closed text-to-lifecycle projection used by every control consumer."""
+
+    decision: object
+    control_text: str
+    plan_materialization: str
+    semantic_scope: str
+
+    def __post_init__(self):
+        if not isinstance(self.decision, MappingProxyType) \
+                or not isinstance(self.control_text, str) \
+                or not self.control_text.strip() \
+                or self.plan_materialization not in {
+                    "none", "persistent", "inline-clarification"} \
+                or self.semantic_scope not in {
+                    "direct", "nonmaterializing", "contradictory"}:
+            raise RuntimeError("semantic operation is invalid")
+
+
+def _mask_semantic_quoted_spans(request):
+    """Remove quoted authority while preserving a quoted sentence boundary."""
+    def replace_span(match):
+        span = match.group(0)
+        interior = span[1:-1].rstrip()
+        terminator = interior[-1] if interior and interior[-1] in ".!?;" else ""
+        return f" quoted material{terminator} "
+
+    return _SEMANTIC_QUOTED_SPAN_RE.sub(replace_span, request)
+
+
+def _semantic_operation(request, state=None):
+    """Resolve speech-act scope before lifecycle words can acquire authority."""
+    if not isinstance(request, str) or not request.strip():
+        raise RuntimeError("request must be non-empty natural language")
+    semantic_request = _semantic_request(request)
+    if not semantic_request.strip():
+        raise RuntimeError("request must contain natural language after /loom")
+    masked = _mask_semantic_quoted_spans(semantic_request)
+    clauses = [
+        " ".join(item.split())
+        for item in _SEMANTIC_CLAUSE_BOUNDARY_RE.split(masked)
+        if item.strip()
+    ]
+    request_plan_negated = any(
+        _SEMANTIC_PLAN_NEGATION_RE.match(clause) is not None
+        for clause in clauses)
+    direct = []
+    resolution_clauses = []
+    nonmaterializing = []
+    plan_negated = False
+    nonmaterializing_discourse = False
+    read_only_review = False
+    for clause in clauses:
+        hypothetical = _SEMANTIC_HYPOTHETICAL_RE.match(clause) is not None
+        reported = _SEMANTIC_REPORTED_RE.match(clause) is not None
+        observation = _SEMANTIC_OBSERVATION_RE.match(clause) is not None \
+            and _PLAN_DELIVERABLE_RE.search(clause) is None \
+            and (nonmaterializing_discourse or request_plan_negated or re.search(
+                    r"\b(?:loom|quote|report|hypothetical)\b|"
+                    r"\b(?:current|existing|approved|reviewed|replacement)\s+"
+                    r"(?:loom\s+)?(?:plan|generation|lifecycle)\b|"
+                    r"\b(?:whether|that)\b[^\r\n]{0,120}\bwould\b",
+                    clause, re.I) is not None)
+        negated_plan = _SEMANTIC_PLAN_NEGATION_RE.match(clause) is not None
+        no_effect = _SEMANTIC_NO_EFFECT_RE.match(clause) is not None
+        if hypothetical or reported or observation or negated_plan or no_effect:
+            nonmaterializing.append(clause)
+            plan_negated = plan_negated or negated_plan
+            nonmaterializing_discourse = nonmaterializing_discourse \
+                or hypothetical or reported or observation
+            read_only_review = read_only_review or observation
+            if no_effect and not (
+                    hypothetical or reported or observation or negated_plan):
+                resolution_clauses.append(clause)
+        else:
+            direct.append(clause)
+            resolution_clauses.append(clause)
+    direct_text = ". ".join(resolution_clauses).strip() if direct else ""
+    positive_plan = False
+    direct_decision = None
+    if direct_text:
+        direct_decision = _resolve_intent_from_text(direct_text, state)
+        positive_plan = (
+            direct_decision["intent"] == "plan"
+            and not direct_decision["blocked"])
+    if positive_plan and plan_negated:
+        decision = _decision(
+            "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
+            confidence=0.0, evidence=("materialization-contradiction",),
+            recommendation=(
+                "Keep lifecycle state unchanged; clarify whether Loom should create "
+                "a new plan or preserve the current plan."))
+        return _SemanticOperation(
+            decision=MappingProxyType(_synchronize_block_reason(
+                decision, category="intent")),
+            control_text="clarify lifecycle request",
+            plan_materialization="inline-clarification",
+            semantic_scope="contradictory")
+    if not direct_text and nonmaterializing:
+        read_only_intent = "review" if read_only_review else "status"
+        decision = _decision(
+            read_only_intent, code=f"ROUTE_{read_only_intent.upper()}",
+            confidence=1.0,
+            evidence=("semantic-nonmaterializing",))
+        return _SemanticOperation(
+            decision=MappingProxyType(_synchronize_block_reason(
+                decision, category="intent")),
+            control_text="review current Loom state",
+            plan_materialization="none",
+            semantic_scope="nonmaterializing")
+    decision = direct_decision or _resolve_intent_from_text(masked, state)
+    materialization = (
+        "persistent"
+        if decision["intent"] == "plan" and not decision["blocked"]
+        else "none")
+    return _SemanticOperation(
+        decision=MappingProxyType(decision),
+        control_text=direct_text or masked,
+        plan_materialization=materialization,
+        semantic_scope="direct")
+
+
+def resolve_intent(request, state=None):
+    """Resolve one closed semantic operation without granting inert text authority."""
+    return _thaw(_semantic_operation(request, state).decision)
+
+
 _PROJECT_WRITE_PROHIBITION_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
     r"\bdo\s+not\s+"
     r"(?:(?:implement|execute|apply)(?:\s+(?:it|this|the\s+(?:plan|changes?|work)))?"
@@ -1315,7 +1483,8 @@ def request_control(request, state=None, *, host_control=None):
         explicitness = "host-bound"
         evidence.append("host-bound-control")
     else:
-        decision = resolve_intent(request)
+        operation = _semantic_operation(request, state)
+        decision = _thaw(operation.decision)
         intent = decision["intent"]
         primary = {
             "plan": "plan", "resume": "execute", "execute": "execute",
@@ -1323,7 +1492,11 @@ def request_control(request, state=None, *, host_control=None):
             "why": "status", "cancel": "cancel", "undo": "recover",
             "close": "cancel",
         }.get(intent, "unknown")
-        text = " ".join(_semantic_request(request).casefold().split())
+        text = " ".join(operation.control_text.casefold().split())
+        if operation.semantic_scope == "nonmaterializing":
+            evidence.append("semantic-nonmaterializing")
+        elif operation.semantic_scope == "contradictory":
+            evidence.append("semantic-clarification")
         explicit_quarantine = bool(
             re.match(
                 r"^(?:please\s+)?quarantine\b.{0,96}\bloom\b.{0,48}"
@@ -1351,7 +1524,9 @@ def request_control(request, state=None, *, host_control=None):
             r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
             r"(?:any\s+)?generated\s+files?\b",
             " scoped-generated-file-exclusion ", text)
-        if explicit_quarantine:
+        if operation.plan_materialization == "inline-clarification":
+            relation = "unclear"
+        elif explicit_quarantine:
             relation = "quarantine-generation"
             evidence.append("explicit-quarantine")
         elif _EXACT_START_CONTROL_RE.search(text):
@@ -1446,6 +1621,7 @@ def request_control(request, state=None, *, host_control=None):
         prohibitions.append("new-work")
     prohibitions = sorted(set(prohibitions))
     if host_control is None and primary == "plan" and not decision["blocked"] \
+            and operation.plan_materialization == "persistent" \
             and not negated_supersession:
         disposition = loom_owner_intent.resolve_planning_disposition(
             primary_operation=primary,

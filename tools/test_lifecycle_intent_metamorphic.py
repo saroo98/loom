@@ -125,6 +125,114 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 self.assertNotEqual("supersede-generation", control["relation"])
                 self.assertNotIn("explicit-supersession", control["evidence"])
 
+    def test_inert_lifecycle_language_never_materializes_a_successor(self):
+        """Break caught: inert lifecycle vocabulary becomes a persistent plan."""
+        requests = (
+            (
+                "Explain what a replacement plan would look like without creating "
+                "one. Keep the current plan unchanged.",
+                "hypothetical",
+            ),
+            (
+                "If I later asked for a different architecture, what would Loom do? "
+                "Do not change the current plan.",
+                "hypothetical",
+            ),
+            (
+                "What would Loom do if I asked for a new plan later? Keep the "
+                "current plan unchanged.",
+                "hypothetical-interrogative",
+            ),
+            (
+                "What if we created a replacement plan someday? Do not change "
+                "anything.",
+                "hypothetical-conditional",
+            ),
+            (
+                "Could a replacement plan be created later? Keep the current plan "
+                "unchanged.",
+                "hypothetical-passive",
+            ),
+            (
+                'The reviewer wrote "Create a fresh replacement plan." Explain '
+                "whether that would be safe; do not act on the quote.",
+                "quoted",
+            ),
+            (
+                "The incident report says the owner requested a fresh replacement "
+                "plan. Summarize the report only; make no changes.",
+                "reported",
+            ),
+            (
+                "The reviewer asks whether a new plan would help. Summarize that "
+                "question only.",
+                "reported-interrogative",
+            ),
+            (
+                "Do not revise, replace, or create a new plan. Show the current plan.",
+                "negative",
+            ),
+        )
+
+        for request, semantic_scope in requests:
+            with self.subTest(scope=semantic_scope):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertFalse(decision["blocked"], decision)
+                self.assertIn(decision["intent"], {"review", "status", "why"})
+                self.assertFalse(control["blocked"], control)
+                self.assertIn(
+                    control["primary_operation"], {"review", "status"})
+                self.assertEqual("read-only", control["relation"])
+                self.assertFalse(any(
+                    item.startswith("planning-")
+                    for item in control["evidence"]))
+                self.assertNotIn("explicit-supersession", control["evidence"])
+
+    def test_true_plan_materialization_contradiction_requests_clarification(self):
+        """Break caught: contradictory authority silently creates a candidate."""
+        requests = (
+            "Create a new plan now. Do not create, revise, or replace the current plan.",
+            "Create a new plan, but do not create or replace the current plan.",
+            "Please create a new plan and do not create a new plan.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertTrue(decision["blocked"], decision)
+                self.assertEqual("INTENT_AMBIGUOUS", decision["code"])
+                self.assertTrue(control["blocked"], control)
+                self.assertEqual("unclear", control["relation"])
+                self.assertFalse(any(
+                    item.startswith("planning-") for item in control["evidence"]))
+
+    def test_direct_planning_survives_inert_context_and_implementation_negation(self):
+        """Break caught: semantic scoping suppresses a separate direct plan command."""
+        requests = (
+            "Use a different architecture for this project now.",
+            (
+                'The reviewer wrote "Create a replacement plan." Now make that the '
+                "new direction for this project."),
+            "Plan a local tracker; do not implement it.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("supersede-generation", control["relation"])
+                self.assertTrue(any(
+                    item.startswith("planning-") for item in control["evidence"]))
+
     def test_real_plan_and_implementation_contradiction_stays_provisional(self):
         """Break caught: a contradiction blocks planning or authorizes execution."""
         decision = loom_runtime.resolve_intent(

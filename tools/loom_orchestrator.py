@@ -963,7 +963,10 @@ def _validate_legacy_plan_contract_v4(contract, *, action, prepared):
     return contract
 
 
-def _validate_action(value, path):
+def _validate_action(value, path, *, allow_pre_ux104_reprepare=False):
+    if type(allow_pre_ux104_reprepare) is not bool:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "action compatibility mode is invalid")
     if not isinstance(value, dict):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
     original_schema_version = value.get("schema_version")
@@ -1361,15 +1364,17 @@ def _validate_action(value, path):
         raise OrchestratorError("ACTION_PATH_MISMATCH", "session journal is not project-scoped")
     if missing_planning_disposition \
             and value["status"] not in TERMINAL_ACTION_STATUSES:
-        raise OrchestratorError(
-            "ACTION_REPREPARE_REQUIRED",
-            "an open pre-UX-104 planning action has no sealed disposition; invoke /loom "
-            "again against the current project state",
-            status="action-required")
+        if not allow_pre_ux104_reprepare:
+            raise OrchestratorError(
+                "ACTION_REPREPARE_REQUIRED",
+                "an open pre-UX-104 planning action has no sealed disposition; invoke /loom "
+                "again against the current project state",
+                status="action-required")
     return value
 
 
-def _read_action(path, *, owner_home=None, install_root=None):
+def _read_action(path, *, owner_home=None, install_root=None,
+                 allow_pre_ux104_reprepare=False):
     path = (_validate_action_path_authority(path, owner_home)
             if owner_home is not None else _absolute(path, "action"))
     try:
@@ -1414,7 +1419,20 @@ def _read_action(path, *, owner_home=None, install_root=None):
             raise OrchestratorError(
                 "ACTION_RUNTIME_MISMATCH", "action does not belong to this home and runtime")
         security = (crypto, opened.identity()["owner_vault_id"])
-    return path, _validate_action(value, path), security
+    return path, _validate_action(
+        value, path,
+        allow_pre_ux104_reprepare=allow_pre_ux104_reprepare), security
+
+
+def _is_pre_ux104_reprepare_action(action):
+    """Identify only the authenticated current-schema compatibility gap."""
+    return action.get("schema_version") == ACTION_SCHEMA_VERSION \
+        and action.get("intent") == "plan" \
+        and action.get("status") not in TERMINAL_ACTION_STATUSES \
+        and isinstance(action.get("request_control"), dict) \
+        and not any(
+            isinstance(item, str) and item.startswith("planning-")
+            for item in action["request_control"].get("evidence", []))
 
 
 def _write_action(path, value, security=None):
@@ -1640,7 +1658,8 @@ def _active_action_for_status(directory, *, owner_home, install_root):
             "RECOVERY_DECISION_REQUIRED",
             "the active pointer names a missing action; status is indeterminate")
     _path, action, _security = _read_action(
-        path, owner_home=owner_home, install_root=install_root)
+        path, owner_home=owner_home, install_root=install_root,
+        allow_pre_ux104_reprepare=True)
     if action["project_id"] != pointer["project_id"] \
             or action["action_id"] != pointer["action_id"]:
         raise OrchestratorError(
@@ -2267,7 +2286,8 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
     return receipt
 
 
-def _legacy_active_actions(directory, *, owner_home, install_root):
+def _legacy_active_actions(directory, *, owner_home, install_root,
+                           allow_pre_ux104_reprepare=False):
     candidates = []
     entries = []
     inspected = 0
@@ -2290,7 +2310,8 @@ def _legacy_active_actions(directory, *, owner_home, install_root):
                 "RECOVERY_CAPACITY", "legacy active-action scan exceeds its hard bound")
     for path in sorted(entries, key=lambda item: item.name):
         _path, action, security = _read_action(
-            path, owner_home=owner_home, install_root=install_root)
+            path, owner_home=owner_home, install_root=install_root,
+            allow_pre_ux104_reprepare=allow_pre_ux104_reprepare)
         if action["status"] in {"initializing", "pending"}:
             candidates.append((_path, action, security))
     return candidates
@@ -2635,14 +2656,16 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                 "the active pointer names a missing action; its project effects cannot be "
                 "proven absent, so the pointer and project were preserved")
         _path, action, security = _read_action(
-            path, owner_home=owner_home, install_root=install_root)
+            path, owner_home=owner_home, install_root=install_root,
+            allow_pre_ux104_reprepare=True)
         if action["status"] in TERMINAL_ACTION_STATUSES:
             _clear_active_pointer(directory, action["action_id"])
             return action.get("recovery_receipt"), None, False
         candidates = [(_path, action, security)]
     else:
         candidates = _legacy_active_actions(
-            directory, owner_home=owner_home, install_root=install_root)
+            directory, owner_home=owner_home, install_root=install_root,
+            allow_pre_ux104_reprepare=True)
         if not candidates:
             return None, None, False
         if len(candidates) != 1:
@@ -2650,6 +2673,21 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                 "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
     path, action, security = candidates[0]
     _reconcile_plan_authoring(action)
+    if _is_pre_ux104_reprepare_action(action):
+        if incoming_intent is None \
+                or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
+            return None, None, False
+        if incoming_intent != "plan":
+            raise OrchestratorError(
+                "ACTION_REPREPARE_REQUIRED",
+                "the open pre-UX-104 planning action cannot resume under current "
+                "semantics; submit a fresh planning request or cancel it",
+                status="action-required")
+        controller, opened = _reopen(action)
+        controller.interrupt(opened, code="planning-reprepared", now=now)
+        receipt = _recover_plan_action(
+            path, action, security, now=now, requested_reason="superseded")
+        return receipt, None, False
     if incoming_intent is None \
             or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
         return None, None, False
@@ -9651,7 +9689,8 @@ def _completion_planning_mode(action):
 
 _USEFUL_PLANNING_REBIND_CODES = {
     "current-world-replan": frozenset({
-        "PLAN_DECISION_STALE", "STALE_LIFECYCLE", "STALE_TIME"}),
+        "ACTIVE_WORLD_CHANGED", "PLAN_DECISION_STALE", "STALE_LIFECYCLE",
+        "STALE_TIME"}),
     "inline-recovery": frozenset({
         "INVALID_LIFECYCLE", "CORRUPT_LIFECYCLE", "MUTATION_PROHIBITED"}),
 }
@@ -9898,7 +9937,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     if request_control_state is not None \
             and prepared.intent == "plan" \
             and prepared.route_contract["code"] in {
-                "PLAN_DECISION_STALE", "STALE_LIFECYCLE", "STALE_TIME"}:
+                "ACTIVE_WORLD_CHANGED", "PLAN_DECISION_STALE",
+                "STALE_LIFECYCLE", "STALE_TIME"}:
         request_control_state = {
             **request_control_state,
             "state_error": "STALE_LIFECYCLE",
