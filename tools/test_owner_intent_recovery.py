@@ -240,6 +240,27 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
             revision_context={})
         self.assertNotIn("mutation", zero_write_wording["prohibitions"])
 
+        self.assertIsNone(
+            loom_orchestrator._completion_planning_mode({
+                "request_control": control,
+                "host_result": {"plan_revision": {}},
+            }))
+        forged = json.loads(json.dumps(control))
+        forged["evidence"] = ["forged-host-bound-control"]
+        unsigned = {
+            key: item for key, item in forged.items()
+            if key != "control_sha256"
+        }
+        forged["control_sha256"] = loom_runtime._sha(
+            loom_runtime._canonical_json(unsigned))
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError,
+                "bound revision control"):
+            loom_orchestrator._completion_planning_mode({
+                "request_control": forged,
+                "host_result": {"plan_revision": {}},
+            })
+
     def test_project_write_prohibition_is_sealed_by_runtime_not_orchestrator(self):
         """Break caught: orchestration reclassifies raw prompt text after preparation."""
         prohibited = (

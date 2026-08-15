@@ -1068,7 +1068,14 @@ def _validate_action(value, path):
             raise OrchestratorError(
                 "ACTION_CORRUPT", f"sealed request control is invalid: {exc}") from exc
         if value.get("intent") == "plan" \
-                and value["request_control"].get("explicitness") != "host-bound":
+                and value["request_control"].get("explicitness") == "host-bound":
+            try:
+                _completion_planning_mode(value)
+            except OrchestratorError as exc:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT",
+                    f"sealed bound revision control is invalid: {exc}") from exc
+        elif value.get("intent") == "plan":
             planning_tokens = [
                 item for item in value["request_control"]["evidence"]
                 if item.startswith("planning-")]
@@ -9578,6 +9585,30 @@ def _extract_planning_mode(request_control):
     return mode
 
 
+def _completion_planning_mode(action):
+    """Return an ordinary mode, or preserve one exact bound revision identity."""
+    request_control = action.get("request_control")
+    revision_record = (action.get("host_result") or {}).get("plan_revision")
+    if revision_record is None:
+        return _extract_planning_mode(request_control)
+    try:
+        loom_runtime.validate_request_control(request_control)
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            f"bound revision control is invalid: {exc}") from exc
+    if request_control.get("primary_operation") != "plan" \
+            or request_control.get("relation") != "revise-exact" \
+            or request_control.get("explicitness") != "host-bound" \
+            or request_control.get("evidence") != ["host-bound-control"] \
+            or request_control.get("blocked") \
+            or request_control.get("block_reason") is not None:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            "bound revision control does not match its exact sealed operation")
+    return None
+
+
 _USEFUL_PLANNING_REBIND_CODES = {
     "current-world-replan": frozenset({
         "PLAN_DECISION_STALE", "STALE_LIFECYCLE", "STALE_TIME"}),
@@ -9902,13 +9933,6 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared).to_dict()
-    if revision_archive is not None:
-        archive_sha256 = _persist_revision_archive(
-            memory, revision_archive)
-        if archive_sha256 != plan_revision["archive_sha256"]:
-            raise OrchestratorError(
-                "PLAN_REVISION_ARCHIVE_FAILED",
-                "the immutable revision archive identity changed before persistence")
     context_capsule = controller.prepare_context(opened, request)
     planning_preference_projection = None
     if prepared.intent == "plan" and planning_preference_projector is not None:
@@ -10077,6 +10101,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared, selected_context=context_capsule)
+        if revision_archive is not None:
+            return receipt.to_dict()
         action["status"], action["result"] = "completed", receipt.to_dict()
         _write_action(path, action, action_security)
         return receipt.to_dict()
@@ -10123,6 +10149,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         action["status"], action["result"] = "completed", immediate.to_dict()
         _write_action(path, action, action_security)
         return immediate.to_dict()
+    if revision_archive is not None:
+        action = _write_action(path, action, action_security)
+        archive_sha256 = _persist_revision_archive(
+            memory, revision_archive)
+        if archive_sha256 != plan_revision["archive_sha256"]:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the immutable revision archive identity changed after action admission")
     if prepared.intent == "plan":
         pack = target / "plans"
         if not action["pack_seed"]["created_pack"]:
@@ -10513,7 +10547,7 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             and action["pack_seed"]["state"] == "installed" \
             and action["generation_id"] is not None \
             and action.get("lifecycle_transition") is not None \
-            and _extract_planning_mode(action["request_control"]) in {
+            and _completion_planning_mode(action) in {
                 "candidate-successor", "current-world-replan"}
         current = None
         if staged_v3_plan or projected_successor:
@@ -10560,7 +10594,7 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     validated_domain_bundle = None
     if action["intent"] == "plan":
         validated_domain_bundle = _validate_authored_plan(action)
-        if _extract_planning_mode(action["request_control"]) in {
+        if _completion_planning_mode(action) in {
                 "candidate-successor", "current-world-replan"}:
             root = Path(action["explicit_target"] or action["cwd"])
             instance_id, preflight_memory = _memory_backend(
@@ -10591,7 +10625,7 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
         def seal_plan_author(memory_adapter):
             revision_record = (action.get("host_result") or {}).get(
                 "plan_revision")
-            planning_mode = _extract_planning_mode(action["request_control"])
+            planning_mode = _completion_planning_mode(action)
             activation = (
                 _activate_reviewed_revision(
                     action, path, memory_adapter, instant)

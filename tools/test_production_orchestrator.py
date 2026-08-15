@@ -1819,6 +1819,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
             revision["revision_context"]["prior_semantics"]["title"])
         self.assertRegex(
             revision["revision_context"]["archive_sha256"], r"^[0-9a-f]{64}$")
+        revision_action_path = Path(revision["action_path"])
+        self.assertTrue(revision_action_path.is_file())
+        archive_paths = sorted(
+            (revision_action_path.parent / "plan-revisions").glob("*.json"))
+        self.assertEqual(1, len(archive_paths))
+        archive = json.loads(archive_paths[0].read_text(encoding="utf-8"))
+        loom_orchestrator._validate_revision_archive_payload(archive)
+        self.assertEqual(
+            revision["revision_context"]["archive_sha256"],
+            archive["archive_sha256"])
 
         contract = revision["plan_contract"]
         revised_draft = {
@@ -2070,7 +2080,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_bound_revision_blocked_before_action_leaves_no_private_archive(self):
         action, completed = self.complete_machine_authored_plan()
         prior = completed["plan_presentation"]
-        archive_dir = Path(action["action_path"]).parent / "plan-revisions"
+        orchestration_dir = Path(action["action_path"]).parent
+        archive_dir = orchestration_dir / "plan-revisions"
+        orchestration_before = loom_reliability.exact_tree_manifest(
+            orchestration_dir)
+        plan_before = loom_reliability.exact_tree_manifest(self.repo / "plans")
+        pointer = orchestration_dir / "active.json"
+        self.assertFalse(pointer.exists())
         self.assertFalse(archive_dir.exists())
 
         with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
@@ -2083,6 +2099,35 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 install_root=self.installed)
 
         self.assertEqual("PLAN_DECISION_STALE", raised.exception.code)
+        self.assertFalse(archive_dir.exists())
+        self.assertFalse(pointer.exists())
+        self.assertEqual(
+            orchestration_before,
+            loom_reliability.exact_tree_manifest(orchestration_dir))
+        self.assertEqual(
+            plan_before,
+            loom_reliability.exact_tree_manifest(self.repo / "plans"))
+
+    def test_bound_revision_archive_waits_for_action_admission(self):
+        """Break caught: private revision history is written before action admission."""
+        action, completed = self.complete_machine_authored_plan()
+        archive_dir = Path(action["action_path"]).parent / "plan-revisions"
+        self.assertFalse(archive_dir.exists())
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "ACTION_ADMISSION_FAILED", "injected admission refusal")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+                loom_orchestrator.revise(
+                    action["action_path"],
+                    presentation_sha256=completed[
+                        "plan_presentation"]["presentation_sha256"],
+                    request="Change one verification check.",
+                    owner_home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("ACTION_ADMISSION_FAILED", raised.exception.code)
         self.assertFalse(archive_dir.exists())
 
     def test_exact_plan_start_returns_a_bounded_completion_contract(self):
