@@ -35,13 +35,6 @@ _PLANNING_STORAGE_KEY_MAP = {
     "autonomy_default": "autonomy",
     "stack_preference": "stack",
 }
-_PLANNING_ENUM_VALUES = {
-    "autonomy": {"A0", "A1", "A2", "A3"},
-    "decision_batch_size": {
-        "one-at-a-time", "small-batch", "gate-batch", "all-at-once"},
-    "report_detail": {"concise", "balanced", "detailed"},
-}
-_SAFE_PREFERENCE_VALUE = re.compile(r"[a-z0-9][a-z0-9._-]{0,79}")
 _PROJECT_ID = re.compile(r"p-[0-9a-f]{32}")
 
 
@@ -74,12 +67,14 @@ def _validate_planning_scope(*, domains, project_id, tier, intent):
 
 
 def _valid_planning_preference_value(key, value):
-    if not isinstance(value, str) or not value or len(value) > 80:
-        return False
-    allowed = _PLANNING_ENUM_VALUES.get(key)
-    if allowed is not None:
-        return value in allowed
-    return key == "stack" and _SAFE_PREFERENCE_VALUE.fullmatch(value) is not None
+    return key in _PLANNING_PREFERENCE_KEYS \
+        and isinstance(value, str) \
+        and value == value.strip() \
+        and 1 <= len(value) <= 200 \
+        and "\n" not in value \
+        and "\r" not in value \
+        and all(character.isprintable() for character in value) \
+        and (key == "stack" or loom_memory.RAW_PATH_RE.search(value) is None)
 
 
 def _validate_planning_preference_record(record, *, domains, risk_class):

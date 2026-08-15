@@ -38,6 +38,7 @@ import loom_proofline  # noqa: E402
 import loom_reliability  # noqa: E402
 import loom_release  # noqa: E402
 import loom_session  # noqa: E402
+import loom_windows_acl  # noqa: E402
 from test_loom_vault_v11 import TestCrypto  # noqa: E402
 
 
@@ -987,6 +988,37 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 self.assertEqual("non-authoritative-plan", result["code"])
                 self.assertIn(domain, result["user_message"])
                 self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+        self.assertNotEqual(messages[0], messages[1])
+
+    def test_inline_recovery_distinguishes_same_domain_semantic_outcomes(self):
+        """Break caught: same-domain recovery loses the requested outcome."""
+        before = loom_reliability.deterministic_manifest(self.repo)
+        cases = (
+            (
+                "Plan an accounting reconciliation workflow with no project writes. "
+                "Private marker cobalt-heron and owner value violet-7.",
+                "reconciliation", ("cobalt-heron", "violet-7"),
+            ),
+            (
+                "Plan an accounting tax-period calendar and filed-period lock with no "
+                "project writes. Private marker silver-marten and owner value amber-9.",
+                "tax-period", ("silver-marten", "amber-9"),
+            ),
+        )
+        messages = []
+        for request, expected_focus, private_values in cases:
+            with self.subTest(expected_focus=expected_focus):
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                message = result["user_message"]
+                messages.append(message)
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertIn(expected_focus, message.casefold())
+                for private_value in private_values:
+                    self.assertNotIn(private_value, json.dumps(result, sort_keys=True))
                 self.assertEqual(
                     before, loom_reliability.deterministic_manifest(self.repo))
         self.assertNotEqual(messages[0], messages[1])
@@ -2968,6 +3000,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
         candidate_pack = loom_orchestrator._action_pack_root(new_action)
         self.assertFalse(candidate_pack.is_relative_to(self.repo))
         self.assertTrue(candidate_pack.is_relative_to(self.home))
+        if os.name == "nt":
+            loom_windows_acl.verify_private_directory(candidate_pack)
+        else:
+            self.assertEqual(0, candidate_pack.stat().st_mode & 0o077)
         world_after = loom_orchestrator.loom_survey.workspace_snapshot(
             self.repo, exclude_prefixes=("plans",)).state.state_hash
         self.assertEqual(world_before, world_after)
@@ -2991,6 +3027,42 @@ class ProductionOrchestratorTests(unittest.TestCase):
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
         self.assertEqual("execute-complete", continued["code"])
+
+    def test_candidate_private_stage_reliability_failures_preserve_predecessor(self):
+        """Break caught: candidate staging bypasses private ACL/race refusal."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        predecessor = loom_plan_store.resolve(self.repo)
+        before = loom_reliability.deterministic_manifest(self.repo)
+        reliability_failures = (
+            "owner-private ACL cannot be proven",
+            "candidate ancestor is a symlink or junction",
+            "candidate ancestor identity changed",
+            "private stage leaf already exists; refusing to reuse it",
+        )
+        for index, failure in enumerate(reliability_failures, 1):
+            with self.subTest(failure=failure), mock.patch.object(
+                    loom_reliability, "reserve_private_stage_leaf",
+                    side_effect=loom_reliability.ReliabilityError(failure)):
+                with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+                    loom_orchestrator.invoke(
+                        request=(
+                            "Plan a new standalone documentation feature for README.md, "
+                            "not a repair or continuation. Planning only; do not implement."),
+                        cwd=self.repo, home=self.home, install_root=self.installed,
+                        transport_invocation_id=(
+                            f"00000000-0000-4000-8000-{index:012d}"))
+                self.assertEqual("BASELINE_STAGING_CONFLICT", caught.exception.code)
+                self.assertEqual(
+                    predecessor.generation_id,
+                    loom_plan_store.resolve(self.repo).generation_id)
+                self.assertEqual(before, loom_reliability.deterministic_manifest(self.repo))
+        pointer = loom_orchestrator._read_active_pointer(
+            Path(started["action_path"]).parent)
+        self.assertEqual(started["action_id"], pointer["action_id"])
 
     def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
         """Break caught: changed-world recovery requires parser-specific wording."""

@@ -24,7 +24,7 @@ STATE_ERRORS = {
     "CORRUPT_LIFECYCLE",
 }
 PROHIBITIONS = {
-    "implementation", "mutation", "project-write", "repair", "continuation",
+    "implementation", "mutation", "repair", "continuation",
     "new-work",
 }
 RELATIONS = {
@@ -97,7 +97,7 @@ def resolve_planning_disposition(
             or any(item not in PROHIBITIONS for item in closed_prohibitions):
         raise ValueError("planning disposition prohibition is unknown")
 
-    if "project-write" in closed_prohibitions or "mutation" in closed_prohibitions:
+    if "mutation" in closed_prohibitions:
         return PlanningDisposition(
             "unclear", "inline-recovery", True, "PROJECT_WRITES_PROHIBITED")
     if state_error in INVALID_ERRORS or generation_phase == "invalid":

@@ -1812,12 +1812,17 @@ def _seed_stage(action_path, action, prepared):
     try:
         target_identity = loom_reliability.observe_root_identity(target)
         if _uses_owner_candidate_stage(action):
-            loom_session._ensure_private_directory(stage.parent)
-            stage_parent_identity = loom_reliability.observe_root_identity(stage.parent)
-            reserved = loom_reliability.reserve_directory_leaf(
-                stage.parent, stage.name, mode=0o700)
+            private_root = _orchestration_directory(
+                action["owner_home"], action["instance_id"],
+                action["project_id"])
+            relative_parent = stage.parent.relative_to(private_root)
+            private_parent = loom_reliability.ensure_private_directory(
+                private_root, relative_parent.parts)
+            stage_parent_identity = loom_reliability.observe_root_identity(private_parent)
+            reserved = loom_reliability.reserve_private_stage_leaf(
+                private_parent, [stage.name])
             loom_reliability._validate_directory_object_continuity(
-                stage.parent, stage_parent_identity)
+                private_parent, stage_parent_identity)
         else:
             reserved = loom_reliability.reserve_directory_leaf(
                 target, stage.name, mode=0o755)
@@ -8187,9 +8192,15 @@ def _rebind_useful_planning_prepared(prepared):
         "recommendation": "",
         "block_reason": None,
     })
-    route["evidence"] = list(dict.fromkeys([
-        *route["evidence"][:15], "useful-planning-recovery",
-    ]))
+    semantic = [
+        item for item in route["evidence"]
+        if item.startswith(loom_runtime.SEMANTIC_OUTCOME_EVIDENCE_PREFIX)]
+    ordinary = [
+        item for item in route["evidence"]
+        if not item.startswith(loom_runtime.SEMANTIC_OUTCOME_EVIDENCE_PREFIX)
+        and item != "useful-planning-recovery"]
+    route["evidence"] = [
+        *ordinary[:14], *semantic[:1], "useful-planning-recovery"]
     values["route_contract"] = route
     return loom_runtime.PreparedInvocation.build(
         **values, operation_fingerprint=prepared.operation_fingerprint)
@@ -8206,7 +8217,8 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
     }
     next_actions = {
         "PROJECT_WRITES_PROHIBITED": (
-            "Remove the project-write prohibition and ask Loom to create a persistent plan."),
+            "Remove the persistent project-write restriction and ask Loom to create a "
+            "persistent plan."),
         "LIFECYCLE_AUTHORITY_UNTRUSTED": (
             "Quarantine or repair the lifecycle store, then ask Loom for a fresh plan."),
     }
@@ -8226,16 +8238,23 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
             or consequence not in {"ordinary", "material", "high", "critical"}:
         raise OrchestratorError(
             "DOMAIN_CONTRACT_INVALID", "inline planning semantics are unavailable")
+    try:
+        semantic_outcome = loom_runtime.semantic_outcome_from_evidence(
+            prepared.route_contract["evidence"], domains)
+    except RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            f"sealed semantic outcome is invalid: {exc}") from exc
     return (
         "NON-AUTHORITATIVE PLAN\n"
         f"Understood outcome: Prepare a {prepared.route_contract['tier']}-tier "
-        f"non-authoritative plan for the sealed {scope} scope in the resolved "
-        f"{inspection['state']} project boundary.\n"
+        f"non-authoritative plan focused on {semantic_outcome} for the sealed "
+        f"{scope} scope in the resolved {inspection['state']} project boundary.\n"
         "Proposed sequence:\n"
         f"1. Use the sealed project inspection and {coverage} {scope} domain coverage "
         "to bound current facts.\n"
-        f"2. Define {scope} constraints, {consequence}-consequence acceptance evidence, "
-        "and failure stops.\n"
+        f"2. Define constraints and {consequence}-consequence acceptance evidence for "
+        f"the sealed {semantic_outcome} focus.\n"
         f"3. Order the {scope} work into bounded reviewed steps before any execution.\n"
         f"Known constraints or uncertainty: {constraints[reason_code]}\n"
         f"Reason code: {reason_code}\n"
@@ -8469,7 +8488,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     if planning_mode == "inline-recovery":
         inline_recovery_reason = (
             "PROJECT_WRITES_PROHIBITED"
-            if "project-write" in request_control["prohibitions"]
+            if "mutation" in request_control["prohibitions"]
             else "LIFECYCLE_AUTHORITY_UNTRUSTED")
     if inline_recovery_reason is not None:
         reason_code = inline_recovery_reason

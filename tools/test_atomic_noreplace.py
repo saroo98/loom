@@ -607,6 +607,91 @@ class PrivateDirectoryTests(unittest.TestCase):
         self.assertFalse((self.root / ".loom-recovery").exists())
         self.assertTrue((displaced / ".loom-recovery").is_dir())
 
+    def test_private_stage_rejects_unsafe_and_preexisting_leaf(self):
+        """Break caught: a candidate reuses attacker-selected or ambiguous storage."""
+        private = loom_reliability.ensure_private_directory(
+            self.root, ("candidate-stages",))
+        for components in (
+                ("..", "plans"), ("nested/path",), ("space name",)):
+            with self.subTest(components=components):
+                with self.assertRaises(loom_reliability.ReliabilityError):
+                    loom_reliability.reserve_private_stage_leaf(
+                        private, components)
+        parent = loom_reliability.ensure_private_directory(
+            private, ("action-123",))
+        leaf = parent / "plans"
+        leaf.mkdir()
+        sentinel = leaf / "owner.txt"
+        sentinel.write_text("preserve", encoding="utf-8")
+
+        with self.assertRaisesRegex(
+                loom_reliability.ReliabilityError, "already exists"):
+            loom_reliability.reserve_private_stage_leaf(
+                private, ("action-123", "plans"))
+
+        self.assertEqual("preserve", sentinel.read_text(encoding="utf-8"))
+
+    def test_private_stage_rejects_redirected_ancestor(self):
+        """Break caught: a candidate stage traverses a symlink or junction."""
+        private = loom_reliability.ensure_private_directory(
+            self.root, ("candidate-stages",))
+        outside = self.base / "outside-stage"
+        outside.mkdir()
+        redirected = private / "redirected"
+        try:
+            os.symlink(outside, redirected, target_is_directory=True)
+        except OSError as exc:
+            self.skipTest(f"directory links unavailable: {exc}")
+
+        with self.assertRaises(loom_reliability.ReliabilityError):
+            loom_reliability.reserve_private_stage_leaf(
+                private, ("redirected", "plans"))
+
+        self.assertEqual([], list(outside.iterdir()))
+
+    def test_private_stage_detects_ancestor_swap(self):
+        """Break caught: a candidate stage follows a replaced private root."""
+        private = loom_reliability.ensure_private_directory(
+            self.root, ("candidate-stages",))
+        displaced = self.base / "displaced-candidate-stages"
+        if os.name == "nt":
+            real_create = loom_reliability._windows_create_or_open_relative_directory
+            injected = False
+
+            def swap_root(parent_handle, component, security_descriptor):
+                nonlocal injected
+                if not injected:
+                    injected = True
+                    private.rename(displaced)
+                    private.mkdir()
+                return real_create(
+                    parent_handle, component, security_descriptor)
+
+            patcher = mock.patch(
+                "loom_reliability._windows_create_or_open_relative_directory",
+                side_effect=swap_root)
+        else:
+            real_mkdir = os.mkdir
+            injected = False
+
+            def swap_root(component, mode=0o777, *, dir_fd=None):
+                nonlocal injected
+                if not injected and dir_fd is not None:
+                    injected = True
+                    os.rename(private, displaced)
+                    real_mkdir(private)
+                return real_mkdir(component, mode, dir_fd=dir_fd)
+
+            patcher = mock.patch(
+                "loom_reliability.os.mkdir", side_effect=swap_root)
+
+        with patcher:
+            with self.assertRaises(loom_reliability.ReliabilityError):
+                loom_reliability.reserve_private_stage_leaf(
+                    private, ("action-123", "plans"))
+
+        self.assertFalse((private / "action-123" / "plans").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

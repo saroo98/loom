@@ -575,6 +575,70 @@ class MemoryLifecycleTests(unittest.TestCase):
                 preferences=[preference], domains=("accounting",),
                 project_id=self.project, tier="M", intent="plan")
 
+    def test_planning_projection_accepts_existing_typed_vault_values(self):
+        """Break caught: planning invents enums that reject valid historical memory."""
+        owner_id = "00000000-0000-4000-8000-000000005130"
+
+        class Vault:
+            def identity(self):
+                return {"owner_vault_id": owner_id}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return []
+
+        adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
+        adapter.vault = Vault()
+        fixed_vault_values = (
+            (
+                _planning_preference(
+                    "00000000-0000-4000-8000-000000005131",
+                    "report_detail", "careful"),
+                "careful",
+            ),
+            (
+                _planning_preference(
+                    "00000000-0000-4000-8000-000000005132",
+                    "stack", "Python 3.13 + PostgreSQL", domain="accounting"),
+                "Python 3.13 + PostgreSQL",
+            ),
+            (
+                _planning_preference(
+                    "00000000-0000-4000-8000-000000005133",
+                    "autonomy", "maximum", task_class="plan",
+                    risk_class="medium"),
+                "maximum",
+            ),
+            (
+                _planning_preference(
+                    "00000000-0000-4000-8000-000000005134",
+                    "autonomy", "careful", task_class="plan",
+                    risk_class="medium"),
+                "careful",
+            ),
+        )
+
+        for preference, expected in fixed_vault_values:
+            with self.subTest(value=expected):
+                projection = adapter.project_planning_preferences(
+                    preferences=[preference], domains=("accounting",),
+                    project_id=self.project, tier="M", intent="plan")
+                self.assertEqual(
+                    expected,
+                    projection["public_preferences"][0]["effective_value"])
+
+        malformed = _planning_preference(
+            "00000000-0000-4000-8000-000000005135",
+            "report_detail", "careful\nprivate-value")
+        local_path = _planning_preference(
+            "00000000-0000-4000-8000-000000005136",
+            "report_detail", "C:\\Users\\owner\\private-style")
+        for invalid in (malformed, local_path):
+            with self.subTest(invalid=invalid["effective_value"]):
+                with self.assertRaises(loom_vault_adapter.VaultAdapterError):
+                    adapter.project_planning_preferences(
+                        preferences=[invalid], domains=("accounting",),
+                        project_id=self.project, tier="M", intent="plan")
+
 
 if __name__ == "__main__":
     unittest.main()

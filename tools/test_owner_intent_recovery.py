@@ -235,6 +235,10 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
         self.assertEqual(
             [], [item for item in control["evidence"]
                  if item.startswith("planning-")])
+        zero_write_wording = loom_orchestrator._sealed_request_control(
+            "Revise the exact reviewed plan with no project writes.",
+            revision_context={})
+        self.assertNotIn("mutation", zero_write_wording["prohibitions"])
 
     def test_project_write_prohibition_is_sealed_by_runtime_not_orchestrator(self):
         """Break caught: orchestration reclassifies raw prompt text after preparation."""
@@ -247,6 +251,7 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
             "Plan this change with no project writes.",
             "Plan this change without touching any files.",
             "Plan this change and leave the project byte-for-byte unchanged.",
+            "Plan without modifying generated files and with no project writes.",
         )
         allowed = (
             "Plan a tool that does not modify files.",
@@ -260,16 +265,22 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
             with self.subTest(prohibited=request):
                 control = loom_runtime.request_control(
                     request, state={"generation_phase": "absent"})
-                self.assertIn("project-write", control["prohibitions"])
+                self.assertIn("mutation", control["prohibitions"])
+                self.assertNotIn("project-write", control["prohibitions"])
                 self.assertIn("planning-inline-recovery", control["evidence"])
                 self.assertEqual(
                     "inline-recovery",
                     loom_orchestrator._extract_planning_mode(control))
+                report = loom_lint.Report()
+                loom_lint.validate_schema(
+                    report, "request-control-v1.schema.json", control,
+                    "request-control-v1.schema.json")
+                self.assertEqual([], report.errors)
         for request in allowed:
             with self.subTest(allowed=request):
                 control = loom_runtime.request_control(
                     request, state={"generation_phase": "absent"})
-                self.assertNotIn("project-write", control["prohibitions"])
+                self.assertNotIn("planning-inline-recovery", control["evidence"])
 
     def test_historical_request_control_v1_without_project_write_fact_stays_valid(self):
         """Break caught: extending the closed prohibition set invalidates v1 evidence."""

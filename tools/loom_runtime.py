@@ -1186,8 +1186,76 @@ _PROJECT_WRITE_PROHIBITION_PATTERNS = tuple(re.compile(pattern, re.I) for patter
 
 
 def _project_write_prohibited(normalized_request):
-    return any(pattern.search(normalized_request)
+    scoped = re.sub(
+        r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
+        r"(?:any\s+)?generated\s+files?\b",
+        " scoped-generated-file-exclusion ", normalized_request)
+    return any(pattern.search(scoped)
                for pattern in _PROJECT_WRITE_PROHIBITION_PATTERNS)
+
+
+SEMANTIC_OUTCOME_EVIDENCE_PREFIX = "semantic-outcome-v1."
+_SEMANTIC_OUTCOME_STOP_WORDS = {
+    "a", "an", "and", "for", "of", "or", "plan", "the", "to", "with",
+    "workflow", "project", "change", "feature", "only", "do", "not",
+}
+
+
+def semantic_outcome_evidence(request, domains_result):
+    """Project request semantics to one closed catalog identity, never prompt text."""
+    if not isinstance(domains_result, dict):
+        raise RuntimeError("semantic outcome domains are invalid")
+    domains = domains_result.get("active_task_domains") or ["unclassified"]
+    if not isinstance(domains, list) or not domains \
+            or any(not isinstance(domain, str) or not ID_RE.fullmatch(domain)
+                   for domain in domains):
+        raise RuntimeError("semantic outcome domain scope is invalid")
+    request_terms = set(re.findall(
+        r"[a-z0-9]+", loom_domain.task_language(request))) \
+        - _SEMANTIC_OUTCOME_STOP_WORDS
+    ranked = []
+    for domain in domains:
+        invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
+        for index, label in enumerate(invariants):
+            label_terms = set(re.findall(r"[a-z0-9]+", label.casefold())) \
+                - _SEMANTIC_OUTCOME_STOP_WORDS
+            overlap = request_terms & label_terms
+            if overlap:
+                ranked.append((
+                    -sum(len(term) for term in overlap), -len(overlap),
+                    domain, index))
+    if ranked:
+        _score, _count, domain, index = min(ranked)
+        suffix = str(index)
+    else:
+        domain, suffix = sorted(domains)[0], "generic"
+    return f"{SEMANTIC_OUTCOME_EVIDENCE_PREFIX}{domain}.{suffix}"
+
+
+def semantic_outcome_from_evidence(evidence, domains):
+    """Open one sealed catalog identity to its repository-owned semantic label."""
+    if not isinstance(evidence, (list, tuple)) or not isinstance(domains, (list, tuple)):
+        raise RuntimeError("semantic outcome evidence is invalid")
+    tokens = [item for item in evidence if isinstance(item, str)
+              and item.startswith(SEMANTIC_OUTCOME_EVIDENCE_PREFIX)]
+    if len(tokens) != 1:
+        raise RuntimeError("semantic outcome evidence is missing or duplicated")
+    identity = tokens[0][len(SEMANTIC_OUTCOME_EVIDENCE_PREFIX):]
+    try:
+        domain, suffix = identity.rsplit(".", 1)
+    except ValueError as exc:
+        raise RuntimeError("semantic outcome identity is malformed") from exc
+    if domain not in domains or not ID_RE.fullmatch(domain):
+        raise RuntimeError("semantic outcome identity is outside the sealed domains")
+    invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
+    if suffix == "generic":
+        return f"bounded {domain} deliverable"
+    try:
+        index = int(suffix)
+        label = invariants[index]
+    except (ValueError, IndexError, TypeError) as exc:
+        raise RuntimeError("semantic outcome catalog identity is invalid") from exc
+    return label
 
 
 def request_control(request, state=None, *, host_control=None):
@@ -1247,6 +1315,10 @@ def request_control(request, state=None, *, host_control=None):
             r"\b(?:new|fresh)\s+(?:standalone\s+)?(?:feature|action|work|task|plan)\b|"
             r"\bstandalone\s+(?:feature|action|work|task)\b|"
             r"\bnot\s+(?:a\s+)?(?:repair|continuation)\b", text))
+        relation_text = re.sub(
+            r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
+            r"(?:any\s+)?generated\s+files?\b",
+            " scoped-generated-file-exclusion ", text)
         if explicit_quarantine:
             relation = "quarantine-generation"
             evidence.append("explicit-quarantine")
@@ -1278,7 +1350,7 @@ def request_control(request, state=None, *, host_control=None):
                 r"^(?:please\s+)?(?:read-only|verify only)\b|"
                 r"\bmake no changes\b|"
                 r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
-                r"\bwithout\s+modifying\b", text):
+                r"\bwithout\s+modifying\b", relation_text):
             relation = "read-only"
             evidence.append("read-only-control")
         elif primary == "cancel":
@@ -1322,14 +1394,14 @@ def request_control(request, state=None, *, host_control=None):
     if re.search(r"\b(?:do not|don't|never|no)\s+(?:implement|execute|start)\b|"
                  r"\bno implementation\b", normalized):
         prohibitions.append("implementation")
-    if re.search(
+    mutation_prohibited = bool(re.search(
             r"\b(?:make no changes|do not modify|read-only|no mutation)\b|"
             r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
-            r"\bwithout\s+modifying\b", normalized):
+            r"\bwithout\s+modifying\b", normalized))
+    if primary == "plan" and host_control is None:
+        mutation_prohibited = _project_write_prohibited(normalized)
+    if mutation_prohibited:
         prohibitions.append("mutation")
-    if host_control is None and primary == "plan" \
-            and _project_write_prohibited(normalized):
-        prohibitions.append("project-write")
     if re.search(r"\bnot\s+(?:a\s+)?repair\b|\bdo not repair\b", normalized):
         prohibitions.append("repair")
     if re.search(r"\bnot\s+(?:a\s+)?continuation\b|\bdo not continue\b", normalized):
@@ -1384,7 +1456,7 @@ def validate_request_control(value):
         "repair-active", "read-only", "cancel-generation",
         "supersede-generation", "quarantine-generation", "unclear"}
     prohibition_values = {
-        "implementation", "mutation", "project-write", "repair", "continuation",
+        "implementation", "mutation", "repair", "continuation",
         "new-work"}
     if not isinstance(value, dict) or set(value) != fields \
             or value.get("schema_version") != 1 \
@@ -2984,6 +3056,12 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "evidence": ["invalid-config"],
             "block_reason": _config_block_reason(config_error),
         })
+    if decision["intent"] == "plan":
+        outcome_evidence = semantic_outcome_evidence(request, domains_result)
+        prior_evidence = [
+            item for item in decision["evidence"]
+            if not item.startswith(SEMANTIC_OUTCOME_EVIDENCE_PREFIX)]
+        decision["evidence"] = [*prior_evidence[:15], outcome_evidence]
     _synchronize_block_reason(
         decision,
         category=("configuration" if config_error else
