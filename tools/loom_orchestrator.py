@@ -8766,6 +8766,7 @@ def _unresolved_lifecycle_envelope(directory):
         raise OrchestratorError(
             "AUTHORIZED_CONTINUATION_UNAVAILABLE",
             "lifecycle transition evidence exceeds its bound")
+    seen_command_ids = set()
     for path in entries:
         if path.is_symlink() or not path.is_file() or path.suffix != ".json" \
                 or path.stat().st_size > loom_lifecycle_transition.MAX_ENVELOPE_BYTES:
@@ -8783,22 +8784,39 @@ def _unresolved_lifecycle_envelope(directory):
                 return True
             kind = envelope.get("kind")
             if kind == "generation-activation-v1":
+                expected_path = \
+                    loom_lifecycle_transition._activation_envelope_path(
+                        root, command_id)
                 validated = loom_lifecycle_transition._load_activation_envelope(
                     path, command_id)
             elif kind == "successor-activation-v1":
+                expected_path = \
+                    loom_lifecycle_transition._successor_envelope_path(
+                        root, command_id)
                 validated = loom_lifecycle_transition._load_successor_envelope(
                     path, command_id)
             elif kind == "legacy-root-adoption-v1":
+                expected_path = \
+                    loom_lifecycle_transition._legacy_adoption_envelope_path(
+                        root, command_id)
                 validated = loom_lifecycle_transition._load_legacy_adoption_envelope(
                     path, command_id)
             elif kind is None:
                 command = loom_lifecycle_kernel.lifecycle_command(
                     envelope.get("command"))
+                command_id = command.command_id
+                expected_path = loom_lifecycle_transition._envelope_path(
+                    root, command_id)
                 validated = loom_lifecycle_transition._load_existing_envelope(
                     path, command,
                     private_projection=envelope.get("private_projection"))
             else:
                 return True
+            if path.parent != root or expected_path.parent != root \
+                    or path != expected_path \
+                    or command_id in seen_command_ids:
+                return True
+            seen_command_ids.add(command_id)
         except (
                 OSError, UnicodeError, json.JSONDecodeError,
                 loom_lifecycle.LifecycleError,

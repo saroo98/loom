@@ -2274,16 +2274,41 @@ class ProductionOrchestratorTests(unittest.TestCase):
         source_root = Path(started["action_path"]).parent / \
             "lifecycle-transitions"
         source_envelopes = []
+        completed_envelope_paths = []
         for path in source_root.glob("*.json"):
             value = json.loads(path.read_text(encoding="utf-8"))
-            if "kind" not in value and value.get("status") == "completed":
-                source_envelopes.append(value)
+            if value.get("status") == "completed":
+                completed_envelope_paths.append(path)
+                if "kind" not in value:
+                    source_envelopes.append(value)
         self.assertTrue(source_envelopes)
+        self.assertTrue(completed_envelope_paths)
         canonical = source_envelopes[-1]
         probe = self.root / "envelope-probe"
         transitions = probe / "lifecycle-transitions"
         transitions.mkdir(parents=True)
         path = transitions / "probe.json"
+
+        for index, source_path in enumerate(completed_envelope_paths):
+            with self.subTest(kind="renamed completed", source=source_path.name):
+                alias = transitions / f"renamed-{index}.json"
+                alias.write_bytes(source_path.read_bytes())
+                self.assertTrue(
+                    loom_orchestrator._unresolved_lifecycle_envelope(probe))
+                alias.unlink()
+
+        canonical_path = loom_lifecycle_transition._envelope_path(
+            transitions, canonical["command_id"])
+        canonical_bytes = json.dumps(canonical).encode("utf-8") + b"\n"
+        canonical_path.write_bytes(canonical_bytes)
+        self.assertFalse(
+            loom_orchestrator._unresolved_lifecycle_envelope(probe))
+        alias = transitions / "duplicate-command.json"
+        alias.write_bytes(canonical_bytes)
+        self.assertTrue(
+            loom_orchestrator._unresolved_lifecycle_envelope(probe))
+        canonical_path.unlink()
+        alias.unlink()
 
         corrupt_completed = json.loads(json.dumps(canonical))
         corrupt_completed["command_sha256"] = "0" * 64
