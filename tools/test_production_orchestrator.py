@@ -4579,6 +4579,24 @@ class ProductionOrchestratorTests(unittest.TestCase):
             2, len(list(action_directory.glob(
                 "????????-????-????-????-????????????.json"))))
 
+    def test_completed_plan_manifest_only_drift_returns_sealed_stale_block(self):
+        action, _completed = self.complete_machine_authored_plan()
+        manifest = _active_pack(self.repo) / "MANIFEST.md"
+        mutated = manifest.read_bytes() + b"\n<!-- out-of-band manifest drift -->\n"
+        manifest.write_bytes(mutated)
+        action_directory = Path(action["action_path"]).parent
+
+        changed = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("blocked", changed["status"])
+        self.assertEqual("plan_decision_stale", changed["code"])
+        self.assertNotIn("action_id", changed)
+        self.assertNotIn("action_path", changed)
+        self.assertIsNone(loom_orchestrator._read_active_pointer(action_directory))
+        self.assertEqual(mutated, manifest.read_bytes())
+
     def test_medium_whole_accounting_plan_requires_architecture_and_security(self):
         contract = loom_orchestrator._artifact_contract(
             "M", ["accounting", "desktop"],

@@ -9799,6 +9799,27 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         request, expected_plan_decision=expected_plan_decision,
         revision_context=revision_context,
         lifecycle_state=request_control_state)
+    if completed_plan_replay_stale and not prepared.route_contract["blocked"]:
+        values = prepared.to_dict()
+        values.pop("prepared_hash")
+        values["route_contract"] = loom_runtime._synchronize_block_reason(
+            loom_runtime._apply_lifecycle_request_policy(
+                values["route_contract"], {
+                    "generation_phase": "reviewable",
+                    "state_error": "STALE_LIFECYCLE",
+                }, request_control),
+            category="lifecycle")
+        prepared = loom_runtime.PreparedInvocation.build(
+            **values, operation_fingerprint=prepared.operation_fingerprint)
+        opened = loom_session.OpenSession(
+            prepared=prepared,
+            session_id=opened.session_id,
+            operation_id=opened.operation_id,
+            journal_path=opened.journal_path,
+            started_at=opened.started_at,
+            terminal_receipt=opened.terminal_receipt,
+            resolved_terminal_block=opened.resolved_terminal_block,
+        )
     planning_mode = None
     if prepared.intent == "plan" \
             and request_control["explicitness"] != "host-bound":
