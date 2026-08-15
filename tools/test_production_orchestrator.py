@@ -2822,6 +2822,24 @@ class ProductionOrchestratorTests(unittest.TestCase):
             old_generation.generation_id,
             loom_plan_store.resolve(self.repo).generation_id)
 
+    def test_semantic_owner_replanning_recovers_changed_reviewable_generation(self):
+        """Break caught: recovery accepts only a parser-specific replacement phrase."""
+        _plan_action, _planned = self.complete_machine_authored_plan()
+        (self.repo / "external-world.txt").write_text(
+            "out-of-band world change\n", encoding="utf-8")
+
+        replacement = loom_orchestrator.invoke(
+            request=(
+                "The library catalogue now has different accessibility needs. "
+                "Prepare a fresh proposal for the changed situation only; do not "
+                "begin any work."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", replacement["status"])
+        self.assertEqual("plan", replacement["intent"])
+        self.assertIn("prior_generation_transition", replacement)
+        self.assertNotIn("work_order", replacement)
+
     def test_revision_archive_and_encrypted_envelope_are_schema_valid(self):
         action, completed = self.complete_machine_authored_plan()
         prior = completed["plan_presentation"]

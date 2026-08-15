@@ -6,6 +6,51 @@ import loom_runtime
 
 
 class LifecycleIntentMetamorphicTests(unittest.TestCase):
+    def test_semantic_planning_requests_do_not_depend_on_lifecycle_keywords(self):
+        """Break caught: ordinary owner planning language is mistaken for review."""
+        requests = (
+            "For a museum collection portal, outline the work needed to add an "
+            "accessibility search filter. Keep this at the proposal stage; do "
+            "not touch the project.",
+            "Our bakery ordering screen needs a small allergen preference panel. "
+            "Before any work begins, give me a step-by-step approach only.",
+            "I am weighing an extensive migration of our public-health appointment "
+            "service. What would a safe delivery plan look like? No execution.",
+            "Draft an approach for a minor warehouse barcode label adjustment. "
+            "This is for review, not implementation.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                self.assertFalse(decision["blocked"], decision)
+                self.assertEqual("plan", decision["intent"])
+
+    def test_plan_and_execution_contradiction_keeps_a_provisional_plan(self):
+        """Break caught: an owner contradiction silently authorizes implementation."""
+        decision = loom_runtime.resolve_intent(
+            "Plan a school attendance dashboard, then implement it immediately.")
+
+        self.assertFalse(decision["blocked"], decision)
+        self.assertEqual("plan", decision["intent"])
+        self.assertTrue(decision["needs_owner"], decision)
+        self.assertEqual(1, decision["routine_question_count"])
+        self.assertTrue(decision["recommendation"].strip())
+
+    def test_discuss_another_design_never_changes_the_current_plan(self):
+        """Break caught: a negated alternative design request starts lifecycle work."""
+        decision = loom_runtime.resolve_intent(
+            "Discuss another design but do not change the current plan.")
+        control = loom_runtime.request_control(
+            "Discuss another design but do not change the current plan.",
+            state={"generation_phase": "reviewable"})
+
+        self.assertNotEqual("execute", decision["intent"])
+        self.assertNotIn(
+            control["relation"],
+            {"start-exact", "continue-active", "repair-active", "supersede-generation"},
+        )
+
     def test_plan_only_equivalents_ignore_descriptive_build_verbs(self):
         """Break caught: harmless wording changes alter lifecycle authority."""
         requests = [
