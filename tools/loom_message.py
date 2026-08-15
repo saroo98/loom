@@ -258,6 +258,14 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
             "plan", "execute", "repair", "close", "remember", "forget", "undo"}
         undo_status = ("available" if reversible_action_ids else
                        "unavailable" if changes_made else "not-applicable")
+        if low == "non-authoritative-plan" and intent == "plan":
+            summary = (
+                "This is non-authoritative planning and recovery material. No project or "
+                "plan authority was changed, and implementation cannot start from it.")
+            next_action = (
+                "Follow the precise Safe next action in the non-authoritative result.")
+            changes_made, undo_status = False, "not-applicable"
+            result_path = None
     else:
         preference_conflict = "preference-conflict" in low
         state = ("decision-needed" if preference_conflict else

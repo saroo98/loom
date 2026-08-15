@@ -299,18 +299,54 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         self.assertIn("Owner-authored content", manifest.read_text(encoding="utf-8"))
 
     def test_preexisting_owner_plans_are_never_initialized_or_modified(self):
-        _write(self.repo / "plans" / "owner-notes.md", "owner-authored plan\n")
-        before = loom_reliability.exact_tree_manifest(self.repo / "plans")
+        private_marker = "owner-private-marker-never-project"
+        _write(
+            self.repo / "plans" / "owner-notes.md",
+            f"owner-authored plan {private_marker}\n")
+        project_before = loom_reliability.exact_tree_manifest(self.repo)
+        plans_before = loom_reliability.exact_tree_manifest(self.repo / "plans")
+        safe_next_action = (
+            "Quarantine or repair the lifecycle store, then ask Loom for a fresh plan.")
 
-        with self.assertRaisesRegex(
-                loom_orchestrator.OrchestratorError, "PLAN_PACK_EXISTS"):
-            self.invoke()
+        result = self.invoke()
 
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertEqual("plan", result["intent"])
+        self.assertFalse(result["owner_message"]["changes_made"])
+        self.assertEqual("not-applicable", result["owner_message"]["undo_status"])
+        self.assertIsNone(result["owner_message"]["result_path"])
         self.assertEqual(
-            before, loom_reliability.exact_tree_manifest(self.repo / "plans"))
+            "Follow the precise Safe next action in the non-authoritative result.",
+            result["owner_message"]["next_action"])
+        self.assertEqual(
+            1, result["user_message"].count(
+                f"Safe next action: {safe_next_action}"))
+        self.assertNotIn("say continue", json.dumps(result, sort_keys=True).casefold())
+        self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+        self.assertNotIn("action_id", result)
+        self.assertNotIn("action_path", result)
+        self.assertNotIn("generation_id", result)
+        self.assertNotIn("plan_identity", result)
+        self.assertNotIn("result_path", result)
+        self.assertIsNone(
+            result["terminal_authority"]["implementation_authorized"])
+        self.assertEqual(project_before, loom_reliability.exact_tree_manifest(self.repo))
+        self.assertEqual(
+            plans_before, loom_reliability.exact_tree_manifest(self.repo / "plans"))
         self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
         self.assertFalse((self.repo / "plans" / "MANIFEST.md").exists())
         self.assertFalse((self.repo / "plans" / ".loom-small-lifecycle.json").exists())
+        self.assertFalse(
+            (self.repo / "plans" / loom_plan_store.INDEX_NAME).exists())
+        orchestration_directories = list((self.home / "instances").glob(
+            "*/runtime/projects/*/orchestrations"))
+        for directory in orchestration_directories:
+            self.assertEqual(
+                [], list(directory.glob(
+                    "????????-????-????-????-????????????.json")))
+            self.assertFalse(
+                (directory / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
 
     def test_unproven_pack_is_preserved(self):
         scenarios = ["unknown", "file-link", "root-link", "special", "mismatched"]

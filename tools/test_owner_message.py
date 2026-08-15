@@ -48,8 +48,40 @@ class OwnerMessageTests(unittest.TestCase):
         self.assertIsNone(re.search(
             r"\b(?:tier|gate|schema|frontier|lifecycle|receipt|ledger)\b",
             value["human"], re.I))
+        self.assertTrue(value["changes_made"])
+        self.assertEqual("unavailable", value["undo_status"])
+        self.assertEqual(
+            "Review the plan, then say continue when you want the agent to start.",
+            value["next_action"])
         self.assertIn("Your project plan is ready.", value["human"])
         self.assertIn("Open: plans/loom-1.0/MANIFEST.md.", value["human"])
+
+    def test_non_authoritative_plan_exposes_only_its_safe_recovery_route(self):
+        """Break caught: inline recovery is projected as startable plan authority."""
+        private_marker = "owner-private-marker-never-project"
+        value = loom_message.from_session(
+            status="completed", code="non-authoritative-plan", intent="plan", tier="M",
+            owner_input_required=False, reversible_action_ids=[],
+            detail=(
+                "NON-AUTHORITATIVE PLAN\n"
+                f"Private result detail: {private_marker}\n"
+                "Safe next action: Quarantine or repair the lifecycle store, then ask "
+                "Loom for a fresh plan."),
+            receipt_id="session-non-authoritative")
+
+        self.assertFalse(value["changes_made"])
+        self.assertEqual("not-applicable", value["undo_status"])
+        self.assertIsNone(value["result_path"])
+        self.assertEqual(
+            "This is non-authoritative planning and recovery material. No project or "
+            "plan authority was changed, and implementation cannot start from it.",
+            value["summary"])
+        self.assertEqual(
+            "Follow the precise Safe next action in the non-authoritative result.",
+            value["next_action"])
+        self.assertNotIn("say continue", value["human"].casefold())
+        self.assertNotIn(private_marker, value["human"])
+        loom_message.validate(value)
 
     def test_current_completed_message_explains_the_actual_operation(self):
         value = loom_message.from_session(
