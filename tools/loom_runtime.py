@@ -1893,30 +1893,50 @@ def promote_prepared_tier(
         raise RuntimeError("tier promotion must select a strictly higher supported tier")
     if not isinstance(evidence, str) or not ID_RE.fullmatch(evidence):
         raise RuntimeError("tier promotion evidence must be a safe identifier")
+    if type(preserve_evidence_suffix) is not tuple:
+        raise RuntimeError("tier promotion evidence suffix must be an exact tuple")
     route = _thaw(prepared.route_contract)
     route["tier"] = tier
-    if not isinstance(preserve_evidence_suffix, tuple) \
-            or not preserve_evidence_suffix \
-            or list(route["evidence"][-len(preserve_evidence_suffix):]) \
-            != list(preserve_evidence_suffix):
-        if preserve_evidence_suffix:
-            raise RuntimeError("tier promotion evidence suffix is not sealed")
+    if not preserve_evidence_suffix:
         route["evidence"] = list(dict.fromkeys([
             *route["evidence"][:15], evidence,
         ]))
     else:
+        if not all(
+                isinstance(item, str) and ID_RE.fullmatch(item)
+                for item in preserve_evidence_suffix) \
+                or len(set(preserve_evidence_suffix)) \
+                != len(preserve_evidence_suffix):
+            raise RuntimeError("tier promotion evidence suffix is noncanonical")
+        if list(route["evidence"][-len(preserve_evidence_suffix):]) \
+                != list(preserve_evidence_suffix):
+            raise RuntimeError("tier promotion evidence suffix is not sealed")
+        prefix = route["evidence"][:-len(preserve_evidence_suffix)]
+        if set(prefix) & set(preserve_evidence_suffix) \
+                or evidence in route["evidence"]:
+            raise RuntimeError("tier promotion evidence suffix collides")
         semantic = validate_semantic_outcome_evidence(
             route["evidence"], prepared.domains, required=False)
         semantic_token = semantic["token"] if semantic is not None else None
-        prefix = route["evidence"][:-len(preserve_evidence_suffix)]
         ordinary = [item for item in prefix if item != semantic_token]
         reserved = [
-            evidence, *([semantic_token] if semantic_token is not None else []),
+            evidence, *([semantic_token] if semantic_token is not None
+                         and semantic_token not in preserve_evidence_suffix else []),
             *preserve_evidence_suffix,
         ]
+        if len(reserved) > 16:
+            raise RuntimeError("tier promotion evidence suffix exceeds the route bound")
         route["evidence"] = list(dict.fromkeys([
             *ordinary[:16 - len(reserved)], *reserved,
         ]))
+        final_evidence = route["evidence"]
+        if len(final_evidence) > 16 \
+                or final_evidence.count(evidence) != 1 \
+                or semantic_token is not None \
+                and final_evidence.count(semantic_token) != 1 \
+                or final_evidence[-len(preserve_evidence_suffix):] \
+                != list(preserve_evidence_suffix):
+            raise RuntimeError("tier promotion evidence postconditions failed")
     _validate_route(route, schema_version=prepared.schema_version)
     values = prepared.to_dict()
     values.pop("prepared_hash")
