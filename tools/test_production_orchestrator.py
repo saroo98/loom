@@ -2785,6 +2785,43 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotEqual(
             old_generation.generation_id, new_action["generation_id"])
 
+    def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
+        """Break caught: changed-world recovery requires parser-specific wording."""
+        _plan_action, _planned = self.complete_machine_authored_plan()
+        old_generation = loom_plan_store.resolve(self.repo)
+        (self.repo / "external-world.txt").write_text(
+            "out-of-band world change\n", encoding="utf-8")
+
+        replacement = loom_orchestrator.invoke(
+            request=(
+                "Create and present a fresh replacement plan reviewed against the "
+                "current world, explicitly superseding the stale unstarted plan "
+                "generation. Do not implement."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", replacement["status"])
+        self.assertEqual("plan", replacement["intent"])
+        _new_path, sealed_replacement, _security = \
+            loom_orchestrator._read_action(
+                replacement["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        # The explicit supersession is committed first.  The successor action
+        # is then sealed against the resulting terminal predecessor as new work.
+        self.assertEqual(
+            "new",
+            sealed_replacement["request_control"]["relation"])
+        self.assertEqual(
+            "generation-superseded",
+            replacement["prior_generation_transition"]["code"])
+        old_ledger = json.loads(
+            (old_generation.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(
+            "generation-superseded", old_ledger["events"][-1]["event_type"])
+        self.assertEqual(
+            old_generation.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
     def test_revision_archive_and_encrypted_envelope_are_schema_valid(self):
         action, completed = self.complete_machine_authored_plan()
         prior = completed["plan_presentation"]

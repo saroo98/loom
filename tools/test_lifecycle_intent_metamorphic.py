@@ -20,6 +20,47 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
         self.assertTrue(all(not item["blocked"] for item in decisions), decisions)
         self.assertEqual({"plan"}, {item["intent"] for item in decisions})
 
+    def test_replacement_plan_only_equivalents_remain_planning_controls(self):
+        """Break caught: plan modifiers turn a planning request into implementation."""
+        requests = [
+            "Create and present a fresh replacement plan. Do not implement.",
+            "Create a tracker, but only produce a fresh replacement plan. "
+            "Do not implement.",
+            "Prepare an updated superseding plan only; do not execute it.",
+        ]
+
+        decisions = [loom_runtime.resolve_intent(value) for value in requests]
+
+        self.assertTrue(all(not item["blocked"] for item in decisions), decisions)
+        self.assertEqual({"plan"}, {item["intent"] for item in decisions})
+
+    def test_reviewable_explicit_replacement_plan_is_a_supersession(self):
+        """Break caught: explicit replacement authority degrades to an unclear relation."""
+        control = loom_runtime.request_control(
+            "Create and present a fresh replacement plan reviewed against the "
+            "current world, explicitly superseding the stale unstarted plan "
+            "generation. Do not implement.",
+            state={"generation_phase": "reviewable"},
+        )
+
+        self.assertFalse(control["blocked"])
+        self.assertEqual("plan", control["primary_operation"])
+        self.assertEqual("supersede-generation", control["relation"])
+        self.assertEqual(["implementation"], control["prohibitions"])
+        self.assertIn("explicit-supersession", control["evidence"])
+
+    def test_negated_replacement_plan_does_not_authorize_supersession(self):
+        """Break caught: a negated plan request becomes lifecycle authority."""
+        for request in (
+                "Do not create a replacement plan.",
+                "Never present a replacement plan."):
+            with self.subTest(request=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertNotEqual("supersede-generation", control["relation"])
+                self.assertNotIn("explicit-supersession", control["evidence"])
+
     def test_real_plan_and_implementation_contradiction_still_blocks(self):
         """Break caught: parser improvement accidentally makes authority permissive."""
         decision = loom_runtime.resolve_intent(

@@ -542,11 +542,13 @@ _POSITIVE_SOFTWARE_CLAUSE_RE = re.compile(
     r"remove|correct\s+(?!(?:what you learned|my preference|that preference|"
     r"the preference)\b))\b")
 _PLAN_DELIVERABLE_RE = re.compile(
-    r"\b(?:produce|create|draft|write|generate|prepare|return|give\s+me)\s+"
+    r"\b(?:produce|create|draft|write|generate|prepare|present|return|give\s+me)\s+"
     r"(?:(?:exactly|only)\s+)?"
     r"(?:(?:one|a|an|the)\s+)?"
-    r"(?:(?:reviewable|detailed|small|release-ready|implementation|coding|"
-    r"project|research|writing|research-and-writing)\s+|and\s+){0,6}plan\b")
+    r"(?:(?:complete|current-world|detailed|fresh|inline|new|owner-reviewed|"
+    r"release-ready|replacement|reviewable|revised|small|superseding|updated|"
+    r"implementation|coding|project|research|writing|research-and-writing)\s+|"
+    r"and\s+){0,6}plan\b")
 _PLAN_REPORTING_REQUIREMENT_RE = re.compile(
     r"^(?:preserve\s+(?:and\s+)?)?report\b"
     r"(?=[^.!?;]{0,200}\b(?:observable|generated|produced|refusal|timeout|"
@@ -1188,7 +1190,17 @@ def request_control(request, state=None, *, host_control=None):
             and re.search(r"\b(?:invalid|corrupt|mixed|blocking)\b", text))
         if explicit_quarantine:
             primary = "recover"
-        explicit_new = bool(re.search(
+        explicit_supersession = bool(re.search(
+            r"\b(?:explicitly\s+)?(?:supersede|superseding|replace|replacing)\b"
+            r"[^.!?;\r\n]{0,120}\b(?:plan\s+)?generation\b|"
+            r"\b(?:fresh|new|updated)?\s*replacement\s+(?:action|plan)\b",
+            text)) and not bool(re.search(
+                r"\b(?:do not|don't|never)\s+(?:ever\s+)?(?:supersede|replace)\b|"
+                r"\b(?:do not|don't|never)\s+(?:ever\s+)?"
+                r"(?:create|draft|generate|prepare|present|produce|write)\b"
+                r"[^.!?;\r\n]{0,96}\breplacement\s+(?:action|plan)\b",
+                text))
+        explicit_new = explicit_supersession or bool(re.search(
             r"\b(?:new|fresh)\s+standalone\b|"
             r"\b(?:new|fresh)\s+(?:standalone\s+)?(?:feature|action|work|task|plan)\b|"
             r"\bstandalone\s+(?:feature|action|work|task)\b|"
@@ -1207,7 +1219,9 @@ def request_control(request, state=None, *, host_control=None):
                 "supersede-generation"
                 if state.get("generation_phase") in {"reviewable", "active"}
                 else "new")
-            evidence.append("explicit-new")
+            evidence.append(
+                "explicit-supersession"
+                if explicit_supersession else "explicit-new")
         elif intent == "repair" or re.search(
                 r"\b(?:repair|fix)\b.{0,80}\b(?:active|current)\b|"
                 r"\b(?:active|current)\b.{0,80}\b(?:repair|fix)\b|"
