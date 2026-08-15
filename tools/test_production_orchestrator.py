@@ -2116,6 +2116,127 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             "--", contract["evidence_capture"]["verification_argv_separator"])
 
+    def test_authorized_continuation_is_closed_self_bound_and_non_authorizing(self):
+        """Break caught: a blocked deviation either dead-ends or grants new authority."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        action_path, sealed_action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        resolved = loom_plan_store.resolve(self.repo)
+        before_index = (
+            self.repo / "plans" / loom_plan_store.INDEX_NAME).read_bytes()
+        before_ledger = (resolved.generation_root / "lifecycle.json").read_bytes()
+        before_action = action_path.read_bytes()
+
+        continuation = loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual({
+            "schema_version", "authority_effect", "project_id", "generation_id",
+            "active_action_id", "plan_semantics_sha256",
+            "lifecycle_state_sha256", "observed_world_sha256",
+            "work_order_id", "outcome_sha256", "allowed_touches",
+            "acceptance_sha256", "negative_acceptance_sha256",
+            "evidence_requirements_sha256", "rejection_code",
+            "safe_next_operation", "continuation_sha256",
+        }, set(continuation))
+        self.assertEqual("none", continuation["authority_effect"])
+        self.assertEqual("WO-001", continuation["work_order_id"])
+        self.assertEqual(["src/app.py"], continuation["allowed_touches"])
+        self.assertEqual("resume-exact-action", continuation["safe_next_operation"])
+        unsigned = {
+            key: value for key, value in continuation.items()
+            if key != "continuation_sha256"
+        }
+        expected_digest = hashlib.sha256(json.dumps(
+            unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+            allow_nan=False).encode("utf-8")).hexdigest()
+        self.assertEqual(expected_digest, continuation["continuation_sha256"])
+        self.assertEqual(
+            continuation,
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, continuation,
+                owner_home=self.home, install_root=self.installed))
+        self.assertEqual(
+            before_index,
+            (self.repo / "plans" / loom_plan_store.INDEX_NAME).read_bytes())
+        self.assertEqual(
+            before_ledger,
+            (resolved.generation_root / "lifecycle.json").read_bytes())
+        self.assertEqual(before_action, action_path.read_bytes())
+        reopened = loom_orchestrator._pending_action_result(sealed_action)
+        self.assertEqual(started["action_id"], reopened["action_id"])
+        self.assertEqual("WO-001", reopened["work_order"])
+
+    def test_authorized_continuation_rejects_forged_cross_project_and_stale_values(self):
+        """Break caught: a stale or cross-project projection is treated as authority."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        _path, sealed_action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        continuation = loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed)
+
+        malformed = {**continuation, "unexpected": True}
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.validate_authorized_continuation(malformed)
+        forged = {**continuation, "project_id": "p-" + "f" * 32}
+        forged.pop("continuation_sha256")
+        forged["continuation_sha256"] = hashlib.sha256(json.dumps(
+            forged, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+            allow_nan=False).encode("utf-8")).hexdigest()
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, forged,
+                owner_home=self.home, install_root=self.installed)
+        cross_generation = {
+            **continuation, "generation_id": "generation-" + "e" * 32}
+        cross_generation.pop("continuation_sha256")
+        cross_generation["continuation_sha256"] = hashlib.sha256(json.dumps(
+            cross_generation, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, cross_generation,
+                owner_home=self.home, install_root=self.installed)
+
+        envelope_root = Path(started["action_path"]).parent / \
+            "lifecycle-transitions"
+        unresolved = envelope_root / "task5-unresolved.json"
+        unresolved.write_text(
+            json.dumps({"status": "prepared"}) + "\n", encoding="utf-8")
+        self.assertIsNone(loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed))
+        unresolved.unlink()
+
+        (self.repo / "src" / "app.py").write_text(
+            "print('world changed')\n", encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, continuation,
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("AUTHORIZED_CONTINUATION_STALE", caught.exception.code)
+
+        loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertIsNone(loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed))
+
     def test_exact_plan_start_completion_contract_closes_verified_work(self):
         action, completed = self.complete_machine_authored_plan()
         prior = completed["plan_presentation"]

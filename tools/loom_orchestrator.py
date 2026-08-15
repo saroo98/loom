@@ -8574,6 +8574,301 @@ def start(
     return result
 
 
+AUTHORIZED_CONTINUATION_FIELDS = {
+    "schema_version", "authority_effect", "project_id", "generation_id",
+    "active_action_id", "plan_semantics_sha256", "lifecycle_state_sha256",
+    "observed_world_sha256", "work_order_id", "outcome_sha256",
+    "allowed_touches", "acceptance_sha256", "negative_acceptance_sha256",
+    "evidence_requirements_sha256", "rejection_code", "safe_next_operation",
+    "continuation_sha256",
+}
+
+
+def validate_authorized_continuation(value):
+    """Validate one closed, non-authorizing execution-path projection."""
+    if not isinstance(value, dict) or set(value) != AUTHORIZED_CONTINUATION_FIELDS \
+            or value.get("schema_version") != 1 \
+            or value.get("authority_effect") != "none" \
+            or value.get("safe_next_operation") != "resume-exact-action":
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation fields are unknown or missing")
+    if not isinstance(value.get("project_id"), str) \
+            or re.fullmatch(r"p-[0-9a-f]{32}", value["project_id"]) is None \
+            or not isinstance(value.get("generation_id"), str) \
+            or loom_lifecycle_kernel.SAFE_ID.fullmatch(
+                value["generation_id"]) is None:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation subject identity is invalid")
+    try:
+        if str(uuid.UUID(str(value.get("active_action_id")))) != \
+                value["active_action_id"]:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation action identity is invalid") from exc
+    if not isinstance(value.get("work_order_id"), str) \
+            or loom_lifecycle_kernel.WORK_ORDER_ID.fullmatch(
+                value["work_order_id"]) is None:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation work-order identity is invalid")
+    for field in (
+            "plan_semantics_sha256", "lifecycle_state_sha256",
+            "observed_world_sha256", "outcome_sha256", "acceptance_sha256",
+            "negative_acceptance_sha256", "evidence_requirements_sha256",
+            "continuation_sha256"):
+        if not isinstance(value.get(field), str) \
+                or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None:
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_INVALID",
+                "authorized continuation digest is invalid")
+    rejection_code = value.get("rejection_code")
+    if not isinstance(rejection_code, str) \
+            or re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", rejection_code) is None:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation rejection identity is invalid")
+    touches = value.get("allowed_touches")
+    if not isinstance(touches, list) \
+            or not 1 <= len(touches) <= loom_lifecycle_kernel.MAX_TOUCH_PATTERNS \
+            or len(touches) != len(set(touches)):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation touch boundary is invalid")
+    for item in touches:
+        if not isinstance(item, str) or not item or len(item) > 300:
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_INVALID",
+                "authorized continuation touch boundary is invalid")
+        path = PurePosixPath(item)
+        if path.is_absolute() or item != path.as_posix() \
+                or any(part in {"", ".", ".."} for part in path.parts):
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_INVALID",
+                "authorized continuation touch boundary is invalid")
+    unsigned = {
+        key: item for key, item in value.items()
+        if key != "continuation_sha256"
+    }
+    if value["continuation_sha256"] != \
+            hashlib.sha256(_canonical_bytes(unsigned)).hexdigest():
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation digest does not match")
+    return value
+
+
+def _unresolved_lifecycle_envelope(directory):
+    """Conservatively detect an unresolved or unreadable transition envelope."""
+    root = Path(directory) / "lifecycle-transitions"
+    if not os.path.lexists(root):
+        return False
+    if root.is_symlink() or not root.is_dir():
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "lifecycle transition evidence is unsafe")
+    entries = list(root.iterdir())
+    if len(entries) > MAX_ORCHESTRATION_DIRECTORY_ENTRIES:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "lifecycle transition evidence exceeds its bound")
+    for path in entries:
+        if path.is_symlink() or not path.is_file() or path.suffix != ".json" \
+                or path.stat().st_size > loom_lifecycle_transition.MAX_ENVELOPE_BYTES:
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                "lifecycle transition evidence is unsafe")
+        try:
+            envelope = json.loads(
+                path.read_text(encoding="utf-8"),
+                object_pairs_hook=loom_lifecycle._strict_object)
+        except (OSError, UnicodeError, json.JSONDecodeError,
+                loom_lifecycle.LifecycleError) as exc:
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                "lifecycle transition evidence is unreadable") from exc
+        if not isinstance(envelope, dict) \
+                or envelope.get("status") not in {"completed", "abandoned"}:
+            return True
+    return False
+
+
+def _authorized_continuation(action, *, rejection_code, owner_home, install_root):
+    if not isinstance(action, dict) or action.get("status") != "pending" \
+            or action.get("intent") != "execute" \
+            or not isinstance(action.get("generation_id"), str):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action has no executable continuation")
+    home = _absolute(owner_home, "owner home", must_exist=True)
+    installed = _absolute(install_root, "installation root", must_exist=True)
+    root = _absolute(
+        action.get("explicit_target") or action.get("cwd"),
+        "active action target", must_exist=True)
+    if Path(action.get("owner_home", "")) != home \
+            or Path(action.get("install_root", "")) != installed:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action belongs to another runtime")
+    instance_id, memory = _memory_backend(home, installed, root)
+    if instance_id != action.get("instance_id"):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action owner identity changed")
+    try:
+        project = loom_runtime.resolve_project(
+            instance_id, explicit_target=root, cwd=root)
+    except loom_runtime.RuntimeBlocked as exc:
+        raise OrchestratorError(exc.code, exc.message) from exc
+    if project.project_id != action.get("project_id"):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action project identity changed")
+    _bind_memory_project(memory, project)
+    directory = _orchestration_directory(home, instance_id, project.project_id)
+    action_path = directory / f"{action['action_id']}.json"
+    try:
+        with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
+            pointer = _read_active_pointer(directory)
+            if pointer is None or pointer["action_id"] != action["action_id"] \
+                    or pointer["project_id"] != action["project_id"]:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "the exact execution action is no longer active")
+            _path, current_action, _security = _read_action(
+                action_path, owner_home=home, install_root=installed)
+            if current_action != action or current_action["status"] != "pending":
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "the exact execution action changed")
+            if _unresolved_lifecycle_envelope(directory):
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "a lifecycle transition requires recovery")
+            witness_store = _lifecycle_witness_store(
+                memory, directory, action["project_id"])
+            resolved, semantics_value, ledger, _witness, state = \
+                loom_lifecycle_transition.observe(
+                    root, witness_store=witness_store)
+            semantics = loom_lifecycle_kernel.validate_reviewed_plan_semantics(
+                semantics_value)
+            selected = state.in_progress_work_order_id
+            if resolved.index is None \
+                    or resolved.index.project_id != action["project_id"] \
+                    or resolved.index.generation_id != action["generation_id"] \
+                    or state.project_id != action["project_id"] \
+                    or state.generation_id != action["generation_id"] \
+                    or state.generation_phase != "active" \
+                    or state.transition_observation != "stable" \
+                    or state.authority_validity != "owned-valid" \
+                    or state.world_relation != "exact" \
+                    or state.semantic_relation != "exact-revision" \
+                    or state.action_relation != "pending" \
+                    or state.frontier != "selected" \
+                    or selected is None \
+                    or state.selected_work_order_id != selected \
+                    or state.blocked_work_order_id is not None \
+                    or state.blockers \
+                    or state.repair_action_id is not None:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "canonical lifecycle authority has no unique safe continuation")
+            final_event = ledger["events"][-1]
+            if final_event.get("event_type") not in {
+                    "work-order-started", "work-order-resumed"} \
+                    or (final_event.get("payload") or {}).get("action_id") != \
+                    action["action_id"] \
+                    or (final_event.get("payload") or {}).get("work_order_id") != selected:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "the active action is not the canonical work-order attempt")
+            work_orders = {dict(item)["id"]: dict(item)
+                           for item in semantics.work_orders}
+            work_order = work_orders.get(selected)
+            if work_order is None:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "reviewed work-order semantics are unavailable")
+            current_world = _reviewed_world_observation(
+                root, project_id=action["project_id"],
+                generation_id=action["generation_id"],
+                excluded_paths=(root / "plans",))
+            final_pointer = _read_active_pointer(directory)
+            _final_path, final_action, _final_security = _read_action(
+                action_path, owner_home=home, install_root=installed)
+            if final_pointer != pointer or final_action != current_action:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "execution authority changed during continuation observation")
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError,
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_reliability.ReliabilityError) as exc:
+        if isinstance(exc, OrchestratorError):
+            raise
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the exact execution continuation could not be observed safely") from exc
+    touches = list(work_order["touches"])
+    value = {
+        "schema_version": 1,
+        "authority_effect": "none",
+        "project_id": action["project_id"],
+        "generation_id": action["generation_id"],
+        "active_action_id": action["action_id"],
+        "plan_semantics_sha256": state.plan_semantics_sha256,
+        "lifecycle_state_sha256": state.state_sha256,
+        "observed_world_sha256": current_world["state_sha256"],
+        "work_order_id": selected,
+        "outcome_sha256": _hash({"outcome": work_order["outcome"]}),
+        "allowed_touches": touches,
+        "acceptance_sha256": _hash({
+            "acceptance": list(work_order["acceptance"])}),
+        "negative_acceptance_sha256": _hash({
+            "negative_acceptance": list(work_order["negative_acceptance"])}),
+        "evidence_requirements_sha256": _hash({
+            "tasks": list(work_order["tasks"]),
+            "acceptance": list(work_order["acceptance"]),
+            "negative_acceptance": list(work_order["negative_acceptance"]),
+        }),
+        "rejection_code": rejection_code,
+        "safe_next_operation": "resume-exact-action",
+    }
+    value["continuation_sha256"] = hashlib.sha256(
+        _canonical_bytes(value)).hexdigest()
+    return validate_authorized_continuation(value)
+
+
+def authorized_continuation(
+        action, *, rejection_code, owner_home, install_root):
+    """Return a fresh exact-path hint, or no hint when authority is ambiguous."""
+    try:
+        return _authorized_continuation(
+            action, rejection_code=rejection_code,
+            owner_home=owner_home, install_root=install_root)
+    except OrchestratorError:
+        return None
+
+
+def verify_authorized_continuation(
+        action, value, *, owner_home, install_root):
+    """Reobserve and verify a projection without granting execution authority."""
+    observed = _authorized_continuation(
+        action, rejection_code=validate_authorized_continuation(
+            value)["rejection_code"],
+        owner_home=owner_home, install_root=install_root)
+    if observed != value:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_STALE",
+            "authorized continuation no longer matches exact lifecycle authority")
+    return value
+
+
 def revise(
         action_path=None, *, presentation_sha256=None, cwd=None, request,
         owner_home, install_root, now=None):

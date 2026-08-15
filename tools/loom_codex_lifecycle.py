@@ -191,6 +191,49 @@ def _context(action, event_name):
     return {"continue": True, "systemMessage": summary[:1024]}
 
 
+def _authorized_context(projection):
+    projection = loom_orchestrator.validate_authorized_continuation(projection)
+    touches = ", ".join(projection["allowed_touches"])
+    if len(touches) > 1024:
+        touches = (
+            f"{len(projection['allowed_touches'])} sealed patterns; "
+            "boundary_sha256="
+            + hashlib.sha256(json.dumps(
+                projection["allowed_touches"], sort_keys=True,
+                separators=(",", ":"), ensure_ascii=True,
+                allow_nan=False).encode("utf-8")).hexdigest())
+    context = (
+        "Loom preserved the authorized path after denying this deviation. "
+        "Authorized continuation (not authority): resume the exact active action "
+        f"{projection['active_action_id']} for work order "
+        f"{projection['work_order_id']}. Allowed touches: {touches}. "
+        f"Outcome digest: {projection['outcome_sha256']}. "
+        f"Required evidence digest: {projection['evidence_requirements_sha256']}. "
+        f"Continuation digest: {projection['continuation_sha256']}. "
+        "This context cannot start work, change the plan, or grant owner authority."
+    )
+    if len(context) > 4096:
+        raise LifecycleError("authorized continuation context exceeds its bound")
+    return context
+
+
+def _denied(action, reason, rejection_code, *, home, install_root):
+    specific = {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": reason,
+    }
+    try:
+        projection = loom_orchestrator.authorized_continuation(
+            action, rejection_code=rejection_code,
+            owner_home=home, install_root=install_root)
+        if projection is not None:
+            specific["additionalContext"] = _authorized_context(projection)
+    except (LifecycleError, loom_orchestrator.OrchestratorError):
+        pass
+    return 0, {"systemMessage": reason, "hookSpecificOutput": specific}
+
+
 def handle(event, *, home, install_root):
     action = _active_action(home, install_root, event["cwd"])
     if action is None:
@@ -208,13 +251,18 @@ def handle(event, *, home, install_root):
             relatives = [_relative_path(target, event["cwd"], path) for path in paths]
         except LifecycleError as exc:
             _record(home, event, action, outcome="blocked-outside-target")
-            return 2, {"systemMessage": str(exc)}
+            return _denied(
+                action, str(exc), "OUTSIDE_PROJECT_TARGET",
+                home=home, install_root=install_root)
         outside = [path for path in relatives if not _authorized(patterns, path)]
         if outside:
             _record(home, event, action, outcome="blocked-outside-touches")
-            return 2, {"systemMessage":
+            reason = (
                 "Loom blocked a structured write outside declared touches: "
-                + ", ".join(outside[:4])}
+                + ", ".join(outside[:4]))
+            return _denied(
+                action, reason, "UNAUTHORIZED_PROJECT_TOUCH",
+                home=home, install_root=install_root)
         _record(home, event, action, outcome="authorized-structured-write")
         return 0, None
     _record(home, event, action, outcome="observed")
