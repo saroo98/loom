@@ -41,6 +41,11 @@ EVENT_KINDS = {
     "session-opened", "session-interrupted", "session-reconciled",
     "session-receipt-sealed", "terminal-block-resolved",
 }
+USEFUL_PLANNING_RECOVERY_MARKER = "useful-planning-recovery"
+NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS = frozenset({
+    "inline-plan-project-writes-prohibited",
+    "inline-plan-lifecycle-authority-untrusted",
+})
 
 if os.name == "nt":
     import msvcrt
@@ -471,6 +476,46 @@ def _validate_handler_result(value):
             "HANDLER_RESULT_INVALID",
             "learning-affecting handler claims require evidence identifiers")
     return json.loads(json.dumps(normalized, allow_nan=False))
+
+
+def _validate_useful_planning_recovery_result(prepared, result):
+    """Bind one sealed inline-recovery route to its authority-empty result."""
+    route = prepared.route_contract
+    route_evidence = list(route["evidence"])
+    recovery_evidence = [
+        item for item in route_evidence
+        if item in NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS]
+    route_declares_recovery = bool(recovery_evidence)
+    result_declares_recovery = result.get("code") == "non-authoritative-plan"
+    if not route_declares_recovery and not result_declares_recovery:
+        return result
+    expected_evidence = recovery_evidence[0] if len(recovery_evidence) == 1 else None
+    exact_route = (
+        prepared.intent == "plan"
+        and route["intent"] == "plan"
+        and route["code"] == "ROUTE_PLAN"
+        and route["blocked"] is False
+        and route["needs_owner"] is False
+        and route["recommendation"] == ""
+        and route["block_reason"] is None
+        and route_evidence.count(USEFUL_PLANNING_RECOVERY_MARKER) == 1
+        and expected_evidence is not None
+        and route_evidence[-2:] == [
+            USEFUL_PLANNING_RECOVERY_MARKER, expected_evidence]
+    )
+    exact_result = (
+        result_declares_recovery
+        and result.get("status") == "completed"
+        and result.get("success") is True
+        and result.get("reversible_action_ids") == []
+        and result.get("result_path") is None
+        and result.get("evidence_ids") == [expected_evidence]
+    )
+    if not exact_route or not exact_result:
+        raise SessionBlocked(
+            "HANDLER_RESULT_INVALID",
+            "useful planning recovery route and result authority do not match")
+    return result
 
 
 @dataclass(frozen=True)
@@ -1648,6 +1693,7 @@ class SessionController:
                 }
             else:
                 result = _validate_handler_result(handler(context))
+            _validate_useful_planning_recovery_result(prepared, result)
             if "usage" not in result:
                 result["usage"] = loom_performance.normalize_usage(None)
             memory_result = self.memory.record_outcome(context, result)

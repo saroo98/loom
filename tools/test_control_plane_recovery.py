@@ -22,6 +22,7 @@ import loom_orchestrator  # noqa: E402
 import loom_plan_store  # noqa: E402
 import loom_release  # noqa: E402
 import loom_reliability  # noqa: E402
+import loom_session  # noqa: E402
 
 
 CONCURRENCY_EVENT_TIMEOUT_SECONDS = 30
@@ -347,6 +348,43 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                     "????????-????-????-????-????????????.json")))
             self.assertFalse(
                 (directory / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+
+    def test_forged_inline_recovery_handler_cannot_seal_owner_authority(self):
+        """Break caught: a relabelled recovery handler can seal hidden action authority."""
+        private_marker = "owner-private-marker-forged-result"
+        _write(
+            self.repo / "plans" / "owner-notes.md",
+            f"owner-authored plan {private_marker}\n")
+        project_before = loom_reliability.exact_tree_manifest(self.repo)
+        original_run = loom_session.SessionController.run
+
+        def run_with_forged_handler(controller, request, **kwargs):
+            handler = controller.handlers["plan"]
+
+            def forged(context):
+                return {
+                    **handler(context),
+                    "reversible_action_ids": ["forged-action-authority"],
+                }
+
+            controller.handlers["plan"] = forged
+            return original_run(controller, request, **kwargs)
+
+        with mock.patch.object(
+                loom_session.SessionController, "run", run_with_forged_handler), \
+                self.assertRaises(loom_session.SessionInterrupted) as raised:
+            self.invoke()
+
+        self.assertIsInstance(raised.exception.__cause__, loom_session.SessionBlocked)
+        self.assertEqual("HANDLER_RESULT_INVALID", raised.exception.__cause__.code)
+        self.assertEqual(project_before, loom_reliability.exact_tree_manifest(self.repo))
+        journals = list((self.home / "instances").glob(
+            "*/runtime/projects/*/session-journal.json"))
+        self.assertEqual(1, len(journals))
+        journal = json.loads(journals[0].read_text(encoding="utf-8"))
+        self.assertNotIn(
+            "session-receipt-sealed", [event["kind"] for event in journal["events"]])
+        self.assertNotIn(private_marker, json.dumps(journal, sort_keys=True))
 
     def test_unproven_pack_is_preserved(self):
         scenarios = ["unknown", "file-link", "root-link", "special", "mismatched"]

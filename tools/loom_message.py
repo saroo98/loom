@@ -219,6 +219,10 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
         result_path = derived_path
     elif derived_path is not None and result_path != derived_path:
         raise MessageError("owner result path disagrees with the sealed result")
+    non_authoritative_plan = (
+        status == "completed" and low == "non-authoritative-plan" and intent == "plan")
+    if non_authoritative_plan and (reversible_action_ids or result_path is not None):
+        raise MessageError("non-authoritative plan cannot carry result authority")
     if status == "completed":
         if block_reason is not None:
             raise MessageError("completed session cannot carry a block reason")
@@ -258,14 +262,13 @@ def from_session(*, status, code, intent, tier, owner_input_required, reversible
             "plan", "execute", "repair", "close", "remember", "forget", "undo"}
         undo_status = ("available" if reversible_action_ids else
                        "unavailable" if changes_made else "not-applicable")
-        if low == "non-authoritative-plan" and intent == "plan":
+        if non_authoritative_plan:
             summary = (
                 "This is non-authoritative planning and recovery material. No project or "
                 "plan authority was changed, and implementation cannot start from it.")
             next_action = (
                 "Follow the precise Safe next action in the non-authoritative result.")
             changes_made, undo_status = False, "not-applicable"
-            result_path = None
     else:
         preference_conflict = "preference-conflict" in low
         state = ("decision-needed" if preference_conflict else

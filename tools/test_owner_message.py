@@ -83,6 +83,21 @@ class OwnerMessageTests(unittest.TestCase):
         self.assertNotIn(private_marker, value["human"])
         loom_message.validate(value)
 
+    def test_non_authoritative_projection_rejects_hidden_authority_fields(self):
+        """Break caught: projection clears authority fields instead of rejecting them."""
+        cases = (
+            {"reversible_action_ids": ["forged-action"], "result_path": None},
+            {"reversible_action_ids": [], "result_path": "plans/forged/MANIFEST.md"},
+        )
+        for case in cases:
+            with self.subTest(case=case), self.assertRaises(
+                    loom_message.MessageError):
+                loom_message.from_session(
+                    status="completed", code="non-authoritative-plan",
+                    intent="plan", tier="M", owner_input_required=False,
+                    detail="Non-authoritative recovery material.",
+                    receipt_id="session-hidden-authority", **case)
+
     def test_current_completed_message_explains_the_actual_operation(self):
         value = loom_message.from_session(
             status="completed", code="undo-complete", intent="undo", tier="S",

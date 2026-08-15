@@ -9617,12 +9617,27 @@ _USEFUL_PLANNING_REBIND_CODES = {
 }
 _USEFUL_PLANNING_REBINDABLE_CODES = frozenset().union(
     *_USEFUL_PLANNING_REBIND_CODES.values())
+_INLINE_RECOVERY_EVIDENCE_BY_ROUTE_CODE = {
+    "MUTATION_PROHIBITED": "inline-plan-project-writes-prohibited",
+    "INVALID_LIFECYCLE": "inline-plan-lifecycle-authority-untrusted",
+    "CORRUPT_LIFECYCLE": "inline-plan-lifecycle-authority-untrusted",
+}
+_INLINE_RECOVERY_REASON_BY_EVIDENCE = {
+    "inline-plan-project-writes-prohibited": "PROJECT_WRITES_PROHIBITED",
+    "inline-plan-lifecycle-authority-untrusted": "LIFECYCLE_AUTHORITY_UNTRUSTED",
+}
 
 
-def _rebind_useful_planning_prepared(prepared, planning_mode):
+def _rebind_useful_planning_prepared(
+        prepared, planning_mode, *, recovery_evidence=None):
     """Allow sealed current-world or inline planning without granting execution."""
-    if prepared.route_contract["code"] not in _USEFUL_PLANNING_REBIND_CODES.get(
-            planning_mode, frozenset()):
+    route_code = prepared.route_contract["code"]
+    allowed_codes = _USEFUL_PLANNING_REBIND_CODES.get(planning_mode, frozenset())
+    sealed_override = (
+        planning_mode == "inline-recovery"
+        and route_code == "ROUTE_PLAN"
+        and recovery_evidence in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS)
+    if route_code not in allowed_codes and not sealed_override:
         raise OrchestratorError(
             "REQUEST_CONTROL_INVALID",
             "planning recovery cannot replace this prepared route")
@@ -9634,6 +9649,19 @@ def _rebind_useful_planning_prepared(prepared, planning_mode):
         raise OrchestratorError(
             "REQUEST_CONTROL_INVALID",
             f"sealed semantic outcome is invalid: {exc}") from exc
+    route_recovery_evidence = (
+        _INLINE_RECOVERY_EVIDENCE_BY_ROUTE_CODE.get(route_code)
+        if planning_mode == "inline-recovery" else None)
+    if recovery_evidence is None:
+        recovery_evidence = route_recovery_evidence
+    elif route_recovery_evidence is not None \
+            and route_recovery_evidence != recovery_evidence:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "inline planning recovery class disagrees")
+    if planning_mode == "inline-recovery" and recovery_evidence not in \
+            loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "inline planning recovery class is unsupported")
     values = prepared.to_dict()
     values.pop("prepared_hash")
     route = values["route_contract"]
@@ -9647,9 +9675,14 @@ def _rebind_useful_planning_prepared(prepared, planning_mode):
     ordinary = [
         item for item in route["evidence"]
         if item != semantic["token"]
-        and item != "useful-planning-recovery"]
-    route["evidence"] = [
-        *ordinary[:14], semantic["token"], "useful-planning-recovery"]
+        and item != loom_session.USEFUL_PLANNING_RECOVERY_MARKER
+        and item not in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS]
+    route["evidence"] = (
+        [*ordinary[:13], semantic["token"],
+         loom_session.USEFUL_PLANNING_RECOVERY_MARKER, recovery_evidence]
+        if recovery_evidence is not None else
+        [*ordinary[:14], semantic["token"],
+         loom_session.USEFUL_PLANNING_RECOVERY_MARKER])
     values["route_contract"] = route
     return loom_runtime.PreparedInvocation.build(
         **values, operation_fingerprint=prepared.operation_fingerprint)
@@ -9865,10 +9898,24 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             not in _USEFUL_PLANNING_REBINDABLE_CODES
         if not protected_block:
             planning_mode = _extract_planning_mode(request_control)
-        if prepared.route_contract["blocked"] and planning_mode in {
-                "current-world-replan", "inline-recovery"}:
+        route_code = prepared.route_contract["code"]
+        recovery_rebind = (
+            planning_mode in {"current-world-replan", "inline-recovery"}
+            and route_code in _USEFUL_PLANNING_REBIND_CODES.get(
+                planning_mode, frozenset()))
+        sealed_inline_override = (
+            planning_mode == "inline-recovery" and route_code == "ROUTE_PLAN")
+        if recovery_rebind or sealed_inline_override:
+            recovery_evidence = None
+            if planning_mode == "inline-recovery":
+                state_error = str(
+                    (request_control_state or {}).get("state_error", ""))
+                if state_error in {"INVALID_LIFECYCLE", "CORRUPT_LIFECYCLE"}:
+                    recovery_evidence = "inline-plan-lifecycle-authority-untrusted"
+                elif "mutation" in request_control["prohibitions"]:
+                    recovery_evidence = "inline-plan-project-writes-prohibited"
             prepared = _rebind_useful_planning_prepared(
-                prepared, planning_mode)
+                prepared, planning_mode, recovery_evidence=recovery_evidence)
             opened = loom_session.OpenSession(
                 prepared=prepared,
                 session_id=opened.session_id,
@@ -9959,18 +10006,26 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     if planning_mode == "inline-recovery" \
             and prepared.route_contract["code"] == "ROUTE_PLAN" \
             and not prepared.route_contract["blocked"]:
-        inline_recovery_reason = (
-            "PROJECT_WRITES_PROHIBITED"
-            if "mutation" in request_control["prohibitions"]
-            else "LIFECYCLE_AUTHORITY_UNTRUSTED")
+        recovery_evidence = [
+            item for item in prepared.route_contract["evidence"]
+            if item in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS]
+        if len(recovery_evidence) != 1:
+            raise OrchestratorError(
+                "REQUEST_CONTROL_INVALID", "inline planning recovery class is not sealed")
+        inline_recovery_reason = _INLINE_RECOVERY_REASON_BY_EVIDENCE.get(
+            recovery_evidence[0])
+        if inline_recovery_reason is None:
+            raise OrchestratorError(
+                "REQUEST_CONTROL_INVALID", "inline planning recovery class is unsupported")
     if inline_recovery_reason is not None:
         reason_code = inline_recovery_reason
+        evidence_id = "inline-plan-" + reason_code.casefold().replace("_", "-")
         controller.handlers["plan"] = lambda _context: {
             "status": "completed",
             "code": "non-authoritative-plan",
             "success": True,
             "metrics": {},
-            "evidence_ids": ["inline-plan-" + reason_code.casefold().replace("_", "-")],
+            "evidence_ids": [evidence_id],
             "reversible_action_ids": [],
             "user_message": _inline_recovery_message(
                 reason_code, prepared=prepared, domain_contract=domain_contract),
