@@ -653,19 +653,196 @@ class TestRunnerTests(unittest.TestCase):
                     loom_test.loom_docs, "refresh_evidence",
                     return_value={"discovered_test_methods": 3}) as refresh:
             output = Path(temp) / "report.json"
-            code = loom_test.main([
-                "full", "--quiet", "--refresh-generated-evidence",
-                "--output", str(output)])
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                code = loom_test.main([
+                    "full", "--quiet", "--refresh-generated-evidence",
+                    "--output", str(output)])
             observed = json.loads(output.read_text(encoding="utf-8"))
+            summary = json.loads(stdout.getvalue())
 
         self.assertEqual(0, code)
         self.assertFalse(observed["capability_complete"])
         self.assertFalse(observed["successful"])
         self.assertEqual("passed-with-capability-skips", observed["status"])
         self.assertEqual("refreshed", observed["generated_evidence"]["status"])
+        self.assertEqual("refreshed", summary["generated_evidence_status"])
+        self.assertFalse(summary["capability_complete"])
+        self.assertFalse(summary["successful"])
+        self.assertEqual("passed-with-capability-skips", summary["status"])
         self.assertEqual(2, refresh.call_count)
         self.assertEqual(
             3, refresh.call_args_list[1].kwargs["expected_test_methods"])
+
+    def test_prebind_docs_error_restores_exact_bytes_before_suite(self):
+        old = b'{"old":true}\n'
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tools").mkdir()
+            (root / "docs").mkdir()
+            evidence = root / "docs" / "generated-evidence.json"
+            evidence.write_bytes(old)
+
+            def fail_prebind(target):
+                (Path(target) / "docs" / "generated-evidence.json").write_bytes(
+                    b'{"partial":true}\n')
+                raise loom_test.loom_docs.DocsError("bounded pre-bind failure")
+
+            with mock.patch.object(
+                    loom_test, "__file__", str(root / "tools" / "loom_test.py")), \
+                    mock.patch.object(loom_test, "run") as run, \
+                    mock.patch.object(
+                        loom_test.loom_docs, "refresh_evidence",
+                        side_effect=fail_prebind), \
+                    self.assertRaises(SystemExit) as caught:
+                loom_test.main(["full", "--refresh-generated-evidence"])
+
+            self.assertEqual(2, caught.exception.code)
+            self.assertEqual(old, evidence.read_bytes())
+            run.assert_not_called()
+
+    def test_prebind_os_error_restores_bytes_and_redacts_failure(self):
+        old = b'{"old":true}\n'
+        private = "C:\\Users\\owner\\private-evidence.json"
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tools").mkdir()
+            (root / "docs").mkdir()
+            evidence = root / "docs" / "generated-evidence.json"
+            evidence.write_bytes(old)
+
+            def fail_prebind(target):
+                (Path(target) / "docs" / "generated-evidence.json").write_bytes(
+                    b'{"partial":true}\n')
+                raise OSError(private)
+
+            stderr = io.StringIO()
+            with mock.patch.object(
+                    loom_test, "__file__", str(root / "tools" / "loom_test.py")), \
+                    mock.patch.object(loom_test, "run") as run, \
+                    mock.patch.object(
+                        loom_test.loom_docs, "refresh_evidence",
+                        side_effect=fail_prebind), \
+                    contextlib.redirect_stderr(stderr), \
+                    self.assertRaises(SystemExit) as caught:
+                loom_test.main(["full", "--refresh-generated-evidence"])
+
+            self.assertEqual(2, caught.exception.code)
+            self.assertEqual(old, evidence.read_bytes())
+            self.assertIn("generated evidence pre-bind failed", stderr.getvalue())
+            self.assertNotIn(private, stderr.getvalue())
+            run.assert_not_called()
+
+    def test_final_non_docs_refresh_error_restores_bytes_and_fails_privately(self):
+        old = b'{"old":true}\n'
+        private = "C:\\Users\\owner\\private-evidence.json"
+        report = self._correctness_clean_full_report(with_platform_skip=True)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "tools").mkdir()
+            (root / "docs").mkdir()
+            evidence = root / "docs" / "generated-evidence.json"
+            evidence.write_bytes(old)
+            calls = 0
+
+            def refresh(target, *, expected_test_methods=None):
+                nonlocal calls
+                calls += 1
+                path = Path(target) / "docs" / "generated-evidence.json"
+                if expected_test_methods is None:
+                    path.write_bytes(b'{"prebound":true}\n')
+                    return {"discovered_test_methods": 3}
+                path.write_bytes(b'{"partial":true}\n')
+                raise OSError(private)
+
+            output = root / "report.json"
+            with mock.patch.object(
+                    loom_test, "__file__", str(root / "tools" / "loom_test.py")), \
+                    mock.patch.object(loom_test, "run", return_value=dict(report)), \
+                    mock.patch.object(
+                        loom_test.loom_docs, "refresh_evidence",
+                        side_effect=refresh):
+                code = loom_test.main([
+                    "full", "--quiet", "--refresh-generated-evidence",
+                    "--output", str(output)])
+            observed = json.loads(output.read_text(encoding="utf-8"))
+
+            self.assertEqual(1, code)
+            self.assertEqual(2, calls)
+            self.assertEqual(old, evidence.read_bytes())
+            self.assertEqual({
+                "status": "failed",
+                "detail": "generated evidence refresh failed",
+            }, observed["generated_evidence"])
+            self.assertNotIn(private, json.dumps(observed, sort_keys=True))
+
+    def test_refresh_report_numeric_validation_is_total_and_bounded(self):
+        base = self._correctness_clean_full_report(with_platform_skip=True)
+        hostile = []
+        for field, value in (
+                ("elapsed_seconds", 10 ** 1000),
+                ("elapsed_seconds", float("inf")),
+                ("elapsed_seconds", float("nan")),
+                ("suppressed_stdout_chars", 10 ** 1000)):
+            report = json.loads(json.dumps(base))
+            report[field] = value
+            hostile.append(report)
+        timing = json.loads(json.dumps(base))
+        timing["timings"][0]["seconds"] = 10 ** 1000
+        hostile.append(timing)
+
+        with mock.patch.object(loom_test.loom_docs, "refresh_evidence") as refresh:
+            for report in hostile:
+                with self.subTest(value=repr(report)), self.assertRaisesRegex(
+                        loom_test.loom_docs.DocsError,
+                        "correctness-clean complete"):
+                    loom_test.refresh_final_evidence(Path.cwd(), report)
+        refresh.assert_not_called()
+
+    def test_inventory_refresh_requires_authorized_skip_classification(self):
+        report = self._correctness_clean_full_report(with_platform_skip=True)
+        report["skip_receipts"][0]["reason"] = "ordinary optional test"
+        with mock.patch.object(loom_test.loom_docs, "refresh_evidence") as refresh, \
+                self.assertRaisesRegex(
+                    loom_test.loom_docs.DocsError,
+                    "correctness-clean complete"):
+            loom_test.refresh_final_evidence(Path.cwd(), report)
+        refresh.assert_not_called()
+
+    def test_every_authorized_skip_category_can_refresh_inventory(self):
+        reasons = {
+            "platform-boundary": "requires Windows host",
+            "host-capability-unavailable": "symlink unavailable",
+            "tool-unavailable": "git toolchain unavailable",
+        }
+        self.assertEqual(set(reasons), set(loom_test.AUTHORIZED_SKIP_REASON_CODES))
+        with mock.patch.object(
+                loom_test.loom_docs, "refresh_evidence",
+                return_value={"discovered_test_methods": 3}) as refresh:
+            for expected_code, reason in reasons.items():
+                report = self._correctness_clean_full_report(
+                    with_platform_skip=True)
+                report["skip_receipts"][0]["reason"] = reason
+                with self.subTest(code=expected_code):
+                    self.assertEqual(
+                        expected_code, loom_test.skip_reason_code(reason))
+                    self.assertEqual(
+                        "refreshed",
+                        loom_test.refresh_final_evidence(
+                            Path.cwd(), report)["status"])
+        self.assertEqual(len(reasons), refresh.call_count)
+
+    def test_refresh_budget_is_rejected_before_prebind_or_suite(self):
+        with mock.patch.object(
+                loom_test.loom_docs, "refresh_evidence") as refresh, \
+                mock.patch.object(loom_test, "run") as run, \
+                self.assertRaises(SystemExit) as caught:
+            loom_test.main([
+                "full", "--max-seconds", "1",
+                "--refresh-generated-evidence"])
+        self.assertEqual(2, caught.exception.code)
+        refresh.assert_not_called()
+        run.assert_not_called()
 
     def test_skipped_full_suite_without_refresh_remains_nonzero(self):
         report = self._correctness_clean_full_report(with_platform_skip=True)

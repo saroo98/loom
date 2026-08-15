@@ -337,11 +337,18 @@ _FULL_REPORT_FIELDS = frozenset({
 })
 _SKIP_RECEIPT_FIELDS = frozenset({"test", "reason"})
 _TIMING_FIELDS = frozenset({"test", "seconds", "status"})
+_MAX_REPORT_NUMBER = (1 << 63) - 1
 
 
 def _nonnegative_number(value):
-    return isinstance(value, (int, float)) and not isinstance(value, bool) \
-        and math.isfinite(value) and value >= 0
+    if type(value) is int:
+        return 0 <= value <= _MAX_REPORT_NUMBER
+    return type(value) is float and math.isfinite(value) \
+        and 0 <= value <= _MAX_REPORT_NUMBER
+
+
+def _nonnegative_integer(value):
+    return type(value) is int and 0 <= value <= _MAX_REPORT_NUMBER
 
 
 def _correctness_clean_full_report(report):
@@ -350,17 +357,15 @@ def _correctness_clean_full_report(report):
             or type(report.get("schema_version")) is not int \
             or report["schema_version"] != 1 \
             or report.get("mode") != "full" \
-            or type(report.get("tests_run")) is not int \
-            or report["tests_run"] <= 0 \
-            or type(report.get("failures")) is not int \
+            or not _nonnegative_integer(report.get("tests_run")) \
+            or report["tests_run"] == 0 \
+            or not _nonnegative_integer(report.get("failures")) \
             or report["failures"] != 0 \
-            or type(report.get("errors")) is not int \
+            or not _nonnegative_integer(report.get("errors")) \
             or report["errors"] != 0 \
-            or type(report.get("skipped")) is not int \
-            or report["skipped"] < 0 \
+            or not _nonnegative_integer(report.get("skipped")) \
             or not _nonnegative_number(report.get("elapsed_seconds")) \
-            or type(report.get("suppressed_stdout_chars")) is not int \
-            or report["suppressed_stdout_chars"] < 0 \
+            or not _nonnegative_integer(report.get("suppressed_stdout_chars")) \
             or report.get("max_seconds") is not None \
             or report.get("within_budget") is not True \
             or report.get("failure_diagnostics") != []:
@@ -376,7 +381,10 @@ def _correctness_clean_full_report(report):
     skip_ids = [row["test"] for row in skip_receipts]
     if len(skip_ids) != len(set(skip_ids)) \
             or skip_ids != sorted(skip_ids) \
-            or len(skip_ids) != report["skipped"]:
+            or len(skip_ids) != report["skipped"] \
+            or any(skip_reason_code(row["reason"])
+                   not in AUTHORIZED_SKIP_REASON_CODES
+                   for row in skip_receipts):
         return False
 
     timings = report.get("timings")
@@ -444,6 +452,8 @@ def main(argv=None):
     evidence_root = Path(__file__).resolve().parents[1]
     if args.refresh_generated_evidence and args.mode != "full":
         parser.error("generated evidence refresh requires full mode")
+    if args.refresh_generated_evidence and args.max_seconds is not None:
+        parser.error("generated evidence refresh cannot use a time budget")
     output_path = None
     progress_path = None
     if args.output:
@@ -476,8 +486,11 @@ def main(argv=None):
             # same tree audits documentation coherence. A second refresh below
             # occurs only after the complete correctness suite passes.
             loom_docs.refresh_evidence(evidence_root)
-        except loom_docs.DocsError as exc:
-            parser.error(str(exc))
+        except Exception as exc:
+            restore_evidence()
+            detail = (str(exc) if isinstance(exc, loom_docs.DocsError)
+                      else "generated evidence pre-bind failed")
+            parser.error(detail)
     try:
         report = run(
             args.mode, max_seconds=args.max_seconds,
@@ -493,24 +506,31 @@ def main(argv=None):
                 evidence_root, report)
             refresh_completed = report["generated_evidence"].get(
                 "status") == "refreshed"
-        except loom_docs.DocsError as exc:
+        except Exception as exc:
             restore_evidence()
             report["generated_evidence"] = {
-                "status": "failed", "detail": str(exc)}
+                "status": "failed",
+                "detail": (str(exc) if isinstance(exc, loom_docs.DocsError)
+                           else "generated evidence refresh failed"),
+            }
             report["successful"] = False
             report["status"] = "failed"
     text = json.dumps(report, indent=2, sort_keys=True) + "\n"
     if output_path is not None:
         output_path.write_text(text, encoding="utf-8")
     if output_path is not None and args.quiet:
-        print(json.dumps({
+        summary = {
             "capability_complete": report["capability_complete"],
             "errors": report["errors"],
             "failures": report["failures"],
             "status": report["status"],
             "successful": report["successful"],
             "tests_run": report["tests_run"],
-        }, sort_keys=True))
+        }
+        if "generated_evidence" in report:
+            summary["generated_evidence_status"] = report[
+                "generated_evidence"].get("status")
+        print(json.dumps(summary, sort_keys=True))
     else:
         print(text, end="")
     return 0 if report["successful"] or refresh_completed else 1
