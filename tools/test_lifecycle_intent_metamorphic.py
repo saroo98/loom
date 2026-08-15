@@ -34,8 +34,41 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
         self.assertFalse(decision["blocked"], decision)
         self.assertEqual("plan", decision["intent"])
         self.assertTrue(decision["needs_owner"], decision)
-        self.assertEqual(1, decision["routine_question_count"])
+        self.assertEqual(0, decision["routine_question_count"])
+        self.assertEqual(1, decision["recommendation"].count("?"))
         self.assertTrue(decision["recommendation"].strip())
+
+    def test_descriptive_build_with_implementation_prohibition_is_planning(self):
+        """Break caught: a project-description verb becomes execution authority."""
+        decision = loom_runtime.resolve_intent(
+            "Build a tracker. Do not implement.")
+
+        self.assertFalse(decision["blocked"], decision)
+        self.assertEqual("plan", decision["intent"])
+        self.assertFalse(decision["needs_owner"], decision)
+
+    def test_execution_and_execution_prohibition_is_one_provisional_plan(self):
+        """Break caught: a contradiction without 'plan' dead-ends or executes."""
+        requests = (
+            "Implement now and do not implement anything.",
+            "Execute now and do not execute anything.",
+            "Start implementation now and do not start anything.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "absent"})
+
+                self.assertFalse(decision["blocked"], decision)
+                self.assertEqual("plan", decision["intent"])
+                self.assertTrue(decision["needs_owner"], decision)
+                self.assertEqual(0, decision["routine_question_count"])
+                self.assertEqual(1, decision["recommendation"].count("?"))
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("new", control["relation"])
+                self.assertIn("implementation", control["prohibitions"])
 
     def test_plan_only_equivalents_ignore_descriptive_build_verbs(self):
         """Break caught: harmless wording changes alter lifecycle authority."""
@@ -100,8 +133,25 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
         self.assertFalse(decision["blocked"], decision)
         self.assertEqual("plan", decision["intent"])
         self.assertTrue(decision["needs_owner"], decision)
-        self.assertEqual(1, decision["routine_question_count"])
+        self.assertEqual(0, decision["routine_question_count"])
+        self.assertEqual(1, decision["recommendation"].count("?"))
         self.assertTrue(decision["recommendation"].strip())
+
+    def test_polite_audit_question_keeps_route_and_control_read_only(self):
+        """Break caught: question grammar hides a direct read-only audit control."""
+        request = "Could you audit the completed project?"
+        decision = loom_runtime.resolve_intent(request)
+        control = loom_runtime.request_control(
+            request, state={"generation_phase": "terminal-completed"})
+        noun_control = loom_runtime.request_control(
+            "Could you build an audit dashboard?",
+            state={"generation_phase": "absent"})
+
+        self.assertFalse(decision["blocked"], decision)
+        self.assertEqual("review", decision["intent"])
+        self.assertEqual("review", control["primary_operation"])
+        self.assertEqual("read-only", control["relation"])
+        self.assertEqual("plan", noun_control["primary_operation"])
 
     def test_structured_control_preserves_explicit_new_relation_after_terminal_history(self):
         """Break caught: terminal history silently rewrites new work as repair."""

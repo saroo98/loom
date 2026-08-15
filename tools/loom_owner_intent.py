@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Pure state-derived planning disposition for Loom owner requests."""
 
+from collections.abc import Mapping, Sequence, Set
 from dataclasses import dataclass
-from typing import Sequence
 
 
 OPERATIONS = {
@@ -87,12 +87,10 @@ def resolve_planning_disposition(
         raise ValueError("planning disposition state error is unknown")
     if type(exact_reference) is not bool:
         raise ValueError("planning disposition exact-reference flag is invalid")
-    if isinstance(prohibitions, (str, bytes)):
+    if isinstance(prohibitions, (str, bytes, Mapping, Set)) \
+            or not isinstance(prohibitions, Sequence):
         raise ValueError("planning disposition prohibitions are invalid")
-    try:
-        closed_prohibitions = tuple(prohibitions)
-    except TypeError as exc:
-        raise ValueError("planning disposition prohibitions are invalid") from exc
+    closed_prohibitions = tuple(prohibitions)
     if any(not isinstance(item, str) for item in closed_prohibitions) \
             or len(closed_prohibitions) != len(set(closed_prohibitions)) \
             or any(item not in PROHIBITIONS for item in closed_prohibitions):

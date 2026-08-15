@@ -2,8 +2,13 @@
 
 import dataclasses
 import inspect
+import subprocess
+import tempfile
 import unittest
+import uuid
+from pathlib import Path
 
+import loom_lint
 import loom_owner_intent
 import loom_runtime
 
@@ -147,6 +152,85 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
                 arguments = {**defaults, field: invalid}
                 with self.assertRaises(ValueError):
                     loom_owner_intent.resolve_planning_disposition(**arguments)
+
+    def test_planning_disposition_requires_an_ordered_sequence_of_prohibitions(self):
+        """Break caught: mappings, sets, generators, or text become controls."""
+        invalid_containers = (
+            "implementation",
+            {"implementation": True},
+            {"implementation"},
+            (item for item in ("implementation",)),
+            iter(("implementation",)),
+        )
+
+        for prohibitions in invalid_containers:
+            with self.subTest(container=type(prohibitions).__name__):
+                with self.assertRaises(ValueError):
+                    loom_owner_intent.resolve_planning_disposition(
+                        primary_operation="plan",
+                        generation_phase="absent",
+                        state_error=None,
+                        prohibitions=prohibitions,
+                        exact_reference=False,
+                    )
+
+    def test_provisional_contradiction_crosses_real_preparation_without_authority(self):
+        """Break caught: one clarification cannot cross the prepared boundary."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            repo = root / "project"
+            repo.mkdir()
+            subprocess.run(
+                ["git", "-C", str(repo), "init"], check=True,
+                capture_output=True, text=True, encoding="utf-8")
+            (repo / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "."], check=True,
+                capture_output=True, text=True, encoding="utf-8")
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "-c", "user.name=Loom Test",
+                    "-c", "user.email=loom@example.invalid", "commit", "-m",
+                    "fixture",
+                ],
+                check=True, capture_output=True, text=True, encoding="utf-8")
+            request = (
+                "Plan a school attendance dashboard, then implement it immediately.")
+            prepared = loom_runtime.prepare_invocation(
+                request,
+                instance_id=str(uuid.uuid4()),
+                invocation_id=str(uuid.uuid4()),
+                cwd=repo,
+                owner_home=root / "owner-home",
+                now="2026-08-15T12:00:00Z",
+            )
+
+        route = prepared.route_contract
+        control = loom_runtime.request_control(
+            request, state={"generation_phase": "absent"})
+        self.assertEqual("plan", prepared.intent)
+        self.assertEqual("PLAN_EXECUTION_CONTRADICTION", route["code"])
+        self.assertFalse(route["blocked"])
+        self.assertTrue(route["needs_owner"])
+        self.assertEqual(0, route["routine_question_count"])
+        self.assertEqual(1, route["recommendation"].count("?"))
+        self.assertEqual("plan", control["primary_operation"])
+        self.assertNotEqual("execute", control["primary_operation"])
+        self.assertEqual(0, route["target_mutation_count"])
+        for field, invalid in (
+                ("intent", "execute"),
+                ("needs_owner", False),
+                ("routine_question_count", 1)):
+            with self.subTest(unsafe_field=field):
+                unsafe_route = dict(route)
+                unsafe_route[field] = invalid
+                with self.assertRaises(loom_runtime.RuntimeError):
+                    loom_runtime._validate_route(unsafe_route)
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "intent.schema.json", prepared.to_dict(),
+            "intent.schema.json")
+        self.assertEqual([], report.errors)
 
     def test_planning_intent_has_no_execution_route_in_each_lifecycle_state(self):
         """Break caught: lifecycle state misclassifies ordinary planning language."""

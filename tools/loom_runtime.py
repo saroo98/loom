@@ -456,9 +456,8 @@ def _provisional_planning_clarification(evidence):
         "plan", code="PLAN_EXECUTION_CONTRADICTION", needs_owner=True,
         confidence=1.0, evidence=evidence,
         recommendation=(
-            "A provisional plan can be prepared without implementation. Confirm "
-            "whether any implementation should begin after you review that plan."))
-    value["routine_question_count"] = 1
+            "A provisional plan can be prepared without implementation. Should "
+            "any implementation begin only after you review that plan?"))
     return value
 
 
@@ -740,6 +739,10 @@ def _classify_control_clause(clause):
     elif _EXACT_START_CONTROL_RE.match(body):
         intent = "continue"
     elif re.match(
+            r"^(?:please\s+)?(?:implement|execute|start|apply)\b", body):
+        intent = "plan"
+        control = "implementation"
+    elif re.match(
             r"^(?:remember\b|retain\s+(?:this|that)\s+preference\b|"
             r"correct\s+(?:what you learned|my preference|that preference|"
             r"the preference)\b|(?:i|we)\s+prefer\b|from now on\b|"
@@ -858,31 +861,24 @@ def _resolve_clause_roles(request, state):
                 "intent": "plan", "negated": False, "control": "planning",
                 "separator": "hard", "index": len(clauses),
             })
-        planning_positions = [
-            item["index"] for item in classified
-            if not item["negated"] and item["intent"] == "plan"
-            and item["control"] == "planning"]
-        implementation_is_prohibited = any(
-            item["negated"] and item["intent"] == "plan"
-            and item["control"] == "implementation"
-            for item in classified)
-        if planning_positions and implementation_is_prohibited:
-            first_plan_control = min(planning_positions)
-            for item in classified:
-                clause = item.get("clause", "")
-                if not item["negated"] and item["intent"] == "plan" \
-                        and item["control"] == "implementation" \
-                        and item["index"] < first_plan_control \
-                        and re.match(
-                            r"^(?:please\s+)?(?:create|design|build|develop|make)\b",
-                            clause) \
-                        and not re.search(
-                            r"\b(?:implement|execute|start|apply|write the files)\b",
-                            clause):
-                    # A leading project-description verb names what the requested
-                    # plan is about. The later explicit plan-only control and
-                    # implementation prohibition define lifecycle authority.
-                    item["control"] = "planning"
+    implementation_is_prohibited = any(
+        item["negated"] and item["intent"] == "plan"
+        and item["control"] == "implementation"
+        for item in classified)
+    if implementation_is_prohibited:
+        for item in classified:
+            clause = item.get("clause", "")
+            if not item["negated"] and item["intent"] == "plan" \
+                    and item["control"] == "implementation" \
+                    and re.match(
+                        r"^(?:please\s+)?(?:create|design|build|develop|make)\b",
+                        clause) \
+                    and not re.search(
+                        r"\b(?:implement|execute|start|apply|write the files)\b",
+                        clause):
+                # A project-description verb names what the safe-default plan is
+                # about. The separate prohibition still forbids implementation.
+                item["control"] = "planning"
     if not classified:
         return None
     # A shared negation governs coordinated verbs until a hard clause boundary.
@@ -925,6 +921,9 @@ def _resolve_clause_roles(request, state):
             "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
             confidence=0.0, evidence=("negated-lifecycle",),
             recommendation="Keep lifecycle state unchanged; state one positive next action.")
+    if implementation_requested and implementation_prohibited:
+        return _provisional_planning_clarification((
+            "plan-execution-contradiction", "implementation-prohibited"))
     if planning_requested and implementation_requested:
         evidence = ["plan-execution-contradiction"]
         if implementation_prohibited:
@@ -1099,7 +1098,10 @@ def resolve_intent(request, state=None):
                 r"\bprogress\b|\bstatus\b|\btoken usage\b|\bperformance report\b|"
                 r"\bcost report\b", task_text)),
             "review": bool(re.search(
-                r"^(?:please\s+)?(?:review|inspect|audit)\b", task_text)),
+                r"^(?:(?:please\s+)?(?:review|inspect|audit)|"
+                r"(?:could|would|can|will)\s+you\s+(?:please\s+)?"
+                r"(?:review|inspect|audit))\b",
+                task_text)),
             "repair": bool(re.search(
                 r"\brepair\b|\bfix (?:the )?(?:stale |broken )?plan\b|"
                 r"\bstale plan\b", task_text)),
@@ -1254,7 +1256,8 @@ def request_control(request, state=None, *, host_control=None):
             relation = "continue-active"
             evidence.append("explicit-continuation")
         elif primary in {"review", "status"} or re.search(
-                r"\b(?:read-only|audit|inspect|verify only|make no changes)\b|"
+                r"^(?:please\s+)?(?:read-only|verify only)\b|"
+                r"\bmake no changes\b|"
                 r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
                 r"\bwithout\s+modifying\b", text):
             relation = "read-only"
@@ -1569,6 +1572,13 @@ def _validate_route(route, *, schema_version=SCHEMA_VERSION):
     if type(route.get("routine_question_count")) is not int \
             or route["routine_question_count"] != 0:
         raise RuntimeError("pure prepared route cannot ask a routine question")
+    if route.get("code") == "PLAN_EXECUTION_CONTRADICTION" \
+            and (route.get("intent") != "plan"
+                 or route.get("blocked")
+                 or not route.get("needs_owner")
+                 or route.get("recommendation", "").count("?") != 1):
+        raise RuntimeError(
+            "provisional contradiction must remain one non-authorizing plan question")
     for field in EFFECT_COUNT_FIELDS:
         if type(route.get(field)) is not int or route[field] != 0:
             raise RuntimeError("pure prepared route cannot claim a side effect")
