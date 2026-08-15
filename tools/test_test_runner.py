@@ -16,6 +16,58 @@ import loom_test
 
 
 class TestRunnerTests(unittest.TestCase):
+    @staticmethod
+    def _correctness_clean_full_report(*, with_platform_skip):
+        timings = [
+            {"test": "test_inventory.Inventory.test_alpha",
+             "seconds": 0.3, "status": "passed"},
+            {"test": "test_inventory.Inventory.test_beta",
+             "seconds": 0.2,
+             "status": "skipped" if with_platform_skip else "passed"},
+            {"test": "test_inventory.Inventory.test_gamma",
+             "seconds": 0.1, "status": "passed"},
+        ]
+        skip_receipts = ([{
+            "test": "test_inventory.Inventory.test_beta",
+            "reason": "requires Windows host",
+        }] if with_platform_skip else [])
+        return {
+            "schema_version": 1,
+            "mode": "full",
+            "tests_run": 3,
+            "failures": 0,
+            "errors": 0,
+            "skipped": len(skip_receipts),
+            "elapsed_seconds": 0.6,
+            "suppressed_stdout_chars": 0,
+            "max_seconds": None,
+            "within_budget": True,
+            "capability_complete": not with_platform_skip,
+            "status": ("passed-with-capability-skips"
+                       if with_platform_skip else "passed"),
+            "successful": not with_platform_skip,
+            "skip_receipts": skip_receipts,
+            "failure_diagnostics": [],
+            "timings": timings,
+        }
+
+    @staticmethod
+    def _write_inventory_fixture(root):
+        (root / "VERSION").write_text("1.8.3\n", encoding="utf-8")
+        (root / "tools").mkdir()
+        (root / "schemas").mkdir()
+        (root / "docs").mkdir()
+        (root / "docs" / "capabilities.json").write_text(json.dumps({
+            "schema_version": 1, "version": "1.8.3", "capabilities": [],
+        }), encoding="utf-8")
+        (root / "tools" / "loom_sample.py").write_text(
+            "VALUE = 1\n", encoding="utf-8")
+        (root / "tools" / "test_inventory.py").write_text(
+            "def test_alpha(): pass\n"
+            "def test_beta(): pass\n"
+            "def test_gamma(): pass\n",
+            encoding="utf-8")
+
     def test_generic_harness_is_product_independent_and_legacy_runner_delegates(self):
         forbidden = {
             "loom_lifecycle", "loom_memory", "loom_owner",
@@ -563,18 +615,143 @@ class TestRunnerTests(unittest.TestCase):
             loom_test.loom_docs._atomic_json(
                 root / "docs" / "generated-evidence.json", stale)
             (root / "tools" / "test_final.py").write_text(
-                "def test_second():\n    pass\n", encoding="utf-8")
+                "def test_second():\n    pass\n"
+                "def test_third():\n    pass\n", encoding="utf-8")
 
-            refreshed = loom_test.refresh_final_evidence(root, {
-                "mode": "full", "successful": True, "tests_run": 2,
-                "failures": 0, "errors": 0, "skipped": 0,
-                "capability_complete": True, "within_budget": True})
+            report = self._correctness_clean_full_report(
+                with_platform_skip=False)
+            refreshed = loom_test.refresh_final_evidence(root, report)
             observed = json.loads((
                 root / "docs" / "generated-evidence.json").read_text(encoding="utf-8"))
 
             self.assertEqual("refreshed", refreshed["status"])
-            self.assertEqual(2, refreshed["discovered_test_methods"])
-            self.assertEqual(2, observed["discovered_test_methods"])
+            self.assertEqual(3, refreshed["discovered_test_methods"])
+            self.assertEqual(3, observed["discovered_test_methods"])
+
+    def test_correctness_clean_platform_skip_refreshes_inventory_without_certifying(self):
+        report = self._correctness_clean_full_report(with_platform_skip=True)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_inventory_fixture(root)
+            refreshed = loom_test.refresh_final_evidence(root, report)
+            observed = json.loads((
+                root / "docs" / "generated-evidence.json").read_text(
+                    encoding="utf-8"))
+
+        self.assertEqual({
+            "status": "refreshed", "discovered_test_methods": 3,
+        }, refreshed)
+        self.assertEqual(3, observed["discovered_test_methods"])
+        self.assertFalse(report["capability_complete"])
+        self.assertFalse(report["successful"])
+        self.assertEqual("passed-with-capability-skips", report["status"])
+
+    def test_refresh_cli_succeeds_without_rewriting_skip_certification(self):
+        report = self._correctness_clean_full_report(with_platform_skip=True)
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+                loom_test, "run", return_value=dict(report)), mock.patch.object(
+                    loom_test.loom_docs, "refresh_evidence",
+                    return_value={"discovered_test_methods": 3}) as refresh:
+            output = Path(temp) / "report.json"
+            code = loom_test.main([
+                "full", "--quiet", "--refresh-generated-evidence",
+                "--output", str(output)])
+            observed = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(0, code)
+        self.assertFalse(observed["capability_complete"])
+        self.assertFalse(observed["successful"])
+        self.assertEqual("passed-with-capability-skips", observed["status"])
+        self.assertEqual("refreshed", observed["generated_evidence"]["status"])
+        self.assertEqual(2, refresh.call_count)
+        self.assertEqual(
+            3, refresh.call_args_list[1].kwargs["expected_test_methods"])
+
+    def test_skipped_full_suite_without_refresh_remains_nonzero(self):
+        report = self._correctness_clean_full_report(with_platform_skip=True)
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(
+                loom_test, "run", return_value=dict(report)):
+            output = Path(temp) / "report.json"
+            code = loom_test.main([
+                "full", "--quiet", "--output", str(output)])
+            observed = json.loads(output.read_text(encoding="utf-8"))
+
+        self.assertEqual(1, code)
+        self.assertEqual(report, observed)
+
+    def test_inventory_refresh_rejects_every_inconsistent_full_report_shape(self):
+        base = self._correctness_clean_full_report(with_platform_skip=True)
+        invalid = {}
+
+        def changed(name, update):
+            value = json.loads(json.dumps(base))
+            update(value)
+            invalid[name] = value
+
+        changed("fast-mode", lambda value: value.update(mode="fast"))
+        changed("full-budget", lambda value: value.update(max_seconds=30.0))
+        changed("budget-failure", lambda value: value.update(within_budget=False))
+        changed("failure", lambda value: value.update(failures=1))
+        changed("error", lambda value: value.update(errors=1))
+        changed("failure-diagnostic", lambda value: value.update(
+            failure_diagnostics=[{
+                "test": "test_inventory.Inventory.test_alpha",
+                "status": "failed", "exception_type": "AssertionError",
+            }]))
+        changed("malformed-skip-receipt", lambda value: value.update(
+            skip_receipts=[{
+                "test": "test_inventory.Inventory.test_beta",
+                "reason": "requires Windows host", "extra": True,
+            }]))
+        changed("duplicate-skip-receipt", lambda value: value.update(
+            skipped=2, skip_receipts=value["skip_receipts"] * 2))
+        changed("unsorted-skip-receipts", lambda value: value.update(
+            skipped=2,
+            skip_receipts=[
+                {"test": "test_inventory.Inventory.test_beta", "reason": "b"},
+                {"test": "test_inventory.Inventory.test_alpha", "reason": "a"},
+            ]))
+        changed("mismatched-skip-receipt", lambda value: value.update(
+            skip_receipts=[{
+                "test": "test_inventory.Inventory.test_gamma",
+                "reason": "requires Windows host",
+            }]))
+        changed("malformed-timing", lambda value: value["timings"][0].update(
+            extra=True))
+        changed("duplicate-timing", lambda value: value.update(
+            timings=[value["timings"][0], value["timings"][0],
+                     value["timings"][2]]))
+        changed("unsorted-timings", lambda value: value.update(
+            timings=list(reversed(value["timings"]))))
+        changed("mismatched-timing-count", lambda value: value.update(
+            timings=value["timings"][:-1]))
+        changed("wrong-skipped-count", lambda value: value.update(skipped=2))
+        changed("wrong-capability", lambda value: value.update(
+            capability_complete=True))
+        changed("wrong-success", lambda value: value.update(successful=True))
+        changed("wrong-status", lambda value: value.update(status="passed"))
+        changed("missing-field", lambda value: value.pop("elapsed_seconds"))
+        changed("unknown-field", lambda value: value.update(extra=True))
+
+        with mock.patch.object(loom_test.loom_docs, "refresh_evidence") as refresh:
+            for name, report in invalid.items():
+                with self.subTest(name=name), self.assertRaisesRegex(
+                        loom_test.loom_docs.DocsError,
+                        "correctness-clean complete"):
+                    loom_test.refresh_final_evidence(Path.cwd(), report)
+        refresh.assert_not_called()
+
+    def test_inventory_count_mismatch_still_fails_closed(self):
+        report = self._correctness_clean_full_report(with_platform_skip=True)
+        report["tests_run"] = 2
+        report["timings"] = report["timings"][:2]
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            self._write_inventory_fixture(root)
+            with self.assertRaisesRegex(
+                    loom_test.loom_docs.DocsError,
+                    "does not match the discovered test inventory"):
+                loom_test.refresh_final_evidence(root, report)
 
     def test_cli_binds_final_inventory_before_suite_and_certifies_it_after(self):
         report = {

@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import os
 import time
 import unittest
@@ -328,16 +329,87 @@ run_modules = loom_suite_harness.run_modules
 _execute_suite = loom_suite_harness.execute_suite
 
 
+_FULL_REPORT_FIELDS = frozenset({
+    "schema_version", "mode", "tests_run", "failures", "errors", "skipped",
+    "elapsed_seconds", "suppressed_stdout_chars", "max_seconds",
+    "within_budget", "capability_complete", "status", "successful",
+    "skip_receipts", "failure_diagnostics", "timings",
+})
+_SKIP_RECEIPT_FIELDS = frozenset({"test", "reason"})
+_TIMING_FIELDS = frozenset({"test", "seconds", "status"})
+
+
+def _nonnegative_number(value):
+    return isinstance(value, (int, float)) and not isinstance(value, bool) \
+        and math.isfinite(value) and value >= 0
+
+
+def _correctness_clean_full_report(report):
+    """Accept only closed full-run evidence that can bind static inventory."""
+    if not isinstance(report, dict) or set(report) != _FULL_REPORT_FIELDS \
+            or type(report.get("schema_version")) is not int \
+            or report["schema_version"] != 1 \
+            or report.get("mode") != "full" \
+            or type(report.get("tests_run")) is not int \
+            or report["tests_run"] <= 0 \
+            or type(report.get("failures")) is not int \
+            or report["failures"] != 0 \
+            or type(report.get("errors")) is not int \
+            or report["errors"] != 0 \
+            or type(report.get("skipped")) is not int \
+            or report["skipped"] < 0 \
+            or not _nonnegative_number(report.get("elapsed_seconds")) \
+            or type(report.get("suppressed_stdout_chars")) is not int \
+            or report["suppressed_stdout_chars"] < 0 \
+            or report.get("max_seconds") is not None \
+            or report.get("within_budget") is not True \
+            or report.get("failure_diagnostics") != []:
+        return False
+
+    skip_receipts = report.get("skip_receipts")
+    if not isinstance(skip_receipts, list) or any(
+            not isinstance(row, dict) or set(row) != _SKIP_RECEIPT_FIELDS
+            or not isinstance(row.get("test"), str) or not row["test"]
+            or not isinstance(row.get("reason"), str)
+            for row in skip_receipts):
+        return False
+    skip_ids = [row["test"] for row in skip_receipts]
+    if len(skip_ids) != len(set(skip_ids)) \
+            or skip_ids != sorted(skip_ids) \
+            or len(skip_ids) != report["skipped"]:
+        return False
+
+    timings = report.get("timings")
+    if not isinstance(timings, list) or any(
+            not isinstance(row, dict) or set(row) != _TIMING_FIELDS
+            or not isinstance(row.get("test"), str) or not row["test"]
+            or row.get("status") not in {"passed", "skipped"}
+            or not _nonnegative_number(row.get("seconds"))
+            for row in timings):
+        return False
+    timing_ids = [row["test"] for row in timings]
+    if len(timings) != report["tests_run"] \
+            or len(timing_ids) != len(set(timing_ids)) \
+            or timings != sorted(
+                timings, key=lambda row: (-row["seconds"], row["test"])):
+        return False
+    skipped_timing_ids = {
+        row["test"] for row in timings if row["status"] == "skipped"}
+    if skipped_timing_ids != set(skip_ids) \
+            or len(skipped_timing_ids) != report["skipped"]:
+        return False
+
+    capability_complete = report["skipped"] == 0
+    expected_status = (
+        "passed" if capability_complete else "passed-with-capability-skips")
+    return report.get("capability_complete") is capability_complete \
+        and report.get("successful") is capability_complete \
+        and report.get("status") == expected_status
+
+
 def refresh_final_evidence(root, report):
     """Refresh inventory after a complete correctness-clean suite, never a partial run."""
-    correctness_clean = report.get("mode") == "full" \
-        and report.get("successful") is True \
-        and report.get("capability_complete") is True \
-        and report.get("failures") == 0 and report.get("errors") == 0 \
-        and report.get("skipped") == 0 \
-        and report.get("within_budget") is True \
-        and type(report.get("tests_run")) is int and report["tests_run"] > 0
-    if not correctness_clean:
+    if not _correctness_clean_full_report(report):
         raise loom_docs.DocsError(
             "generated evidence requires a correctness-clean complete test suite")
     evidence = loom_docs.refresh_evidence(
@@ -389,6 +461,7 @@ def main(argv=None):
     evidence_path = evidence_root / "docs" / "generated-evidence.json"
     evidence_existed = evidence_path.is_file() and not evidence_path.is_symlink()
     evidence_before = evidence_path.read_bytes() if evidence_existed else None
+    refresh_completed = False
 
     def restore_evidence():
         if evidence_existed:
@@ -418,6 +491,8 @@ def main(argv=None):
         try:
             report["generated_evidence"] = refresh_final_evidence(
                 evidence_root, report)
+            refresh_completed = report["generated_evidence"].get(
+                "status") == "refreshed"
         except loom_docs.DocsError as exc:
             restore_evidence()
             report["generated_evidence"] = {
@@ -438,7 +513,7 @@ def main(argv=None):
         }, sort_keys=True))
     else:
         print(text, end="")
-    return 0 if report["successful"] else 1
+    return 0 if report["successful"] or refresh_completed else 1
 
 
 if __name__ == "__main__":
