@@ -2679,6 +2679,9 @@ def recover_pending(
                     raise LifecycleTransitionError(
                         "successor activation envelope name is not identity-bound")
                 envelope = _load_successor_envelope(path, command_id)
+                if envelope["status"] == "completed" \
+                        and envelope["projection_status"] == "completed":
+                    continue
                 if envelope["status"] not in {"prepared", "completed"}:
                     continue
                 result = recover_successor_activation(
@@ -2686,8 +2689,10 @@ def recover_pending(
                     envelope_root=envelope_root, lock_path=lock_path,
                     project_projection=successor_projection,
                     _lock_held=True)
+                completed_envelope = _load_successor_envelope(path, command_id)
                 if recovered_projection is not None:
-                    recovered_projection("successor-activation", envelope, result)
+                    recovered_projection(
+                        "successor-activation", completed_envelope, result)
                 recovered.append({
                     "kind": "successor-activation",
                     "command_id": command_id,

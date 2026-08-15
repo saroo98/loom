@@ -949,7 +949,7 @@ class GenerationActivationTests(unittest.TestCase):
                 candidate_action_id=prepared["candidate_action_id"],
                 projection_verifier=reject_stale_projection)
 
-    def test_pending_scan_reverifies_completed_successor_projection(self):
+    def test_pending_scan_treats_completed_successor_projection_as_terminal(self):
         _source, stage, prepared = self._prepare_live_successor()
         self.transition.activate_successor(
             self.root, stage, prepared,
@@ -959,26 +959,18 @@ class GenerationActivationTests(unittest.TestCase):
             self.envelopes, prepared["command_id"],
             candidate_action_id=prepared["candidate_action_id"],
             projection_verifier=lambda _prepared, _receipt: None)
-
-        with self.assertRaisesRegex(
-                self.transition.LifecycleTransitionError,
-                "completed projection changed"):
-            self.transition.recover_pending(
-                self.root, witness_path=self.witness,
-                envelope_root=self.envelopes, lock_path=self.lock,
-                successor_projection=lambda _prepared, _receipt: (
-                    (_ for _ in ()).throw(
-                        self.transition.LifecycleTransitionError(
-                            "completed projection changed"))))
-
+        envelope_path = self.transition._successor_envelope_path(
+            self.envelopes, prepared["command_id"])
+        envelope_bytes = envelope_path.read_bytes()
         observed = []
         recovered = self.transition.recover_pending(
             self.root, witness_path=self.witness,
             envelope_root=self.envelopes, lock_path=self.lock,
             successor_projection=lambda prepared_value, receipt: observed.append(
                 (prepared_value["prepared_sha256"], receipt["receipt_sha256"])))
-        self.assertEqual(1, len(observed))
-        self.assertEqual("completed", recovered[0]["status"])
+        self.assertEqual([], observed)
+        self.assertEqual([], recovered)
+        self.assertEqual(envelope_bytes, envelope_path.read_bytes())
 
     def test_post_index_recovery_does_not_reapply_precommit_validation(self):
         _source, stage, prepared = self._prepare_live_successor()

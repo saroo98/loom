@@ -4123,7 +4123,13 @@ def _recover_pending_v3_lifecycle(
                 "LIFECYCLE_PROJECTION_INVALID",
                 "successor recovery action identity does not match its envelope")
         if candidate["status"] == "completed":
-            _finalize_successor_projection(candidate, action_path, memory)
+            if envelope["projection_status"] == "completed":
+                _verify_completed_successor_projection(
+                    candidate, action_path, envelope["prepared"],
+                    envelope["receipt"], cleanup_owner_stage=False,
+                    recover_exact_pointer=False)
+            else:
+                _finalize_successor_projection(candidate, action_path, memory)
             return
         if candidate["status"] != "pending":
             raise OrchestratorError(
@@ -5448,6 +5454,76 @@ def _successor_action_base_sha256(action):
     return _hash(body)
 
 
+def _verify_completed_successor_projection(
+        action, action_path, prepared, receipt, *, cleanup_owner_stage,
+        recover_exact_pointer):
+    """Verify the exact completed target and, while pending, its sealed stage."""
+    directory = Path(action_path).parent
+    _path, completed, _security = _read_action(
+        action_path, owner_home=action["owner_home"],
+        install_root=action["install_root"])
+    projection = prepared["candidate_projection"]
+    result = completed.get("result")
+    author = (
+        completed.get("host_result", {}).get("plan_author")
+        if isinstance(completed.get("host_result"), dict) else None)
+    try:
+        resolved = loom_plan_store.resolve(
+            Path(completed["explicit_target"] or completed["cwd"]))
+        final_manifest = loom_reliability.exact_tree_manifest(
+            resolved.generation_root)
+        loom_reliability.validate_exact_tree_manifest(final_manifest)
+    except (
+            loom_plan_store.PlanStoreError,
+            loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "completed successor plan projection is not independently verifiable") \
+            from exc
+    if completed["action_id"] != projection["action_id"] \
+            or completed["project_id"] != projection["project_id"] \
+            or completed.get("generation_id") != projection["generation_id"] \
+            or completed["session_id"] != projection["session_id"] \
+            or completed["operation_id"] != projection["operation_id"] \
+            or completed["invocation_id"] != projection["invocation_id"] \
+            or _successor_action_base_sha256(completed) != projection[
+                "action_base_sha256"] \
+            or completed["status"] != "completed" \
+            or completed["pack_seed"]["state"] != "installed" \
+            or completed.get("lifecycle_transition") != receipt \
+            or not isinstance(result, dict) \
+            or result.get("session_id") != projection["session_id"] \
+            or result.get("operation_id") != projection["operation_id"] \
+            or result.get("invocation_id") != projection["invocation_id"] \
+            or result.get("project_id") != projection["project_id"] \
+            or result.get("intent") != "plan" \
+            or result.get("status") != "completed" \
+            or result.get("code") != "plan-complete" \
+            or not isinstance(author, dict) \
+            or author.get("manifest") != final_manifest:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "completed successor action/session evidence does not match")
+    pointer = _read_active_pointer(directory)
+    if pointer is not None:
+        if not recover_exact_pointer \
+                or pointer["action_id"] != completed["action_id"] \
+                or pointer["project_id"] != completed["project_id"]:
+            raise OrchestratorError(
+                "ACTION_POINTER_CONFLICT",
+                "completed successor conflicts with an active action pointer")
+        _clear_active_pointer(directory, completed["action_id"])
+    owner_stage = _stage_path(action_path)
+    if not os.path.lexists(owner_stage):
+        return
+    if not cleanup_owner_stage:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "completed successor owner stage unexpectedly reappeared")
+    loom_lifecycle_transition._remove_exact_generation(
+        owner_stage, projection["owner_stage_manifest"])
+
+
 def _finalize_successor_projection(action, action_path, memory):
     transition_receipt = action.get("lifecycle_transition")
     if not isinstance(transition_receipt, dict) \
@@ -5458,60 +5534,9 @@ def _finalize_successor_projection(action, action_path, memory):
     envelope_root = directory / "lifecycle-transitions"
 
     def verify(prepared, receipt):
-        _path, completed, _security = _read_action(
-            action_path, owner_home=action["owner_home"],
-            install_root=action["install_root"])
-        projection = prepared["candidate_projection"]
-        result = completed.get("result")
-        author = (
-            completed.get("host_result", {}).get("plan_author")
-            if isinstance(completed.get("host_result"), dict) else None)
-        try:
-            resolved = loom_plan_store.resolve(
-                Path(completed["explicit_target"] or completed["cwd"]))
-            final_manifest = loom_reliability.exact_tree_manifest(
-                resolved.generation_root)
-            loom_reliability.validate_exact_tree_manifest(final_manifest)
-        except (
-                loom_plan_store.PlanStoreError,
-                loom_reliability.ReliabilityError) as exc:
-            raise OrchestratorError(
-                "LIFECYCLE_PROJECTION_INVALID",
-                "completed successor plan projection is not independently verifiable") \
-                from exc
-        if completed["action_id"] != projection["action_id"] \
-                or completed["project_id"] != projection["project_id"] \
-                or completed.get("generation_id") != projection["generation_id"] \
-                or completed["session_id"] != projection["session_id"] \
-                or completed["operation_id"] != projection["operation_id"] \
-                or completed["invocation_id"] != projection["invocation_id"] \
-                or _successor_action_base_sha256(completed) != projection[
-                    "action_base_sha256"] \
-                or completed["status"] != "completed" \
-                or completed["pack_seed"]["state"] != "installed" \
-                or completed.get("lifecycle_transition") != receipt \
-                or not isinstance(result, dict) \
-                or result.get("session_id") != projection["session_id"] \
-                or result.get("operation_id") != projection["operation_id"] \
-                or result.get("invocation_id") != projection["invocation_id"] \
-                or result.get("project_id") != projection["project_id"] \
-                or result.get("intent") != "plan" \
-                or result.get("status") != "completed" \
-                or result.get("code") != "plan-complete" \
-                or not isinstance(author, dict) \
-                or author.get("manifest") != final_manifest:
-            raise OrchestratorError(
-                "LIFECYCLE_PROJECTION_INVALID",
-                "completed successor action/session evidence does not match")
-        pointer = _read_active_pointer(directory)
-        if pointer is not None:
-            raise OrchestratorError(
-                "ACTION_POINTER_CONFLICT",
-                "completed successor still owns an active action pointer")
-        owner_stage = _action_pack_root(completed)
-        if os.path.lexists(owner_stage):
-            loom_lifecycle_transition._remove_exact_generation(
-                owner_stage, projection["owner_stage_manifest"])
+        _verify_completed_successor_projection(
+            action, action_path, prepared, receipt,
+            cleanup_owner_stage=True, recover_exact_pointer=True)
 
     try:
         loom_lifecycle_transition.complete_successor_projection(

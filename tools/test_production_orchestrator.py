@@ -4141,6 +4141,201 @@ class ProductionOrchestratorTests(unittest.TestCase):
             executor["generation_id"],
             loom_plan_store.resolve(self.repo).generation_id)
 
+    def test_completed_successor_allows_an_ordinary_follow_up_invoke(self):
+        """Break caught: terminal successor recovery re-enters deleted owner stage."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+
+        completed = loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("plan-complete", completed["code"])
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        follow_up = loom_orchestrator.invoke(
+            request="Plan a separate accounting documentation improvement.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", follow_up["status"])
+        self.assertEqual("plan", follow_up["intent"])
+        self.assertEqual(
+            active.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+
+    def test_successor_recovery_after_exact_owner_stage_cleanup_is_idempotent(self):
+        """Break caught: recovery maps an absent owner stage onto active authority."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        owner_stage = loom_orchestrator._stage_path(action_path)
+        self.assertTrue(owner_stage.is_dir())
+        real_write_envelope = loom_lifecycle_transition._write_envelope
+        observed_cleanup_boundary = []
+
+        def interrupt_before_projection_completion(path, value):
+            if value.get("kind") == "successor-activation-v1" \
+                    and value.get("status") == "completed" \
+                    and value.get("projection_status") == "completed":
+                observed_cleanup_boundary.append(not os.path.lexists(owner_stage))
+                raise loom_lifecycle_transition.LifecycleTransitionInterrupted(
+                    "after-owner-stage-deletion")
+            return real_write_envelope(path, value)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "_write_envelope",
+                side_effect=interrupt_before_projection_completion), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual(
+            "LIFECYCLE_PROJECTION_INVALID", interrupted.exception.code)
+        self.assertEqual([True], observed_cleanup_boundary)
+        self.assertFalse(os.path.lexists(owner_stage))
+        _path, completed, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+        envelope_path = loom_lifecycle_transition._successor_envelope_path(
+            action_path.parent / "lifecycle-transitions",
+            completed["lifecycle_transition"]["command_id"])
+        interrupted_envelope = json.loads(
+            envelope_path.read_text(encoding="utf-8"))
+        self.assertEqual("completed", interrupted_envelope["status"])
+        self.assertEqual("pending", interrupted_envelope["projection_status"])
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)):
+            recovered = loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=completed["project_id"],
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual(1, len(recovered))
+        self.assertEqual("completed", recovered[0]["status"])
+        sealed_envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+        self.assertEqual("completed", sealed_envelope["projection_status"])
+        self.assertFalse(os.path.lexists(owner_stage))
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+
+    def test_successor_recovery_clears_only_its_exact_terminal_action_pointer(self):
+        """Break caught: a crash before pointer clear dead-ends committed authority."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        real_clear_pointer = loom_orchestrator._clear_active_pointer
+        observed_terminal_boundary = []
+
+        def interrupt_terminal_pointer_clear(directory, action_id):
+            _path, stored, _security = loom_orchestrator._read_action(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+            if action_id == candidate["action_id"] \
+                    and stored["status"] == "completed":
+                observed_terminal_boundary.append(True)
+                raise loom_lifecycle_transition.LifecycleTransitionInterrupted(
+                    "after-terminal-action-write")
+            return real_clear_pointer(directory, action_id)
+
+        with mock.patch.object(
+                loom_orchestrator, "_clear_active_pointer",
+                side_effect=interrupt_terminal_pointer_clear), \
+                self.assertRaises(
+                    loom_lifecycle_transition.LifecycleTransitionInterrupted):
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual([True], observed_terminal_boundary)
+        _path, completed, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+        self.assertEqual(
+            candidate["action_id"],
+            loom_orchestrator._read_active_pointer(action_path.parent)["action_id"])
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        unrelated_action_id = "00000000-0000-4000-8000-000000000099"
+        loom_orchestrator._write_active_pointer(
+            action_path.parent, action_id=unrelated_action_id,
+            project_id=completed["project_id"])
+
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as conflict:
+            loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=completed["project_id"],
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("ACTION_POINTER_CONFLICT", conflict.exception.code)
+        self.assertEqual(
+            unrelated_action_id,
+            loom_orchestrator._read_active_pointer(action_path.parent)["action_id"])
+        loom_orchestrator._write_active_pointer(
+            action_path.parent, action_id=candidate["action_id"],
+            project_id=completed["project_id"])
+
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)):
+            recovered = loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=completed["project_id"],
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual(1, len(recovered))
+        self.assertEqual("completed", recovered[0]["status"])
+        self.assertIsNone(
+            loom_orchestrator._read_active_pointer(action_path.parent))
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+
     def test_successor_recovery_finishes_exact_action_after_authority_commit(self):
         boundaries = (
             "after-index-commit",
