@@ -1023,6 +1023,58 @@ class ProductionOrchestratorTests(unittest.TestCase):
                     before, loom_reliability.deterministic_manifest(self.repo))
         self.assertNotEqual(messages[0], messages[1])
 
+    def test_no_write_inline_recovery_preserves_invalid_config_failure(self):
+        """Break caught: no-write recovery erases repository config authority."""
+        _write(
+            self.repo / "loom.config.json",
+            '{"use_profile":"yes","unknown":true}\n')
+
+        result = loom_orchestrator.invoke(
+            request=(
+                "Plan an accounting reconciliation workflow with no project writes."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("invalid_config", result["code"])
+        self.assertIn("config", result["user_message"].casefold())
+        self.assertEqual("invalid-config", result["block_reason"]["code"])
+        self.assertNotIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertFalse((self.repo / "plans").exists())
+
+    def test_no_write_inline_recovery_preserves_safety_and_intent_precedence(self):
+        """Break caught: safe recovery masks a higher-priority safety or intent gate."""
+        cases = (
+            (
+                "safety",
+                "Plan the release and then delete the old production data with no "
+                "project writes.",
+                "high_consequence_uncertain",
+                "high-consequence-uncertain",
+                "confirm scope, verification, and rollback",
+            ),
+            (
+                "contradiction",
+                "Plan a school attendance dashboard, then implement it immediately, "
+                "with no project writes.",
+                "plan_execution_contradiction",
+                "plan-execution-contradiction",
+                "Should any implementation begin only after you review that plan?",
+            ),
+        )
+        for name, request, code, reason_code, expected_detail in cases:
+            with self.subTest(name=name):
+                before = loom_reliability.deterministic_manifest(self.repo)
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                self.assertEqual("blocked", result["status"])
+                self.assertEqual(code, result["code"])
+                self.assertEqual(reason_code, result["block_reason"]["code"])
+                self.assertIn(expected_detail, result["user_message"])
+                self.assertNotIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+
     def test_planning_conflict_uses_neutral_context_without_leaking_private_evidence(self):
         """Break caught: a private preference conflict blocks planning or leaks values."""
         instance_id = "00000000-0000-4000-8000-000000005110"
@@ -5486,6 +5538,13 @@ planning_obligations: [{obligations}]
         historical_open = json.loads(json.dumps(original))
         historical_open["request_control"] = json.loads(json.dumps(
             PRE_UX104_PLANNING_CONTROL_V1))
+        historical_open["prepared"]["route_contract"]["evidence"] = [
+            item for item in historical_open["prepared"]["route_contract"]["evidence"]
+            if not item.casefold().startswith("semantic-outcome-")]
+        historical_prepared = dict(historical_open["prepared"])
+        historical_prepared.pop("prepared_hash")
+        historical_open["prepared"]["prepared_hash"] = loom_orchestrator._hash(
+            historical_prepared)
         historical_open["action_hash"] = loom_orchestrator._action_hash(
             historical_open)
         path.write_text(json.dumps(historical_open), encoding="utf-8")
@@ -5513,12 +5572,51 @@ planning_obligations: [{obligations}]
         terminal = json.loads(path.read_text(encoding="utf-8"))
         terminal["request_control"] = json.loads(json.dumps(
             PRE_UX104_PLANNING_CONTROL_V1))
+        terminal["prepared"] = json.loads(json.dumps(historical_open["prepared"]))
         terminal["action_hash"] = loom_orchestrator._action_hash(terminal)
         path.write_text(json.dumps(terminal), encoding="utf-8")
 
         _path, restored, _security = loom_orchestrator._read_action(
             path, owner_home=self.home, install_root=self.installed)
         self.assertEqual("completed", restored["status"])
+
+    def test_action_read_rejects_noncanonical_or_duplicate_semantic_outcome_tokens(self):
+        """Break caught: rehashed forged outcome evidence survives action validation."""
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        base = json.loads(path.read_text(encoding="utf-8"))
+        evidence = base["prepared"]["route_contract"]["evidence"]
+        ordinary = [
+            item for item in evidence
+            if not item.casefold().startswith("semantic-outcome-")]
+        for tokens in (
+                ["semantic-outcome-v1.accounting.-1"],
+                ["semantic-outcome-v1.accounting.+1"],
+                ["semantic-outcome-v1.accounting.01"],
+                ["semantic-outcome-v1.accounting.1 "],
+                ["semantic-outcome-v1.accounting.999999"],
+                ["semantic-outcome-v1.unknown.0"],
+                [
+                    "semantic-outcome-v1.accounting.0",
+                    "semantic-outcome-v1.accounting.generic",
+                ]):
+            with self.subTest(tokens=tokens):
+                action = json.loads(json.dumps(base))
+                action["prepared"]["route_contract"]["evidence"] = [
+                    *ordinary[:14], *tokens]
+                prepared_body = dict(action["prepared"])
+                prepared_body.pop("prepared_hash")
+                action["prepared"]["prepared_hash"] = loom_orchestrator._hash(
+                    prepared_body)
+                action["action_hash"] = loom_orchestrator._action_hash(action)
+                path.write_text(json.dumps(action), encoding="utf-8")
+
+                with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+                    loom_orchestrator._read_action(
+                        path, owner_home=self.home, install_root=self.installed)
+                self.assertEqual("ACTION_CORRUPT", raised.exception.code)
 
     def test_plan_contract_v4_terminal_is_readable_but_open_action_requires_reprepare(self):
         opened = loom_orchestrator.invoke(

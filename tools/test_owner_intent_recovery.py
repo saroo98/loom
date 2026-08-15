@@ -299,6 +299,92 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
 
         self.assertEqual(fixture, loom_runtime.validate_request_control(fixture))
 
+    def test_semantic_outcome_evidence_is_canonical_unique_and_catalog_bounded(self):
+        """Break caught: forged catalog identities survive sealed evidence parsing."""
+        valid = "semantic-outcome-v1.accounting.0"
+        expected = loom_runtime.loom_domain.CATALOG["accounting"]["invariants"][0]
+        self.assertEqual(
+            expected,
+            loom_runtime.semantic_outcome_from_evidence([valid], ["accounting"]))
+        self.assertEqual(
+            "bounded accounting deliverable",
+            loom_runtime.semantic_outcome_from_evidence(
+                ["semantic-outcome-v1.accounting.generic"], ["accounting"]))
+
+        invalid = (
+            "semantic-outcome-v1.accounting.-1",
+            "semantic-outcome-v1.accounting.+1",
+            "semantic-outcome-v1.accounting.01",
+            "semantic-outcome-v1.accounting. 1",
+            "semantic-outcome-v1.accounting.1 ",
+            "Semantic-outcome-v1.accounting.1",
+            "semantic-outcome-v1.unknown.0",
+            "semantic-outcome-v1.accounting.999999",
+            "semantic-outcome-v1.accounting",
+        )
+        for token in invalid:
+            with self.subTest(token=token), self.assertRaises(
+                    loom_runtime.RuntimeError):
+                loom_runtime.semantic_outcome_from_evidence(
+                    [token], ["accounting"])
+        with self.assertRaises(loom_runtime.RuntimeError):
+            loom_runtime.semantic_outcome_from_evidence(
+                [valid, "semantic-outcome-v1.accounting.generic"],
+                ["accounting"])
+
+    def test_prepared_semantic_outcome_validation_allows_only_historical_absence(self):
+        """Break caught: rehashed malformed or duplicate evidence enters orchestration."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            repo = root / "project"
+            repo.mkdir()
+            subprocess.run(
+                ["git", "-C", str(repo), "init"], check=True,
+                capture_output=True, text=True, encoding="utf-8")
+            (repo / "README.md").write_text("fixture\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "-C", str(repo), "add", "."], check=True,
+                capture_output=True, text=True, encoding="utf-8")
+            subprocess.run(
+                [
+                    "git", "-C", str(repo), "-c", "user.name=Loom Test",
+                    "-c", "user.email=loom@example.invalid", "commit", "-m",
+                    "fixture",
+                ],
+                check=True, capture_output=True, text=True, encoding="utf-8")
+            prepared = loom_runtime.prepare_invocation(
+                "Plan an accounting reconciliation change.",
+                instance_id=str(uuid.uuid4()),
+                invocation_id=str(uuid.uuid4()), cwd=repo,
+                owner_home=root / "owner-home", now="2026-08-15T12:00:00Z")
+
+        values = prepared.to_dict()
+        values.pop("prepared_hash")
+        values["route_contract"]["evidence"] = [
+            item for item in values["route_contract"]["evidence"]
+            if not item.casefold().startswith("semantic-outcome-")]
+        historical = loom_runtime.PreparedInvocation.build(
+            **values, operation_fingerprint=prepared.operation_fingerprint)
+        self.assertFalse(any(
+            item.casefold().startswith("semantic-outcome-")
+            for item in historical.route_contract["evidence"]))
+
+        for tokens in (
+                ["semantic-outcome-v1.accounting.-1"],
+                ["semantic-outcome-v1.accounting.999999"],
+                [
+                    "semantic-outcome-v1.accounting.0",
+                    "semantic-outcome-v1.accounting.generic",
+                ]):
+            with self.subTest(tokens=tokens):
+                forged = json.loads(json.dumps(values))
+                forged["route_contract"]["evidence"] = [
+                    *forged["route_contract"]["evidence"][:14], *tokens]
+                with self.assertRaises(loom_runtime.RuntimeError):
+                    loom_runtime.PreparedInvocation.build(
+                        **forged,
+                        operation_fingerprint=prepared.operation_fingerprint)
+
     def test_provisional_contradiction_crosses_real_preparation_without_authority(self):
         """Break caught: one clarification cannot cross the prepared boundary."""
         with tempfile.TemporaryDirectory() as directory:

@@ -8180,8 +8180,31 @@ def _extract_planning_mode(request_control):
     return mode
 
 
-def _rebind_useful_planning_prepared(prepared):
+_USEFUL_PLANNING_REBIND_CODES = {
+    "current-world-replan": frozenset({
+        "PLAN_DECISION_STALE", "STALE_LIFECYCLE", "STALE_TIME"}),
+    "inline-recovery": frozenset({
+        "INVALID_LIFECYCLE", "CORRUPT_LIFECYCLE", "MUTATION_PROHIBITED"}),
+}
+_USEFUL_PLANNING_REBINDABLE_CODES = frozenset().union(
+    *_USEFUL_PLANNING_REBIND_CODES.values())
+
+
+def _rebind_useful_planning_prepared(prepared, planning_mode):
     """Allow sealed current-world or inline planning without granting execution."""
+    if prepared.route_contract["code"] not in _USEFUL_PLANNING_REBIND_CODES.get(
+            planning_mode, frozenset()):
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            "planning recovery cannot replace this prepared route")
+    try:
+        semantic = loom_runtime.validate_semantic_outcome_evidence(
+            prepared.route_contract["evidence"], prepared.domains,
+            required=True)
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            f"sealed semantic outcome is invalid: {exc}") from exc
     values = prepared.to_dict()
     values.pop("prepared_hash")
     route = values["route_contract"]
@@ -8192,15 +8215,12 @@ def _rebind_useful_planning_prepared(prepared):
         "recommendation": "",
         "block_reason": None,
     })
-    semantic = [
-        item for item in route["evidence"]
-        if item.startswith(loom_runtime.SEMANTIC_OUTCOME_EVIDENCE_PREFIX)]
     ordinary = [
         item for item in route["evidence"]
-        if not item.startswith(loom_runtime.SEMANTIC_OUTCOME_EVIDENCE_PREFIX)
+        if item != semantic["token"]
         and item != "useful-planning-recovery"]
     route["evidence"] = [
-        *ordinary[:14], *semantic[:1], "useful-planning-recovery"]
+        *ordinary[:14], semantic["token"], "useful-planning-recovery"]
     values["route_contract"] = route
     return loom_runtime.PreparedInvocation.build(
         **values, operation_fingerprint=prepared.operation_fingerprint)
@@ -8241,7 +8261,7 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
     try:
         semantic_outcome = loom_runtime.semantic_outcome_from_evidence(
             prepared.route_contract["evidence"], domains)
-    except RuntimeError as exc:
+    except loom_runtime.RuntimeError as exc:
         raise OrchestratorError(
             "REQUEST_CONTROL_INVALID",
             f"sealed semantic outcome is invalid: {exc}") from exc
@@ -8387,10 +8407,15 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     planning_mode = None
     if prepared.intent == "plan" \
             and request_control["explicitness"] != "host-bound":
-        planning_mode = _extract_planning_mode(request_control)
-        if prepared.route_contract["blocked"] \
-                and planning_mode in {"current-world-replan", "inline-recovery"}:
-            prepared = _rebind_useful_planning_prepared(prepared)
+        protected_block = prepared.route_contract["blocked"] \
+            and prepared.route_contract["code"] \
+            not in _USEFUL_PLANNING_REBINDABLE_CODES
+        if not protected_block:
+            planning_mode = _extract_planning_mode(request_control)
+        if prepared.route_contract["blocked"] and planning_mode in {
+                "current-world-replan", "inline-recovery"}:
+            prepared = _rebind_useful_planning_prepared(
+                prepared, planning_mode)
             opened = loom_session.OpenSession(
                 prepared=prepared,
                 session_id=opened.session_id,
@@ -8485,7 +8510,9 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "preferences": planning_preference_projection["public_preferences"],
         }
     inline_recovery_reason = None
-    if planning_mode == "inline-recovery":
+    if planning_mode == "inline-recovery" \
+            and prepared.route_contract["code"] == "ROUTE_PLAN" \
+            and not prepared.route_contract["blocked"]:
         inline_recovery_reason = (
             "PROJECT_WRITES_PROHIBITED"
             if "mutation" in request_control["prohibitions"]
@@ -8501,6 +8528,22 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "reversible_action_ids": [],
             "user_message": _inline_recovery_message(
                 reason_code, prepared=prepared, domain_contract=domain_contract),
+        }
+        return controller.run(
+            request, invocation_id=invocation_id, cwd=cwd,
+            explicit_target=target, now=now, continue_open=True,
+            prepared=prepared, selected_context=context_capsule).to_dict()
+    if planning_mode == "inline-recovery" \
+            and prepared.route_contract["code"] \
+            == "PLAN_EXECUTION_CONTRADICTION":
+        controller.handlers["plan"] = lambda _context: {
+            "status": "blocked",
+            "code": "plan_execution_contradiction",
+            "success": False,
+            "metrics": {},
+            "evidence_ids": [],
+            "reversible_action_ids": [],
+            "user_message": prepared.route_contract["recommendation"],
         }
         return controller.run(
             request, invocation_id=invocation_id, cwd=cwd,

@@ -1195,6 +1195,9 @@ def _project_write_prohibited(normalized_request):
 
 
 SEMANTIC_OUTCOME_EVIDENCE_PREFIX = "semantic-outcome-v1."
+_SEMANTIC_OUTCOME_TOKEN_RE = re.compile(
+    r"semantic-outcome-v1\.([a-z0-9][a-z0-9._-]{0,63})\."
+    r"(generic|0|[1-9][0-9]*)\Z")
 _SEMANTIC_OUTCOME_STOP_WORDS = {
     "a", "an", "and", "for", "of", "or", "plan", "the", "to", "with",
     "workflow", "project", "change", "feature", "only", "do", "not",
@@ -1229,33 +1232,62 @@ def semantic_outcome_evidence(request, domains_result):
         suffix = str(index)
     else:
         domain, suffix = sorted(domains)[0], "generic"
-    return f"{SEMANTIC_OUTCOME_EVIDENCE_PREFIX}{domain}.{suffix}"
+    token = f"{SEMANTIC_OUTCOME_EVIDENCE_PREFIX}{domain}.{suffix}"
+    parse_semantic_outcome_token(token, domains)
+    return token
+
+
+def parse_semantic_outcome_token(token, domains):
+    """Parse one exact closed catalog identity within sealed domain scope."""
+    if not isinstance(token, str) or len(token) > 200 \
+            or not isinstance(domains, (list, tuple)) \
+            or not domains or any(
+                not isinstance(domain, str) or not ID_RE.fullmatch(domain)
+                for domain in domains) \
+            or len(set(domains)) != len(domains):
+        raise RuntimeError("semantic outcome identity or domain scope is invalid")
+    match = _SEMANTIC_OUTCOME_TOKEN_RE.fullmatch(token)
+    if match is None:
+        raise RuntimeError("semantic outcome identity is noncanonical")
+    domain, suffix = match.groups()
+    if domain not in domains:
+        raise RuntimeError("semantic outcome identity is outside the sealed domains")
+    if suffix == "generic":
+        return {
+            "token": token, "domain": domain, "index": None,
+            "label": f"bounded {domain} deliverable",
+        }
+    invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
+    index = int(suffix)
+    if not 0 <= index < len(invariants):
+        raise RuntimeError("semantic outcome catalog index is outside its bound")
+    return {
+        "token": token, "domain": domain, "index": index,
+        "label": invariants[index],
+    }
+
+
+def validate_semantic_outcome_evidence(evidence, domains, *, required=False):
+    """Validate an optional historical semantic token without accepting lookalikes."""
+    if not isinstance(evidence, (list, tuple)) or type(required) is not bool:
+        raise RuntimeError("semantic outcome evidence is invalid")
+    tokens = [
+        item for item in evidence
+        if isinstance(item, str)
+        and item.strip().casefold().startswith("semantic-outcome-")]
+    if not tokens:
+        if required:
+            raise RuntimeError("semantic outcome evidence is missing")
+        return None
+    if len(tokens) != 1:
+        raise RuntimeError("semantic outcome evidence is duplicated")
+    return parse_semantic_outcome_token(tokens[0], domains)
 
 
 def semantic_outcome_from_evidence(evidence, domains):
     """Open one sealed catalog identity to its repository-owned semantic label."""
-    if not isinstance(evidence, (list, tuple)) or not isinstance(domains, (list, tuple)):
-        raise RuntimeError("semantic outcome evidence is invalid")
-    tokens = [item for item in evidence if isinstance(item, str)
-              and item.startswith(SEMANTIC_OUTCOME_EVIDENCE_PREFIX)]
-    if len(tokens) != 1:
-        raise RuntimeError("semantic outcome evidence is missing or duplicated")
-    identity = tokens[0][len(SEMANTIC_OUTCOME_EVIDENCE_PREFIX):]
-    try:
-        domain, suffix = identity.rsplit(".", 1)
-    except ValueError as exc:
-        raise RuntimeError("semantic outcome identity is malformed") from exc
-    if domain not in domains or not ID_RE.fullmatch(domain):
-        raise RuntimeError("semantic outcome identity is outside the sealed domains")
-    invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
-    if suffix == "generic":
-        return f"bounded {domain} deliverable"
-    try:
-        index = int(suffix)
-        label = invariants[index]
-    except (ValueError, IndexError, TypeError) as exc:
-        raise RuntimeError("semantic outcome catalog identity is invalid") from exc
-    return label
+    return validate_semantic_outcome_evidence(
+        evidence, domains, required=True)["label"]
 
 
 def request_control(request, state=None, *, host_control=None):
@@ -1512,11 +1544,16 @@ def _apply_lifecycle_request_policy(decision, state, control):
         }
 
     if control["blocked"]:
+        if decision["blocked"]:
+            return decision
         return block(
             control["block_reason"] or "RELATION_REQUIRES_OWNER",
             "Choose one explicit lifecycle relation before Loom changes state.",
             "structured-control-blocked")
     if "mutation" in control["prohibitions"] and relation != "read-only":
+        if decision["blocked"] \
+                or decision["code"] == "PLAN_EXECUTION_CONTRADICTION":
+            return decision
         return block(
             "MUTATION_PROHIBITED",
             "The request prohibits mutation; use a read-only inspection instead.",
@@ -1795,6 +1832,8 @@ class PreparedInvocation:
             data.get("route_contract"), schema_version=data["schema_version"])
         if data["route_contract"]["intent"] != data["intent"]:
             raise RuntimeError("prepared intent/route mismatch")
+        validate_semantic_outcome_evidence(
+            data["route_contract"]["evidence"], domains, required=False)
         try:
             loom_project_inspection.validate(data.get("project_inspection"))
         except loom_project_inspection.InspectionError as exc:
