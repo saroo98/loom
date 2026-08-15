@@ -2840,6 +2840,90 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertIn("prior_generation_transition", replacement)
         self.assertNotIn("work_order", replacement)
 
+    def test_negated_alternative_design_keeps_the_reviewed_generation_unchanged(self):
+        """Break caught: a no-change design discussion mutates the current lifecycle."""
+        self.complete_machine_authored_plan()
+        before = loom_plan_store.resolve(self.repo)
+        before_manifest = loom_reliability.exact_tree_manifest(
+            before.generation_root)
+        before_lifecycle = (
+            before.generation_root / "lifecycle.json").read_bytes()
+        request = "Discuss another design but do not change the current plan."
+
+        result = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertFalse(result["owner_message"]["changes_made"])
+        self.assertFalse(result["terminal_authority"]["implementation_authorized"])
+        after = loom_plan_store.resolve(self.repo)
+        self.assertEqual(before.generation_id, after.generation_id)
+        self.assertEqual(before_manifest, loom_reliability.exact_tree_manifest(
+            after.generation_root))
+        self.assertEqual(
+            before_lifecycle,
+            (after.generation_root / "lifecycle.json").read_bytes())
+        action_paths = sorted(self.home.glob(
+            f"instances/*/runtime/projects/{result['project_id']}/orchestrations/*.json"))
+        matching = []
+        for path in action_paths:
+            if re.fullmatch(r"[0-9a-f-]{36}\.json", path.name) is None:
+                continue
+            _path, action, _security = loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+            if action["request"] == request:
+                matching.append(action)
+        self.assertEqual(1, len(matching))
+        self.assertEqual("read-only", matching[0]["request_control"]["relation"])
+
+    def test_plan_pack_exists_reports_a_real_bounded_recovery_path(self):
+        """Break caught: an existing pack leaves the owner without a safe next step."""
+        existing_pack = self.root / "existing-pack"
+        existing_pack.mkdir()
+        (existing_pack / "plans").mkdir()
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as pack_exists:
+            loom_orchestrator.invoke(
+                request=(
+                    "Outline a small museum catalogue accessibility enhancement."),
+                cwd=existing_pack, home=self.home, install_root=self.installed)
+        self.assertEqual("PLAN_PACK_EXISTS", pack_exists.exception.code)
+        self.assertIn("use resume or repair", str(pack_exists.exception))
+
+    def test_stale_plan_decision_reports_a_real_bounded_recovery_path(self):
+        """Break caught: a stale displayed plan hides its recovery requirement."""
+        action, completed = self.complete_machine_authored_plan()
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as stale:
+            loom_orchestrator.start(
+                action["action_path"],
+                presentation_sha256=completed[
+                    "plan_presentation"]["presentation_sha256"],
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("PLAN_DECISION_STALE", stale.exception.code)
+        self.assertIn("changed", str(stale.exception))
+
+    def test_indeterminate_repair_scope_reports_a_real_bounded_recovery_path(self):
+        """Break caught: an empty active repair scope mutates the reviewed plan."""
+        repair_action, repair_completed = self.complete_machine_authored_plan()
+        loom_orchestrator.start(
+            repair_action["action_path"],
+            presentation_sha256=repair_completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        active = loom_plan_store.resolve(self.repo)
+        before_repair = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as indeterminate:
+            loom_orchestrator.invoke(
+                request="Repair the failed active action.", cwd=self.repo,
+                home=self.home, install_root=self.installed)
+        self.assertEqual("REPAIR_SCOPE_INDETERMINATE", indeterminate.exception.code)
+        self.assertIn(
+            "no exact product-world difference", str(indeterminate.exception))
+        self.assertEqual(before_repair, loom_reliability.exact_tree_manifest(
+            loom_plan_store.resolve(self.repo).generation_root))
+
     def test_revision_archive_and_encrypted_envelope_are_schema_valid(self):
         action, completed = self.complete_machine_authored_plan()
         prior = completed["plan_presentation"]

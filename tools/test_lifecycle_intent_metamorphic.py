@@ -37,20 +37,6 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
         self.assertEqual(1, decision["routine_question_count"])
         self.assertTrue(decision["recommendation"].strip())
 
-    def test_discuss_another_design_never_changes_the_current_plan(self):
-        """Break caught: a negated alternative design request starts lifecycle work."""
-        decision = loom_runtime.resolve_intent(
-            "Discuss another design but do not change the current plan.")
-        control = loom_runtime.request_control(
-            "Discuss another design but do not change the current plan.",
-            state={"generation_phase": "reviewable"})
-
-        self.assertNotEqual("execute", decision["intent"])
-        self.assertNotIn(
-            control["relation"],
-            {"start-exact", "continue-active", "repair-active", "supersede-generation"},
-        )
-
     def test_plan_only_equivalents_ignore_descriptive_build_verbs(self):
         """Break caught: harmless wording changes alter lifecycle authority."""
         requests = [
