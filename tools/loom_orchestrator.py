@@ -4108,6 +4108,22 @@ def _recover_pending_v3_lifecycle(
             owner_home=owner_home, install_root=install_root, memory=memory,
             target=target)
 
+    def verify_terminal_successor(prepared, receipt):
+        projection = prepared["candidate_projection"]
+        action_path = Path(directory) / f"{projection['action_id']}.json"
+        _path, candidate, _security = _read_action(
+            action_path, owner_home=owner_home, install_root=install_root)
+        if candidate["action_id"] != projection["action_id"] \
+                or candidate["project_id"] != projection["project_id"] \
+                or candidate.get("generation_id") != projection["generation_id"] \
+                or candidate["status"] != "completed":
+            raise OrchestratorError(
+                "LIFECYCLE_PROJECTION_INVALID",
+                "terminal successor projection has no exact completed candidate")
+        _verify_completed_successor_projection(
+            candidate, action_path, prepared, receipt,
+            cleanup_owner_stage=False, recover_exact_pointer=False)
+
     def recovered_projection(kind, envelope, result):
         if kind != "successor-activation" or result["status"] == "abandoned":
             return
@@ -4122,14 +4138,12 @@ def _recover_pending_v3_lifecycle(
             raise OrchestratorError(
                 "LIFECYCLE_PROJECTION_INVALID",
                 "successor recovery action identity does not match its envelope")
+        if envelope["projection_status"] == "completed":
+            verify_terminal_successor(
+                envelope["prepared"], envelope["receipt"])
+            return
         if candidate["status"] == "completed":
-            if envelope["projection_status"] == "completed":
-                _verify_completed_successor_projection(
-                    candidate, action_path, envelope["prepared"],
-                    envelope["receipt"], cleanup_owner_stage=False,
-                    recover_exact_pointer=False)
-            else:
-                _finalize_successor_projection(candidate, action_path, memory)
+            _finalize_successor_projection(candidate, action_path, memory)
             return
         if candidate["status"] != "pending":
             raise OrchestratorError(
@@ -4340,6 +4354,7 @@ def _recover_pending_v3_lifecycle(
             lock_path=_orchestration_lock(directory),
             activation_projection=project_generation,
             successor_projection=project_successor,
+            successor_terminal_verifier=verify_terminal_successor,
             legacy_projection=project_generation,
             recovery_projection=recover_projection,
             recovered_projection=recovered_projection,

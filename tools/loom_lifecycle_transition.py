@@ -2617,7 +2617,8 @@ def recover_pending(
         project_root, *, witness_path=None, witness_store=None, envelope_root,
         lock_path, project_projection=None, activation_projection=None,
         successor_projection=None, legacy_projection=None, recovery_projection=None,
-        recovered_projection=None, _lock_held=False):
+        recovered_projection=None, successor_terminal_verifier=None,
+        _lock_held=False):
     """Recover every bounded prepared envelope before accepting a new mutation."""
     witness_store = _witness_store(
         witness_path=witness_path, witness_store=witness_store)
@@ -2681,6 +2682,12 @@ def recover_pending(
                 envelope = _load_successor_envelope(path, command_id)
                 if envelope["status"] == "completed" \
                         and envelope["projection_status"] == "completed":
+                    if successor_terminal_verifier is None:
+                        raise LifecycleTransitionError(
+                            "completed successor projection requires independent "
+                            "terminal verification")
+                    successor_terminal_verifier(
+                        envelope["prepared"], envelope["receipt"])
                     continue
                 if envelope["status"] not in {"prepared", "completed"}:
                     continue

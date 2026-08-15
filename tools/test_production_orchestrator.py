@@ -4177,6 +4177,47 @@ class ProductionOrchestratorTests(unittest.TestCase):
             predecessor_manifest,
             loom_reliability.exact_tree_manifest(predecessor.generation_root))
 
+    def test_terminal_successor_scan_rejects_corrupted_completed_evidence(self):
+        """Break caught: a naked terminal marker bypasses candidate verification."""
+        self.complete_machine_authored_plan()
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        action_path = Path(candidate["action_path"])
+        _path, completed, security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        completed["result"] = {
+            **completed["result"], "code": "forged-plan-complete",
+        }
+        loom_orchestrator._write_action(action_path, completed, security)
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        envelope_path = loom_lifecycle_transition._successor_envelope_path(
+            action_path.parent / "lifecycle-transitions",
+            completed["lifecycle_transition"]["command_id"])
+        envelope_bytes = envelope_path.read_bytes()
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as rejected:
+            loom_orchestrator.invoke(
+                request="Plan a separate accounting documentation improvement.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("LIFECYCLE_PROJECTION_INVALID", rejected.exception.code)
+        self.assertEqual(envelope_bytes, envelope_path.read_bytes())
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertIsNone(
+            loom_orchestrator._read_active_pointer(action_path.parent))
+        self.assertFalse(os.path.lexists(
+            loom_orchestrator._stage_path(action_path)))
+
     def test_successor_recovery_after_exact_owner_stage_cleanup_is_idempotent(self):
         """Break caught: recovery maps an absent owner stage onto active authority."""
         self.complete_machine_authored_plan()

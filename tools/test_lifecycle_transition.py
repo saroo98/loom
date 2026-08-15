@@ -962,13 +962,26 @@ class GenerationActivationTests(unittest.TestCase):
         envelope_path = self.transition._successor_envelope_path(
             self.envelopes, prepared["command_id"])
         envelope_bytes = envelope_path.read_bytes()
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "requires independent terminal verification"):
+            self.transition.recover_pending(
+                self.root, witness_path=self.witness,
+                envelope_root=self.envelopes, lock_path=self.lock)
         observed = []
         recovered = self.transition.recover_pending(
             self.root, witness_path=self.witness,
             envelope_root=self.envelopes, lock_path=self.lock,
-            successor_projection=lambda prepared_value, receipt: observed.append(
-                (prepared_value["prepared_sha256"], receipt["receipt_sha256"])))
-        self.assertEqual([], observed)
+            successor_projection=lambda _prepared, _receipt: self.fail(
+                "terminal scan must not replay successor projection"),
+            recovered_projection=lambda _kind, _value, _result: self.fail(
+                "terminal scan must not enter recovery projection"),
+            successor_terminal_verifier=lambda prepared_value, receipt: (
+                observed.append((
+                    prepared_value["prepared_sha256"],
+                    receipt["receipt_sha256"]))))
+        self.assertEqual(1, len(observed))
+        self.assertEqual(prepared["prepared_sha256"], observed[0][0])
         self.assertEqual([], recovered)
         self.assertEqual(envelope_bytes, envelope_path.read_bytes())
 
