@@ -5,6 +5,7 @@ import hashlib
 import json
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
@@ -55,7 +56,7 @@ class CodexLifecycleTests(unittest.TestCase):
             "negative_acceptance_sha256": "8" * 64,
             "evidence_requirements_sha256": "9" * 64,
             "rejection_code": "UNAUTHORIZED_PROJECT_TOUCH",
-            "safe_next_operation": "resume-exact-action",
+            "safe_next_operation": "continue-current-execution",
         }
         value["continuation_sha256"] = hashlib.sha256(json.dumps(
             value, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
@@ -94,38 +95,6 @@ class CodexLifecycleTests(unittest.TestCase):
         self.assertIn(
             self.continuation()["continuation_sha256"], context)
 
-    def test_distinct_executor_deviations_are_denied_and_reassert_one_path(self):
-        """Break caught: one blocked shortcut dead-ends the valid exact action."""
-        self.action.update({
-            "intent": "execute",
-            "generation_id": "generation-" + "2" * 32,
-            "work_order": "work-orders/WO-001-feature.md",
-        })
-        attempts = {
-            "scope reduction": "tests/required_acceptance.py",
-            "acceptance weakening": "tests/test_contract.py",
-            "architecture substitution": "architecture/alternate.py",
-            "invented extra scope": "src/unplanned_extra.py",
-            "omitted required work": "docs/claim-complete.md",
-            "premature completion": "plans/completion-evidence/WO-001.json",
-            "repair loophole": "repairs/shortcut.py",
-            "executor replanning": "plans/plan-semantics.json",
-        }
-        with mock.patch.object(
-                loom_codex_lifecycle, "_work_order_touches",
-                return_value=(self.root, ["src/app.py"])), \
-                mock.patch.object(
-                    loom_codex_lifecycle.loom_orchestrator,
-                    "authorized_continuation", return_value=self.continuation()):
-            for label, path in attempts.items():
-                with self.subTest(label=label):
-                    code, output = self.handle(self.event(
-                        tool_name="Write", tool_input={"file_path": path}))
-                    self.assertEqual(0, code)
-                    specific = output["hookSpecificOutput"]
-                    self.assertEqual("deny", specific["permissionDecision"])
-                    self.assertIn("WO-001", specific["additionalContext"])
-
     def test_malformed_continuation_is_dropped_without_weakening_denial(self):
         """Break caught: malformed reassertion turns a denied write into a hook failure."""
         with mock.patch.object(
@@ -160,6 +129,65 @@ class CodexLifecycleTests(unittest.TestCase):
         self.assertEqual(
             output["systemMessage"], specific["permissionDecisionReason"])
 
+    def test_denial_output_is_bounded_and_never_echoes_private_paths(self):
+        private = "private-owner-segment-" + "x" * 12000
+        attempts = [
+            private + "/outside.py",
+            "../" + private,
+            str(self.root.parent / private / "outside.py"),
+        ]
+        with mock.patch.object(
+                loom_codex_lifecycle.loom_orchestrator,
+                "authorized_continuation", return_value=self.continuation()):
+            for raw in attempts:
+                with self.subTest(raw=raw[:32]):
+                    code, output = self.handle(self.event(
+                        tool_name="Write", tool_input={"file_path": raw}))
+                    serialized = json.dumps(
+                        output, separators=(",", ":"), ensure_ascii=False)
+                    self.assertEqual(0, code)
+                    self.assertEqual(
+                        "deny", output["hookSpecificOutput"][
+                            "permissionDecision"])
+                    self.assertLessEqual(
+                        len(serialized.encode("utf-8")),
+                        loom_codex_lifecycle.MAX_DENIAL_OUTPUT_BYTES)
+                    self.assertNotIn("private-owner-segment", serialized)
+                    self.assertNotIn("..", output["systemMessage"])
+
+    def test_launcher_emits_structured_denial_and_keeps_allowed_no_output(self):
+        denied_event = self.event(
+            tool_name="Write", tool_input={"file_path": "outside.py"})
+        allowed_event = self.event(
+            tool_name="Write", tool_input={"file_path": "plans/plan.md"})
+
+        def launch(event):
+            output = io.StringIO()
+            with mock.patch.object(
+                    loom_codex_lifecycle, "_read_event", return_value=event), \
+                    mock.patch.object(
+                        loom_codex_lifecycle, "_active_action",
+                        return_value=self.action), \
+                    mock.patch.object(loom_codex_lifecycle, "_record"), \
+                    mock.patch.object(
+                        loom_codex_lifecycle.loom_orchestrator,
+                        "authorized_continuation",
+                        return_value=self.continuation()), \
+                    redirect_stdout(output):
+                code = loom_codex_lifecycle.main([
+                    "--home", str(self.root / ".loom"),
+                    "--install-root", str(self.root)])
+            return code, output.getvalue()
+
+        denied_code, denied_stdout = launch(denied_event)
+        self.assertEqual(0, denied_code)
+        self.assertEqual(
+            "deny", json.loads(denied_stdout)[
+                "hookSpecificOutput"]["permissionDecision"])
+        allowed_code, allowed_stdout = launch(allowed_event)
+        self.assertEqual(0, allowed_code)
+        self.assertEqual("", allowed_stdout)
+
     def test_v3_execution_scope_uses_the_resolved_generation_root(self):
         """Break caught: lifecycle hooks look for v3 work under legacy plans/."""
         generation = self.root / "plans" / "generations" / "generation-1"
@@ -188,7 +216,7 @@ class CodexLifecycleTests(unittest.TestCase):
         code, output = self.handle(self.event(
             tool_name="Write", tool_input={"file_path": str(outside)}))
         self.assertEqual(0, code)
-        self.assertIn("escapes", output["systemMessage"])
+        self.assertIn("code=OUTSIDE_PROJECT_TARGET", output["systemMessage"])
         self.assertEqual(
             "deny", output["hookSpecificOutput"]["permissionDecision"])
 

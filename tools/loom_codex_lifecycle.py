@@ -18,6 +18,9 @@ import loom_runtime
 
 MAX_EVENT_BYTES = 256 * 1024
 MAX_EVENT_RECEIPTS = 256
+MAX_DENIAL_REASON_BYTES = 512
+MAX_DENIAL_CONTEXT_BYTES = 4096
+MAX_DENIAL_OUTPUT_BYTES = 8192
 SUPPORTED_EVENTS = {
     "PreToolUse", "PostToolUse", "PreCompact", "PostCompact",
     "Stop", "SubagentStart", "SubagentStop",
@@ -204,7 +207,8 @@ def _authorized_context(projection):
                 allow_nan=False).encode("utf-8")).hexdigest())
     context = (
         "Loom preserved the authorized path after denying this deviation. "
-        "Authorized continuation (not authority): resume the exact active action "
+        "Authorized continuation (not authority): continue current execution "
+        "without reinvoking Loom, using the exact active action "
         f"{projection['active_action_id']} for work order "
         f"{projection['work_order_id']}. Allowed touches: {touches}. "
         f"Outcome digest: {projection['outcome_sha256']}. "
@@ -212,9 +216,27 @@ def _authorized_context(projection):
         f"Continuation digest: {projection['continuation_sha256']}. "
         "This context cannot start work, change the plan, or grant owner authority."
     )
-    if len(context) > 4096:
+    if len(context.encode("utf-8")) > MAX_DENIAL_CONTEXT_BYTES:
         raise LifecycleError("authorized continuation context exceeds its bound")
     return context
+
+
+def _denial_reason(code, paths):
+    if code not in loom_orchestrator.AUTHORIZED_CONTINUATION_REJECTION_CODES:
+        raise LifecycleError("structured-write rejection identity is invalid")
+    sealed_paths = [str(item) for item in paths]
+    digest = hashlib.sha256(json.dumps(
+        sealed_paths, sort_keys=False, separators=(",", ":"),
+        ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+    boundary = (
+        "outside the active target" if code == "OUTSIDE_PROJECT_TARGET"
+        else "outside declared touches")
+    reason = (
+        f"Loom blocked a structured write {boundary}. code={code}; "
+        f"path_count={len(sealed_paths)}; path_set_sha256={digest}")
+    if len(reason.encode("utf-8")) > MAX_DENIAL_REASON_BYTES:
+        raise LifecycleError("structured-write rejection exceeds its bound")
+    return reason
 
 
 def _denied(action, reason, rejection_code, *, home, install_root):
@@ -231,7 +253,16 @@ def _denied(action, reason, rejection_code, *, home, install_root):
             specific["additionalContext"] = _authorized_context(projection)
     except (LifecycleError, loom_orchestrator.OrchestratorError):
         pass
-    return 0, {"systemMessage": reason, "hookSpecificOutput": specific}
+    output = {"systemMessage": reason, "hookSpecificOutput": specific}
+    encoded = json.dumps(
+        output, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if len(encoded) > MAX_DENIAL_OUTPUT_BYTES and "additionalContext" in specific:
+        specific.pop("additionalContext")
+        encoded = json.dumps(
+            output, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+    if len(encoded) > MAX_DENIAL_OUTPUT_BYTES:
+        raise LifecycleError("structured-write denial exceeds its output bound")
+    return 0, output
 
 
 def handle(event, *, home, install_root):
@@ -252,14 +283,13 @@ def handle(event, *, home, install_root):
         except LifecycleError as exc:
             _record(home, event, action, outcome="blocked-outside-target")
             return _denied(
-                action, str(exc), "OUTSIDE_PROJECT_TARGET",
+                action, _denial_reason("OUTSIDE_PROJECT_TARGET", paths),
+                "OUTSIDE_PROJECT_TARGET",
                 home=home, install_root=install_root)
         outside = [path for path in relatives if not _authorized(patterns, path)]
         if outside:
             _record(home, event, action, outcome="blocked-outside-touches")
-            reason = (
-                "Loom blocked a structured write outside declared touches: "
-                + ", ".join(outside[:4]))
+            reason = _denial_reason("UNAUTHORIZED_PROJECT_TOUCH", outside)
             return _denied(
                 action, reason, "UNAUTHORIZED_PROJECT_TOUCH",
                 home=home, install_root=install_root)

@@ -4711,6 +4711,95 @@ def _seal_v3_execution_completion(action, action_path, memory):
             f"v3 completion could not be sealed safely: {exc}") from exc
 
 
+def _preflight_v3_execution_completion(action, action_path, memory):
+    """Return a safe block reason before terminal session mutation, or None."""
+    root = Path(action["explicit_target"] or action["cwd"])
+    try:
+        resolved = loom_plan_store.resolve(root)
+        if resolved.index is None or resolved.index.generation_id != \
+                action.get("generation_id"):
+            raise OrchestratorError(
+                "COMPLETION_NOT_READY",
+                "the exact action generation is no longer active",
+                status="action-required")
+        semantics_value = json.loads(
+            (resolved.generation_root / "plan-semantics.json").read_text(
+                encoding="utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+        reviewed_world = loom_lifecycle_kernel.validate_reviewed_world_observation(
+            json.loads(
+                (resolved.generation_root / "reviewed-world.json").read_text(
+                    encoding="utf-8"),
+                object_pairs_hook=loom_lifecycle._strict_object))
+        witness_store = _lifecycle_witness_store(
+            memory, Path(action_path).parent, action["project_id"])
+        ledger_value = json.loads(
+            (resolved.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+        state = loom_lifecycle_kernel.fold(
+            resolved.index, semantics_value, ledger_value,
+            witness_store.read())
+        work_order_path = resolved.generation_root / action["work_order"]
+        frontmatter, _body = loom_lint.parse_frontmatter(
+            work_order_path.read_text(encoding="utf-8"))
+        work_order_id = (frontmatter or {}).get("id")
+        if state.in_progress_work_order_id != work_order_id:
+            receipt = action.get("lifecycle_transition")
+            if isinstance(receipt, dict) \
+                    and receipt.get("status") == "completed" \
+                    and receipt.get("command_id") == \
+                    "complete-" + action["action_id"]:
+                return None
+            raise OrchestratorError(
+                "COMPLETION_NOT_READY",
+                "the exact action does not own the in-progress work order",
+                status="action-required")
+        prior = _v3_completion_records(
+            resolved.generation_root, state, reviewed_world)
+        try:
+            loom_gate.evaluate_work_order_completion(
+                resolved.generation_root, root, work_order_path,
+                project_id=action["project_id"],
+                generation_id=action["generation_id"],
+                reviewed_world_observation_sha256=reviewed_world[
+                    "observation_sha256"],
+                baseline_files=reviewed_world["files"],
+                prior_completions=prior)
+        except (ValueError, loom_lifecycle.LifecycleError) as exc:
+            return loom_block_reason.safe_text(
+                " ".join(str(exc).split())[:320],
+                "completion evidence was rejected and unsafe detail was withheld")
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError,
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_lifecycle.LifecycleError, ValueError) as exc:
+        if isinstance(exc, OrchestratorError):
+            raise
+        raise OrchestratorError(
+            "COMPLETION_NOT_READY",
+            "completion readiness could not be observed safely",
+            status="action-required") from exc
+    return None
+
+
+def _completion_not_ready_result(normalized_usage, message):
+    """Return an accurate nonterminal block while preserving the active action."""
+    findings = [message]
+    return {
+        "status": "blocked",
+        "code": "execute-not-ready",
+        "success": False,
+        "metrics": {},
+        "evidence_ids": ["gate-" + _hash(findings)[:24]],
+        "reversible_action_ids": [],
+        "usage": normalized_usage,
+        "user_message": "Execute blocked: " + message,
+    }
+
+
 def _seal_v3_repair_completion(action, action_path, memory):
     root = Path(action["explicit_target"] or action["cwd"])
     try:
@@ -8582,6 +8671,9 @@ AUTHORIZED_CONTINUATION_FIELDS = {
     "evidence_requirements_sha256", "rejection_code", "safe_next_operation",
     "continuation_sha256",
 }
+AUTHORIZED_CONTINUATION_REJECTION_CODES = {
+    "OUTSIDE_PROJECT_TARGET", "UNAUTHORIZED_PROJECT_TOUCH",
+}
 
 
 def validate_authorized_continuation(value):
@@ -8589,7 +8681,7 @@ def validate_authorized_continuation(value):
     if not isinstance(value, dict) or set(value) != AUTHORIZED_CONTINUATION_FIELDS \
             or value.get("schema_version") != 1 \
             or value.get("authority_effect") != "none" \
-            or value.get("safe_next_operation") != "resume-exact-action":
+            or value.get("safe_next_operation") != "continue-current-execution":
         raise OrchestratorError(
             "AUTHORIZED_CONTINUATION_INVALID",
             "authorized continuation fields are unknown or missing")
@@ -8626,8 +8718,7 @@ def validate_authorized_continuation(value):
                 "AUTHORIZED_CONTINUATION_INVALID",
                 "authorized continuation digest is invalid")
     rejection_code = value.get("rejection_code")
-    if not isinstance(rejection_code, str) \
-            or re.fullmatch(r"[A-Z][A-Z0-9_]{0,63}", rejection_code) is None:
+    if rejection_code not in AUTHORIZED_CONTINUATION_REJECTION_CODES:
         raise OrchestratorError(
             "AUTHORIZED_CONTINUATION_INVALID",
             "authorized continuation rejection identity is invalid")
@@ -8662,7 +8753,7 @@ def validate_authorized_continuation(value):
 
 
 def _unresolved_lifecycle_envelope(directory):
-    """Conservatively detect an unresolved or unreadable transition envelope."""
+    """Validate every transition envelope and report any unresolved authority."""
     root = Path(directory) / "lifecycle-transitions"
     if not os.path.lexists(root):
         return False
@@ -8682,17 +8773,95 @@ def _unresolved_lifecycle_envelope(directory):
                 "AUTHORIZED_CONTINUATION_UNAVAILABLE",
                 "lifecycle transition evidence is unsafe")
         try:
-            envelope = json.loads(
-                path.read_text(encoding="utf-8"),
-                object_pairs_hook=loom_lifecycle._strict_object)
-        except (OSError, UnicodeError, json.JSONDecodeError,
-                loom_lifecycle.LifecycleError) as exc:
-            raise OrchestratorError(
-                "AUTHORIZED_CONTINUATION_UNAVAILABLE",
-                "lifecycle transition evidence is unreadable") from exc
-        if not isinstance(envelope, dict) \
-                or envelope.get("status") not in {"completed", "abandoned"}:
+            envelope = loom_lifecycle_transition._load_json(
+                path, "lifecycle transition envelope",
+                loom_lifecycle_transition.MAX_ENVELOPE_BYTES)
+            if not isinstance(envelope, dict):
+                return True
+            command_id = envelope.get("command_id")
+            if not isinstance(command_id, str):
+                return True
+            kind = envelope.get("kind")
+            if kind == "generation-activation-v1":
+                validated = loom_lifecycle_transition._load_activation_envelope(
+                    path, command_id)
+            elif kind == "successor-activation-v1":
+                validated = loom_lifecycle_transition._load_successor_envelope(
+                    path, command_id)
+            elif kind == "legacy-root-adoption-v1":
+                validated = loom_lifecycle_transition._load_legacy_adoption_envelope(
+                    path, command_id)
+            elif kind is None:
+                command = loom_lifecycle_kernel.lifecycle_command(
+                    envelope.get("command"))
+                validated = loom_lifecycle_transition._load_existing_envelope(
+                    path, command,
+                    private_projection=envelope.get("private_projection"))
+            else:
+                return True
+        except (
+                OSError, UnicodeError, json.JSONDecodeError,
+                loom_lifecycle.LifecycleError,
+                loom_lifecycle_kernel.LifecycleKernelError,
+                loom_lifecycle_transition.LifecycleTransitionError):
             return True
+        if validated is None \
+                or validated.get("status") not in {"completed", "abandoned"}:
+            return True
+        if kind == "successor-activation-v1" \
+                and validated["status"] == "completed" \
+                and validated.get("projection_status") != "completed":
+            return True
+        if kind == "generation-activation-v1":
+            status = validated["status"]
+            expected = loom_lifecycle_transition._activation_receipt(
+                validated, status=status,
+                observation="target" if status == "completed" else "source",
+                projection_status=(
+                    "verified" if status == "completed"
+                    else "not-applicable"))
+            if validated.get("receipt") != expected:
+                return True
+        elif kind == "legacy-root-adoption-v1":
+            status = validated["status"]
+            expected = loom_lifecycle_transition._legacy_adoption_receipt(
+                validated, status=status,
+                observation="target" if status == "completed" else "source",
+                projection_status=(
+                    "verified" if status == "completed"
+                    else "not-applicable"))
+            if validated.get("receipt") != expected:
+                return True
+        elif kind is None:
+            receipt = validated.get("receipt")
+            expected_status = validated["status"]
+            expected_observation = (
+                "target" if expected_status == "completed" else "source")
+            expected_projection = (
+                "verified" if expected_status == "completed"
+                else "not-applicable")
+            bindings = {
+                "project_id": validated["source_ledger"]["project_id"],
+                "generation_id": validated["source_ledger"]["generation_id"],
+                "command_id": validated["command_id"],
+                "transition_id": validated["transition_id"],
+                "status": expected_status,
+                "source_authority_sha256": validated[
+                    "source_ledger"]["lifecycle_sha256"],
+                "target_authority_sha256": validated[
+                    "target_ledger"]["lifecycle_sha256"],
+                "source_witness_sha256": validated[
+                    "source_witness"]["witness_sha256"],
+                "target_witness_sha256": validated[
+                    "target_witness"]["witness_sha256"],
+                "observation": expected_observation,
+                "projection_status": expected_projection,
+                "findings": [],
+            }
+            if not isinstance(receipt, dict) or any(
+                    receipt.get(field) != item
+                    for field, item in bindings.items()):
+                return True
     return False
 
 
@@ -8837,7 +9006,7 @@ def _authorized_continuation(action, *, rejection_code, owner_home, install_root
             "negative_acceptance": list(work_order["negative_acceptance"]),
         }),
         "rejection_code": rejection_code,
-        "safe_next_operation": "resume-exact-action",
+        "safe_next_operation": "continue-current-execution",
     }
     value["continuation_sha256"] = hashlib.sha256(
         _canonical_bytes(value)).hexdigest()
@@ -8856,11 +9025,19 @@ def authorized_continuation(
 
 
 def verify_authorized_continuation(
-        action, value, *, owner_home, install_root):
+        action, value, *, expected_rejection_code, owner_home, install_root):
     """Reobserve and verify a projection without granting execution authority."""
+    if expected_rejection_code not in AUTHORIZED_CONTINUATION_REJECTION_CODES:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "expected continuation rejection identity is invalid")
+    validated = validate_authorized_continuation(value)
+    if validated["rejection_code"] != expected_rejection_code:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation rejection identity does not match")
     observed = _authorized_continuation(
-        action, rejection_code=validate_authorized_continuation(
-            value)["rejection_code"],
+        action, rejection_code=expected_rejection_code,
         owner_home=owner_home, install_root=install_root)
     if observed != value:
         raise OrchestratorError(
@@ -10195,6 +10372,28 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             **(action.get("host_result") or {}),
             **_read_host_outcome(result_path, action),
         }
+    if action["intent"] == "execute" and action.get("generation_id") is not None:
+        root = Path(action["explicit_target"] or action["cwd"])
+        instance_id, preflight_memory = _memory_backend(
+            Path(action["owner_home"]), Path(action["install_root"]), root)
+        if instance_id != action["instance_id"]:
+            raise OrchestratorError(
+                "OWNER_VAULT_CHANGED",
+                "the action owner vault no longer matches the active vault")
+        try:
+            project = loom_runtime.resolve_project(
+                instance_id, explicit_target=root, cwd=root)
+        except loom_runtime.RuntimeBlocked as exc:
+            raise OrchestratorError(exc.code, exc.message) from exc
+        if project.project_id != action["project_id"]:
+            raise OrchestratorError(
+                "PROJECT_CHANGED",
+                "the action project identity no longer matches the active target")
+        _bind_memory_project(preflight_memory, project)
+        completion_block = _preflight_v3_execution_completion(
+            action, path, preflight_memory)
+        if completion_block is not None:
+            return _completion_not_ready_result(normalized, completion_block)
     sealed = loom_runtime.PreparedInvocation.from_dict(action["prepared"])
     if action["intent"] == "repair" and action["tier"] == "S":
         project = loom_runtime.resolve_project(

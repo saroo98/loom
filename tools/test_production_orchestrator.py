@@ -25,7 +25,9 @@ import loom_fault_harness  # noqa: E402
 import loom_install  # noqa: E402
 import loom_improvement  # noqa: E402
 import loom_lifecycle  # noqa: E402
+import loom_lifecycle_kernel  # noqa: E402
 import loom_lifecycle_transition  # noqa: E402
+import loom_codex_lifecycle  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_adapter_protocol  # noqa: E402
 import loom_domain_discovery  # noqa: E402
@@ -2149,7 +2151,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("none", continuation["authority_effect"])
         self.assertEqual("WO-001", continuation["work_order_id"])
         self.assertEqual(["src/app.py"], continuation["allowed_touches"])
-        self.assertEqual("resume-exact-action", continuation["safe_next_operation"])
+        self.assertEqual(
+            "continue-current-execution",
+            continuation["safe_next_operation"])
         unsigned = {
             key: value for key, value in continuation.items()
             if key != "continuation_sha256"
@@ -2162,6 +2166,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             continuation,
             loom_orchestrator.verify_authorized_continuation(
                 sealed_action, continuation,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
                 owner_home=self.home, install_root=self.installed))
         self.assertEqual(
             before_index,
@@ -2200,6 +2205,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         with self.assertRaises(loom_orchestrator.OrchestratorError):
             loom_orchestrator.verify_authorized_continuation(
                 sealed_action, forged,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
                 owner_home=self.home, install_root=self.installed)
         cross_generation = {
             **continuation, "generation_id": "generation-" + "e" * 32}
@@ -2210,6 +2216,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         with self.assertRaises(loom_orchestrator.OrchestratorError):
             loom_orchestrator.verify_authorized_continuation(
                 sealed_action, cross_generation,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
                 owner_home=self.home, install_root=self.installed)
 
         envelope_root = Path(started["action_path"]).parent / \
@@ -2227,8 +2234,27 @@ class ProductionOrchestratorTests(unittest.TestCase):
         with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
             loom_orchestrator.verify_authorized_continuation(
                 sealed_action, continuation,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
                 owner_home=self.home, install_root=self.installed)
         self.assertEqual("AUTHORIZED_CONTINUATION_STALE", caught.exception.code)
+
+        forged_code = {
+            **continuation, "rejection_code": "FORGED_EXECUTOR_PERMISSION"}
+        forged_code.pop("continuation_sha256")
+        forged_code["continuation_sha256"] = hashlib.sha256(json.dumps(
+            forged_code, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, forged_code,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+                owner_home=self.home, install_root=self.installed)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, continuation,
+                expected_rejection_code="OUTSIDE_PROJECT_TARGET",
+                owner_home=self.home, install_root=self.installed)
 
         loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
@@ -2236,6 +2262,178 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertIsNone(loom_orchestrator.authorized_continuation(
             sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
             owner_home=self.home, install_root=self.installed))
+
+    def test_authorized_continuation_requires_canonical_resolved_envelopes(self):
+        """Break caught: a corrupt completed envelope is trusted by its status."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        source_root = Path(started["action_path"]).parent / \
+            "lifecycle-transitions"
+        source_envelopes = []
+        for path in source_root.glob("*.json"):
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if "kind" not in value and value.get("status") == "completed":
+                source_envelopes.append(value)
+        self.assertTrue(source_envelopes)
+        canonical = source_envelopes[-1]
+        probe = self.root / "envelope-probe"
+        transitions = probe / "lifecycle-transitions"
+        transitions.mkdir(parents=True)
+        path = transitions / "probe.json"
+
+        corrupt_completed = json.loads(json.dumps(canonical))
+        corrupt_completed["command_sha256"] = "0" * 64
+        corrupt_abandoned = json.loads(json.dumps(canonical))
+        corrupt_abandoned["status"] = "abandoned"
+        corrupt_abandoned["target_witness"]["authoritative_sha256"] = "0" * 64
+        bad_receipt = json.loads(json.dumps(canonical))
+        bad_receipt["receipt"]["command_id"] = "foreign-completion"
+        bad_receipt["receipt"]["receipt_sha256"] = \
+            loom_lifecycle_kernel.digest({
+                key: value for key, value in bad_receipt["receipt"].items()
+                if key != "receipt_sha256"})
+        cases = {
+            "corrupt completed": json.dumps(corrupt_completed),
+            "corrupt abandoned": json.dumps(corrupt_abandoned),
+            "foreign self-consistent receipt": json.dumps(bad_receipt),
+            "duplicate keys": '{"status":"completed","status":"abandoned"}',
+            "unknown kind": json.dumps({
+                "schema_version": 1, "kind": "unknown-v1",
+                "command_id": "unknown", "status": "completed"}),
+            "truncated": '{"schema_version":1',
+        }
+        for label, raw in cases.items():
+            with self.subTest(label=label):
+                path.write_text(raw + "\n", encoding="utf-8")
+                self.assertTrue(
+                    loom_orchestrator._unresolved_lifecycle_envelope(probe))
+
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "kind": "successor-activation-v1",
+            "command_id": "candidate-switch",
+            "status": "completed",
+            "projection_status": "pending",
+        }) + "\n", encoding="utf-8")
+        with mock.patch.object(
+                loom_orchestrator.loom_lifecycle_transition,
+                "_load_successor_envelope", return_value={
+                    "status": "completed", "projection_status": "pending"}):
+            self.assertTrue(
+                loom_orchestrator._unresolved_lifecycle_envelope(probe))
+
+    def test_real_hook_denial_preserves_exact_action_and_allowed_completion(self):
+        """Break caught: the hook denial has no real supported continuation."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        action_path = Path(started["action_path"])
+        _sealed_path, sealed_action, _sealed_security = \
+            loom_orchestrator._read_action(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+        directory = action_path.parent
+        resolved = loom_plan_store.resolve(self.repo)
+        control_paths = [
+            self.repo / "src" / "app.py",
+            self.repo / "plans" / loom_plan_store.INDEX_NAME,
+            resolved.generation_root / "lifecycle.json",
+            directory / "lifecycle-head-witness.json",
+            action_path,
+            directory / loom_orchestrator.ACTIVE_POINTER_FILE,
+        ]
+
+        def snapshot():
+            return {
+                str(path): path.read_bytes() if path.exists() else None
+                for path in control_paths
+            }
+
+        def hook(path):
+            event = {
+                "hook_event_name": "PreToolUse",
+                "cwd": str(self.repo),
+                "tool_name": "Write",
+                "tool_input": {"file_path": path},
+            }
+            with mock.patch.object(
+                    loom_codex_lifecycle, "_active_action",
+                    return_value=sealed_action), \
+                    mock.patch.object(loom_codex_lifecycle, "_record"):
+                return loom_codex_lifecycle.handle(
+                    event, home=self.home, install_root=self.installed)
+
+        baseline = snapshot()
+        work_order = self.repo.joinpath(
+            *PurePosixPath(started[
+                "execution_completion_contract"]["work_order_path"]).parts)
+        denied_attempts = {
+            "outside touch": "docs/outside.py",
+            "acceptance weakening or omitted work":
+                work_order.relative_to(self.repo).as_posix(),
+            "architecture substitution": "architecture/alternate.py",
+            "invented extra work": "src/unplanned_extra.py",
+            "repair or refactor loophole": "repairs/shortcut.py",
+            "executor replanning": "plans/plan-semantics.json",
+        }
+        for label, path in denied_attempts.items():
+            with self.subTest(label=label):
+                code, output = hook(path)
+                self.assertEqual(0, code)
+                self.assertEqual(
+                    "deny", output["hookSpecificOutput"]["permissionDecision"])
+                self.assertIn(
+                    "continue current execution",
+                    output["hookSpecificOutput"]["additionalContext"].lower())
+                self.assertEqual(baseline, snapshot())
+
+        premature = loom_orchestrator.complete(
+            action_path, owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("blocked", premature["status"])
+        self.assertEqual("execute-not-ready", premature["code"])
+        self.assertEqual(baseline, snapshot())
+
+        allowed_code, allowed_output = hook("src/app.py")
+        self.assertEqual(0, allowed_code)
+        self.assertIsNone(allowed_output)
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        after_allowed = snapshot()
+        self.assertNotEqual(baseline[str(self.repo / "src" / "app.py")],
+                            after_allowed[str(self.repo / "src" / "app.py")])
+        for path in control_paths[1:]:
+            self.assertEqual(baseline[str(path)], after_allowed[str(path)])
+
+        acceptance_weakening = loom_orchestrator.complete(
+            action_path, owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("blocked", acceptance_weakening["status"])
+        self.assertEqual("execute-not-ready", acceptance_weakening["code"])
+        self.assertEqual(after_allowed, snapshot())
+
+        contract = started["execution_completion_contract"]
+        text = work_order.read_text(encoding="utf-8")
+        text = text.replace("status: in-progress", "status: done")
+        text = text.replace("- [ ]", "- [x]")
+        text = text.replace(
+            contract["pending_evidence_text"],
+            "Evidence: isolated real-process verification exited 0.")
+        work_order.write_text(text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            Path(contract["evidence_capture"]["pack_path"]), self.repo,
+            contract["work_order_id"], medium="python-unittest",
+            command=[sys.executable, "-c", "print('verification passed')"])
+        sealed = loom_orchestrator.complete(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", sealed["status"])
+        self.assertEqual("execute-complete", sealed["code"])
 
     def test_exact_plan_start_completion_contract_closes_verified_work(self):
         action, completed = self.complete_machine_authored_plan()
