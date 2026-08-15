@@ -43,6 +43,36 @@ from test_loom_vault_v11 import TestCrypto  # noqa: E402
 
 TODAY = dt.datetime.now(dt.timezone.utc).date().isoformat()
 
+PRE_UX104_PLANNING_CONTROL_V1 = {
+    "schema_version": 1,
+    "primary_operation": "plan",
+    "relation": "new",
+    "prohibitions": [],
+    "explicitness": "defaulted",
+    "evidence": ["safe-new-default"],
+    "blocked": False,
+    "block_reason": None,
+    "control_sha256": (
+        "7aaf553efc41778311b4743cb6a1eb0f0f7c424afddca14c95c1a0a15ed0589a"),
+}
+
+
+def _sealed_preference(identifier, key, value, *, domain=None,
+                       task_class=None, risk_class=None):
+    return {
+        "id": identifier,
+        "key": key,
+        "effective_value": value,
+        "effective_source": "stated",
+        "stated_confidence": 1.0,
+        "inferred_confidence": 0.0,
+        "domain": domain,
+        "task_class": task_class,
+        "risk_class": risk_class,
+        "subject": None,
+        "retired_values": [],
+    }
+
 
 def _write(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -932,32 +962,34 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertFalse((self.repo / "plans").exists())
         self.assertEqual(before_manifest, loom_reliability.deterministic_manifest(self.repo))
 
-    def test_zero_project_write_detection_is_explicit_and_bounded(self):
-        blocked = (
-            "Plan this change but do not modify files.",
-            "Plan this change but do not implement or modify files.",
-            "Plan this change but do not implement it or modify project files.",
-            "Plan this change but do not implement this or modify the project files.",
-            "Plan this change but do not implement, modify files, or publish.",
-            "Plan this change with no project writes.",
-            "Plan this change without touching any files.",
-            "Plan this change and leave the project byte-for-byte unchanged.",
+    def test_inline_recovery_is_request_specific_without_prompt_or_project_leaks(self):
+        """Break caught: safe inline recovery is generic or echoes raw private wording."""
+        before = loom_reliability.deterministic_manifest(self.repo)
+        cases = (
+            (
+                "Plan accounting ledger validation with no project writes. "
+                "Private case velvet-otter.",
+                "accounting", "velvet-otter",
+            ),
+            (
+                "Plan accessible website navigation with no project writes. "
+                "Private case amber-lynx.",
+                "website", "amber-lynx",
+            ),
         )
-        allowed = (
-            "Plan a tool that does not modify files.",
-            "Plan read-only evidence handling.",
-            "Plan this change without modifying generated files.",
-            "Do not ask questions, modify files directly.",
-            "Do not merely describe the fix, modify files and test it.",
-        )
-        for request in blocked:
-            with self.subTest(request=request):
-                self.assertTrue(
-                    loom_orchestrator._explicit_zero_project_write_requested(request))
-        for request in allowed:
-            with self.subTest(request=request):
-                self.assertFalse(
-                    loom_orchestrator._explicit_zero_project_write_requested(request))
+        messages = []
+        for request, domain, private_marker in cases:
+            with self.subTest(domain=domain):
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                messages.append(result["user_message"])
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertIn(domain, result["user_message"])
+                self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+        self.assertNotEqual(messages[0], messages[1])
 
     def test_planning_conflict_uses_neutral_context_without_leaking_private_evidence(self):
         """Break caught: a private preference conflict blocks planning or leaks values."""
@@ -973,7 +1005,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             def relevant_preference_conflicts(self, *, domain, project_id):
                 return [{
                     "conflict_id": conflict_id,
-                    "preference_key": "report_style",
+                    "preference_key": "stack_preference",
                 }]
 
         projection_adapter = object.__new__(
@@ -982,24 +1014,19 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         class ConflictMemory(loom_session.NoopMemoryAdapter):
             def select_preferences(self, _context):
-                return [{
-                    "id": "00000000-0000-4000-8000-000000005113",
-                    "key": "report_detail",
-                    "effective_value": secret_value,
-                    "effective_source": "stated",
-                    "domain": None,
-                }, {
-                    "id": "00000000-0000-4000-8000-000000005114",
-                    "key": "stack",
-                    "effective_value": "python",
-                    "effective_source": "stated",
-                    "domain": "accounting",
-                }]
+                return [
+                    _sealed_preference(
+                        "00000000-0000-4000-8000-000000005113",
+                        "stack", secret_value, domain="accounting"),
+                    _sealed_preference(
+                        "00000000-0000-4000-8000-000000005114",
+                        "report_detail", "concise"),
+                ]
 
             def relevant_preference_conflicts(self, *, domains, project_id):
                 return [{
                     "conflict_id": conflict_id,
-                    "preference_key": "report_style",
+                    "preference_key": "stack_preference",
                 }]
 
             def project_planning_preferences(self, **arguments):
@@ -1015,10 +1042,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("action-required", result["status"])
         self.assertNotEqual("preference-conflict", result.get("code"))
         self.assertIn(
-            {"key": "report_detail", "neutral_default": True},
+            {"key": "stack", "domain": "accounting", "neutral_default": True},
             result["context"]["preferences"])
         self.assertTrue(any(
-            item.get("key") == "stack"
+            item.get("key") == "report_detail"
             for item in result["context"]["preferences"]))
         public = json.dumps(result, sort_keys=True)
         self.assertNotIn(secret_value, public)
@@ -1028,10 +1055,81 @@ class ProductionOrchestratorTests(unittest.TestCase):
             result["action_path"], owner_home=self.home,
             install_root=self.installed)
         private = action["host_result"]["planning_preference_conflicts"]
-        self.assertEqual(["report_detail"], private["conflict_keys"])
+        self.assertEqual(["stack"], private["conflict_keys"])
         self.assertEqual(conflict_id, private["private_evidence"][0]["conflict_id"])
         self.assertNotIn(
             secret_value, json.dumps(private, sort_keys=True))
+
+    def test_action_read_rejects_unbound_or_value_bearing_conflict_evidence(self):
+        """Break caught: rehashed private conflict metadata crosses its sealed scope."""
+        instance_id = "00000000-0000-4000-8000-000000005130"
+        owner_id = "00000000-0000-4000-8000-000000005131"
+        conflict_id = "00000000-0000-4000-8000-000000005132"
+
+        class Vault:
+            def identity(self):
+                return {"owner_vault_id": owner_id}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return [{
+                    "conflict_id": conflict_id,
+                    "preference_key": "stack_preference",
+                }]
+
+        adapter = object.__new__(
+            loom_orchestrator.loom_vault_adapter.VaultMemoryAdapter)
+        adapter.vault = Vault()
+
+        class ConflictMemory(loom_session.NoopMemoryAdapter):
+            def select_preferences(self, _context):
+                return [_sealed_preference(
+                    "00000000-0000-4000-8000-000000005133",
+                    "stack", "python", domain="accounting")]
+
+            def project_planning_preferences(self, **arguments):
+                return adapter.project_planning_preferences(**arguments)
+
+        with mock.patch.object(
+                loom_orchestrator, "_memory_backend",
+                return_value=(instance_id, ConflictMemory())):
+            opened = loom_orchestrator.invoke(
+                request="Plan a small accounting change to src/app.py.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+        path = Path(opened["action_path"])
+        base = json.loads(path.read_text(encoding="utf-8"))
+        conflict = base["host_result"]["planning_preference_conflicts"]
+        evidence = conflict["private_evidence"][0]
+        mutations = (
+            lambda value: value.update({"project_id": "p-" + "f" * 32}),
+            lambda value: value.update({"domain": "three-d"}),
+            lambda value: value.update({"preference_key": "invented"}),
+            lambda value: value.update({"conflict_id": "not-a-uuid"}),
+            lambda value: value.update({"risk_class": "low"}),
+            lambda value: value.update({"task_class": "execute"}),
+            lambda value: value.update({"value": "private-python"}),
+            lambda value: value.update({"unknown": True}),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                action = json.loads(json.dumps(base))
+                mutate(action["host_result"]["planning_preference_conflicts"]
+                       ["private_evidence"][0])
+                action["action_hash"] = loom_orchestrator._action_hash(action)
+                path.write_text(json.dumps(action), encoding="utf-8")
+                with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+                    loom_orchestrator._read_action(
+                        path, owner_home=self.home, install_root=self.installed)
+                self.assertEqual("ACTION_CORRUPT", raised.exception.code)
+
+        action = json.loads(json.dumps(base))
+        action["host_result"]["planning_preference_conflicts"][
+            "private_evidence"].append(dict(evidence))
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as duplicate:
+            loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_CORRUPT", duplicate.exception.code)
 
     def test_installed_invoke_drives_real_gate_and_seals_receipt(self):
         opened = self.cli(
@@ -2831,6 +2929,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             owner_home=self.home, install_root=self.installed)
         old_action_path = Path(started["action_path"])
         old_generation = loom_plan_store.resolve(self.repo)
+        world_before = loom_orchestrator.loom_survey.workspace_snapshot(
+            self.repo, exclude_prefixes=("plans",)).state.state_hash
 
         replacement = loom_orchestrator.invoke(
             request=(
@@ -2865,6 +2965,32 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertTrue(new_action["pack_seed"]["created_pack"])
         self.assertNotEqual(
             old_generation.generation_id, new_action["generation_id"])
+        candidate_pack = loom_orchestrator._action_pack_root(new_action)
+        self.assertFalse(candidate_pack.is_relative_to(self.repo))
+        self.assertTrue(candidate_pack.is_relative_to(self.home))
+        world_after = loom_orchestrator.loom_survey.workspace_snapshot(
+            self.repo, exclude_prefixes=("plans",)).state.state_hash
+        self.assertEqual(world_before, world_after)
+
+        completion_contract = started["execution_completion_contract"]
+        work_order = self.repo.joinpath(
+            *PurePosixPath(completion_contract["work_order_path"]).parts)
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        work_order_text = work_order.read_text(encoding="utf-8")
+        work_order_text = work_order_text.replace(
+            "status: in-progress", "status: done").replace("- [ ]", "- [x]")
+        work_order_text = work_order_text.replace(
+            completion_contract["pending_evidence_text"],
+            "Evidence: isolated real-process verification exited 0.")
+        work_order.write_text(work_order_text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            Path(completion_contract["evidence_capture"]["pack_path"]), self.repo,
+            "WO-001", medium="python-unittest",
+            command=[sys.executable, "-c", "print('verified')"])
+        continued = loom_orchestrator.complete(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("execute-complete", continued["code"])
 
     def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
         """Break caught: changed-world recovery requires parser-specific wording."""
@@ -5276,6 +5402,50 @@ planning_obligations: [{obligations}]
         action["action_hash"] = loom_orchestrator._action_hash(action)
         path.write_text(json.dumps(action), encoding="utf-8")
         _path, restored, _security = loom_orchestrator._read_action(path)
+        self.assertEqual("completed", restored["status"])
+
+    def test_pre_ux104_current_schema_plan_action_is_terminal_only_compatible(self):
+        """Break caught: a valid pre-mode current-schema action becomes corrupt."""
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        original = json.loads(path.read_text(encoding="utf-8"))
+        historical_open = json.loads(json.dumps(original))
+        historical_open["request_control"] = json.loads(json.dumps(
+            PRE_UX104_PLANNING_CONTROL_V1))
+        historical_open["action_hash"] = loom_orchestrator._action_hash(
+            historical_open)
+        path.write_text(json.dumps(historical_open), encoding="utf-8")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as open_error:
+            loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_REPREPARE_REQUIRED", open_error.exception.code)
+
+        malformed_open = json.loads(json.dumps(historical_open))
+        malformed_open["context"]["archived_count"] = -1
+        malformed_open["action_hash"] = loom_orchestrator._action_hash(
+            malformed_open)
+        path.write_text(json.dumps(malformed_open), encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as corrupt:
+            loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_CORRUPT", corrupt.exception.code)
+
+        path.write_text(json.dumps(original), encoding="utf-8")
+        _author_medium_action(opened, request=self.request)
+        loom_orchestrator.complete(
+            opened["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        terminal = json.loads(path.read_text(encoding="utf-8"))
+        terminal["request_control"] = json.loads(json.dumps(
+            PRE_UX104_PLANNING_CONTROL_V1))
+        terminal["action_hash"] = loom_orchestrator._action_hash(terminal)
+        path.write_text(json.dumps(terminal), encoding="utf-8")
+
+        _path, restored, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
         self.assertEqual("completed", restored["status"])
 
     def test_plan_contract_v4_terminal_is_readable_but_open_action_requires_reprepare(self):

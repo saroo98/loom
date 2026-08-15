@@ -236,6 +236,58 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
             [], [item for item in control["evidence"]
                  if item.startswith("planning-")])
 
+    def test_project_write_prohibition_is_sealed_by_runtime_not_orchestrator(self):
+        """Break caught: orchestration reclassifies raw prompt text after preparation."""
+        prohibited = (
+            "Plan this change but do not modify files.",
+            "Plan this change but do not implement or modify files.",
+            "Plan this change but do not implement it or modify project files.",
+            "Plan this change but do not implement this or modify the project files.",
+            "Plan this change but do not implement, modify files, or publish.",
+            "Plan this change with no project writes.",
+            "Plan this change without touching any files.",
+            "Plan this change and leave the project byte-for-byte unchanged.",
+        )
+        allowed = (
+            "Plan a tool that does not modify files.",
+            "Plan read-only evidence handling.",
+            "Plan this change without modifying generated files.",
+            "Do not ask questions, modify files directly.",
+            "Do not merely describe the fix, modify files and test it.",
+        )
+
+        for request in prohibited:
+            with self.subTest(prohibited=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "absent"})
+                self.assertIn("project-write", control["prohibitions"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
+                self.assertEqual(
+                    "inline-recovery",
+                    loom_orchestrator._extract_planning_mode(control))
+        for request in allowed:
+            with self.subTest(allowed=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "absent"})
+                self.assertNotIn("project-write", control["prohibitions"])
+
+    def test_historical_request_control_v1_without_project_write_fact_stays_valid(self):
+        """Break caught: extending the closed prohibition set invalidates v1 evidence."""
+        fixture = {
+            "schema_version": 1,
+            "primary_operation": "plan",
+            "relation": "new",
+            "prohibitions": [],
+            "explicitness": "defaulted",
+            "evidence": ["safe-new-default"],
+            "blocked": False,
+            "block_reason": None,
+            "control_sha256": (
+                "7aaf553efc41778311b4743cb6a1eb0f0f7c424afddca14c95c1a0a15ed0589a"),
+        }
+
+        self.assertEqual(fixture, loom_runtime.validate_request_control(fixture))
+
     def test_provisional_contradiction_crosses_real_preparation_without_authority(self):
         """Break caught: one clarification cannot cross the prepared boundary."""
         with tempfile.TemporaryDirectory() as directory:

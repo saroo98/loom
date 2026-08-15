@@ -309,6 +309,12 @@ def _validate_action_path_authority(path, owner_home):
 
 
 def _plan_author_transaction_path(action):
+    if _uses_owner_candidate_stage(action):
+        action_path = _action_path(
+            action["owner_home"], action["instance_id"], action["project_id"],
+            action["action_id"])
+        return (_stage_path(action_path).parent /
+                f".loom-plan-transaction-{action['action_id']}.json")
     root = Path(action["explicit_target"] or action["cwd"]).resolve()
     return root / f".loom-plan-transaction-{action['action_id']}.json"
 
@@ -961,6 +967,7 @@ def _validate_action(value, path):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
     original_schema_version = value.get("schema_version")
     planning_mode = None
+    missing_planning_disposition = False
     if value.get("schema_version") == LEGACY_ACTION_SCHEMA_VERSION:
         if set(value) != ACTION_FIELDS_V7 \
                 or value.get("action_hash") != _action_hash(value) \
@@ -1061,11 +1068,17 @@ def _validate_action(value, path):
                 "ACTION_CORRUPT", f"sealed request control is invalid: {exc}") from exc
         if value.get("intent") == "plan" \
                 and value["request_control"].get("explicitness") != "host-bound":
-            try:
-                planning_mode = _extract_planning_mode(value["request_control"])
-            except OrchestratorError as exc:
-                raise OrchestratorError(
-                    "ACTION_CORRUPT", f"sealed planning mode is invalid: {exc}") from exc
+            planning_tokens = [
+                item for item in value["request_control"]["evidence"]
+                if item.startswith("planning-")]
+            if not planning_tokens:
+                missing_planning_disposition = True
+            else:
+                try:
+                    planning_mode = _extract_planning_mode(value["request_control"])
+                except OrchestratorError as exc:
+                    raise OrchestratorError(
+                        "ACTION_CORRUPT", f"sealed planning mode is invalid: {exc}") from exc
     elif value["request_control"] is not None:
         raise OrchestratorError(
             "ACTION_CORRUPT", "historical action unexpectedly carries request control")
@@ -1275,6 +1288,32 @@ def _validate_action(value, path):
         raise OrchestratorError("ACTION_CORRUPT", "non-repair action carries repair scope")
     if value["host_result"] is not None and not isinstance(value["host_result"], dict):
         raise OrchestratorError("ACTION_CORRUPT", "host result is invalid")
+    planning_conflicts = (
+        value["host_result"].get("planning_preference_conflicts")
+        if isinstance(value["host_result"], dict) else None)
+    if planning_conflicts is not None and value["intent"] != "plan":
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "non-planning action carries planning preference evidence")
+    if original_schema_version == ACTION_SCHEMA_VERSION and value["intent"] == "plan":
+        if planning_conflicts is not None and (
+                not isinstance(planning_conflicts, dict)
+                or set(planning_conflicts) != {"conflict_keys", "private_evidence"}):
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "planning preference evidence fields are invalid")
+        try:
+            loom_vault_adapter.validate_planning_preference_projection({
+                "public_preferences": value["context"]["preferences"],
+                "conflict_keys": (
+                    planning_conflicts["conflict_keys"]
+                    if planning_conflicts is not None else []),
+                "private_conflict_evidence": (
+                    planning_conflicts["private_evidence"]
+                    if planning_conflicts is not None else []),
+            }, domains=value["domains"], project_id=value["project_id"],
+                tier=value["tier"], intent=value["intent"])
+        except loom_vault_adapter.VaultAdapterError as exc:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", f"planning preference evidence is invalid: {exc}") from exc
     if isinstance(value["host_result"], dict) and "plan_author" in value["host_result"]:
         if value["intent"] != "plan":
             raise OrchestratorError(
@@ -1312,6 +1351,13 @@ def _validate_action(value, path):
     expected_journal = expected.parent.parent / loom_session.JOURNAL_FILE
     if Path(value["journal_path"]) != expected_journal:
         raise OrchestratorError("ACTION_PATH_MISMATCH", "session journal is not project-scoped")
+    if missing_planning_disposition \
+            and value["status"] not in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "ACTION_REPREPARE_REQUIRED",
+            "an open pre-UX-104 planning action has no sealed disposition; invoke /loom "
+            "again against the current project state",
+            status="action-required")
     return value
 
 
@@ -1689,13 +1735,33 @@ def _project_stage_path(action):
     return target / f".loom-plan-stage-{action['action_id']}"
 
 
+def _uses_owner_candidate_stage(action):
+    control = action.get("request_control")
+    evidence = control.get("evidence") if isinstance(control, dict) else None
+    if not isinstance(evidence, list):
+        return False
+    return [item for item in evidence if item.startswith("planning-")] in (
+        ["planning-candidate-successor"],
+        ["planning-current-world-replan"],
+    )
+
+
+def _prepared_stage_path(action):
+    if _uses_owner_candidate_stage(action):
+        action_path = _action_path(
+            action["owner_home"], action["instance_id"], action["project_id"],
+            action["action_id"])
+        return _stage_path(action_path)
+    return _project_stage_path(action)
+
+
 def _action_pack_root(action):
     """Resolve the exact plan projection owned by one action."""
     root = Path(action["explicit_target"] or action["cwd"])
     seed = action.get("pack_seed") or {}
     if action.get("intent") == "plan" and seed.get("created_pack") \
             and seed.get("state") in {"recorded", "prepared"}:
-        stage = _project_stage_path(action)
+        stage = _prepared_stage_path(action)
         if _path_present(stage):
             return stage
     plans = root / "plans"
@@ -1738,19 +1804,26 @@ def _recovery_manifest(path):
 
 
 def _seed_stage(action_path, action, prepared):
-    stage = _project_stage_path(action)
+    stage = _prepared_stage_path(action)
     if _path_present(stage):
         raise OrchestratorError(
             "BASELINE_STAGING_CONFLICT", "planning seed staging path already exists")
     target = Path(action["explicit_target"] or action["cwd"])
     try:
         target_identity = loom_reliability.observe_root_identity(target)
-        reserved = loom_reliability.reserve_directory_leaf(
-            target, stage.name, mode=0o755)
-        loom_reliability._validate_directory_object_continuity(
-            target, target_identity)
+        if _uses_owner_candidate_stage(action):
+            loom_session._ensure_private_directory(stage.parent)
+            stage_parent_identity = loom_reliability.observe_root_identity(stage.parent)
+            reserved = loom_reliability.reserve_directory_leaf(
+                stage.parent, stage.name, mode=0o700)
+            loom_reliability._validate_directory_object_continuity(
+                stage.parent, stage_parent_identity)
+        else:
+            reserved = loom_reliability.reserve_directory_leaf(
+                target, stage.name, mode=0o755)
+        loom_reliability._validate_directory_object_continuity(target, target_identity)
         stage_identity = loom_reliability.observe_root_identity(reserved)
-    except loom_reliability.ReliabilityError as exc:
+    except (loom_reliability.ReliabilityError, loom_session.SessionError) as exc:
         raise OrchestratorError(
             "BASELINE_STAGING_CONFLICT",
             f"planning seed stage could not be reserved safely: {exc}") from exc
@@ -2022,6 +2095,7 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
     immutable_revision_stage = (
         isinstance(revision_record, dict)
         and revision_record.get("schema_version") == 2)
+    owner_candidate_stage = _uses_owner_candidate_stage(action)
     if immutable_revision_stage and not _v3_revision_source_is_current(
             action, target):
         raise OrchestratorError(
@@ -2030,7 +2104,8 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
             "were preserved")
     present = [
         ("plans", pack)
-        if not immutable_revision_stage and _path_present(pack) else None,
+        if not immutable_revision_stage and not owner_candidate_stage
+        and _path_present(pack) else None,
         ("install-stage", project_stage) if _path_present(project_stage) else None,
         ("owner-stage", legacy_stage) if _path_present(legacy_stage) else None,
         ("legacy-tombstone", legacy_tombstone)
@@ -3658,8 +3733,10 @@ def _reviewed_world_observation(
 
 def _staged_plan_world(action):
     root = Path(action["explicit_target"] or action["cwd"])
-    stage = _project_stage_path(action)
-    excluded = [stage]
+    stage = _prepared_stage_path(action)
+    excluded = []
+    if stage.is_relative_to(root):
+        excluded.append(stage)
     plans = root / "plans"
     if _path_present(plans):
         excluded.append(plans)
@@ -8026,27 +8103,6 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
     return result
 
 
-_ZERO_PROJECT_WRITE_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
-    r"\bdo\s+not\s+"
-    r"(?:(?:implement|execute|apply)(?:\s+(?:it|this|the\s+(?:plan|changes?|work)))?"
-    r"\s*(?:,|\band\b|\bor\b)\s*)?"
-    r"(?:modify|change|write|create|touch)\s+(?:any\s+)?(?:the\s+)?"
-    r"(?:project(?:-local)?\s+)?files?\b",
-    r"\bdo\s+not\s+(?:modify|change|write|create|touch)\s+(?:the\s+)?project\b",
-    r"\bno\s+(?:project(?:-local)?\s+)?(?:file\s+)?writes?\b",
-    r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
-    r"(?:any\s+)?files?\b",
-    r"\bleave\s+(?:the\s+)?project\s+(?:byte[- ]for[- ]byte\s+)?unchanged\b",
-))
-
-
-def _explicit_zero_project_write_requested(request):
-    """Return true only for an explicit owner prohibition on project-local writes."""
-    if not isinstance(request, str):
-        return False
-    return any(pattern.search(request) for pattern in _ZERO_PROJECT_WRITE_PATTERNS)
-
-
 def _planning_seed_summary(tier, planning_mode=None):
     if planning_mode in {"candidate-successor", "current-world-replan"}:
         return (
@@ -8139,7 +8195,7 @@ def _rebind_useful_planning_prepared(prepared):
         **values, operation_fingerprint=prepared.operation_fingerprint)
 
 
-def _inline_recovery_message(reason_code):
+def _inline_recovery_message(reason_code, *, prepared, domain_contract):
     constraints = {
         "PROJECT_WRITES_PROHIBITED": (
             "Persistent project plan files are prohibited, so this result cannot be "
@@ -8157,13 +8213,30 @@ def _inline_recovery_message(reason_code):
     if reason_code not in constraints:
         raise OrchestratorError(
             "REQUEST_CONTROL_INVALID", "inline recovery reason is unsupported")
+    inspection = loom_project_inspection.capsule(
+        loom_runtime._thaw(prepared.project_inspection))
+    domains = list(prepared.domains)
+    if domains != domain_contract.get("active_task_domains"):
+        raise OrchestratorError(
+            "DOMAIN_CONTRACT_INVALID", "inline planning domains are not sealed")
+    scope = " + ".join(domains)
+    coverage = domain_contract.get("coverage_state")
+    consequence = domain_contract.get("consequence", {}).get("class")
+    if coverage not in {"known", "partial", "unknown"} \
+            or consequence not in {"ordinary", "material", "high", "critical"}:
+        raise OrchestratorError(
+            "DOMAIN_CONTRACT_INVALID", "inline planning semantics are unavailable")
     return (
         "NON-AUTHORITATIVE PLAN\n"
-        "Understood outcome: Prepare a reviewable approach for the requested project outcome.\n"
+        f"Understood outcome: Prepare a {prepared.route_contract['tier']}-tier "
+        f"non-authoritative plan for the sealed {scope} scope in the resolved "
+        f"{inspection['state']} project boundary.\n"
         "Proposed sequence:\n"
-        "1. Inspect the current project boundary without implementation.\n"
-        "2. Define scope, constraints, acceptance evidence, and failure stops.\n"
-        "3. Present the bounded steps for owner review before any execution.\n"
+        f"1. Use the sealed project inspection and {coverage} {scope} domain coverage "
+        "to bound current facts.\n"
+        f"2. Define {scope} constraints, {consequence}-consequence acceptance evidence, "
+        "and failure stops.\n"
+        f"3. Order the {scope} work into bounded reviewed steps before any execution.\n"
         f"Known constraints or uncertainty: {constraints[reason_code]}\n"
         f"Reason code: {reason_code}\n"
         f"Safe next action: {next_actions[reason_code]}")
@@ -8379,31 +8452,25 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             project_id=prepared.project_id,
             tier=prepared.route_contract["tier"],
             intent="plan")
-        if not isinstance(planning_preference_projection, dict) \
-                or set(planning_preference_projection) != {
-                    "public_preferences", "conflict_keys",
-                    "private_conflict_evidence"} \
-                or not isinstance(
-                    planning_preference_projection["public_preferences"], list) \
-                or not isinstance(planning_preference_projection["conflict_keys"], list) \
-                or not isinstance(
-                    planning_preference_projection["private_conflict_evidence"], list):
+        try:
+            loom_vault_adapter.validate_planning_preference_projection(
+                planning_preference_projection, domains=prepared.domains,
+                project_id=prepared.project_id,
+                tier=prepared.route_contract["tier"], intent="plan")
+        except loom_vault_adapter.VaultAdapterError as exc:
             raise OrchestratorError(
                 "PREFERENCE_PROJECTION_INVALID",
-                "planning preference conflict projection is invalid")
+                f"planning preference conflict projection is invalid: {exc}") from exc
         context_capsule = {
             **context_capsule,
             "preferences": planning_preference_projection["public_preferences"],
         }
     inline_recovery_reason = None
-    if planning_mode == "inline-recovery" or (
-            prepared.intent == "plan"
-            and request_control["explicitness"] != "host-bound"
-            and _explicit_zero_project_write_requested(request)):
+    if planning_mode == "inline-recovery":
         inline_recovery_reason = (
-            "LIFECYCLE_AUTHORITY_UNTRUSTED"
-            if planning_state_override is not None
-            else "PROJECT_WRITES_PROHIBITED")
+            "PROJECT_WRITES_PROHIBITED"
+            if "project-write" in request_control["prohibitions"]
+            else "LIFECYCLE_AUTHORITY_UNTRUSTED")
     if inline_recovery_reason is not None:
         reason_code = inline_recovery_reason
         controller.handlers["plan"] = lambda _context: {
@@ -8413,7 +8480,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "metrics": {},
             "evidence_ids": ["inline-plan-" + reason_code.casefold().replace("_", "-")],
             "reversible_action_ids": [],
-            "user_message": _inline_recovery_message(reason_code),
+            "user_message": _inline_recovery_message(
+                reason_code, prepared=prepared, domain_contract=domain_contract),
         }
         return controller.run(
             request, invocation_id=invocation_id, cwd=cwd,

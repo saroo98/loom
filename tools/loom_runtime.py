@@ -1171,6 +1171,25 @@ def resolve_intent(request, state=None):
     return _synchronize_block_reason(decision, category="intent")
 
 
+_PROJECT_WRITE_PROHIBITION_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\bdo\s+not\s+"
+    r"(?:(?:implement|execute|apply)(?:\s+(?:it|this|the\s+(?:plan|changes?|work)))?"
+    r"\s*(?:,|\band\b|\bor\b)\s*)?"
+    r"(?:modify|change|write|create|touch)\s+(?:any\s+)?(?:the\s+)?"
+    r"(?:project(?:-local)?\s+)?files?\b",
+    r"\bdo\s+not\s+(?:modify|change|write|create|touch)\s+(?:the\s+)?project\b",
+    r"\bno\s+(?:project(?:-local)?\s+)?(?:file\s+)?writes?\b",
+    r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
+    r"(?:any\s+)?files?\b",
+    r"\bleave\s+(?:the\s+)?project\s+(?:byte[- ]for[- ]byte\s+)?unchanged\b",
+))
+
+
+def _project_write_prohibited(normalized_request):
+    return any(pattern.search(normalized_request)
+               for pattern in _PROJECT_WRITE_PROHIBITION_PATTERNS)
+
+
 def request_control(request, state=None, *, host_control=None):
     """Project raw wording into one closed, privacy-safe lifecycle control."""
     if not isinstance(request, str) or not request.strip():
@@ -1308,6 +1327,9 @@ def request_control(request, state=None, *, host_control=None):
             r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
             r"\bwithout\s+modifying\b", normalized):
         prohibitions.append("mutation")
+    if host_control is None and primary == "plan" \
+            and _project_write_prohibited(normalized):
+        prohibitions.append("project-write")
     if re.search(r"\bnot\s+(?:a\s+)?repair\b|\bdo not repair\b", normalized):
         prohibitions.append("repair")
     if re.search(r"\bnot\s+(?:a\s+)?continuation\b|\bdo not continue\b", normalized):
@@ -1362,7 +1384,8 @@ def validate_request_control(value):
         "repair-active", "read-only", "cancel-generation",
         "supersede-generation", "quarantine-generation", "unclear"}
     prohibition_values = {
-        "implementation", "mutation", "repair", "continuation", "new-work"}
+        "implementation", "mutation", "project-write", "repair", "continuation",
+        "new-work"}
     if not isinstance(value, dict) or set(value) != fields \
             or value.get("schema_version") != 1 \
             or value.get("primary_operation") not in operations \

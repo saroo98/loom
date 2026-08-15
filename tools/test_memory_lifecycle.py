@@ -12,6 +12,23 @@ import loom_session
 import loom_vault_adapter
 
 
+def _planning_preference(identifier, key, value, *, domain=None,
+                         task_class=None, risk_class=None):
+    return {
+        "id": identifier,
+        "key": key,
+        "effective_value": value,
+        "effective_source": "stated",
+        "stated_confidence": 1.0,
+        "inferred_confidence": 0.0,
+        "domain": domain,
+        "task_class": task_class,
+        "risk_class": risk_class,
+        "subject": None,
+        "retired_values": [],
+    }
+
+
 class MemoryLifecycleTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -403,16 +420,12 @@ class MemoryLifecycleTests(unittest.TestCase):
         adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
         adapter.vault = vault
         preferences = [
-            {
-                "id": "00000000-0000-4000-8000-000000005101",
-                "key": "report_detail", "effective_value": "private-concise",
-                "effective_source": "stated", "domain": None,
-            },
-            {
-                "id": "00000000-0000-4000-8000-000000005102",
-                "key": "stack", "effective_value": "python",
-                "effective_source": "stated", "domain": "accounting",
-            },
+            _planning_preference(
+                "00000000-0000-4000-8000-000000005101",
+                "report_detail", "concise"),
+            _planning_preference(
+                "00000000-0000-4000-8000-000000005102",
+                "stack", "python", domain="accounting"),
         ]
 
         projection = adapter.project_planning_preferences(
@@ -429,7 +442,7 @@ class MemoryLifecycleTests(unittest.TestCase):
         self.assertEqual(
             {"key": "report_detail", "neutral_default": True}, neutral)
         public = json.dumps(projection["public_preferences"], sort_keys=True)
-        self.assertNotIn("private-concise", public)
+        self.assertNotIn('"effective_value": "concise"', public)
         self.assertNotIn(conflict_id, public)
         self.assertEqual(["report_detail"], projection["conflict_keys"])
         self.assertEqual([{
@@ -459,11 +472,10 @@ class MemoryLifecycleTests(unittest.TestCase):
                 preferences=[], domains=("accounting",),
                 project_id=self.project, tier="M", intent="execute")
         projection = adapter.project_planning_preferences(
-            preferences=[{
-                "id": "00000000-0000-4000-8000-000000005103",
-                "key": "report_detail", "effective_value": "detailed",
-                "effective_source": "stated", "domain": None,
-            }], domains=("three-d",), project_id="p-" + "2" * 32,
+            preferences=[_planning_preference(
+                "00000000-0000-4000-8000-000000005103",
+                "report_detail", "detailed")],
+            domains=("three-d",), project_id="p-" + "2" * 32,
             tier="XL", intent="plan")
         self.assertEqual([], projection["conflict_keys"])
         self.assertEqual("detailed", projection["public_preferences"][0][
@@ -484,15 +496,13 @@ class MemoryLifecycleTests(unittest.TestCase):
         adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
         adapter.vault = Vault()
         projection = adapter.project_planning_preferences(
-            preferences=[{
-                "id": "00000000-0000-4000-8000-000000005109",
-                "key": "stack", "effective_value": "private-ledger-stack",
-                "effective_source": "stated", "domain": "accounting",
-            }, {
-                "id": "00000000-0000-4000-8000-000000005110",
-                "key": "stack", "effective_value": "blender",
-                "effective_source": "stated", "domain": "three-d",
-            }], domains=("accounting", "three-d"), project_id=self.project,
+            preferences=[_planning_preference(
+                "00000000-0000-4000-8000-000000005109",
+                "stack", "private-ledger-stack", domain="accounting"),
+                _planning_preference(
+                    "00000000-0000-4000-8000-000000005110",
+                    "stack", "blender", domain="three-d")],
+            domains=("accounting", "three-d"), project_id=self.project,
             tier="M", intent="plan")
 
         self.assertIn({
@@ -505,6 +515,65 @@ class MemoryLifecycleTests(unittest.TestCase):
         self.assertNotIn(
             "private-ledger-stack",
             json.dumps(projection["public_preferences"], sort_keys=True))
+
+    def test_planning_projection_rejects_malformed_preferences_and_conflicts(self):
+        """Break caught: malformed or value-bearing private evidence is silently kept."""
+        owner_id = "00000000-0000-4000-8000-000000005120"
+        conflict_id = "00000000-0000-4000-8000-000000005121"
+        preference = _planning_preference(
+            "00000000-0000-4000-8000-000000005122",
+            "stack", "python", domain="accounting")
+
+        class Vault:
+            def __init__(self, conflicts, identity=owner_id):
+                self.conflicts = conflicts
+                self.owner_id = identity
+
+            def identity(self):
+                return {"owner_vault_id": self.owner_id}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return self.conflicts
+
+        preference_cases = []
+        preference_cases.append([{**preference, "unknown": True}])
+        preference_cases.append([{**preference, "id": "not-a-uuid"}])
+        preference_cases.append([preference, dict(preference)])
+        preference_cases.append([{**preference, "domain": "three-d"}])
+        for values in preference_cases:
+            with self.subTest(preferences=values):
+                adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
+                adapter.vault = Vault([])
+                with self.assertRaises(loom_vault_adapter.VaultAdapterError):
+                    adapter.project_planning_preferences(
+                        preferences=values, domains=("accounting",),
+                        project_id=self.project, tier="M", intent="plan")
+
+        valid_conflict = {
+            "conflict_id": conflict_id,
+            "preference_key": "stack_preference",
+        }
+        conflict_cases = (
+            [{**valid_conflict, "value": "private-ledger-stack"}],
+            [{**valid_conflict, "unknown": True}],
+            [{**valid_conflict, "conflict_id": "not-a-uuid"}],
+            [valid_conflict, dict(valid_conflict)],
+        )
+        for values in conflict_cases:
+            with self.subTest(conflicts=values):
+                adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
+                adapter.vault = Vault(values)
+                with self.assertRaises(loom_vault_adapter.VaultAdapterError):
+                    adapter.project_planning_preferences(
+                        preferences=[preference], domains=("accounting",),
+                        project_id=self.project, tier="M", intent="plan")
+
+        adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
+        adapter.vault = Vault([valid_conflict], identity="not-a-uuid")
+        with self.assertRaises(loom_vault_adapter.VaultAdapterError):
+            adapter.project_planning_preferences(
+                preferences=[preference], domains=("accounting",),
+                project_id=self.project, tier="M", intent="plan")
 
 
 if __name__ == "__main__":
