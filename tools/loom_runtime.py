@@ -1877,7 +1877,8 @@ class PreparedInvocation:
         return cls(**data)
 
 
-def promote_prepared_tier(prepared, tier, *, evidence):
+def promote_prepared_tier(
+        prepared, tier, *, evidence, preserve_evidence_suffix=()):
     """Return the same immutable preparation with a higher, evidenced tier.
 
     This is used only for a mechanical host-contract bound discovered after the
@@ -1894,9 +1895,28 @@ def promote_prepared_tier(prepared, tier, *, evidence):
         raise RuntimeError("tier promotion evidence must be a safe identifier")
     route = _thaw(prepared.route_contract)
     route["tier"] = tier
-    route["evidence"] = list(dict.fromkeys([
-        *route["evidence"][:15], evidence,
-    ]))
+    if not isinstance(preserve_evidence_suffix, tuple) \
+            or not preserve_evidence_suffix \
+            or list(route["evidence"][-len(preserve_evidence_suffix):]) \
+            != list(preserve_evidence_suffix):
+        if preserve_evidence_suffix:
+            raise RuntimeError("tier promotion evidence suffix is not sealed")
+        route["evidence"] = list(dict.fromkeys([
+            *route["evidence"][:15], evidence,
+        ]))
+    else:
+        semantic = validate_semantic_outcome_evidence(
+            route["evidence"], prepared.domains, required=False)
+        semantic_token = semantic["token"] if semantic is not None else None
+        prefix = route["evidence"][:-len(preserve_evidence_suffix)]
+        ordinary = [item for item in prefix if item != semantic_token]
+        reserved = [
+            evidence, *([semantic_token] if semantic_token is not None else []),
+            *preserve_evidence_suffix,
+        ]
+        route["evidence"] = list(dict.fromkeys([
+            *ordinary[:16 - len(reserved)], *reserved,
+        ]))
     _validate_route(route, schema_version=prepared.schema_version)
     values = prepared.to_dict()
     values.pop("prepared_hash")

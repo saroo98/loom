@@ -349,6 +349,56 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
             self.assertFalse(
                 (directory / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
 
+    def test_tier_s_promotion_preserves_inline_recovery_identity(self):
+        """Break caught: Tier-S promotion truncates the sealed recovery class."""
+        private_marker = "owner-private-marker-tier-s-recovery"
+        _write(
+            self.repo / "plans" / "owner-notes.md",
+            f"owner-authored plan {private_marker}\n")
+        self.request = "Plan a tiny Python command-line greeting tool."
+        project_before = loom_reliability.exact_tree_manifest(self.repo)
+        observed_prepared = []
+        original_capsule = loom_orchestrator._tier_s_host_capsule
+        original_run = loom_session.SessionController.run
+
+        def force_tier_s_overflow(contract):
+            if contract["tier"] == "S":
+                raise loom_orchestrator.OrchestratorError(
+                    "TIER_PROMOTION_REQUIRED",
+                    "complete Tier S decision context exceeds the host capsule bound")
+            return original_capsule(contract)
+
+        def capture_prepared(controller, request, **kwargs):
+            observed_prepared.append(kwargs["prepared"])
+            return original_run(controller, request, **kwargs)
+
+        with mock.patch.object(
+                loom_orchestrator, "_tier_s_host_capsule",
+                side_effect=force_tier_s_overflow), \
+                mock.patch.object(
+                    loom_session.SessionController, "run", capture_prepared):
+            try:
+                result = self.invoke()
+            except loom_session.SessionInterrupted as exc:
+                self.fail(
+                    "genuine promoted inline recovery was interrupted: "
+                    f"{exc.__cause__}")
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertEqual("M", result["tier"])
+        self.assertEqual(1, len(observed_prepared))
+        route = observed_prepared[0].route_contract
+        evidence = list(route["evidence"])
+        self.assertLessEqual(len(evidence), 16)
+        self.assertIn("tier-s-host-capsule-overflow", evidence)
+        self.assertEqual([
+            "useful-planning-recovery",
+            "inline-plan-lifecycle-authority-untrusted",
+        ], evidence[-2:])
+        self.assertEqual(project_before, loom_reliability.exact_tree_manifest(self.repo))
+        self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+
     def test_forged_inline_recovery_handler_cannot_seal_owner_authority(self):
         """Break caught: a relabelled recovery handler can seal hidden action authority."""
         private_marker = "owner-private-marker-forged-result"

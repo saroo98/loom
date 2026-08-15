@@ -9949,8 +9949,20 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         except OrchestratorError as exc:
             if exc.code != "TIER_PROMOTION_REQUIRED":
                 raise
+            route_evidence = list(prepared.route_contract["evidence"])
+            recovery_evidence = [
+                item for item in route_evidence
+                if item in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS]
+            recovery_suffix = (
+                (loom_session.USEFUL_PLANNING_RECOVERY_MARKER,
+                 recovery_evidence[0])
+                if len(recovery_evidence) == 1
+                and route_evidence[-2:] == [
+                    loom_session.USEFUL_PLANNING_RECOVERY_MARKER,
+                    recovery_evidence[0]] else ())
             prepared = loom_runtime.promote_prepared_tier(
-                prepared, "M", evidence="tier-s-host-capsule-overflow")
+                prepared, "M", evidence="tier-s-host-capsule-overflow",
+                preserve_evidence_suffix=recovery_suffix)
             opened = loom_session.OpenSession(
                 prepared=prepared,
                 session_id=opened.session_id,
