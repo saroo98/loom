@@ -837,7 +837,119 @@ class GenerationActivationTests(unittest.TestCase):
                 witness_path=self.witness, envelope_root=self.envelopes,
                 lock_path=self.lock)
 
-    def test_completed_successor_repair_restores_index_before_terminal_history(self):
+    def test_successor_completed_claim_cannot_override_exact_source_observation(self):
+        source, stage, prepared = self._prepare_live_successor()
+        with self.assertRaises(self.transition.LifecycleTransitionInterrupted):
+            self.transition.activate_successor(
+                self.root, stage, prepared,
+                witness_path=self.witness, envelope_root=self.envelopes,
+                lock_path=self.lock, fault_at="after-generation-install")
+        path = self.transition._successor_envelope_path(
+            self.envelopes, prepared["command_id"])
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        envelope["status"] = "completed"
+        envelope["projection_status"] = "completed"
+        envelope["receipt"] = self.transition._activation_receipt(
+            {
+                "prepared": prepared,
+                "source_index": prepared["source_index"],
+                "source_witness": prepared["source_witness"],
+                "command_id": prepared["command_id"],
+            }, status="completed", observation="target",
+            projection_status="verified")
+        self.transition.loom_reliability.atomic_write_json(path, envelope)
+
+        recovered = self.transition.recover_successor_activation(
+            self.root, prepared["command_id"], witness_path=self.witness,
+            envelope_root=self.envelopes, lock_path=self.lock)
+
+        self.assertEqual("abandoned", recovered["status"])
+        self.assertEqual(
+            source["index"],
+            json.loads((self.root / "plans" / "active-generation.json").read_text(
+                encoding="utf-8")))
+
+    def test_successor_foreign_self_digested_receipt_is_rejected(self):
+        _source, stage, prepared = self._prepare_live_successor()
+        with self.assertRaises(self.transition.LifecycleTransitionInterrupted):
+            self.transition.activate_successor(
+                self.root, stage, prepared,
+                witness_path=self.witness, envelope_root=self.envelopes,
+                lock_path=self.lock, fault_at="after-generation-install")
+        path = self.transition._successor_envelope_path(
+            self.envelopes, prepared["command_id"])
+        envelope = json.loads(path.read_text(encoding="utf-8"))
+        receipt = self.transition._activation_receipt(
+            {
+                "prepared": prepared,
+                "source_index": prepared["source_index"],
+                "source_witness": prepared["source_witness"],
+                "command_id": prepared["command_id"],
+            }, status="completed", observation="target",
+            projection_status="verified")
+        receipt["command_id"] = "foreign-successor-command"
+        receipt["receipt_sha256"] = kernel.digest({
+            key: value for key, value in receipt.items()
+            if key != "receipt_sha256"})
+        envelope["status"] = "completed"
+        envelope["receipt"] = receipt
+        self.transition.loom_reliability.atomic_write_json(path, envelope)
+
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "receipt"):
+            self.transition.recover_successor_activation(
+                self.root, prepared["command_id"], witness_path=self.witness,
+                envelope_root=self.envelopes, lock_path=self.lock)
+
+    def test_successor_target_witness_repairs_rolled_back_index(self):
+        source, stage, prepared = self._prepare_live_successor()
+        with self.assertRaises(self.transition.LifecycleTransitionInterrupted):
+            self.transition.activate_successor(
+                self.root, stage, prepared,
+                witness_path=self.witness, envelope_root=self.envelopes,
+                lock_path=self.lock, fault_at="after-witness")
+        self.transition.loom_reliability.atomic_write_json(
+            self.root / "plans" / "active-generation.json", source["index"])
+        source_root = self.root.joinpath(
+            *Path(source["index"]["generation_path"]).parts)
+        self.transition.loom_reliability.atomic_write_json(
+            source_root / "lifecycle.json", source["ledger"])
+
+        recovered = self.transition.recover_successor_activation(
+            self.root, prepared["command_id"], witness_path=self.witness,
+            envelope_root=self.envelopes, lock_path=self.lock)
+
+        self.assertEqual("completed", recovered["status"])
+        self.assertEqual(
+            prepared["index"],
+            json.loads((self.root / "plans" / "active-generation.json").read_text(
+                encoding="utf-8")))
+
+    def test_successor_projection_replay_always_reverifies_exact_action(self):
+        _source, stage, prepared = self._prepare_live_successor()
+        self.transition.activate_successor(
+            self.root, stage, prepared,
+            witness_path=self.witness, envelope_root=self.envelopes,
+            lock_path=self.lock)
+        self.transition.complete_successor_projection(
+            self.envelopes, prepared["command_id"],
+            candidate_action_id=prepared["candidate_action_id"],
+            projection_verifier=lambda _prepared, _receipt: None)
+
+        def reject_stale_projection(_prepared, _receipt):
+            raise self.transition.LifecycleTransitionError(
+                "stale action projection")
+
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "stale action projection"):
+            self.transition.complete_successor_projection(
+                self.envelopes, prepared["command_id"],
+                candidate_action_id=prepared["candidate_action_id"],
+                projection_verifier=reject_stale_projection)
+
+    def test_completed_claim_with_exact_source_authority_preserves_source(self):
         source, stage, prepared = self._prepare_live_successor()
         self.transition.activate_successor(
             self.root, stage, prepared,
@@ -866,12 +978,12 @@ class GenerationActivationTests(unittest.TestCase):
                 witness_path=self.witness, envelope_root=self.envelopes,
                 lock_path=self.lock)
 
-        self.assertEqual("completed", recovered["status"])
-        self.assertLess(
-            writes.index(self.root / "plans" / "active-generation.json"),
-            writes.index(source_root / "lifecycle.json"))
+        self.assertEqual("abandoned", recovered["status"])
+        self.assertNotIn(
+            self.root / "plans" / "active-generation.json", writes)
+        self.assertNotIn(source_root / "lifecycle.json", writes)
         self.assertEqual(
-            "generation-2",
+            "generation-1",
             self.transition.loom_plan_store.resolve(self.root).generation_id)
 
     def test_successor_requires_closed_executor_quiescence(self):
@@ -992,6 +1104,9 @@ class GenerationActivationTests(unittest.TestCase):
             "action_id": "different-action",
             "project_id": state.project_id,
             "generation_id": state.generation_id,
+            "action_sha256": HEX_A,
+            "lifecycle_state_sha256": state.state_sha256,
+            "pointer_expectation": "exact-action",
             "action_operation_id": "action-operation-1",
             "supervisor_operation_id": receipt["operation_id"],
             "project_world_sha256": HEX_B,
@@ -1015,6 +1130,37 @@ class GenerationActivationTests(unittest.TestCase):
         _source, _stage, prepared = self._prepare_live_successor(
             "generation-3", source=source, executor_quiescence=valid)
         self.assertEqual("action-1", prepared["executor_quiescence"]["action_id"])
+
+        repair_command = {
+            **self._command("repair-active", "repair-predecessor",
+                            action_id="repair-action-1"),
+            "affected_scope_sha256": HEX_A,
+        }
+        repair_decision = kernel.decide(
+            state, kernel.lifecycle_command(repair_command))
+        self.assertTrue(repair_decision.accepted)
+        repair_ledger = self.transition._target_ledger(
+            source["ledger"], repair_decision)
+        repair_witness = self.transition._target_witness(
+            source["witness"], repair_decision, repair_ledger)
+        repair_state = kernel.fold(
+            source["index"], source["semantics"], repair_ledger,
+            repair_witness)
+        repair = json.loads(json.dumps(valid))
+        repair["action_id"] = "repair-action-1"
+        repair["lifecycle_state_sha256"] = repair_state.state_sha256
+        repair["binding_sha256"] = kernel.digest({
+            key: value for key, value in repair.items()
+            if key != "binding_sha256"
+        })
+        repair_source = {**source, "ledger": repair_ledger,
+                         "witness": repair_witness}
+        _source, _stage, repair_prepared = self._prepare_live_successor(
+            "generation-repair", source=repair_source,
+            executor_quiescence=repair)
+        self.assertEqual(
+            "repair-action-1",
+            repair_prepared["executor_quiescence"]["action_id"])
 
         nonterminal = json.loads(json.dumps(valid))
         nonterminal_receipt = nonterminal["supervisor_receipt"]

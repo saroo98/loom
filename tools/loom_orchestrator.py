@@ -2780,6 +2780,13 @@ def _transition_project_generation_terminal(
         action_path = Path(directory) / f"{pointer['action_id']}.json"
         path, action, security = _read_action(
             action_path, owner_home=owner_home, install_root=install_root)
+        pending_successor = action["project_id"] == project_id \
+            and action.get("generation_id") != state.generation_id \
+            and action.get("status") not in TERMINAL_ACTION_STATUSES \
+            and _extract_planning_mode(action.get("request_control")) in {
+                "candidate-successor", "current-world-replan"}
+        if pending_successor:
+            return
         if action["project_id"] != project_id \
                 or action.get("generation_id") != state.generation_id:
             raise OrchestratorError(
@@ -4938,41 +4945,94 @@ def _activate_reviewed_generation(action, action_path, memory, instant):
     }
 
 
-def _remove_owned_successor_reservation(path, expected_identity):
-    """Remove only one exact reservation root whose contents are non-redirected."""
+def _successor_reservation_ownership(path, expected_identity, *, manifest=None):
+    """Seal the exact copied entries whose unchanged bytes may be cleaned."""
+    path = Path(path)
+    root_identity = loom_reliability._validate_directory_object_continuity(
+        path, expected_identity)
+    observed = loom_reliability.exact_tree_manifest(
+        path, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+        max_total_bytes=16 * 1024 * 1024)
+    if manifest is not None:
+        loom_reliability.validate_exact_tree_manifest(
+            manifest, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        expected_entries = {
+            item["path"]: item for item in manifest["entries"]
+            if item["path"] != "."
+        }
+        if any(expected_entries.get(item["path"]) != item
+               for item in observed["entries"] if item["path"] != "."):
+            raise loom_reliability.ReliabilityError(
+                "successor reservation contains bytes not proven by its source")
+    identities = []
+    for entry in observed["entries"]:
+        relative = entry["path"]
+        candidate = path if relative == "." else path.joinpath(
+            *PurePosixPath(relative).parts)
+        parent = path if relative == "." else candidate.parent
+        identities.append({
+            "path": relative,
+            "kind": entry["kind"],
+            "identity": list(loom_reliability._stat_identity(candidate.lstat())),
+            "parent_path": (
+                "." if parent == path else parent.relative_to(path).as_posix()),
+            "parent_identity": list(
+                loom_reliability._stat_identity(parent.lstat())),
+        })
+    body = {
+        "schema_version": 1,
+        "root_identity": root_identity,
+        "manifest": observed,
+        "entries": identities,
+    }
+    return {**body, "ownership_sha256": _hash(body)}
+
+
+def _remove_owned_successor_reservation(path, ownership):
+    """Remove only unchanged entries sealed by one exact copy reservation."""
     path = Path(path)
     try:
-        loom_reliability._validate_directory_object_continuity(
-            path, expected_identity)
+        fields = {
+            "schema_version", "root_identity", "manifest", "entries",
+            "ownership_sha256",
+        }
+        if not isinstance(ownership, dict) or set(ownership) != fields \
+                or ownership.get("schema_version") != 1 \
+                or ownership["ownership_sha256"] != _hash({
+                    key: value for key, value in ownership.items()
+                    if key != "ownership_sha256"
+                }):
+            raise loom_reliability.ReliabilityError(
+                "successor cleanup ownership is invalid")
+        current = _successor_reservation_ownership(
+            path, ownership["root_identity"])
+        if current["manifest"] != ownership["manifest"] \
+                or current["entries"] != ownership["entries"]:
+            raise loom_reliability.ReliabilityError(
+                "successor reservation changed after ownership was sealed")
         entries = []
-        pending = [path]
-        while pending:
-            current = pending.pop()
-            with os.scandir(current) as scan:
-                for item in scan:
-                    candidate = Path(item.path)
-                    if item.is_symlink() or loom_reliability._is_redirect(candidate):
-                        raise loom_reliability.ReliabilityError(
-                            "successor reservation contains a redirected entry")
-                    info = candidate.lstat()
-                    if item.is_dir(follow_symlinks=False):
-                        pending.append(candidate)
-                    elif not item.is_file(follow_symlinks=False) \
-                            or info.st_nlink != 1:
-                        raise loom_reliability.ReliabilityError(
-                            "successor reservation contains an ambiguous entry")
-                    entries.append(candidate)
-                    if len(entries) > 1024:
-                        raise loom_reliability.ReliabilityError(
-                            "successor reservation exceeds its cleanup bound")
-        loom_reliability._validate_directory_object_continuity(
-            path, expected_identity)
-        for entry in sorted(
-                entries, key=lambda item: len(item.parts), reverse=True):
-            if entry.is_dir():
+        for record in ownership["entries"]:
+            if record["path"] == ".":
+                continue
+            candidate = path.joinpath(*PurePosixPath(record["path"]).parts)
+            parent = path if record["parent_path"] == "." else path.joinpath(
+                *PurePosixPath(record["parent_path"]).parts)
+            if list(loom_reliability._stat_identity(candidate.lstat())) != \
+                    record["identity"] \
+                    or list(loom_reliability._stat_identity(parent.lstat())) != \
+                    record["parent_identity"]:
+                raise loom_reliability.ReliabilityError(
+                    "successor reservation identity changed before cleanup")
+            entries.append((candidate, record["kind"]))
+        for entry, kind in sorted(
+                entries, key=lambda item: len(item[0].parts), reverse=True):
+            if kind == "directory":
                 entry.rmdir()
             else:
                 entry.unlink()
+        loom_reliability._validate_directory_object_continuity(
+            path, ownership["root_identity"])
         path.rmdir()
         loom_reliability._sync_parent(path)
     except (OSError, loom_reliability.ReliabilityError) as exc:
@@ -4989,6 +5049,8 @@ def _copy_successor_install_stage(
     destination = Path(destination)
     reserved = None
     reservation_identity = None
+    cleanup_ownership = None
+    before = None
     try:
         source_identity = loom_reliability.validate_root_identity(
             source, expected_source_identity)
@@ -5024,16 +5086,26 @@ def _copy_successor_install_stage(
                     max_total_bytes=16 * 1024 * 1024):
             raise loom_reliability.ReliabilityError(
                 "successor copy differs from its sealed source")
+        cleanup_ownership = _successor_reservation_ownership(
+            reserved, reservation_identity, manifest=before)
         return {
             "manifest": before,
-            "reservation_identity": loom_reliability._validate_directory_object_continuity(
-                reserved, reservation_identity),
+            "reservation_identity": cleanup_ownership["root_identity"],
+            "cleanup_ownership": cleanup_ownership,
         }
     except (OSError, shutil.Error, loom_reliability.ReliabilityError) as exc:
         if reserved is not None and reservation_identity is not None \
                 and os.path.lexists(reserved):
-            _remove_owned_successor_reservation(
-                reserved, reservation_identity)
+            try:
+                cleanup_ownership = _successor_reservation_ownership(
+                    reserved, reservation_identity, manifest=before)
+            except loom_reliability.ReliabilityError as cleanup_exc:
+                raise OrchestratorError(
+                    "SUCCESSOR_INSTALL_AMBIGUOUS",
+                    "the successor reservation could not be proven safe to "
+                    "clean; its bytes were preserved and the prior plan remains "
+                    "current") from cleanup_exc
+            _remove_owned_successor_reservation(reserved, cleanup_ownership)
         raise OrchestratorError(
             "SUCCESSOR_INSTALL_PREPARATION_FAILED",
             "the reviewed successor could not be reserved safely; the prior "
@@ -5043,9 +5115,9 @@ def _copy_successor_install_stage(
 def _successor_quiescence_required():
     raise OrchestratorError(
         "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED",
-        "the reviewed successor remains pending. Complete or quiesce the exact "
-        "active Loom execution through its supported supervised path, then retry "
-        "completion of this pending reviewed plan",
+        "the reviewed successor remains pending. Complete the exact active Loom "
+        "work, or ask Loom: 'Cancel the current Loom plan generation.' Then "
+        "retry completion of this exact pending reviewed plan",
         status="action-required")
 
 
@@ -5056,21 +5128,20 @@ def _successor_executor_quiescence(
             "case": "no-active-executor", "action_id": None,
             "receipt_sha256": None,
         }
+    if source_state.generation_phase == "terminal-cancelled":
+        return {
+            "case": "terminal-predecessor", "action_id": None,
+            "receipt_sha256": None,
+        }
     if source_state.generation_phase != "active":
         raise OrchestratorError(
             "GENERATION_ACTIVATION_INVALID",
             "successor activation requires one exact live predecessor")
-    action_ids = [
-        event.get("payload", {}).get("action_id")
-        for event in reversed(source_ledger["events"])
-        if event.get("event_type") in {
-            "work-order-started", "work-order-resumed"}
-        and isinstance(event.get("payload"), dict)
-        and event["payload"].get("action_id") is not None
-    ]
-    if not action_ids:
+    try:
+        action_id = loom_lifecycle_transition._active_executor_action_id(
+            source_state, source_ledger)
+    except loom_lifecycle_transition.LifecycleTransitionError:
         _successor_quiescence_required()
-    action_id = action_ids[0]
     try:
         _path, executor, _security = _read_action(
             Path(directory) / f"{action_id}.json",
@@ -5080,13 +5151,77 @@ def _successor_executor_quiescence(
     evidence = (
         executor.get("host_result", {}).get("executor_quiescence")
         if isinstance(executor.get("host_result"), dict) else None)
-    if not isinstance(evidence, dict) \
+    pointer = _read_active_pointer(directory)
+    pointer_expectation = "absent" if pointer is None else "exact-action"
+    if pointer is not None and pointer["action_id"] != action_id:
+        _successor_quiescence_required()
+    raw_fields = {
+        "case", "action_id", "project_id", "generation_id",
+        "action_operation_id", "supervisor_operation_id",
+        "project_world_sha256", "terminal_state", "receipt_sha256",
+        "supervisor_receipt", "binding_sha256",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != raw_fields \
             or evidence.get("action_id") != executor["action_id"] \
             or evidence.get("project_id") != executor["project_id"] \
             or evidence.get("generation_id") != executor.get("generation_id") \
-            or evidence.get("action_operation_id") != executor["operation_id"]:
+            or evidence.get("action_operation_id") != executor["operation_id"] \
+            or evidence.get("binding_sha256") != loom_lifecycle_kernel.digest({
+                key: value for key, value in evidence.items()
+                if key != "binding_sha256"
+            }):
         _successor_quiescence_required()
-    return evidence
+    bound = {
+        **{key: value for key, value in evidence.items()
+           if key != "binding_sha256"},
+        "action_sha256": executor["action_hash"],
+        "lifecycle_state_sha256": source_state.state_sha256,
+        "pointer_expectation": pointer_expectation,
+    }
+    bound["binding_sha256"] = loom_lifecycle_kernel.digest(bound)
+    return bound
+
+
+def _rebaseline_cancelled_successor_control(pack, root):
+    """Rebind only legacy gate metadata after an explicit generation cancel."""
+    pack = Path(pack)
+    root = Path(root)
+    lifecycle_path = pack / loom_gate.LIFECYCLE_FILE
+    try:
+        data = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+        if [item.get("event") for item in data.get("events", [])] != [
+                "planning-started"]:
+            raise ValueError("pending successor gate is not rebaselinable")
+        state, current_files = loom_gate._stable_snapshot(root, pack)
+        prior_files = data.get("baseline_files")
+        if not isinstance(prior_files, dict):
+            raise ValueError("pending successor baseline is invalid")
+        changed = {
+            path for path in set(prior_files) | set(current_files)
+            if prior_files.get(path) != current_files.get(path)
+        }
+        if any(path != "plans" and not path.startswith("plans/")
+               for path in changed):
+            raise ValueError(
+                "product bytes changed while the successor was pending")
+        previous = json.loads(json.dumps(data, allow_nan=False))
+        event = loom_gate.make_event(
+            "planning-started", state,
+            baseline_snapshot_sha256=loom_gate._mapping_hash(current_files))
+        event["at"] = previous["events"][0]["at"]
+        event["event_hash"] = loom_gate._event_hash(event)
+        data["baseline_files"] = current_files
+        data["events"] = [event]
+        manifest_path, manifest_text = loom_gate._render_manifest(
+            pack, state, data["mode"])
+        loom_gate._write_lifecycle_and_manifest(
+            pack, data, manifest_path, manifest_text, previous)
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            ValueError, loom_survey.SurveyError) as exc:
+        raise OrchestratorError(
+            "TARGET_DRIFT",
+            "the pending successor could not be rebound after the exact owner "
+            "cancellation") from exc
 
 
 def _successor_action_base_sha256(action):
@@ -5350,7 +5485,8 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
         raise OrchestratorError(
             "GENERATION_ACTIVATION_INVALID",
             "the exact predecessor cannot be observed safely") from exc
-    if source_state.generation_phase not in {"reviewable", "active"}:
+    if source_state.generation_phase not in {
+            "reviewable", "active", "terminal-cancelled"}:
         raise OrchestratorError(
             "GENERATION_ACTIVATION_INVALID",
             "successor activation requires one exact live predecessor")
@@ -5424,13 +5560,16 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
             },
             replace_lifecycle_sha256=legacy_sha256,
             replace_lifecycle_name=legacy_name)
+        copied["cleanup_ownership"] = _successor_reservation_ownership(
+            install_stage, copied["reservation_identity"],
+            manifest=prepared["stage_manifest"])
     except (
             OSError, loom_plan_presentation.PresentationError,
             loom_lifecycle_transition.LifecycleTransitionError,
             loom_reliability.ReliabilityError) as exc:
         if copied is not None and os.path.lexists(install_stage):
             _remove_owned_successor_reservation(
-                install_stage, copied["reservation_identity"])
+                install_stage, copied["cleanup_ownership"])
         if isinstance(exc, OrchestratorError):
             raise
         raise OrchestratorError(
@@ -5440,16 +5579,46 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
 
     def precommit_validation(prepared_value):
         current_world = _staged_plan_world(action)
-        current_pointer = _read_active_pointer(Path(action_path).parent)
         _current_path, current_action, _security = _read_action(
             action_path, owner_home=action["owner_home"],
             install_root=action["install_root"])
+        try:
+            current_resolved, current_semantics, current_ledger, \
+                current_witness, current_state = \
+                loom_lifecycle_transition._observe(root, witness_store)
+        except loom_lifecycle_transition.LifecycleTransitionError as exc:
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "successor predecessor changed before commit") from exc
+        current_source_index = {
+            "schema_version": 1,
+            "project_id": current_resolved.index.project_id,
+            "generation_id": current_resolved.index.generation_id,
+            "storage_kind": current_resolved.index.storage_kind,
+            "generation_path": current_resolved.index.generation_path,
+            "index_sha256": current_resolved.index.index_sha256,
+        }
+        try:
+            current_quiescence = _successor_executor_quiescence(
+                current_state, current_ledger,
+                directory=Path(action_path).parent,
+                owner_home=action["owner_home"],
+                install_root=action["install_root"])
+        except OrchestratorError as exc:
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "successor executor changed before commit") from exc
+        current_pointer = _read_active_pointer(Path(action_path).parent)
         if current_world["state_sha256"] != prepared_value[
                 "project_world_sha256"] \
                 or current_action["action_hash"] != prepared_value[
                     "candidate_action_sha256"] \
-                or current_pointer is not None \
-                and source_state.generation_phase == "reviewable" \
+                or current_source_index != prepared_value["source_index"] \
+                or current_semantics != prepared_value["source_semantics"] \
+                or current_ledger != prepared_value["source_ledger"] \
+                or current_witness != prepared_value["source_witness"] \
+                or current_quiescence != prepared_value[
+                    "executor_quiescence"] \
+                or current_state.generation_phase == "reviewable" \
+                and current_pointer is not None \
                 and current_pointer["action_id"] != action["action_id"]:
             raise loom_lifecycle_transition.LifecycleTransitionError(
                 "successor bound identity changed before commit")
@@ -5497,7 +5666,7 @@ def _activate_reviewed_successor(action, action_path, memory, instant):
                 and loom_lifecycle_transition.successor_envelope_status(
                     envelope_root, prepared["command_id"]) is None:
             _remove_owned_successor_reservation(
-                install_stage, copied["reservation_identity"])
+                install_stage, copied["cleanup_ownership"])
         raise OrchestratorError(
             "GENERATION_ACTIVATION_INVALID",
             "reviewed successor activation failed closed; recover the sealed "
@@ -9745,6 +9914,9 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
                 raise OrchestratorError(
                     "GENERATION_ACTIVATION_INVALID",
                     "the exact predecessor cannot be observed safely") from exc
+            if predecessor.generation_phase == "terminal-cancelled":
+                _rebaseline_cancelled_successor_control(
+                    _action_pack_root(action), root)
             _successor_executor_quiescence(
                 predecessor, predecessor_ledger, directory=path.parent,
                 owner_home=action["owner_home"],

@@ -3145,8 +3145,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         identity = loom_reliability.observe_root_identity(source)
         destination = self.root / "reserved-successor"
 
-        def partial_copy(_source, reserved, **_kwargs):
-            Path(reserved, "partial.txt").write_text("partial\n", encoding="utf-8")
+        def partial_copy(copy_source, reserved, **_kwargs):
+            shutil.copy2(
+                Path(copy_source, "plan.md"), Path(reserved, "plan.md"))
             raise shutil.Error([("source", "destination", "copy failed")])
 
         with mock.patch.object(
@@ -3184,6 +3185,60 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             "preserve ambiguous bytes\n",
             destination.joinpath("unrelated.txt").read_text(encoding="utf-8"))
+
+    def test_successor_cleanup_preserves_injected_or_replaced_entries(self):
+        mutations = ("injected-child", "replaced-file", "changed-file",
+                     "directory-swap", "hardlink", "redirect")
+        for ordinal, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation):
+                source = self.root / f"owner-stage-{ordinal}"
+                nested = source / "nested"
+                nested.mkdir(parents=True)
+                (nested / "plan.md").write_text(
+                    "reviewed candidate\n", encoding="utf-8")
+                identity = loom_reliability.observe_root_identity(source)
+                destination = self.root / f"reserved-successor-{ordinal}"
+                copied = loom_orchestrator._copy_successor_install_stage(
+                    source, destination, expected_source_identity=identity)
+                target = destination / "nested" / "plan.md"
+                if mutation == "injected-child":
+                    (destination / "injected.txt").write_text(
+                        "untracked\n", encoding="utf-8")
+                elif mutation == "replaced-file":
+                    content = target.read_bytes()
+                    target.unlink()
+                    target.write_bytes(content)
+                elif mutation == "changed-file":
+                    target.write_text("changed bytes\n", encoding="utf-8")
+                elif mutation == "directory-swap":
+                    old = destination / "nested-old"
+                    (destination / "nested").rename(old)
+                    (destination / "nested").mkdir()
+                    (destination / "nested" / "plan.md").write_text(
+                        "reviewed candidate\n", encoding="utf-8")
+                elif mutation == "hardlink":
+                    os.link(target, destination / "second-name.md")
+                else:
+                    with mock.patch.object(
+                            loom_reliability, "_is_redirect",
+                            side_effect=lambda path, _target=target:
+                                Path(path) == _target):
+                        with self.assertRaises(
+                                loom_orchestrator.OrchestratorError) as caught:
+                            loom_orchestrator._remove_owned_successor_reservation(
+                                destination, copied["cleanup_ownership"])
+                    self.assertEqual(
+                        "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+                    self.assertTrue(destination.exists())
+                    continue
+
+                with self.assertRaises(
+                        loom_orchestrator.OrchestratorError) as caught:
+                    loom_orchestrator._remove_owned_successor_reservation(
+                        destination, copied["cleanup_ownership"])
+                self.assertEqual(
+                    "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+                self.assertTrue(destination.exists())
 
     def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
         """Break caught: changed-world recovery requires parser-specific wording."""
@@ -3347,6 +3402,96 @@ class ProductionOrchestratorTests(unittest.TestCase):
             Path(started["action_path"]).parent)
         self.assertEqual(started["action_id"], pointer["action_id"])
 
+    def test_successor_executor_binding_detects_action_receipt_and_pointer_change(self):
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        action_path = Path(started["action_path"])
+        path, executor, security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        self.assertEqual(executor["instance_id"], instance_id)
+        witness_store = loom_orchestrator._lifecycle_witness_store(
+            memory, action_path.parent, executor["project_id"])
+        resolved, _semantics, ledger, _witness, state = \
+            loom_lifecycle_transition.observe(
+                self.repo, witness_store=witness_store)
+        receipt = loom_lifecycle_transition.loom_operation_supervisor.run(
+            operation_class="successor-executor-binding-test",
+            command=[sys.executable, "-c", "pass"], cwd=self.repo,
+            timeout=10, allowed_roots=[self.repo],
+            protected_roots=[resolved.generation_root])
+        raw = {
+            "case": "supervisor-terminal",
+            "action_id": executor["action_id"],
+            "project_id": executor["project_id"],
+            "generation_id": executor["generation_id"],
+            "action_operation_id": executor["operation_id"],
+            "supervisor_operation_id": receipt["operation_id"],
+            "project_world_sha256": state.expected_world_sha256,
+            "terminal_state": "completed",
+            "receipt_sha256": receipt["receipt_sha256"],
+            "supervisor_receipt": receipt,
+        }
+        raw["binding_sha256"] = loom_orchestrator.loom_lifecycle_kernel.digest(raw)
+        executor["host_result"] = {
+            **(executor.get("host_result") or {}),
+            "executor_quiescence": raw,
+        }
+        executor = loom_orchestrator._write_action(path, executor, security)
+        sealed = loom_orchestrator._successor_executor_quiescence(
+            state, ledger, directory=action_path.parent,
+            owner_home=self.home, install_root=self.installed)
+        self.assertEqual(executor["action_hash"], sealed["action_sha256"])
+        self.assertEqual("exact-action", sealed["pointer_expectation"])
+
+        changed = json.loads(json.dumps(executor))
+        changed["attempts"] += 1
+        changed = loom_orchestrator._write_action(path, changed, security)
+        rebound = loom_orchestrator._successor_executor_quiescence(
+            state, ledger, directory=action_path.parent,
+            owner_home=self.home, install_root=self.installed)
+        self.assertNotEqual(sealed, rebound)
+        self.assertEqual(changed["action_hash"], rebound["action_sha256"])
+
+        loom_orchestrator._clear_active_pointer(
+            action_path.parent, executor["action_id"])
+        pointer_rebound = loom_orchestrator._successor_executor_quiescence(
+            state, ledger, directory=action_path.parent,
+            owner_home=self.home, install_root=self.installed)
+        self.assertEqual("absent", pointer_rebound["pointer_expectation"])
+        self.assertNotEqual(rebound, pointer_rebound)
+
+        loom_orchestrator._write_active_pointer(
+            action_path.parent,
+            action_id="11111111-1111-4111-8111-111111111111",
+            project_id=executor["project_id"])
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator._successor_executor_quiescence(
+                state, ledger, directory=action_path.parent,
+                owner_home=self.home, install_root=self.installed)
+
+        loom_orchestrator._clear_active_pointer(
+            action_path.parent, "11111111-1111-4111-8111-111111111111")
+        stale = json.loads(json.dumps(changed))
+        stale["host_result"]["executor_quiescence"][
+            "action_operation_id"] = "stale-operation"
+        stale_raw = stale["host_result"]["executor_quiescence"]
+        stale_raw["binding_sha256"] = \
+            loom_orchestrator.loom_lifecycle_kernel.digest({
+            key: value for key, value in stale_raw.items()
+            if key != "binding_sha256"
+        })
+        loom_orchestrator._write_action(path, stale, security)
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator._successor_executor_quiescence(
+                state, ledger, directory=action_path.parent,
+                owner_home=self.home, install_root=self.installed)
+
     def test_cancelled_execution_and_cleared_pointer_do_not_quiesce_active_generation(self):
         plan_action, planned = self.complete_machine_authored_plan()
         started = loom_orchestrator.start(
@@ -3373,9 +3518,110 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         self.assertEqual(
             "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED", blocked.exception.code)
-        self.assertIn("retry completion", blocked.exception.message)
+        self.assertIn(
+            "Cancel the current Loom plan generation", blocked.exception.message)
         self.assertEqual(
             predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+        retired = loom_orchestrator.invoke(
+            request="Cancel the current Loom plan generation.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        self.assertEqual("generation-cancelled", retired["code"])
+        completed = loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        self.assertNotEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_successor_precommit_revalidates_executor_action_and_pointer(self):
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        executor_path = Path(started["action_path"])
+        path, executor, security = loom_orchestrator._read_action(
+            executor_path, owner_home=self.home, install_root=self.installed)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        witness_store = loom_orchestrator._lifecycle_witness_store(
+            memory, executor_path.parent, executor["project_id"])
+        resolved, _semantics, _ledger, _witness, state = \
+            loom_lifecycle_transition.observe(
+                self.repo, witness_store=witness_store)
+        receipt = loom_lifecycle_transition.loom_operation_supervisor.run(
+            operation_class="successor-precommit-binding-test",
+            command=[sys.executable, "-c", "pass"], cwd=self.repo,
+            timeout=10, allowed_roots=[self.repo],
+            protected_roots=[resolved.generation_root])
+        raw = {
+            "case": "supervisor-terminal",
+            "action_id": executor["action_id"],
+            "project_id": executor["project_id"],
+            "generation_id": executor["generation_id"],
+            "action_operation_id": executor["operation_id"],
+            "supervisor_operation_id": receipt["operation_id"],
+            "project_world_sha256": state.expected_world_sha256,
+            "terminal_state": "completed",
+            "receipt_sha256": receipt["receipt_sha256"],
+            "supervisor_receipt": receipt,
+        }
+        raw["binding_sha256"] = loom_orchestrator.loom_lifecycle_kernel.digest(raw)
+        executor["host_result"] = {
+            **(executor.get("host_result") or {}),
+            "executor_quiescence": raw,
+        }
+        executor = loom_orchestrator._write_action(path, executor, security)
+
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        original_activate = loom_lifecycle_transition.activate_successor
+
+        def clear_exact_pointer(*args, **kwargs):
+            loom_orchestrator._clear_active_pointer(
+                executor_path.parent, executor["action_id"])
+            return original_activate(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=clear_exact_pointer), \
+                self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            executor["generation_id"],
+            loom_plan_store.resolve(self.repo).generation_id)
+
+        loom_orchestrator._write_active_pointer(
+            executor_path.parent, action_id=executor["action_id"],
+            project_id=executor["project_id"])
+
+        def change_exact_action(*args, **kwargs):
+            _path, changed, current_security = loom_orchestrator._read_action(
+                executor_path, owner_home=self.home,
+                install_root=self.installed)
+            changed["attempts"] += 1
+            loom_orchestrator._write_action(
+                executor_path, changed, current_security)
+            return original_activate(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=change_exact_action), \
+                self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            executor["generation_id"],
             loom_plan_store.resolve(self.repo).generation_id)
 
     def test_successor_recovery_finishes_exact_action_after_authority_commit(self):

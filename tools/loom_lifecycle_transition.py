@@ -418,8 +418,17 @@ def _validate_executor_quiescence(
             raise LifecycleTransitionError(
                 "successor executor quiescence is invalid")
         return
+    if value.get("case") == "terminal-predecessor":
+        if set(value) != {"case", "action_id", "receipt_sha256"} \
+                or value["action_id"] is not None \
+                or value["receipt_sha256"] is not None \
+                or source_state.generation_phase != "terminal-cancelled":
+            raise LifecycleTransitionError(
+                "successor executor quiescence is invalid")
+        return
     fields = {
         "case", "action_id", "project_id", "generation_id",
+        "action_sha256", "lifecycle_state_sha256", "pointer_expectation",
         "action_operation_id", "supervisor_operation_id",
         "project_world_sha256", "terminal_state", "receipt_sha256",
         "supervisor_receipt", "binding_sha256",
@@ -449,6 +458,10 @@ def _validate_executor_quiescence(
                 source_state, source_ledger) \
             or value["project_id"] != source_state.project_id \
             or value["generation_id"] != source_state.generation_id \
+            or not isinstance(value["action_sha256"], str) \
+            or kernel.HEX64.fullmatch(value["action_sha256"]) is None \
+            or value["lifecycle_state_sha256"] != source_state.state_sha256 \
+            or value["pointer_expectation"] not in {"exact-action", "absent"} \
             or value["project_world_sha256"] != project_world_sha256 \
             or value["supervisor_operation_id"] != receipt["operation_id"] \
             or value["receipt_sha256"] != receipt["receipt_sha256"] \
@@ -479,7 +492,8 @@ def prepare_successor_authority(
         executor_quiescence, source_state=source_state,
         source_ledger=source_ledger,
         project_world_sha256=project_world_sha256)
-    if source_state.generation_phase not in {"reviewable", "active"} \
+    if source_state.generation_phase not in {
+            "reviewable", "active", "terminal-cancelled"} \
             or not isinstance(candidate_action_id, str) \
             or kernel.SAFE_ID.fullmatch(candidate_action_id) is None \
             or not isinstance(candidate_action_sha256, str) \
@@ -487,10 +501,11 @@ def prepare_successor_authority(
             or not isinstance(project_world_sha256, str) \
             or kernel.HEX64.fullmatch(project_world_sha256) is None:
         raise LifecycleTransitionError("successor source relation is invalid")
+    terminal_source = source_state.generation_phase == "terminal-cancelled"
     command = {
         "schema_version": 1,
         "command_id": command_id + "-predecessor",
-        "relation": "supersede-generation",
+        "relation": "new" if terminal_source else "supersede-generation",
         "project_id": source_state.project_id,
         "generation_id": source_state.generation_id,
         "plan_semantics_sha256": source_state.plan_semantics_sha256,
@@ -500,16 +515,22 @@ def prepare_successor_authority(
         "evidence_sha256": None,
         "affected_scope_sha256": None,
         "successor_generation_id": index_value.get("generation_id"),
-        "reason_code": "owner-reviewed-successor",
+        "reason_code": (
+            "owner-cancelled-successor" if terminal_source
+            else "owner-reviewed-successor"),
     }
     try:
         decision = kernel.decide(source_state, kernel.lifecycle_command(command))
-        if not decision.accepted or len(decision.event_batch.events) != 1:
+        if not decision.accepted or len(decision.event_batch.events) != (
+                0 if terminal_source else 1):
             raise LifecycleTransitionError(
                 "successor predecessor transition is not authorized")
-        terminal_ledger = _target_ledger(source_ledger, decision)
-        terminal_witness = _target_witness(
-            source_witness, decision, terminal_ledger)
+        terminal_ledger = (
+            source_ledger if terminal_source
+            else _target_ledger(source_ledger, decision))
+        terminal_witness = (
+            source_witness if terminal_source
+            else _target_witness(source_witness, decision, terminal_ledger))
         target = prepare_generation_authority(
             stage_root, index_value=index_value,
             semantics_value=semantics_value,
@@ -943,16 +964,26 @@ def _validate_prepared_generation(value):
         except loom_reliability.ReliabilityError as exc:
             raise LifecycleTransitionError(
                 "prepared successor owner projection is invalid") from exc
-        if source_state.generation_phase not in {"reviewable", "active"} \
-                or terminal_state.generation_phase != "terminal-superseded" \
-                or command.relation != "supersede-generation" \
+        terminal_source = source_state.generation_phase == "terminal-cancelled"
+        source_relation_valid = (
+            value["source_terminal_ledger"] == value["source_ledger"]
+            and value["source_terminal_witness"] == value["source_witness"]
+            if terminal_source else
+            value["source_terminal_ledger"]["events"][:-1] ==
+            value["source_ledger"]["events"]
+            and value["source_terminal_witness"][
+                "predecessor_witness_sha256"] ==
+            value["source_witness"]["witness_sha256"])
+        if source_state.generation_phase not in {
+                "reviewable", "active", "terminal-cancelled"} \
+                or terminal_state.generation_phase != (
+                    "terminal-cancelled" if terminal_source
+                    else "terminal-superseded") \
+                or command.relation != (
+                    "new" if terminal_source else "supersede-generation") \
                 or command.generation_id != source_state.generation_id \
                 or command.successor_generation_id != state.generation_id \
-                or value["source_terminal_ledger"]["events"][:-1] != \
-                value["source_ledger"]["events"] \
-                or value["source_terminal_witness"][
-                    "predecessor_witness_sha256"] != \
-                value["source_witness"]["witness_sha256"] \
+                or not source_relation_valid \
                 or value["witness"]["predecessor_witness_sha256"] != \
                 value["source_terminal_witness"]["witness_sha256"] \
                 or value["index"]["project_id"] != source_state.project_id \
@@ -1308,6 +1339,24 @@ def _successor_envelope_path(root, command_id):
     return Path(root) / ("successor-" + leaf + ".json")
 
 
+def _successor_receipt(prepared, command_id, *, status):
+    if status == "completed":
+        observation, projection = "target", "verified"
+    elif status == "abandoned":
+        observation, projection = "source", "not-applicable"
+    else:
+        raise LifecycleTransitionError(
+            "successor activation receipt status is invalid")
+    return _activation_receipt(
+        {
+            "prepared": prepared,
+            "source_index": prepared["source_index"],
+            "source_witness": prepared["source_witness"],
+            "command_id": command_id,
+        }, status=status, observation=observation,
+        projection_status=projection)
+
+
 def _load_successor_envelope(path, command_id):
     if not os.path.lexists(path):
         return None
@@ -1337,6 +1386,11 @@ def _load_successor_envelope(path, command_id):
         raise LifecycleTransitionError("successor activation envelope is invalid")
     if value["receipt"] is not None:
         validate_receipt(value["receipt"])
+        expected = _successor_receipt(
+            value["prepared"], command_id, status=value["status"])
+        if value["receipt"] != expected:
+            raise LifecycleTransitionError(
+                "successor activation receipt does not match its prepared authority")
     return value
 
 
@@ -1357,8 +1411,6 @@ def complete_successor_projection(
             or envelope["prepared"]["candidate_action_id"] != candidate_action_id:
         raise LifecycleTransitionError(
             "successor orchestration projection identity is invalid")
-    if envelope["projection_status"] == "completed":
-        return {"status": "completed", "receipt": envelope["receipt"]}
     if projection_verifier is not None:
         projection_verifier(envelope["prepared"], envelope["receipt"])
     envelope["projection_status"] = "completed"
@@ -1515,50 +1567,38 @@ def recover_successor_activation(
                     prepared["source_terminal_ledger"]):
                 raise LifecycleTransitionError(
                     "successor predecessor matches neither source nor terminal state")
-            if current_witness not in (
-                    prepared["source_witness"],
-                    prepared["source_terminal_witness"]):
-                raise LifecycleTransitionError(
-                    "successor source witness is indeterminate")
-            if envelope["status"] == "completed":
-                if not _generation_tree_matches(
-                        target_root, prepared["stage_manifest"]):
-                    raise LifecycleTransitionError(
-                        "completed successor material is unavailable")
-                # The active index is the sole authority linearization point.
-                # Restore it before projecting any terminal predecessor state.
+            target_matches = _generation_tree_matches(
+                target_root, prepared["stage_manifest"])
+            source_preserved = (
+                current_source_ledger == prepared["source_ledger"]
+                and current_witness == prepared["source_witness"])
+            committed_rollback = (
+                target_matches
+                and current_witness == prepared["witness"])
+            if source_preserved:
+                if os.path.lexists(target_root):
+                    _remove_exact_generation(
+                        target_root, prepared["stage_manifest"])
+                receipt = _successor_receipt(
+                    prepared, command_id, status="abandoned")
+                envelope["status"] = "abandoned"
+                envelope["projection_status"] = "not-applicable"
+            elif committed_rollback:
                 loom_reliability.atomic_write_json(
                     root / "plans" / loom_plan_store.INDEX_NAME, target_index)
                 loom_reliability.atomic_write_json(
                     source_root / "lifecycle.json",
                     prepared["source_terminal_ledger"])
                 witness_store.write(prepared["witness"])
-                receipt = _activation_receipt(
-                    {
-                        "prepared": prepared, "source_index": source_index,
-                        "source_witness": prepared["source_witness"],
-                        "command_id": command_id,
-                    }, status="completed", observation="target",
-                    projection_status="verified")
+                receipt = _successor_receipt(
+                    prepared, command_id, status="completed")
                 if project_projection is not None:
                     project_projection(prepared, receipt)
                 envelope["status"] = "completed"
+                envelope["projection_status"] = "pending"
             else:
-                loom_reliability.atomic_write_json(
-                    source_root / "lifecycle.json", prepared["source_ledger"])
-                witness_store.write(prepared["source_witness"])
-                if os.path.lexists(target_root):
-                    _remove_exact_generation(
-                        target_root, prepared["stage_manifest"])
-                receipt = _activation_receipt(
-                    {
-                        "prepared": prepared, "source_index": source_index,
-                        "source_witness": prepared["source_witness"],
-                        "command_id": command_id,
-                    }, status="abandoned", observation="source",
-                    projection_status="not-applicable")
-                envelope["status"] = "abandoned"
-                envelope["projection_status"] = "not-applicable"
+                raise LifecycleTransitionError(
+                    "successor source observation is inconsistent")
         elif current_index == target_index:
             if not _generation_tree_matches(
                     target_root, prepared["stage_manifest"]):
@@ -1579,16 +1619,12 @@ def recover_successor_activation(
                 source_root / "lifecycle.json",
                 prepared["source_terminal_ledger"])
             witness_store.write(prepared["witness"])
-            receipt = _activation_receipt(
-                {
-                    "prepared": prepared, "source_index": source_index,
-                    "source_witness": prepared["source_witness"],
-                    "command_id": command_id,
-                }, status="completed", observation="target",
-                projection_status="verified")
+            receipt = _successor_receipt(
+                prepared, command_id, status="completed")
             if project_projection is not None:
                 project_projection(prepared, receipt)
             envelope["status"] = "completed"
+            envelope["projection_status"] = "pending"
         else:
             raise LifecycleTransitionError(
                 "successor index matches neither source nor target")
