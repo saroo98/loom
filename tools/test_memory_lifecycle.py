@@ -9,6 +9,7 @@ from pathlib import Path
 
 import loom_memory
 import loom_session
+import loom_vault_adapter
 
 
 class MemoryLifecycleTests(unittest.TestCase):
@@ -376,6 +377,134 @@ class MemoryLifecycleTests(unittest.TestCase):
         retained = loom_memory._read_archive(archive)
         self.assertEqual(5000, retained[-1]["index"])
         self.assertLessEqual(archive.stat().st_size, loom_memory.MAX_ARCHIVE_BYTES)
+
+    def test_planning_preference_projection_quarantines_only_conflicting_keys(self):
+        """Break caught: one conflict blocks planning or leaks either private value."""
+        conflict_id = "00000000-0000-4000-8000-000000005104"
+        owner_id = "00000000-0000-4000-8000-000000005105"
+        expected_project_id = self.project
+
+        class Vault:
+            def __init__(self):
+                self.calls = []
+
+            def identity(self):
+                return {"owner_vault_id": owner_id}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                self.calls.append((domain, project_id))
+                return ([{
+                    "conflict_id": conflict_id,
+                    "preference_key": "report_style",
+                }] if domain == "accounting"
+                    and project_id == expected_project_id else [])
+
+        vault = Vault()
+        adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
+        adapter.vault = vault
+        preferences = [
+            {
+                "id": "00000000-0000-4000-8000-000000005101",
+                "key": "report_detail", "effective_value": "private-concise",
+                "effective_source": "stated", "domain": None,
+            },
+            {
+                "id": "00000000-0000-4000-8000-000000005102",
+                "key": "stack", "effective_value": "python",
+                "effective_source": "stated", "domain": "accounting",
+            },
+        ]
+
+        projection = adapter.project_planning_preferences(
+            preferences=preferences, domains=("accounting",),
+            project_id=self.project, tier="M", intent="plan")
+
+        self.assertEqual(
+            [("accounting", self.project)], vault.calls)
+        self.assertEqual(
+            ["stack", "report_detail"],
+            [item["key"] for item in projection["public_preferences"]])
+        neutral = next(item for item in projection["public_preferences"]
+                       if item["key"] == "report_detail")
+        self.assertEqual(
+            {"key": "report_detail", "neutral_default": True}, neutral)
+        public = json.dumps(projection["public_preferences"], sort_keys=True)
+        self.assertNotIn("private-concise", public)
+        self.assertNotIn(conflict_id, public)
+        self.assertEqual(["report_detail"], projection["conflict_keys"])
+        self.assertEqual([{
+            "conflict_id": conflict_id,
+            "preference_key": "report_detail",
+            "owner_vault_id": owner_id,
+            "domain": "accounting",
+            "project_id": self.project,
+            "task_class": "plan",
+            "risk_class": "medium",
+        }], projection["private_conflict_evidence"])
+
+    def test_planning_conflict_projection_cannot_filter_execution_or_cross_scope(self):
+        """Break caught: a planning conflict becomes execution or cross-project authority."""
+        class Vault:
+            def identity(self):
+                return {"owner_vault_id": "00000000-0000-4000-8000-000000005106"}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return []
+
+        adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
+        adapter.vault = Vault()
+        with self.assertRaisesRegex(
+                loom_vault_adapter.VaultAdapterError, "planning only"):
+            adapter.project_planning_preferences(
+                preferences=[], domains=("accounting",),
+                project_id=self.project, tier="M", intent="execute")
+        projection = adapter.project_planning_preferences(
+            preferences=[{
+                "id": "00000000-0000-4000-8000-000000005103",
+                "key": "report_detail", "effective_value": "detailed",
+                "effective_source": "stated", "domain": None,
+            }], domains=("three-d",), project_id="p-" + "2" * 32,
+            tier="XL", intent="plan")
+        self.assertEqual([], projection["conflict_keys"])
+        self.assertEqual("detailed", projection["public_preferences"][0][
+            "effective_value"])
+
+    def test_domain_stack_conflict_preserves_an_unrelated_domain_preference(self):
+        """Break caught: one domain conflict removes the same key from another domain."""
+        class Vault:
+            def identity(self):
+                return {"owner_vault_id": "00000000-0000-4000-8000-000000005107"}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return ([{
+                    "conflict_id": "00000000-0000-4000-8000-000000005108",
+                    "preference_key": "stack_preference",
+                }] if domain == "accounting" else [])
+
+        adapter = object.__new__(loom_vault_adapter.VaultMemoryAdapter)
+        adapter.vault = Vault()
+        projection = adapter.project_planning_preferences(
+            preferences=[{
+                "id": "00000000-0000-4000-8000-000000005109",
+                "key": "stack", "effective_value": "private-ledger-stack",
+                "effective_source": "stated", "domain": "accounting",
+            }, {
+                "id": "00000000-0000-4000-8000-000000005110",
+                "key": "stack", "effective_value": "blender",
+                "effective_source": "stated", "domain": "three-d",
+            }], domains=("accounting", "three-d"), project_id=self.project,
+            tier="M", intent="plan")
+
+        self.assertIn({
+            "key": "stack", "domain": "accounting", "neutral_default": True,
+        }, projection["public_preferences"])
+        unrelated = next(
+            item for item in projection["public_preferences"]
+            if item.get("domain") == "three-d")
+        self.assertEqual("blender", unrelated["effective_value"])
+        self.assertNotIn(
+            "private-ledger-stack",
+            json.dumps(projection["public_preferences"], sort_keys=True))
 
 
 if __name__ == "__main__":

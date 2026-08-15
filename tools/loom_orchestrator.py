@@ -960,6 +960,7 @@ def _validate_action(value, path):
     if not isinstance(value, dict):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
     original_schema_version = value.get("schema_version")
+    planning_mode = None
     if value.get("schema_version") == LEGACY_ACTION_SCHEMA_VERSION:
         if set(value) != ACTION_FIELDS_V7 \
                 or value.get("action_hash") != _action_hash(value) \
@@ -1058,6 +1059,13 @@ def _validate_action(value, path):
         except loom_runtime.RuntimeError as exc:
             raise OrchestratorError(
                 "ACTION_CORRUPT", f"sealed request control is invalid: {exc}") from exc
+        if value.get("intent") == "plan" \
+                and value["request_control"].get("explicitness") != "host-bound":
+            try:
+                planning_mode = _extract_planning_mode(value["request_control"])
+            except OrchestratorError as exc:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT", f"sealed planning mode is invalid: {exc}") from exc
     elif value["request_control"] is not None:
         raise OrchestratorError(
             "ACTION_CORRUPT", "historical action unexpectedly carries request control")
@@ -1157,7 +1165,7 @@ def _validate_action(value, path):
                      "not-needed" if message_builder is loom_message.v2_build
                      else "not-applicable"),
         summary=(
-            _planning_seed_summary(value["tier"])
+            _planning_seed_summary(value["tier"], planning_mode)
             if planning_metadata_changed
             else "Loom prepared the next safe frontier."),
         next_action=(
@@ -2511,7 +2519,8 @@ def _action_matches_current_frontier(action, prepared, target, *, request, cwd):
 
 def _reconcile_active_action(*, owner_home, install_root, instance_id,
                              project_id, now, incoming_intent, request, cwd, target,
-                             memory, transport_invocation_id=None):
+                             memory, transport_invocation_id=None,
+                             candidate_planning=False):
     directory = _orchestration_directory(owner_home, instance_id, project_id)
     directory.mkdir(parents=True, exist_ok=True)
     pointer = _read_active_pointer(directory)
@@ -2529,13 +2538,13 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             path, owner_home=owner_home, install_root=install_root)
         if action["status"] in TERMINAL_ACTION_STATUSES:
             _clear_active_pointer(directory, action["action_id"])
-            return action.get("recovery_receipt"), None
+            return action.get("recovery_receipt"), None, False
         candidates = [(_path, action, security)]
     else:
         candidates = _legacy_active_actions(
             directory, owner_home=owner_home, install_root=install_root)
         if not candidates:
-            return None, None
+            return None, None, False
         if len(candidates) != 1:
             raise OrchestratorError(
                 "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
@@ -2543,7 +2552,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
     _reconcile_plan_authoring(action)
     if incoming_intent is None \
             or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
-        return None, None
+        return None, None, False
     if transport_invocation_id is not None \
             and action["invocation_id"] == transport_invocation_id \
             and action["status"] == "pending" \
@@ -2559,7 +2568,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             raise OrchestratorError(exc.code, exc.message) from exc
         if _action_matches_current_frontier(
                 action, prepared, target, request=request, cwd=cwd):
-            return None, action
+            return None, action, False
         raise OrchestratorError(
             "TARGET_DRIFT",
             "a repeated transport operation no longer matches its sealed target state")
@@ -2581,7 +2590,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                 action, prepared, target, request=request, cwd=cwd):
             # Host retries commonly carry a new transport request ID. Request,
             # project, and exact world identity are the idempotency authority.
-            return None, action
+            return None, action, False
     if incoming_intent == "repair" \
             and action["intent"] == "execute" \
             and action["status"] == "pending" \
@@ -2596,7 +2605,12 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         action["status"] = "cancelled"
         _write_action(path, action, security)
         _clear_active_pointer(directory, action["action_id"])
-        return None, None
+        return None, None, False
+    if incoming_intent == "plan" and candidate_planning \
+            and action["intent"] != "plan" and action["status"] == "pending" \
+            and loom_runtime._parse_time(now) <= loom_runtime._parse_time(
+                action["expires_at"]):
+        return None, None, True
     if action["intent"] != "plan" or not action["pack_seed"]["created_pack"]:
         raise OrchestratorError(
             "ACTION_IN_PROGRESS", "a non-planning action remains active for this project")
@@ -2606,7 +2620,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         raise OrchestratorError(
             "ACTION_IN_PROGRESS",
             "the current planning action must complete or be cancelled before this request")
-    return _recover_plan_action(path, action, security, now=now), None
+    return _recover_plan_action(path, action, security, now=now), None, False
 
 
 def _cancel_active_request(*, directory, request, owner_home, install_root, now):
@@ -7290,6 +7304,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             "plan-store quarantine cannot share exact plan or revision authority")
     effective_transport_invocation_id = transport_invocation_id
     prior_generation_transition = None
+    planning_state_override = None
+    preserve_active_pointer = False
     lifecycle_recovery = []
     try:
         with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
@@ -7329,15 +7345,22 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                 try:
                     (_resolved, _semantics, _ledger, _witness,
                      lifecycle_state) = loom_lifecycle_transition.observe(
-                        target, witness_store=witness_store)
+                         target, witness_store=witness_store)
                 except loom_lifecycle_transition.LifecycleTransitionError as exc:
-                    raise OrchestratorError(
-                        "INVALID_LIFECYCLE",
-                        f"indexed lifecycle authority cannot be observed safely: {exc}") \
-                        from exc
+                    if incoming_intent != "plan" or revision_context is not None:
+                        raise OrchestratorError(
+                            "INVALID_LIFECYCLE",
+                            "indexed lifecycle authority cannot be observed safely") from exc
+                    planning_state_override = {
+                        "generation_phase": "invalid",
+                        "state_error": "INVALID_LIFECYCLE",
+                    }
                 lifecycle_control = _sealed_request_control(
                     request,
-                    lifecycle_state=loom_lifecycle_kernel.project(lifecycle_state))
+                    lifecycle_state=(
+                        planning_state_override
+                        if planning_state_override is not None
+                        else loom_lifecycle_kernel.project(lifecycle_state)))
             if incoming_intent == "cancel":
                 if lifecycle_state is not None \
                         and lifecycle_control["relation"] == "cancel-generation":
@@ -7354,9 +7377,12 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                         directory=directory, request=request, owner_home=home,
                         install_root=install_root, now=instant)
             else:
-                if lifecycle_state is not None \
+                if incoming_intent == "plan" \
+                        and lifecycle_state is not None \
                         and not lifecycle_state.generation_phase.startswith("terminal-") \
-                        and lifecycle_control["relation"] == "supersede-generation":
+                        and lifecycle_control["relation"] == "supersede-generation" \
+                        and _extract_planning_mode(lifecycle_control) not in {
+                            "candidate-successor", "current-world-replan"}:
                     effective_transport_invocation_id = (
                         transport_invocation_id or str(uuid.uuid4()))
                     successor_generation_id = _derived_generation_id(
@@ -7371,17 +7397,26 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                                 + effective_transport_invocation_id),
                             successor_generation_id=successor_generation_id,
                             owner_home=home, install_root=install_root)
-                recovery, reused_action = _reconcile_active_action(
-                    owner_home=home, install_root=install_root, instance_id=instance_id,
-                    project_id=project.project_id, now=instant,
-                    incoming_intent=incoming_intent, request=request, cwd=cwd,
-                    target=target, memory=memory,
-                    transport_invocation_id=transport_invocation_id)
+                candidate_planning = (
+                    incoming_intent == "plan"
+                    and revision_context is None
+                    and lifecycle_control is not None
+                    and _extract_planning_mode(lifecycle_control) in {
+                        "candidate-successor", "current-world-replan"})
+                recovery, reused_action, preserve_active_pointer = \
+                    _reconcile_active_action(
+                        owner_home=home, install_root=install_root,
+                        instance_id=instance_id, project_id=project.project_id,
+                        now=instant, incoming_intent=incoming_intent,
+                        request=request, cwd=cwd, target=target, memory=memory,
+                        transport_invocation_id=transport_invocation_id,
+                        candidate_planning=candidate_planning)
                 if reused_action is not None:
                     result = _pending_action_result(reused_action)
                 else:
                     replay = None
-                    if incoming_intent == "plan" and revision_context is None:
+                    if incoming_intent == "plan" and revision_context is None \
+                            and planning_state_override is None:
                         try:
                             prepared = loom_runtime.prepare_invocation(
                                 request, instance_id=instance_id,
@@ -7406,7 +7441,9 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             assurance=assurance,
                             expected_plan_decision=expected_plan_decision,
                             revision_context=revision_context,
-                            bound_intent=bound_intent)
+                            bound_intent=bound_intent,
+                            planning_state_override=planning_state_override,
+                            preserve_active_pointer=preserve_active_pointer)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
@@ -8010,7 +8047,11 @@ def _explicit_zero_project_write_requested(request):
     return any(pattern.search(request) for pattern in _ZERO_PROJECT_WRITE_PATTERNS)
 
 
-def _planning_seed_summary(tier):
+def _planning_seed_summary(tier, planning_mode=None):
+    if planning_mode in {"candidate-successor", "current-world-replan"}:
+        return (
+            "Loom created a non-authoritative candidate plan stage; the current "
+            "generation remains authoritative until an explicit successor switch.")
     if tier == "S":
         return (
             "Loom created plans/.loom-small-lifecycle.json in the project; "
@@ -8045,11 +8086,95 @@ def _sealed_request_control(
             f"the lifecycle request control is invalid: {exc}") from exc
 
 
+_PLANNING_MODE_RELATIONS = {
+    "direct": "new",
+    "candidate-successor": "supersede-generation",
+    "current-world-replan": "supersede-generation",
+    "inline-recovery": "unclear",
+}
+
+
+def _extract_planning_mode(request_control):
+    """Extract one closed planning disposition from its sealed evidence carrier."""
+    try:
+        loom_runtime.validate_request_control(request_control)
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", f"planning mode control is invalid: {exc}") from exc
+    evidence = request_control.get("evidence")
+    tokens = [item for item in evidence if item.startswith("planning-")]
+    if len(tokens) != 1:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "planning mode evidence must contain exactly one token")
+    mode = tokens[0].removeprefix("planning-")
+    expected_relation = _PLANNING_MODE_RELATIONS.get(mode)
+    if expected_relation is None:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "planning mode evidence is unknown")
+    if request_control.get("primary_operation") != "plan" \
+            or request_control.get("explicitness") == "host-bound" \
+            or request_control.get("relation") != expected_relation:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "planning mode is incompatible with its relation")
+    return mode
+
+
+def _rebind_useful_planning_prepared(prepared):
+    """Allow sealed current-world or inline planning without granting execution."""
+    values = prepared.to_dict()
+    values.pop("prepared_hash")
+    route = values["route_contract"]
+    route.update({
+        "blocked": False,
+        "code": "ROUTE_PLAN",
+        "needs_owner": False,
+        "recommendation": "",
+        "block_reason": None,
+    })
+    route["evidence"] = list(dict.fromkeys([
+        *route["evidence"][:15], "useful-planning-recovery",
+    ]))
+    values["route_contract"] = route
+    return loom_runtime.PreparedInvocation.build(
+        **values, operation_fingerprint=prepared.operation_fingerprint)
+
+
+def _inline_recovery_message(reason_code):
+    constraints = {
+        "PROJECT_WRITES_PROHIBITED": (
+            "Persistent project plan files are prohibited, so this result cannot be "
+            "started or treated as project authority."),
+        "LIFECYCLE_AUTHORITY_UNTRUSTED": (
+            "The existing lifecycle authority cannot be trusted, so no plan identity "
+            "was created and no project plan bytes were changed."),
+    }
+    next_actions = {
+        "PROJECT_WRITES_PROHIBITED": (
+            "Remove the project-write prohibition and ask Loom to create a persistent plan."),
+        "LIFECYCLE_AUTHORITY_UNTRUSTED": (
+            "Quarantine or repair the lifecycle store, then ask Loom for a fresh plan."),
+    }
+    if reason_code not in constraints:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "inline recovery reason is unsupported")
+    return (
+        "NON-AUTHORITATIVE PLAN\n"
+        "Understood outcome: Prepare a reviewable approach for the requested project outcome.\n"
+        "Proposed sequence:\n"
+        "1. Inspect the current project boundary without implementation.\n"
+        "2. Define scope, constraints, acceptance evidence, and failure stops.\n"
+        "3. Present the bounded steps for owner review before any execution.\n"
+        f"Known constraints or uncertainty: {constraints[reason_code]}\n"
+        f"Reason code: {reason_code}\n"
+        f"Safe next action: {next_actions[reason_code]}")
+
+
 def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        timeout_seconds, now, instance_id, memory,
                        transport_invocation_id=None, assurance=None,
                        expected_plan_decision=None, revision_context=None,
-                       bound_intent=None):
+                       bound_intent=None, planning_state_override=None,
+                       preserve_active_pointer=False):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = transport_invocation_id or str(uuid.uuid4())
@@ -8115,6 +8240,74 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 terminal_receipt=opened.terminal_receipt,
                 resolved_terminal_block=opened.resolved_terminal_block,
             )
+    if planning_state_override is None and prepared.intent == "plan" \
+            and prepared.route_contract["code"] in {
+                "INVALID_LIFECYCLE", "CORRUPT_LIFECYCLE"}:
+        planning_state_override = {
+            "generation_phase": "invalid",
+            "state_error": "INVALID_LIFECYCLE",
+        }
+    if planning_state_override is None and prepared.intent == "plan" \
+            and revision_context is None and _path_present(target / "plans") \
+            and not os.path.lexists(
+                target / "plans" / loom_plan_store.INDEX_NAME):
+        planning_state_override = {
+            "generation_phase": "invalid",
+            "state_error": "INVALID_LIFECYCLE",
+        }
+    lifecycle_state = None
+    if planning_state_override is None \
+            and os.path.lexists(target / "plans" / loom_plan_store.INDEX_NAME):
+        witness_store = _lifecycle_witness_store(
+            memory,
+            _orchestration_directory(home, instance_id, prepared.project_id),
+            prepared.project_id)
+        try:
+            _resolved, _semantics, _ledger, _witness, lifecycle_state = \
+                loom_lifecycle_transition.observe(
+                    target, witness_store=witness_store)
+        except loom_lifecycle_transition.LifecycleTransitionError as exc:
+            if prepared.intent != "plan" or revision_context is not None:
+                raise OrchestratorError(
+                    "INVALID_LIFECYCLE",
+                    "indexed lifecycle authority cannot be observed safely") from exc
+            planning_state_override = {
+                "generation_phase": "invalid",
+                "state_error": "INVALID_LIFECYCLE",
+            }
+    request_control_state = (
+        planning_state_override
+        if planning_state_override is not None
+        else loom_lifecycle_kernel.project(lifecycle_state)
+        if lifecycle_state is not None else None)
+    if request_control_state is not None \
+            and prepared.intent == "plan" \
+            and prepared.route_contract["code"] in {
+                "PLAN_DECISION_STALE", "STALE_LIFECYCLE", "STALE_TIME"}:
+        request_control_state = {
+            **request_control_state,
+            "state_error": "STALE_LIFECYCLE",
+        }
+    request_control = _sealed_request_control(
+        request, expected_plan_decision=expected_plan_decision,
+        revision_context=revision_context,
+        lifecycle_state=request_control_state)
+    planning_mode = None
+    if prepared.intent == "plan" \
+            and request_control["explicitness"] != "host-bound":
+        planning_mode = _extract_planning_mode(request_control)
+        if prepared.route_contract["blocked"] \
+                and planning_mode in {"current-world-replan", "inline-recovery"}:
+            prepared = _rebind_useful_planning_prepared(prepared)
+            opened = loom_session.OpenSession(
+                prepared=prepared,
+                session_id=opened.session_id,
+                operation_id=opened.operation_id,
+                journal_path=opened.journal_path,
+                started_at=opened.started_at,
+                terminal_receipt=opened.terminal_receipt,
+                resolved_terminal_block=opened.resolved_terminal_block,
+            )
     created_at = _stamp(now)
     domain_contract = loom_domain.select_domains(
         request, explicit=list(prepared.domains),
@@ -8151,9 +8344,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 resolved_terminal_block=opened.resolved_terminal_block,
             )
     conflict_selector = getattr(memory, "relevant_preference_conflicts", None)
+    planning_preference_projector = getattr(
+        memory, "project_planning_preferences", None)
     conflicts = (conflict_selector(
         domains=prepared.domains, project_id=prepared.project_id)
-        if conflict_selector is not None else [])
+        if conflict_selector is not None
+        and (prepared.intent != "plan" or planning_preference_projector is None)
+        else [])
     if conflicts:
         keys = sorted({item["preference_key"] for item in conflicts})
         controller.handlers[prepared.intent] = lambda _context: {
@@ -8166,23 +8363,6 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared).to_dict()
-    if prepared.intent == "plan" and _explicit_zero_project_write_requested(request):
-        controller.handlers["plan"] = lambda _context: {
-            "status": "blocked",
-            "code": "project-write-prohibited",
-            "success": False,
-            "metrics": {},
-            "evidence_ids": [],
-            "reversible_action_ids": [],
-            "user_message": (
-                "Loom stopped before changing the project. Creating a persistent Loom plan "
-                "currently requires project-local planning files under plans/. Remove the "
-                "no-file-write constraint if you want those files created."),
-        }
-        return controller.run(
-            request, invocation_id=invocation_id, cwd=cwd,
-            explicit_target=target, now=now, continue_open=True,
-            prepared=prepared).to_dict()
     if revision_archive is not None:
         archive_sha256 = _persist_revision_archive(
             memory, revision_archive)
@@ -8191,6 +8371,54 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 "PLAN_REVISION_ARCHIVE_FAILED",
                 "the immutable revision archive identity changed before persistence")
     context_capsule = controller.prepare_context(opened, request)
+    planning_preference_projection = None
+    if prepared.intent == "plan" and planning_preference_projector is not None:
+        planning_preference_projection = planning_preference_projector(
+            preferences=context_capsule["preferences"],
+            domains=prepared.domains,
+            project_id=prepared.project_id,
+            tier=prepared.route_contract["tier"],
+            intent="plan")
+        if not isinstance(planning_preference_projection, dict) \
+                or set(planning_preference_projection) != {
+                    "public_preferences", "conflict_keys",
+                    "private_conflict_evidence"} \
+                or not isinstance(
+                    planning_preference_projection["public_preferences"], list) \
+                or not isinstance(planning_preference_projection["conflict_keys"], list) \
+                or not isinstance(
+                    planning_preference_projection["private_conflict_evidence"], list):
+            raise OrchestratorError(
+                "PREFERENCE_PROJECTION_INVALID",
+                "planning preference conflict projection is invalid")
+        context_capsule = {
+            **context_capsule,
+            "preferences": planning_preference_projection["public_preferences"],
+        }
+    inline_recovery_reason = None
+    if planning_mode == "inline-recovery" or (
+            prepared.intent == "plan"
+            and request_control["explicitness"] != "host-bound"
+            and _explicit_zero_project_write_requested(request)):
+        inline_recovery_reason = (
+            "LIFECYCLE_AUTHORITY_UNTRUSTED"
+            if planning_state_override is not None
+            else "PROJECT_WRITES_PROHIBITED")
+    if inline_recovery_reason is not None:
+        reason_code = inline_recovery_reason
+        controller.handlers["plan"] = lambda _context: {
+            "status": "completed",
+            "code": "non-authoritative-plan",
+            "success": True,
+            "metrics": {},
+            "evidence_ids": ["inline-plan-" + reason_code.casefold().replace("_", "-")],
+            "reversible_action_ids": [],
+            "user_message": _inline_recovery_message(reason_code),
+        }
+        return controller.run(
+            request, invocation_id=invocation_id, cwd=cwd,
+            explicit_target=target, now=now, continue_open=True,
+            prepared=prepared, selected_context=context_capsule).to_dict()
     expires_at = _stamp(
         loom_runtime._parse_time(created_at) + dt.timedelta(seconds=timeout_seconds))
     action_id = invocation_id
@@ -8199,24 +8427,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     revision_uses_immutable_stage = (
         isinstance(plan_revision, dict)
         and plan_revision.get("schema_version") == 2)
-    lifecycle_state = None
-    if os.path.lexists(target / "plans" / loom_plan_store.INDEX_NAME):
-        witness_store = _lifecycle_witness_store(
-            memory, path.parent, prepared.project_id)
-        try:
-            _resolved, _semantics, _ledger, _witness, lifecycle_state = \
-                loom_lifecycle_transition.observe(
-                    target, witness_store=witness_store)
-        except loom_lifecycle_transition.LifecycleTransitionError as exc:
-            raise OrchestratorError(
-                "INVALID_LIFECYCLE",
-                f"indexed lifecycle authority cannot be observed safely: {exc}") from exc
-    request_control = _sealed_request_control(
-        request, expected_plan_decision=expected_plan_decision,
-        revision_context=revision_context,
-        lifecycle_state=(
-            loom_lifecycle_kernel.project(lifecycle_state)
-            if lifecycle_state is not None else None))
+    candidate_uses_immutable_stage = planning_mode in {
+        "candidate-successor", "current-world-replan"}
     generation_id = (
         (plan_revision or {}).get("generation_id")
         or (plan_decision or {}).get("generation_id")
@@ -8255,6 +8467,12 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                if plan_decision is not None else {}),
             **({"plan_revision": plan_revision}
                if plan_revision is not None else {}),
+            **({"planning_preference_conflicts": {
+                "conflict_keys": planning_preference_projection["conflict_keys"],
+                "private_evidence": planning_preference_projection[
+                    "private_conflict_evidence"],
+            }} if planning_preference_projection is not None
+                and planning_preference_projection["conflict_keys"] else {}),
         } or None),
         "plan_contract": None,
         "domain_contract": domain_contract,
@@ -8274,7 +8492,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             undo_status=("unavailable" if prepared.intent == "plan"
                          else "not-applicable"),
             summary=(
-                _planning_seed_summary(prepared.route_contract["tier"])
+                _planning_seed_summary(
+                    prepared.route_contract["tier"], planning_mode)
                 if prepared.intent == "plan"
                 else "Loom prepared the next safe frontier."),
             next_action=(
@@ -8287,7 +8506,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "state": "recorded",
             "created_pack": (
                 not pack_present_at_start or revision_uses_immutable_stage
-                or rollover_uses_immutable_stage),
+                or rollover_uses_immutable_stage
+                or candidate_uses_immutable_stage),
             "kind": "small" if prepared.route_contract["tier"] == "S" else "planned",
             "manifest": None,
             "activation_atomic_rename": None,
@@ -8360,8 +8580,9 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                     "a planning pack already exists; use resume or repair instead of mutating it")
             directory = path.parent
             action = _write_action(path, action, action_security)
-            _write_active_pointer(
-                directory, action_id=action_id, project_id=prepared.project_id)
+            if not preserve_active_pointer:
+                _write_active_pointer(
+                    directory, action_id=action_id, project_id=prepared.project_id)
             action["initial_pack_hash"] = _pack_hash(pack)
             action["pack_seed"] = {
                 **action["pack_seed"],
@@ -8373,8 +8594,9 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             return _pending_action_result(action)
         directory = path.parent
         action = _write_action(path, action, action_security)
-        _write_active_pointer(
-            directory, action_id=action_id, project_id=prepared.project_id)
+        if not preserve_active_pointer:
+            _write_active_pointer(
+                directory, action_id=action_id, project_id=prepared.project_id)
         stage, manifest, stage_identity = _seed_stage(path, action, prepared)
         action["pack_seed"] = {**action["pack_seed"], "state": "prepared",
                                "manifest": manifest}
@@ -8757,6 +8979,14 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     validated_domain_bundle = None
     if action["intent"] == "plan":
         validated_domain_bundle = _validate_authored_plan(action)
+        if action["request_control"].get("explicitness") != "host-bound" \
+                and _extract_planning_mode(action["request_control"]) in {
+                    "candidate-successor", "current-world-replan"}:
+            raise OrchestratorError(
+                "SUCCESSOR_AUTHORITY_SWITCH_PENDING",
+                "the reviewed candidate remains non-authoritative until the sealed "
+                "successor switch is available",
+                status="action-required")
     seal_plan_author = None
     if action["intent"] == "plan" and action["pack_seed"]["created_pack"]:
         def seal_plan_author(memory_adapter):

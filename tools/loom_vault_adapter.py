@@ -271,6 +271,80 @@ class VaultMemoryAdapter:
         return sorted(values.values(), key=lambda item: (
             item["key"], item.get("domain") or "", item["id"]))
 
+    def project_planning_preferences(
+            self, *, preferences, domains, project_id, tier, intent):
+        """Separate usable planning preferences from private conflict evidence."""
+        if intent != "plan":
+            raise VaultAdapterError("preference conflict projection is planning only")
+        if not isinstance(preferences, list) or len(preferences) > 32 \
+                or not isinstance(domains, (list, tuple)) or not domains \
+                or len(domains) != len(set(domains)) \
+                or any(not isinstance(domain, str) or not domain for domain in domains) \
+                or not isinstance(project_id, str) or not project_id.startswith("p-") \
+                or tier not in {"S", "M", "L", "XL"}:
+            raise VaultAdapterError("planning preference projection scope is invalid")
+        key_map = {
+            "report_style": "report_detail",
+            "decision_batching": "decision_batch_size",
+            "autonomy_default": "autonomy",
+            "stack_preference": "stack",
+        }
+        risk_class = {
+            "S": "low", "M": "medium", "L": "high", "XL": "high"}[tier]
+        owner_vault_id = self.vault.identity()["owner_vault_id"]
+        conflict_keys = set()
+        conflict_slots = set()
+        private_evidence = []
+        seen = set()
+        for domain in domains:
+            for conflict in self.vault.relevant_preference_conflicts(
+                    domain=domain, project_id=project_id):
+                public_key = key_map.get(conflict.get("preference_key"))
+                if public_key is None:
+                    raise VaultAdapterError(
+                        "preference conflict names an unsupported planning key")
+                identity = (conflict.get("conflict_id"), public_key, domain)
+                if identity in seen:
+                    continue
+                seen.add(identity)
+                conflict_keys.add(public_key)
+                conflict_slots.add((
+                    public_key, domain if public_key == "stack" else None))
+                private_evidence.append({
+                    "conflict_id": conflict["conflict_id"],
+                    "preference_key": public_key,
+                    "owner_vault_id": owner_vault_id,
+                    "domain": domain,
+                    "project_id": project_id,
+                    "task_class": "plan",
+                    "risk_class": risk_class,
+                })
+        usable = [
+            item for item in preferences
+            if isinstance(item, dict) and (
+                item.get("key"),
+                item.get("domain") if item.get("key") == "stack" else None,
+            ) not in conflict_slots
+        ]
+        neutral_defaults = []
+        for key, domain in sorted(conflict_slots):
+            neutral = {"key": key, "neutral_default": True}
+            if domain is not None:
+                neutral["domain"] = domain
+            neutral_defaults.append(neutral)
+        public_preferences = [
+            *usable,
+            *neutral_defaults,
+        ]
+        return {
+            "public_preferences": public_preferences,
+            "conflict_keys": sorted(conflict_keys),
+            "private_conflict_evidence": sorted(
+                private_evidence,
+                key=lambda item: (
+                    item["preference_key"], item["domain"], item["conflict_id"])),
+        }
+
     def relevant_preference_conflicts(self, *, domains, project_id):
         conflicts = {}
         for domain in domains:

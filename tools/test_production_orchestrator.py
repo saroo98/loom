@@ -884,7 +884,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotIn("interaction-accessibility", active)
         self.assertNotIn("migration-release", active)
 
-    def test_explicit_no_file_modification_plan_leaves_project_unchanged(self):
+    def test_explicit_no_file_modification_returns_sealed_inline_plan(self):
         request = (
             "Produce a reviewable plan for adding a short 'Development notes' section "
             "to README.md in this disposable project. Do not implement the plan, modify "
@@ -898,9 +898,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
 
-        self.assertEqual("blocked", result["status"])
-        self.assertEqual("project-write-prohibited", result["code"])
-        self.assertIn("stopped before changing the project", result["user_message"])
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertIn("Understood outcome:", result["user_message"])
+        self.assertIn("Proposed sequence:", result["user_message"])
+        self.assertIn("Known constraints or uncertainty:", result["user_message"])
+        self.assertIn("Reason code: PROJECT_WRITES_PROHIBITED", result["user_message"])
+        self.assertEqual(1, result["user_message"].count("Safe next action:"))
+        self.assertRegex(result["receipt_hash"], r"^[0-9a-f]{64}$")
+        self.assertIsNone(result["terminal_authority"]["implementation_authorized"])
         self.assertFalse((self.repo / "plans").exists())
         self.assertEqual(before_manifest, loom_reliability.deterministic_manifest(self.repo))
         self.assertEqual(before_status, subprocess.run(
@@ -920,8 +927,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
 
-        self.assertEqual("blocked", result["status"])
-        self.assertEqual("project-write-prohibited", result["code"])
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
         self.assertFalse((self.repo / "plans").exists())
         self.assertEqual(before_manifest, loom_reliability.deterministic_manifest(self.repo))
 
@@ -951,6 +958,80 @@ class ProductionOrchestratorTests(unittest.TestCase):
             with self.subTest(request=request):
                 self.assertFalse(
                     loom_orchestrator._explicit_zero_project_write_requested(request))
+
+    def test_planning_conflict_uses_neutral_context_without_leaking_private_evidence(self):
+        """Break caught: a private preference conflict blocks planning or leaks values."""
+        instance_id = "00000000-0000-4000-8000-000000005110"
+        conflict_id = "00000000-0000-4000-8000-000000005111"
+        owner_id = "00000000-0000-4000-8000-000000005112"
+        secret_value = "private-owner-choice-never-public"
+
+        class Vault:
+            def identity(self):
+                return {"owner_vault_id": owner_id}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return [{
+                    "conflict_id": conflict_id,
+                    "preference_key": "report_style",
+                }]
+
+        projection_adapter = object.__new__(
+            loom_orchestrator.loom_vault_adapter.VaultMemoryAdapter)
+        projection_adapter.vault = Vault()
+
+        class ConflictMemory(loom_session.NoopMemoryAdapter):
+            def select_preferences(self, _context):
+                return [{
+                    "id": "00000000-0000-4000-8000-000000005113",
+                    "key": "report_detail",
+                    "effective_value": secret_value,
+                    "effective_source": "stated",
+                    "domain": None,
+                }, {
+                    "id": "00000000-0000-4000-8000-000000005114",
+                    "key": "stack",
+                    "effective_value": "python",
+                    "effective_source": "stated",
+                    "domain": "accounting",
+                }]
+
+            def relevant_preference_conflicts(self, *, domains, project_id):
+                return [{
+                    "conflict_id": conflict_id,
+                    "preference_key": "report_style",
+                }]
+
+            def project_planning_preferences(self, **arguments):
+                return projection_adapter.project_planning_preferences(**arguments)
+
+        with mock.patch.object(
+                loom_orchestrator, "_memory_backend",
+                return_value=(instance_id, ConflictMemory())):
+            result = loom_orchestrator.invoke(
+                request="Plan a small accounting change to src/app.py.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", result["status"])
+        self.assertNotEqual("preference-conflict", result.get("code"))
+        self.assertIn(
+            {"key": "report_detail", "neutral_default": True},
+            result["context"]["preferences"])
+        self.assertTrue(any(
+            item.get("key") == "stack"
+            for item in result["context"]["preferences"]))
+        public = json.dumps(result, sort_keys=True)
+        self.assertNotIn(secret_value, public)
+        self.assertNotIn(conflict_id, public)
+        self.assertNotIn(owner_id, public)
+        _path, action, _security = loom_orchestrator._read_action(
+            result["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        private = action["host_result"]["planning_preference_conflicts"]
+        self.assertEqual(["report_detail"], private["conflict_keys"])
+        self.assertEqual(conflict_id, private["private_evidence"][0]["conflict_id"])
+        self.assertNotIn(
+            secret_value, json.dumps(private, sort_keys=True))
 
     def test_installed_invoke_drives_real_gate_and_seals_receipt(self):
         opened = self.cli(
@@ -2424,8 +2505,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         replacement = loom_orchestrator.invoke(
             request=(
-                "Plan a new standalone financial accounting documentation feature "
-                "for README.md. "
+                "Plan a financial accounting documentation feature for README.md. "
                 "Planning only; do not implement."),
             cwd=self.repo, home=self.home, install_root=self.installed)
 
@@ -2742,8 +2822,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("action-required", replacement["status"])
         self.assertEqual("plan", replacement["intent"])
 
-    def test_explicit_new_plan_supersedes_an_active_generation_before_staging(self):
-        """Break caught: explicit standalone work is trapped behind an active action."""
+    def test_explicit_new_plan_stages_candidate_without_superseding_active_generation(self):
+        """Break caught: candidate planning terminalizes its predecessor before review."""
         plan_action, planned = self.complete_machine_authored_plan()
         started = loom_orchestrator.start(
             plan_action["action_path"],
@@ -2760,28 +2840,29 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         self.assertEqual("action-required", replacement["status"])
         self.assertEqual("plan", replacement["intent"])
-        self.assertEqual(
-            "generation-superseded",
-            replacement["prior_generation_transition"]["code"])
+        self.assertNotIn("prior_generation_transition", replacement)
         self.assertEqual(
             old_generation.generation_id,
             loom_plan_store.resolve(self.repo).generation_id)
         old_ledger = json.loads(
             (old_generation.generation_root / "lifecycle.json").read_text(
                 encoding="utf-8"))
-        self.assertEqual(
-            "generation-superseded", old_ledger["events"][-1]["event_type"])
+        self.assertNotIn(
+            "generation-superseded",
+            [item["event_type"] for item in old_ledger["events"]])
+        pointer = loom_orchestrator._read_active_pointer(old_action_path.parent)
+        self.assertEqual(started["action_id"], pointer["action_id"])
         _old_path, old_action, _security = loom_orchestrator._read_action(
             old_action_path, owner_home=self.home, install_root=self.installed)
-        self.assertEqual("cancelled", old_action["status"])
-        pointer = loom_orchestrator._read_active_pointer(old_action_path.parent)
-        self.assertEqual(replacement["action_id"], pointer["action_id"])
+        self.assertEqual("pending", old_action["status"])
         _new_path, new_action, _new_security = loom_orchestrator._read_action(
             replacement["action_path"], owner_home=self.home,
             install_root=self.installed)
-        self.assertEqual(
-            new_action["generation_id"],
-            old_ledger["events"][-1]["payload"]["successor_generation_id"])
+        self.assertIn(
+            "planning-candidate-successor",
+            new_action["request_control"]["evidence"])
+        self.assertEqual("supersede-generation", new_action["request_control"]["relation"])
+        self.assertTrue(new_action["pack_seed"]["created_pack"])
         self.assertNotEqual(
             old_generation.generation_id, new_action["generation_id"])
 
@@ -2805,19 +2886,19 @@ class ProductionOrchestratorTests(unittest.TestCase):
             loom_orchestrator._read_action(
                 replacement["action_path"], owner_home=self.home,
                 install_root=self.installed)
-        # The explicit supersession is committed first.  The successor action
-        # is then sealed against the resulting terminal predecessor as new work.
         self.assertEqual(
-            "new",
+            "supersede-generation",
             sealed_replacement["request_control"]["relation"])
-        self.assertEqual(
-            "generation-superseded",
-            replacement["prior_generation_transition"]["code"])
+        self.assertIn(
+            "planning-current-world-replan",
+            sealed_replacement["request_control"]["evidence"])
+        self.assertNotIn("prior_generation_transition", replacement)
         old_ledger = json.loads(
             (old_generation.generation_root / "lifecycle.json").read_text(
                 encoding="utf-8"))
-        self.assertEqual(
-            "generation-superseded", old_ledger["events"][-1]["event_type"])
+        self.assertNotIn(
+            "generation-superseded",
+            [item["event_type"] for item in old_ledger["events"]])
         self.assertEqual(
             old_generation.generation_id,
             loom_plan_store.resolve(self.repo).generation_id)
@@ -2877,18 +2958,69 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(1, len(matching))
         self.assertEqual("read-only", matching[0]["request_control"]["relation"])
 
-    def test_plan_pack_exists_reports_a_real_bounded_recovery_path(self):
-        """Break caught: an existing pack leaves the owner without a safe next step."""
-        existing_pack = self.root / "existing-pack"
-        existing_pack.mkdir()
-        (existing_pack / "plans").mkdir()
-        with self.assertRaises(loom_orchestrator.OrchestratorError) as pack_exists:
-            loom_orchestrator.invoke(
-                request=(
-                    "Outline a small museum catalogue accessibility enhancement."),
-                cwd=existing_pack, home=self.home, install_root=self.installed)
-        self.assertEqual("PLAN_PACK_EXISTS", pack_exists.exception.code)
-        self.assertIn("use resume or repair", str(pack_exists.exception))
+    def test_existing_reviewable_pack_stages_a_candidate_successor(self):
+        """Break caught: an existing reviewed pack ends ordinary planning at PLAN_PACK_EXISTS."""
+        _action, _completed = self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        candidate_request = "Outline a small accounting accessibility enhancement."
+
+        candidate = loom_orchestrator.invoke(
+            request=candidate_request,
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", candidate["status"])
+        action = json.loads(Path(candidate["action_path"]).read_text(encoding="utf-8"))
+        self.assertIn("planning-candidate-successor", action["request_control"]["evidence"])
+        self.assertEqual("prepared", action["pack_seed"]["state"])
+        self.assertTrue(action["pack_seed"]["created_pack"])
+        self.assertTrue(_owned_pack(candidate).is_dir())
+        current = loom_plan_store.resolve(self.repo)
+        self.assertEqual(predecessor.generation_id, current.generation_id)
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(current.generation_root))
+
+        _author_medium_action(candidate, request=candidate_request)
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as unavailable:
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            "SUCCESSOR_AUTHORITY_SWITCH_PENDING", unavailable.exception.code)
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+
+    def test_corrupt_lifecycle_returns_sealed_inline_plan_without_exposing_bytes(self):
+        """Break caught: untrusted lifecycle storage prevents any useful planning output."""
+        plans = self.repo / "plans"
+        plans.mkdir()
+        (plans / "active-generation.json").write_text(
+            '{"schema_version":1,"schema_version":2}\n', encoding="utf-8")
+        secret = "private-conflict-value-never-expose"
+        (plans / "preserve-me.txt").write_text(secret + "\n", encoding="utf-8")
+        before = loom_reliability.exact_tree_manifest(plans)
+
+        result = loom_orchestrator.invoke(
+            request="Plan a safe accounting documentation update for README.md.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertIn(
+            "Reason code: LIFECYCLE_AUTHORITY_UNTRUSTED",
+            result["user_message"])
+        self.assertNotIn(secret, json.dumps(result, sort_keys=True))
+        self.assertNotIn("action_path", result)
+        self.assertEqual(before, loom_reliability.exact_tree_manifest(plans))
+        self.assertFalse(any(self.repo.glob(".loom-plan-stage-*")))
 
     def test_stale_plan_decision_reports_a_real_bounded_recovery_path(self):
         """Break caught: a stale displayed plan hides its recovery requirement."""

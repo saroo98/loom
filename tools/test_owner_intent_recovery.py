@@ -2,6 +2,7 @@
 
 import dataclasses
 import inspect
+import json
 import subprocess
 import tempfile
 import unittest
@@ -10,6 +11,7 @@ from pathlib import Path
 
 import loom_lint
 import loom_owner_intent
+import loom_orchestrator
 import loom_runtime
 
 
@@ -173,6 +175,66 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
                         prohibitions=prohibitions,
                         exact_reference=False,
                     )
+
+    def test_orchestrator_extracts_one_relation_compatible_planning_mode(self):
+        """Break caught: sealed disposition evidence is ignored or re-inferred."""
+        cases = (
+            ({"generation_phase": "absent"}, "direct"),
+            ({"generation_phase": "reviewable"}, "candidate-successor"),
+            ({
+                "generation_phase": "reviewable",
+                "state_error": "STALE_LIFECYCLE",
+            }, "current-world-replan"),
+            ({
+                "generation_phase": "invalid",
+                "state_error": "INVALID_LIFECYCLE",
+            }, "inline-recovery"),
+        )
+
+        for state, expected in cases:
+            with self.subTest(mode=expected):
+                control = loom_runtime.request_control(
+                    self.PLANNING_REQUEST, state=state)
+                self.assertEqual(
+                    expected,
+                    loom_orchestrator._extract_planning_mode(control))
+
+    def test_orchestrator_rejects_missing_duplicate_unknown_or_incompatible_mode(self):
+        """Break caught: malformed sealed mode evidence reaches an ordinary plan action."""
+        base = loom_runtime.request_control(
+            self.PLANNING_REQUEST, state={"generation_phase": "reviewable"})
+        cases = (
+            [],
+            ["planning-candidate-successor", "planning-candidate-successor"],
+            ["planning-invented-mode"],
+            ["planning-direct"],
+        )
+
+        for evidence in cases:
+            with self.subTest(evidence=evidence):
+                value = json.loads(json.dumps(base))
+                value["evidence"] = evidence
+                unsigned = {
+                    key: item for key, item in value.items()
+                    if key != "control_sha256"
+                }
+                value["control_sha256"] = loom_runtime._sha(
+                    loom_runtime._canonical_json(unsigned))
+                with self.assertRaisesRegex(
+                        loom_orchestrator.OrchestratorError,
+                        "planning mode"):
+                    loom_orchestrator._extract_planning_mode(value)
+
+    def test_exact_host_control_keeps_its_existing_non_disposition_path(self):
+        """Break caught: exact revision is forced through ordinary planning evidence."""
+        control = loom_orchestrator._sealed_request_control(
+            self.PLANNING_REQUEST, revision_context={})
+
+        self.assertEqual("host-bound", control["explicitness"])
+        self.assertEqual("revise-exact", control["relation"])
+        self.assertEqual(
+            [], [item for item in control["evidence"]
+                 if item.startswith("planning-")])
 
     def test_provisional_contradiction_crosses_real_preparation_without_authority(self):
         """Break caught: one clarification cannot cross the prepared boundary."""
