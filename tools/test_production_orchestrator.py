@@ -2078,6 +2078,138 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             "generation-completed", final_ledger["events"][-1]["event_type"])
 
+    def test_exact_start_updates_only_the_manifest_frontier_table(self):
+        """Break caught: routing rows make a valid multi-WO start unrecoverable."""
+        opened = loom_orchestrator.invoke(
+            request=(
+                "Plan an ETL and machine-learning pipeline with schema evolution, "
+                "backfills, lineage, reproducibility, monitoring, recovery, release "
+                "rollback, maintenance, and documentation. Plan the work only and "
+                "do not implement it yet."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        self.assertEqual("L", opened["tier"])
+        contract = opened["plan_contract"]
+        draft = {
+            "schema_version": 1,
+            "title": "Deliver a reviewed data and model pipeline",
+            "summary": "Implement ingestion, model verification, and documentation serially.",
+            "assumptions": ["The three reviewed steps remain strictly serial."],
+            "decisions": ["Model verification follows replay-safe ingestion."],
+            "current_facts": [{
+                "domain": item["domain"], "fact": item["fact"],
+                "source": "sealed project inspection and shipped domain adapter",
+            } for item in contract["current_facts_to_verify"]],
+            "release_exposure": {
+                "external_users": 0, "irreversible": False,
+                "data_migration": False, "regulated": False,
+            },
+            "work_orders": [
+                {
+                    "title": "Make ingestion replay safe",
+                    "outcome": "Ingestion preserves schema, lineage, and idempotency.",
+                    "tasks": ["Implement replay-safe ingestion.", "Run focused verification."],
+                    "acceptance": ["The focused Python verification exits 0."],
+                    "negative_acceptance": [
+                        "A rejected record never enters the accepted dataset."],
+                    "out_of_scope": ["Model training and documentation."],
+                    "escalation": ["Stop if the product world changes."],
+                    "touches": ["src/etl/**", "tests/etl/**"], "depends_on": [],
+                    "routing": "strong-coding", "size": "S",
+                },
+                {
+                    "title": "Prove reproducible model behavior",
+                    "outcome": "Training and inference are reproducible and monitored.",
+                    "tasks": ["Bind model inputs and artifacts.", "Test recovery behavior."],
+                    "acceptance": ["Reproducibility and recovery verification exits 0."],
+                    "negative_acceptance": [
+                        "Leakage or train-serve skew blocks release."],
+                    "out_of_scope": ["Documentation."],
+                    "escalation": ["Stop if WO-001 lacks sealed completion."],
+                    "touches": ["src/ml/**", "tests/ml/**"],
+                    "depends_on": ["WO-001"],
+                    "routing": "specialist", "size": "M",
+                },
+                {
+                    "title": "Document the verified pipeline",
+                    "outcome": "README documents only the verified pipeline behavior.",
+                    "tasks": ["Update README.md.", "Perform a read-only audit."],
+                    "acceptance": ["The documentation audit exits 0."],
+                    "negative_acceptance": [
+                        "Documentation cannot claim unverified behavior."],
+                    "out_of_scope": ["Further implementation changes."],
+                    "escalation": ["Stop if WO-002 lacks sealed completion."],
+                    "touches": ["README.md"], "depends_on": ["WO-002"],
+                    "routing": "strong-coding", "size": "S",
+                },
+            ],
+            "domain_evidence": None,
+        }
+        loom_orchestrator.author(
+            opened["action_path"], draft, owner_home=self.home,
+            install_root=self.installed)
+        planned = loom_orchestrator.complete(
+            opened["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        resolved = loom_plan_store.resolve(self.repo)
+        manifest_path = resolved.generation_root / "MANIFEST.md"
+        before = manifest_path.read_text(encoding="utf-8")
+        self.assertIn("## Routing snapshot", before)
+        self.assertIn("## Work order frontier", before)
+        self.assertGreaterEqual(before.count("| WO-001 |"), 2)
+
+        started = loom_orchestrator.start(
+            opened["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("WO-001", started["work_order"])
+        after = manifest_path.read_text(encoding="utf-8")
+        routing = loom_lint.parse_markdown_table(after, "Routing snapshot")
+        frontier = loom_lint.parse_markdown_table(after, "Work order frontier")
+        self.assertEqual("none", routing[0]["depends on"])
+        self.assertEqual("in-progress", frontier[0]["status"])
+        self.assertEqual("blocked", frontier[1]["status"])
+        self.assertEqual("blocked", frontier[2]["status"])
+
+    def test_projection_rejects_duplicate_manifest_frontier_sections(self):
+        """Break caught: an ambiguous second frontier escapes projection checks."""
+        with tempfile.TemporaryDirectory() as temporary:
+            pack = Path(temporary)
+            work_orders = pack / "work-orders"
+            work_orders.mkdir()
+            policy = loom_plan_author._execution_policy()
+            (pack / "MANIFEST.md").write_text(
+                "---\n"
+                "status: gated\n"
+                f"execution_policy: {policy.execution_policy}\n"
+                "execution_sequence: [WO-001]\n"
+                f"execution_policy_sha256: {policy.policy_sha256}\n"
+                "---\n"
+                "## Work order frontier\n"
+                "| WO | Status | Routing | Claimed by | Claimed at (UTC) | Heartbeat |\n"
+                "|---|---|---|---|---|---|\n"
+                "| WO-001 | ready | strong-coding | — | — | — |\n"
+                "## Work order frontier\n"
+                "| WO | Status | Routing | Claimed by | Claimed at (UTC) | Heartbeat |\n"
+                "|---|---|---|---|---|---|\n"
+                "| WO-001 | ready | strong-coding | — | — | — |\n",
+                encoding="utf-8")
+            (work_orders / "WO-001-example.md").write_text(
+                "---\nid: WO-001\nstatus: ready\n---\n",
+                encoding="utf-8")
+            state = types.SimpleNamespace(
+                generation_phase="reviewable",
+                graph=types.SimpleNamespace(execution_sequence=("WO-001",)))
+            projection = {"work_order_statuses": {"WO-001": "ready"}}
+
+            with mock.patch.object(
+                    loom_orchestrator.loom_lifecycle_kernel, "project",
+                    return_value=projection):
+                with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+                    loom_orchestrator._write_v3_pack_projection(pack, state)
+
+            self.assertEqual("PLAN_PROJECTION_INVALID", raised.exception.code)
+
     def test_cancelled_attempt_can_be_repaired_and_resumed_without_replanning(self):
         """Break caught: explicit v3 repair falls into the historical pack reconciler."""
         plan_action, planned = self.complete_machine_authored_plan()

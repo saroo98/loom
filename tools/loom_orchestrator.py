@@ -3839,16 +3839,29 @@ def _write_v3_pack_projection(pack, state):
             "active" if state.generation_phase == "active" else "archived")
         manifest_text = _replace_frontmatter_status(
             manifest_text, phase_status, label="manifest")
+        frontier_sections = list(re.finditer(
+            r"(?ms)^##\s+Work order frontier\s*$\n(.*?)(?=^##\s|\Z)",
+            manifest_text))
+        if len(frontier_sections) != 1:
+            raise OrchestratorError(
+                "PLAN_PROJECTION_INVALID",
+                "manifest must contain exactly one work-order frontier")
+        frontier_section = frontier_sections[0]
+        frontier_text = frontier_section.group(1)
         for identifier, status in statuses.items():
             row = re.compile(
                 rf"(?m)^\|\s*{re.escape(identifier)}\s*\|\s*[^|\r\n]+\|")
-            rows = list(row.finditer(manifest_text))
+            rows = list(row.finditer(frontier_text))
             if len(rows) != 1:
                 raise OrchestratorError(
                     "PLAN_PROJECTION_INVALID",
                     f"manifest frontier does not contain exactly one {identifier}")
-            manifest_text = row.sub(
-                f"| {identifier} | {status} |", manifest_text, count=1)
+            frontier_text = row.sub(
+                f"| {identifier} | {status} |", frontier_text, count=1)
+        manifest_text = (
+            manifest_text[:frontier_section.start(1)]
+            + frontier_text
+            + manifest_text[frontier_section.end(1):])
         for path, text in work_order_writes:
             loom_gate._atomic_write_text(path, text)
         loom_gate._atomic_write_text(manifest_path, manifest_text)
