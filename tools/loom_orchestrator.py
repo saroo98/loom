@@ -15,6 +15,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
@@ -4077,6 +4078,11 @@ def _recover_pending_v3_lifecycle(
         _path, candidate, _security = _read_action(
             action_path, owner_home=owner_home, install_root=install_root)
         if candidate["status"] == "completed":
+            if not _finalize_successor_projection(
+                    candidate, action_path, memory):
+                raise OrchestratorError(
+                    "LIFECYCLE_PROJECTION_INVALID",
+                    "completed successor projection lacks its exact transition")
             return
         if candidate["status"] != "pending":
             raise OrchestratorError(
@@ -4945,7 +4951,8 @@ def _activate_reviewed_generation(action, action_path, memory, instant):
     }
 
 
-def _successor_reservation_ownership(path, expected_identity, *, manifest=None):
+def _successor_reservation_ownership(
+        path, expected_identity, *, manifest=None, created_paths=None):
     """Seal the exact copied entries whose unchanged bytes may be cleaned."""
     path = Path(path)
     root_identity = loom_reliability._validate_directory_object_continuity(
@@ -4965,6 +4972,11 @@ def _successor_reservation_ownership(path, expected_identity, *, manifest=None):
                for item in observed["entries"] if item["path"] != "."):
             raise loom_reliability.ReliabilityError(
                 "successor reservation contains bytes not proven by its source")
+    observed_paths = {
+        item["path"] for item in observed["entries"] if item["path"] != "."}
+    if created_paths is not None and observed_paths != set(created_paths):
+        raise loom_reliability.ReliabilityError(
+            "successor reservation contains an entry not recorded at creation")
     identities = []
     for entry in observed["entries"]:
         relative = entry["path"]
@@ -4984,6 +4996,7 @@ def _successor_reservation_ownership(path, expected_identity, *, manifest=None):
         "schema_version": 1,
         "root_identity": root_identity,
         "manifest": observed,
+        "created_paths": sorted(observed_paths),
         "entries": identities,
     }
     return {**body, "ownership_sha256": _hash(body)}
@@ -4995,7 +5008,7 @@ def _remove_owned_successor_reservation(path, ownership):
     try:
         fields = {
             "schema_version", "root_identity", "manifest", "entries",
-            "ownership_sha256",
+            "created_paths", "ownership_sha256",
         }
         if not isinstance(ownership, dict) or set(ownership) != fields \
                 or ownership.get("schema_version") != 1 \
@@ -5006,7 +5019,8 @@ def _remove_owned_successor_reservation(path, ownership):
             raise loom_reliability.ReliabilityError(
                 "successor cleanup ownership is invalid")
         current = _successor_reservation_ownership(
-            path, ownership["root_identity"])
+            path, ownership["root_identity"],
+            created_paths=ownership["created_paths"])
         if current["manifest"] != ownership["manifest"] \
                 or current["entries"] != ownership["entries"]:
             raise loom_reliability.ReliabilityError(
@@ -5018,16 +5032,47 @@ def _remove_owned_successor_reservation(path, ownership):
             candidate = path.joinpath(*PurePosixPath(record["path"]).parts)
             parent = path if record["parent_path"] == "." else path.joinpath(
                 *PurePosixPath(record["parent_path"]).parts)
-            if list(loom_reliability._stat_identity(candidate.lstat())) != \
-                    record["identity"] \
-                    or list(loom_reliability._stat_identity(parent.lstat())) != \
-                    record["parent_identity"]:
+            candidate_info = candidate.lstat()
+            parent_info = parent.lstat()
+            parent_identity = record["parent_identity"]
+            if loom_reliability._is_redirect(candidate) \
+                    or loom_reliability._is_redirect(parent) \
+                    or (record["kind"] == "file" and list(
+                        loom_reliability._stat_identity(candidate_info)) !=
+                        record["identity"]) \
+                    or (record["kind"] == "directory" and (
+                        int(candidate_info.st_dev) != record["identity"][0]
+                        or int(candidate_info.st_ino) != record["identity"][1]
+                        or int(candidate_info.st_mode) != record["identity"][2])) \
+                    or int(parent_info.st_dev) != parent_identity[0] \
+                    or int(parent_info.st_ino) != parent_identity[1] \
+                    or stat.S_IFMT(parent_info.st_mode) != stat.S_IFMT(
+                        parent_identity[2]):
                 raise loom_reliability.ReliabilityError(
                     "successor reservation identity changed before cleanup")
-            entries.append((candidate, record["kind"]))
-        for entry, kind in sorted(
+            entries.append((candidate, parent, record))
+        for entry, parent, record in sorted(
                 entries, key=lambda item: len(item[0].parts), reverse=True):
-            if kind == "directory":
+            latest = entry.lstat()
+            latest_parent = parent.lstat()
+            parent_identity = record["parent_identity"]
+            changed = loom_reliability._is_redirect(entry) \
+                or loom_reliability._is_redirect(parent) \
+                or (record["kind"] == "file" and list(
+                    loom_reliability._stat_identity(latest)) !=
+                    record["identity"]) \
+                or (record["kind"] == "directory" and (
+                    int(latest.st_dev) != record["identity"][0]
+                    or int(latest.st_ino) != record["identity"][1]
+                    or int(latest.st_mode) != record["identity"][2])) \
+                or int(latest_parent.st_dev) != parent_identity[0] \
+                or int(latest_parent.st_ino) != parent_identity[1] \
+                or stat.S_IFMT(latest_parent.st_mode) != stat.S_IFMT(
+                    parent_identity[2])
+            if changed:
+                raise loom_reliability.ReliabilityError(
+                    "successor reservation changed at cleanup boundary")
+            if record["kind"] == "directory":
                 entry.rmdir()
             else:
                 entry.unlink()
@@ -5042,6 +5087,41 @@ def _remove_owned_successor_reservation(path, ownership):
             "bytes were preserved and the prior plan remains current") from exc
 
 
+def _copy_successor_entry(source, destination):
+    """Copy one regular file into an absent reservation leaf."""
+    if os.path.lexists(destination):
+        raise loom_reliability.ReliabilityError(
+            "successor copy target already exists")
+    return shutil.copy2(source, destination, follow_symlinks=False)
+
+
+def _copy_successor_tree(source, reserved, manifest, record_created):
+    """Copy a closed exact tree while journaling each completed creation."""
+    entries = [item for item in manifest["entries"] if item["path"] != "."]
+    directories = sorted(
+        (item for item in entries if item["kind"] == "directory"),
+        key=lambda item: (len(PurePosixPath(item["path"]).parts), item["path"]))
+    files = sorted(
+        (item for item in entries if item["kind"] == "file"),
+        key=lambda item: item["path"])
+    for entry in directories:
+        destination = reserved.joinpath(*PurePosixPath(entry["path"]).parts)
+        if os.path.lexists(destination):
+            raise loom_reliability.ReliabilityError(
+                "successor directory target already exists")
+        destination.mkdir(mode=entry["mode"])
+        os.chmod(destination, entry["mode"])
+        record_created(entry["path"])
+    for entry in files:
+        relative = PurePosixPath(entry["path"])
+        _copy_successor_entry(
+            source.joinpath(*relative.parts),
+            reserved.joinpath(*relative.parts))
+        record_created(entry["path"])
+    root_entry = manifest["entries"][0]
+    os.chmod(reserved, root_entry["mode"])
+
+
 def _copy_successor_install_stage(
         source, destination, *, expected_source_identity):
     """Copy one sealed owner candidate to a no-replace same-volume reservation."""
@@ -5051,6 +5131,7 @@ def _copy_successor_install_stage(
     reservation_identity = None
     cleanup_ownership = None
     before = None
+    created_paths = set()
     try:
         source_identity = loom_reliability.validate_root_identity(
             source, expected_source_identity)
@@ -5066,8 +5147,15 @@ def _copy_successor_install_stage(
             raise loom_reliability.ReliabilityError(
                 "successor reservation resolved unexpectedly")
         reservation_identity = loom_reliability.observe_root_identity(reserved)
-        shutil.copytree(source, reserved, dirs_exist_ok=True, symlinks=True,
-                        copy_function=shutil.copy2)
+
+        def record_created(relative):
+            nonlocal cleanup_ownership
+            created_paths.add(relative)
+            cleanup_ownership = _successor_reservation_ownership(
+                reserved, reservation_identity, manifest=before,
+                created_paths=created_paths)
+
+        _copy_successor_tree(source, reserved, before, record_created)
         loom_reliability._validate_directory_object_continuity(
             source, source_identity)
         after = loom_reliability.exact_tree_manifest(
@@ -5087,7 +5175,8 @@ def _copy_successor_install_stage(
             raise loom_reliability.ReliabilityError(
                 "successor copy differs from its sealed source")
         cleanup_ownership = _successor_reservation_ownership(
-            reserved, reservation_identity, manifest=before)
+            reserved, reservation_identity, manifest=before,
+            created_paths=created_paths)
         return {
             "manifest": before,
             "reservation_identity": cleanup_ownership["root_identity"],
@@ -5097,8 +5186,10 @@ def _copy_successor_install_stage(
         if reserved is not None and reservation_identity is not None \
                 and os.path.lexists(reserved):
             try:
-                cleanup_ownership = _successor_reservation_ownership(
-                    reserved, reservation_identity, manifest=before)
+                if cleanup_ownership is None:
+                    cleanup_ownership = _successor_reservation_ownership(
+                        reserved, reservation_identity, manifest=before,
+                        created_paths=created_paths)
             except loom_reliability.ReliabilityError as cleanup_exc:
                 raise OrchestratorError(
                     "SUCCESSOR_INSTALL_AMBIGUOUS",

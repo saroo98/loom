@@ -1613,8 +1613,6 @@ def recover_successor_activation(
                         prepared["witness"]):
                 raise LifecycleTransitionError(
                     "target successor recovery evidence is indeterminate")
-            if precommit_validation is not None:
-                precommit_validation(prepared)
             loom_reliability.atomic_write_json(
                 source_root / "lifecycle.json",
                 prepared["source_terminal_ledger"])
@@ -2681,9 +2679,7 @@ def recover_pending(
                     raise LifecycleTransitionError(
                         "successor activation envelope name is not identity-bound")
                 envelope = _load_successor_envelope(path, command_id)
-                if envelope["status"] != "prepared" and not (
-                        envelope["status"] == "completed"
-                        and envelope["projection_status"] == "pending"):
+                if envelope["status"] not in {"prepared", "completed"}:
                     continue
                 result = recover_successor_activation(
                     project_root, command_id, witness_store=witness_store,

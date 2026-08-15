@@ -949,6 +949,65 @@ class GenerationActivationTests(unittest.TestCase):
                 candidate_action_id=prepared["candidate_action_id"],
                 projection_verifier=reject_stale_projection)
 
+    def test_pending_scan_reverifies_completed_successor_projection(self):
+        _source, stage, prepared = self._prepare_live_successor()
+        self.transition.activate_successor(
+            self.root, stage, prepared,
+            witness_path=self.witness, envelope_root=self.envelopes,
+            lock_path=self.lock)
+        self.transition.complete_successor_projection(
+            self.envelopes, prepared["command_id"],
+            candidate_action_id=prepared["candidate_action_id"],
+            projection_verifier=lambda _prepared, _receipt: None)
+
+        with self.assertRaisesRegex(
+                self.transition.LifecycleTransitionError,
+                "completed projection changed"):
+            self.transition.recover_pending(
+                self.root, witness_path=self.witness,
+                envelope_root=self.envelopes, lock_path=self.lock,
+                successor_projection=lambda _prepared, _receipt: (
+                    (_ for _ in ()).throw(
+                        self.transition.LifecycleTransitionError(
+                            "completed projection changed"))))
+
+        observed = []
+        recovered = self.transition.recover_pending(
+            self.root, witness_path=self.witness,
+            envelope_root=self.envelopes, lock_path=self.lock,
+            successor_projection=lambda prepared_value, receipt: observed.append(
+                (prepared_value["prepared_sha256"], receipt["receipt_sha256"])))
+        self.assertEqual(1, len(observed))
+        self.assertEqual("completed", recovered[0]["status"])
+
+    def test_post_index_recovery_does_not_reapply_precommit_validation(self):
+        _source, stage, prepared = self._prepare_live_successor()
+        precommit_calls = []
+
+        def precommit(_prepared):
+            precommit_calls.append("called")
+            if len(precommit_calls) > 1:
+                raise self.transition.LifecycleTransitionError(
+                    "post-index executor changed")
+
+        with self.assertRaises(self.transition.LifecycleTransitionInterrupted):
+            self.transition.activate_successor(
+                self.root, stage, prepared,
+                witness_path=self.witness, envelope_root=self.envelopes,
+                lock_path=self.lock, fault_at="after-index-commit",
+                precommit_validation=precommit)
+
+        recovered = self.transition.recover_successor_activation(
+            self.root, prepared["command_id"], witness_path=self.witness,
+            envelope_root=self.envelopes, lock_path=self.lock,
+            precommit_validation=precommit)
+        self.assertEqual(["called"], precommit_calls)
+        self.assertEqual("completed", recovered["status"])
+        self.assertEqual(
+            prepared["index"],
+            json.loads((self.root / "plans" / "active-generation.json").read_text(
+                encoding="utf-8")))
+
     def test_completed_claim_with_exact_source_authority_preserves_source(self):
         source, stage, prepared = self._prepare_live_successor()
         self.transition.activate_successor(

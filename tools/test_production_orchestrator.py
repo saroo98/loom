@@ -3141,17 +3141,22 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_partial_successor_copy_cleans_only_its_proven_reservation(self):
         source = self.root / "owner-stage"
         source.mkdir()
-        (source / "plan.md").write_text("reviewed candidate\n", encoding="utf-8")
+        (source / "a.md").write_text("first\n", encoding="utf-8")
+        (source / "z.md").write_text("second\n", encoding="utf-8")
         identity = loom_reliability.observe_root_identity(source)
         destination = self.root / "reserved-successor"
+        original_copy = loom_orchestrator._copy_successor_entry
+        calls = []
 
-        def partial_copy(copy_source, reserved, **_kwargs):
-            shutil.copy2(
-                Path(copy_source, "plan.md"), Path(reserved, "plan.md"))
+        def partial_copy(copy_source, reserved):
+            calls.append(Path(copy_source).name)
+            if len(calls) == 1:
+                return original_copy(copy_source, reserved)
             raise shutil.Error([("source", "destination", "copy failed")])
 
         with mock.patch.object(
-                shutil, "copytree", side_effect=partial_copy), \
+                loom_orchestrator, "_copy_successor_entry",
+                side_effect=partial_copy), \
                 self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
             loom_orchestrator._copy_successor_install_stage(
                 source, destination, expected_source_identity=identity)
@@ -3167,16 +3172,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
         identity = loom_reliability.observe_root_identity(source)
         destination = self.root / "reserved-successor"
 
-        def replace_reservation(_source, reserved, **_kwargs):
-            reserved = Path(reserved)
-            reserved.rmdir()
-            reserved.mkdir()
-            (reserved / "unrelated.txt").write_text(
+        def replace_reservation(_source, _destination):
+            destination.rmdir()
+            destination.mkdir()
+            (destination / "unrelated.txt").write_text(
                 "preserve ambiguous bytes\n", encoding="utf-8")
             raise shutil.Error([("source", "destination", "copy failed")])
 
         with mock.patch.object(
-                shutil, "copytree", side_effect=replace_reservation), \
+                loom_orchestrator, "_copy_successor_entry",
+                side_effect=replace_reservation), \
                 self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
             loom_orchestrator._copy_successor_install_stage(
                 source, destination, expected_source_identity=identity)
@@ -3239,6 +3244,88 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 self.assertEqual(
                     "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
                 self.assertTrue(destination.exists())
+
+    def test_failed_copy_preserves_source_identical_unjournaled_entries(self):
+        for ordinal, mutation in enumerate(("file", "directory")):
+            with self.subTest(mutation=mutation):
+                source = self.root / f"copy-source-{ordinal}"
+                nested = source / "nested"
+                nested.mkdir(parents=True)
+                (nested / "plan.md").write_text(
+                    "reviewed candidate\n", encoding="utf-8")
+                identity = loom_reliability.observe_root_identity(source)
+                destination = self.root / f"copy-destination-{ordinal}"
+
+                def inject_then_fail(copy_source, copy_destination):
+                    copy_destination = Path(copy_destination)
+                    if mutation == "file":
+                        shutil.copy2(copy_source, copy_destination)
+                    else:
+                        copied_parent = copy_destination.parent
+                        copied_parent.rmdir()
+                        copied_parent.mkdir()
+                    raise shutil.Error([
+                        ("source", "destination", "copy failed")])
+
+                with mock.patch.object(
+                        loom_orchestrator, "_copy_successor_entry",
+                        side_effect=inject_then_fail), \
+                        self.assertRaises(
+                            loom_orchestrator.OrchestratorError) as caught:
+                    loom_orchestrator._copy_successor_install_stage(
+                        source, destination,
+                        expected_source_identity=identity)
+                self.assertEqual(
+                    "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+                self.assertTrue(destination.exists())
+
+    def test_successor_cleanup_detects_replacement_during_entry_unlink(self):
+        source = self.root / "unlink-race-source"
+        source.mkdir()
+        (source / "plan.md").write_text(
+            "reviewed candidate\n", encoding="utf-8")
+        destination = self.root / "unlink-race-destination"
+        copied = loom_orchestrator._copy_successor_install_stage(
+            source, destination,
+            expected_source_identity=loom_reliability.observe_root_identity(
+                source))
+        target = destination / "plan.md"
+        original_inode = int(target.lstat().st_ino)
+        original_identity = loom_reliability._stat_identity
+        baseline_observations = 0
+
+        def count_target(info, **kwargs):
+            nonlocal baseline_observations
+            if int(info.st_ino) == original_inode:
+                baseline_observations += 1
+            return original_identity(info, **kwargs)
+
+        with mock.patch.object(
+                loom_reliability, "_stat_identity",
+                side_effect=count_target):
+            loom_orchestrator._successor_reservation_ownership(
+                destination, copied["cleanup_ownership"]["root_identity"],
+                created_paths=copied["cleanup_ownership"]["created_paths"])
+        observations = 0
+
+        def replace_between_check_and_unlink(info, **kwargs):
+            nonlocal observations
+            if int(info.st_ino) == original_inode:
+                observations += 1
+                if observations == baseline_observations + 1:
+                    target.unlink()
+                    target.write_text(
+                        "reviewed candidate\n", encoding="utf-8")
+            return original_identity(info, **kwargs)
+
+        with mock.patch.object(
+                loom_reliability, "_stat_identity",
+                side_effect=replace_between_check_and_unlink), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._remove_owned_successor_reservation(
+                destination, copied["cleanup_ownership"])
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertTrue(destination.exists())
 
     def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
         """Break caught: changed-world recovery requires parser-specific wording."""
