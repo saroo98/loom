@@ -94,7 +94,11 @@ def _work_order_touches(action):
     relative = action.get("work_order")
     if action["intent"] != "execute" or not isinstance(relative, str):
         return target, []
-    path = target / "plans" / PurePosixPath(relative)
+    try:
+        pack = loom_orchestrator._action_pack_root(action)
+    except loom_orchestrator.OrchestratorError:
+        return target, []
+    path = pack / PurePosixPath(relative)
     try:
         frontmatter, _body = loom_orchestrator.loom_lint.parse_frontmatter(
             path.read_text(encoding="utf-8"))

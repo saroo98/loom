@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/plan-store-quarantine-v1.schema.json",
+  "title": "Loom privacy-safe invalid plan-store quarantine receipt",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "project_id",
+    "command_id",
+    "quarantine_id",
+    "reason_code",
+    "status",
+    "source_tree_sha256",
+    "source_file_count",
+    "source_directory_count",
+    "source_total_bytes",
+    "durability_scope",
+    "receipt_sha256"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "project_id": {"$ref": "#/$defs/id"},
+    "command_id": {"$ref": "#/$defs/id"},
+    "quarantine_id": {"$ref": "#/$defs/id"},
+    "reason_code": {"$ref": "#/$defs/id"},
+    "status": {"const": "completed"},
+    "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+    "source_file_count": {"type": "integer", "minimum": 0, "maximum": 1024},
+    "source_directory_count": {"type": "integer", "minimum": 1, "maximum": 1024},
+    "source_total_bytes": {"type": "integer", "minimum": 0, "maximum": 16777216},
+    "durability_scope": {
+      "enum": ["process-crash-confirmed", "power-loss-unconfirmed"]
+    },
+    "receipt_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "active_index_storage_kinds": [
+    "generation-dir",
+    "legacy-root"
+  ],
+  "commit_protocol": "single-authoritative-object-v1",
+  "execution_policy": "strict-serial-sequence-v1",
+  "idempotency": "exact-command-and-transition-v1",
+  "max_dependencies_per_work_order": 16,
+  "max_ledger_bytes": 4194304,
+  "max_ledger_events": 512,
+  "max_touch_patterns_per_work_order": 5,
+  "max_work_orders": 64,
+  "policy_sha256": "ad2b2e8cebaae2ddcdfca39c7454c521f1f99c8a1e35f1e3c40b395c1c6134ae",
+  "recovery": "source-discard-target-roll-forward-otherwise-block-v1",
+  "schema_version": 1
+}

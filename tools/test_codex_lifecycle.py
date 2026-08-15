@@ -51,6 +51,29 @@ class CodexLifecycleTests(unittest.TestCase):
         self.assertEqual(2, code)
         self.assertIn("outside declared touches", output["systemMessage"])
 
+    def test_v3_execution_scope_uses_the_resolved_generation_root(self):
+        """Break caught: lifecycle hooks look for v3 work under legacy plans/."""
+        generation = self.root / "plans" / "generations" / "generation-1"
+        work_orders = generation / "work-orders"
+        work_orders.mkdir(parents=True)
+        (work_orders / "WO-001-feature.md").write_text(
+            "---\nid: WO-001\nstatus: in-progress\n"
+            "touches: [src/app.py]\ndepends_on: []\n---\n",
+            encoding="utf-8")
+        self.action.update({
+            "intent": "execute",
+            "work_order": "work-orders/WO-001-feature.md",
+        })
+
+        with mock.patch.object(
+                loom_codex_lifecycle.loom_orchestrator,
+                "_action_pack_root", return_value=generation) as resolver:
+            target, patterns = loom_codex_lifecycle._work_order_touches(self.action)
+
+        resolver.assert_called_once_with(self.action)
+        self.assertEqual(self.root, target)
+        self.assertEqual(["src/app.py"], patterns)
+
     def test_absolute_escape_is_blocked(self):
         outside = self.root.parent / "outside.txt"
         code, output = self.handle(self.event(

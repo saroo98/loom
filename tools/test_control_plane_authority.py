@@ -111,7 +111,7 @@ class ControlPlaneIntentTests(unittest.TestCase):
         self.assertFalse(durable_preference["blocked"])
         self.assertEqual("repair", stale_repair["intent"])
         self.assertFalse(stale_repair["blocked"])
-        self.assertEqual("repair", continued_repair["intent"])
+        self.assertEqual("execute", continued_repair["intent"])
         self.assertFalse(continued_repair["blocked"])
         self.assertEqual("status", conflict["intent"])
         self.assertTrue(conflict["blocked"])

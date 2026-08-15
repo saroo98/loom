@@ -99,6 +99,10 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def read_action(action_path):
         return json.loads(Path(action_path).read_text(encoding="utf-8"))
 
+    def action_pack(self, action_path):
+        """Return the exact pending plan projection named by the action."""
+        return loom_orchestrator._action_pack_root(self.read_action(action_path))
+
     @staticmethod
     def pointer_path(action_path):
         return Path(action_path).parent / loom_orchestrator.ACTIVE_POINTER_FILE
@@ -177,42 +181,41 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
         self.assertTrue(stage.exists() or stage.is_symlink())
         artifact_assertion()
 
-    def test_pack_destination_created_at_native_boundary_is_never_replaced(self):
-        pack = self.repo / "plans"
-        real_native = loom_reliability._native_atomic_rename_noreplace
+    def test_stage_destination_created_at_reservation_boundary_is_never_replaced(self):
+        real_reserve = loom_reliability.reserve_directory_leaf
         injected = False
 
-        def destination_race(*arguments):
+        def destination_race(parent, leaf, **kwargs):
             nonlocal injected
-            source, destination = map(Path, arguments[:2])
-            if destination == pack:
+            destination = Path(parent) / leaf
+            if leaf.startswith(".loom-plan-stage-"):
                 injected = True
                 destination.mkdir()
                 (destination / "owner.txt").write_bytes(b"owner destination")
-            return real_native(*arguments)
+            return real_reserve(parent, leaf, **kwargs)
 
         with mock.patch.object(
-                loom_reliability, "_native_atomic_rename_noreplace",
+                loom_reliability, "reserve_directory_leaf",
                 side_effect=destination_race):
             self.assert_safety_refusal(
                 self.invoke,
-                {"BASELINE_CONFLICT", "BASELINE_ATOMIC_INSTALL_FAILED",
-                 "BASELINE_ATOMICITY_UNAVAILABLE"})
+                {"BASELINE_STAGING_CONFLICT"})
 
-        self.assertTrue(injected, "pack installation bypassed the no-replace primitive")
-        self.assertEqual(b"owner destination", (pack / "owner.txt").read_bytes())
+        self.assertTrue(injected, "stage creation bypassed exclusive reservation")
         action_path = next(
             path for path in (self.home / "instances").glob(
                 "*/runtime/projects/*/orchestrations/*.json")
             if path.name != loom_orchestrator.ACTIVE_POINTER_FILE)
         action = self.assert_active_authority(action_path, statuses=("initializing",))
         stage = loom_orchestrator._project_stage_path(action)
-        self.assertEqual(action["pack_seed"]["manifest"], self.exact_tree(stage))
+        self.assertEqual(b"owner destination", (stage / "owner.txt").read_bytes())
+        self.assertEqual("recorded", action["pack_seed"]["state"])
+        self.assertIsNone(action["pack_seed"]["manifest"])
 
     def test_quarantine_destination_created_at_native_boundary_preserves_both_trees(self):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        pack = self.repo / "plans"
+        pack = self.action_pack(action_path)
         pack_before = self.exact_tree(pack)
         quarantine = self.recovery_quarantine(action_path)
         real_native = loom_reliability._native_atomic_rename_noreplace
@@ -246,7 +249,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def test_source_root_substitution_after_exact_scan_is_refused_without_consuming_evidence(self):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        pack = self.repo / "plans"
+        pack = self.action_pack(action_path)
         original_manifest = self.exact_tree(pack)
         displaced = self.repo / "owner-preserved-original-plans"
         quarantine = self.recovery_quarantine(action_path)
@@ -282,7 +285,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def test_replaced_existing_quarantine_blocks_and_preserves_every_artifact(self):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        pack = self.repo / "plans"
+        pack = self.action_pack(action_path)
         pack_before = self.exact_tree(pack)
         quarantine = self.recovery_quarantine(action_path)
         _write(quarantine / "owner.txt", "unrelated replacement quarantine\n")
@@ -297,7 +300,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def test_unsafe_hardlinked_existing_quarantine_blocks_without_unlinking_owner_data(self):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        pack = self.repo / "plans"
+        pack = self.action_pack(action_path)
         pack_before = self.exact_tree(pack)
         quarantine = self.recovery_quarantine(action_path)
         quarantine.mkdir(parents=True)
@@ -320,7 +323,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def assert_move_refusal_retains_authority(self, message):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        pack = self.repo / "plans"
+        pack = self.action_pack(action_path)
         before = self.exact_tree(pack)
         with mock.patch.object(
                 loom_reliability, "_native_atomic_rename_noreplace",
@@ -343,7 +346,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def test_cross_volume_explicit_cancel_writes_readable_preserved_receipt(self):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        pack = self.repo / "plans"
+        pack = self.action_pack(action_path)
         before = self.exact_tree(pack)
 
         with mock.patch.object(
@@ -365,14 +368,15 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
                 install_root=self.installed)[1]["recovery_receipt"])
 
         next_result = self.invoke()
-        self.assertEqual("blocked", next_result["status"])
-        self.assertEqual("invalid_lifecycle", next_result["code"])
-        self.assertNotEqual("ACTION_CORRUPT", next_result["code"])
+        self.assertEqual("action-required", next_result["status"])
+        self.assertEqual("plan", next_result["intent"])
+        self.assertNotEqual(opened["action_id"], next_result["action_id"])
+        self.assertEqual(before, self.exact_tree(pack))
 
     def test_same_volume_explicit_cancel_quarantines_seed_and_allows_next_action(self):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        pack = self.repo / "plans"
+        pack = self.action_pack(action_path)
         before = self.exact_tree(pack)
 
         cancelled = loom_orchestrator.cancel(action_path)
@@ -396,7 +400,7 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
     def test_absent_seed_cancellation_records_not_present_without_inventing_changes(self):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
-        shutil.rmtree(self.repo / "plans")
+        shutil.rmtree(self.action_pack(action_path))
 
         cancelled = loom_orchestrator.cancel(action_path)
 
@@ -405,14 +409,10 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
         self.assertFalse(receipt["complete_seed"])
         self.assertFalse(receipt["changes_made"])
         activation = receipt["activation_atomic_rename"]
-        self.assertIsNotNone(activation)
-        expected_phase = (
-            "gc-complete"
-            if activation["namespace_state"] == "committed"
-            and activation["durability"] == "confirmed"
-            else "reconciliation-required"
-        )
-        self.assertEqual(expected_phase, receipt["cleanup_phase"])
+        self.assertIsNone(activation)
+        self.assertEqual("gc-complete", receipt["cleanup_phase"])
+        self.assertFalse(receipt["project_namespace_changed"])
+        self.assertFalse(receipt["owner_control_changed"])
         self.assertIsNone(receipt["quarantined_manifest_sha256"])
         self.assertEqual([], receipt["preserved_project_relatives"])
         self.assertEqual([], receipt["preserved_relatives"])
@@ -457,15 +457,15 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
         action = self.read_action(action_path)
-        pack = self.repo / "plans"
-        project_stage = loom_orchestrator._project_stage_path(action)
+        pack = loom_orchestrator._action_pack_root(action)
+        legacy_pack = self.repo / "plans"
         owner_stage = loom_orchestrator._stage_path(action_path)
         tombstone = self.repo / f".loom-recovery-{action['action_id']}"
-        for path in (project_stage, owner_stage, tombstone):
+        for path in (legacy_pack, owner_stage, tombstone):
             shutil.copytree(pack, path, copy_function=shutil.copy2)
         snapshots = {
             path: self.exact_tree(path)
-            for path in (pack, project_stage, owner_stage, tombstone)
+            for path in (pack, legacy_pack, owner_stage, tombstone)
         }
 
         self.assert_safety_refusal(self.supersede, {"RECOVERY_DECISION_REQUIRED"})

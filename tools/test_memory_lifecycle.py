@@ -312,6 +312,7 @@ class MemoryLifecycleTests(unittest.TestCase):
             invocation_id="00000000-0000-4000-8000-000000000603",
             cwd=self.project_root, now="2026-07-14T12:00:00Z")
         self.assertEqual(receipt.intent, "close")
+        self.assertEqual("completed", receipt.status, receipt.to_dict())
         self.assertEqual(loom_memory.inspect_record(
             self.home, self.instance, record["id"])["status"], "archived")
 

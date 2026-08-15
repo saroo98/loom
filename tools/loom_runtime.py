@@ -22,8 +22,10 @@ import loom_domain
 import loom_gate
 import loom_block_reason
 import loom_lifecycle
+import loom_lifecycle_kernel
 import loom_lint
 import loom_memory
+import loom_plan_store
 import loom_project_inspection
 import loom_survey
 import loom_tier
@@ -563,6 +565,14 @@ _NEGATED_CONTROL_PREFIX_RE = re.compile(
     r"(?:i|we)\s+(?:do not|don't|never)\s+want\s+you\s+to|"
     r"(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?)\s+"
     r"(?P<body>.+)$")
+_EXACT_START_CONTROL_RE = re.compile(
+    r"\b(?:please\s+)?(?:start|begin)\s+(?:(?:this|the)\s+)?"
+    r"(?:exact\s+approved|approved\s+exact|exact\s+reviewed|"
+    r"reviewed\s+exact|exact|approved|revised|reviewed)\s+plan\b")
+_EXACT_REVISION_CONTROL_RE = re.compile(
+    r"\b(?:please\s+)?revise\s+(?:(?:this|the)\s+)?"
+    r"(?:exact\s+reviewed|reviewed\s+exact|exact|approved|reviewed)\s+plan\b"
+    r"(?:\s+exactly)?")
 MAX_ROUTE_CLAUSES = 16
 
 
@@ -604,7 +614,10 @@ def _has_planning_envelope(request):
     normalized = request.casefold().replace("\r\n", "\n").replace("\r", "\n")
     return bool(
         re.match(r"^(?:now\s+)?(?:please\s+)?plan\b", normalized)
-        or _PLAN_DELIVERABLE_RE.search(normalized))
+        or _PLAN_DELIVERABLE_RE.search(normalized)
+        or re.search(
+            r"\bplan\s+(?:the\s+)?(?:work|project|change|task)\s+only\b",
+            normalized))
 
 
 def _split_control_clauses(request):
@@ -627,6 +640,9 @@ def _split_control_clauses(request):
                 and role["intent"] == "plan" \
                 and role["control"] == "implementation" \
                 and not role["negated"] \
+                and re.match(
+                    r"^(?:also\s+)?(?:implement|execute|start|apply)\b",
+                    value) is None \
                 and _PLAN_DELIVERABLE_RE.search(value) is None:
             # Imperative requirements inside one explicit planning envelope
             # describe the requested system. They are not separate requests for
@@ -645,6 +661,16 @@ def _split_control_clauses(request):
 
     for position, match in enumerate(separators):
         if match.lastgroup != "hard":
+            current = normalized[start:match.start()].strip()
+            if re.search(
+                    r"\b(?:do not|don't|never)\s+"
+                    r"(?:implement|execute|start)\b.{0,160}\buntil\b",
+                    current):
+                # An implementation prohibition remains one control through
+                # its future owner-authorization condition. A phrase such as
+                # "do not implement until I ask ... and then start" does not
+                # authorize the future start in the current request.
+                continue
             next_start = (
                 separators[position + 1].start()
                 if position + 1 < len(separators)
@@ -662,7 +688,10 @@ def _split_control_clauses(request):
             break
         pending = (
             "hard" if match.lastgroup == "hard"
-            else "and" if match.lastgroup == "comma"
+            else (
+                "but" if match.lastgroup == "comma"
+                and re.search(r"\bbut\b", match.group(0))
+                else "and") if match.lastgroup == "comma"
             else match.lastgroup
         )
         start = match.end()
@@ -677,11 +706,25 @@ def _classify_control_clause(clause):
         r"^(?:explicit\s+)?(?:prohibitions?|constraints?|limitations?)\s*:\s*",
         "", clause.strip())
     clause = re.sub(r"^(?:either|instead)\s+", "", clause)
+    clause = re.sub(r"^also\s+", "", clause)
     negated = _NEGATED_CONTROL_PREFIX_RE.match(clause)
     body = negated.group("body").strip() if negated else clause
     body = re.sub(r"^(?:either|instead)\s+", "", body)
+    body = re.sub(r"^also\s+", "", body)
+    mutation_prohibition = re.match(
+        r"^(?:please\s+)?(?:make\s+no\s+(?:changes|modifications)|"
+        r"modify\s+nothing|change\s+nothing|no\s+(?:changes|modifications))\b",
+        body)
     control = None
-    if re.match(
+    if mutation_prohibition:
+        intent = "plan"
+        control = "implementation"
+    elif _EXACT_REVISION_CONTROL_RE.match(body):
+        intent = "plan"
+        control = "planning"
+    elif _EXACT_START_CONTROL_RE.match(body):
+        intent = "continue"
+    elif re.match(
             r"^(?:remember\b|retain\s+(?:this|that)\s+preference\b|"
             r"correct\s+(?:what you learned|my preference|that preference|"
             r"the preference)\b|(?:i|we)\s+prefer\b|from now on\b|"
@@ -711,8 +754,9 @@ def _classify_control_clause(clause):
         intent = "status"
     elif re.match(r"^(?:why\b|explain\b|show (?:me )?why\b)", body):
         intent = "why"
-    elif re.match(r"^(?:review|inspect|audit)\b", body) and not re.match(
-            r"^audit\s+(?:trails?|logs?)\b", body):
+    elif re.match(r"^(?:please\s+)?(?:review|inspect|audit)\b", body) \
+            and not re.match(
+                r"^(?:please\s+)?audit\s+(?:trails?|logs?)\b", body):
         intent = "review"
     elif re.match(r"^(?:close this|finish the project|we are done|project is over)\b", body):
         intent = "close"
@@ -727,23 +771,17 @@ def _classify_control_clause(clause):
         return None
     return {
         "intent": intent,
-        "negated": negated is not None,
+        "negated": negated is not None or mutation_prohibition is not None,
         "control": control or intent,
     }
 
 
 def _continue_route_intent(state):
-    if state.get("drift") or state.get("failed"):
-        return "repair"
-    if state.get("terminal"):
-        return "close"
-    if state.get("pack_exists") and (
-            state.get("plan_ready") or state.get("authorized")) \
-            and state.get("active_frontier"):
-        return "execute"
-    if state.get("pack_exists"):
-        return "resume"
-    return "plan"
+    # Continuation wording names the requested operation.  Lifecycle state may
+    # accept or reject that relation, but must never silently reinterpret it as
+    # repair, closure, resumption, or fresh planning.
+    del state
+    return "execute"
 
 
 def _resolve_clause_roles(request, state):
@@ -805,6 +843,31 @@ def _resolve_clause_roles(request, state):
                 "intent": "plan", "negated": False, "control": "planning",
                 "separator": "hard", "index": len(clauses),
             })
+        planning_positions = [
+            item["index"] for item in classified
+            if not item["negated"] and item["intent"] == "plan"
+            and item["control"] == "planning"]
+        implementation_is_prohibited = any(
+            item["negated"] and item["intent"] == "plan"
+            and item["control"] == "implementation"
+            for item in classified)
+        if planning_positions and implementation_is_prohibited:
+            first_plan_control = min(planning_positions)
+            for item in classified:
+                clause = item.get("clause", "")
+                if not item["negated"] and item["intent"] == "plan" \
+                        and item["control"] == "implementation" \
+                        and item["index"] < first_plan_control \
+                        and re.match(
+                            r"^(?:please\s+)?(?:create|design|build|develop|make)\b",
+                            clause) \
+                        and not re.search(
+                            r"\b(?:implement|execute|start|apply|write the files)\b",
+                            clause):
+                    # A leading project-description verb names what the requested
+                    # plan is about. The later explicit plan-only control and
+                    # implementation prohibition define lifecycle authority.
+                    item["control"] = "planning"
     if not classified:
         return None
     # A shared negation governs coordinated verbs until a hard clause boundary.
@@ -1061,18 +1124,7 @@ def resolve_intent(request, state=None):
             match = re.search(
                 r"\b(?:continue|keep going|resume|pick up|carry on|build the next|"
                 r"next part)\b", text)
-            if state.get("drift") or state.get("failed"):
-                intent = "repair"
-            elif state.get("terminal"):
-                intent = "close"
-            elif state.get("pack_exists") and (
-                    state.get("plan_ready") or state.get("authorized")) \
-                    and state.get("active_frontier"):
-                intent = "execute"
-            elif state.get("pack_exists"):
-                intent = "resume"
-            else:
-                intent = "plan"
+            intent = _continue_route_intent(state)
             decision = _route(text, intent, match)
         elif (re.search(r"^(?:please\s+)?(?:i|we)\s+(?:need|want)\b", text)
               and _ARTIFACT_NOUN_RE.search(text)):
@@ -1093,6 +1145,341 @@ def resolve_intent(request, state=None):
             "evidence": ["high-consequence", _request_span(text, high_consequence)],
         })
     return _synchronize_block_reason(decision, category="intent")
+
+
+def request_control(request, state=None, *, host_control=None):
+    """Project raw wording into one closed, privacy-safe lifecycle control."""
+    if not isinstance(request, str) or not request.strip():
+        raise RuntimeError("request control requires non-empty text")
+    state = dict(state or {})
+    allowed_operations = {
+        "plan", "execute", "review", "status", "cancel", "recover", "unknown"}
+    allowed_relations = {
+        "new", "revise-exact", "start-exact", "continue-active",
+        "repair-active", "read-only", "cancel-generation",
+        "supersede-generation", "quarantine-generation", "unclear"}
+    evidence = []
+    if host_control is not None:
+        if not isinstance(host_control, dict) \
+                or set(host_control) != {"primary_operation", "relation"} \
+                or host_control["primary_operation"] not in allowed_operations \
+                or host_control["relation"] not in allowed_relations:
+            raise RuntimeError("host request control is invalid")
+        primary = host_control["primary_operation"]
+        relation = host_control["relation"]
+        blocked = False
+        block_reason = None
+        explicitness = "host-bound"
+        evidence.append("host-bound-control")
+    else:
+        decision = resolve_intent(request)
+        intent = decision["intent"]
+        primary = {
+            "plan": "plan", "resume": "execute", "execute": "execute",
+            "repair": "recover", "review": "review", "status": "status",
+            "why": "status", "cancel": "cancel", "undo": "recover",
+            "close": "cancel",
+        }.get(intent, "unknown")
+        text = " ".join(_semantic_request(request).casefold().split())
+        explicit_quarantine = bool(
+            re.match(
+                r"^(?:please\s+)?quarantine\b.{0,96}\bloom\b.{0,48}"
+                r"\b(?:plan store|plan state|generation)\b", text)
+            and re.search(r"\b(?:invalid|corrupt|mixed|blocking)\b", text))
+        if explicit_quarantine:
+            primary = "recover"
+        explicit_new = bool(re.search(
+            r"\b(?:new|fresh)\s+standalone\b|"
+            r"\b(?:new|fresh)\s+(?:standalone\s+)?(?:feature|action|work|task|plan)\b|"
+            r"\bstandalone\s+(?:feature|action|work|task)\b|"
+            r"\bnot\s+(?:a\s+)?(?:repair|continuation)\b", text))
+        if explicit_quarantine:
+            relation = "quarantine-generation"
+            evidence.append("explicit-quarantine")
+        elif _EXACT_START_CONTROL_RE.search(text):
+            relation = "start-exact"
+            evidence.append("explicit-start-exact")
+        elif _EXACT_REVISION_CONTROL_RE.search(text):
+            relation = "revise-exact"
+            evidence.append("explicit-revise-exact")
+        elif explicit_new:
+            relation = (
+                "supersede-generation"
+                if state.get("generation_phase") in {"reviewable", "active"}
+                else "new")
+            evidence.append("explicit-new")
+        elif intent == "repair" or re.search(
+                r"\b(?:repair|fix)\b.{0,80}\b(?:active|current)\b|"
+                r"\b(?:active|current)\b.{0,80}\b(?:repair|fix)\b|"
+                r"\bthis\s+is\s+(?:a\s+)?repair\b", text):
+            relation = "repair-active"
+            evidence.append("explicit-repair")
+        elif intent in {"resume", "execute"} or re.search(
+                r"\b(?:continue|resume|keep going|carry on)\b", text):
+            relation = "continue-active"
+            evidence.append("explicit-continuation")
+        elif primary in {"review", "status"} or re.search(
+                r"\b(?:read-only|audit|inspect|verify only|make no changes)\b|"
+                r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
+                r"\bwithout\s+modifying\b", text):
+            relation = "read-only"
+            evidence.append("read-only-control")
+        elif primary == "cancel":
+            relation = "cancel-generation"
+            evidence.append("explicit-cancel")
+        elif primary in {"plan", "execute", "recover"} and state.get(
+                "generation_phase") in {None, "absent", "terminal-completed",
+                                         "terminal-cancelled", "terminal-superseded"}:
+            relation = "new"
+            evidence.append("safe-new-default")
+        else:
+            relation = "unclear"
+            evidence.append("relation-unclear")
+        if relation in {"start-exact", "continue-active"}:
+            primary = "execute"
+        elif relation == "repair-active":
+            primary = "recover"
+        elif relation == "revise-exact":
+            primary = "plan"
+        elif relation == "read-only" and primary not in {"review", "status"}:
+            primary = "review"
+        elif relation == "cancel-generation":
+            primary = "cancel"
+        elif relation == "quarantine-generation":
+            primary = "recover"
+        elif relation in {"new", "supersede-generation"}:
+            primary = "plan"
+        blocked = False if explicit_quarantine else bool(decision["blocked"])
+        block_reason = decision["code"] if blocked else None
+        explicitness = (
+            "explicit" if evidence and evidence[0].startswith("explicit-")
+            else "defaulted" if "safe-new-default" in evidence
+            else "inferred")
+        if state.get("generation_phase") == "active" \
+                and relation == "unclear" and primary in {"plan", "execute", "recover"}:
+            blocked = True
+            block_reason = "RELATION_REQUIRES_OWNER"
+
+    normalized = " ".join(_semantic_request(request).casefold().split())
+    prohibitions = []
+    if re.search(r"\b(?:do not|don't|never|no)\s+(?:implement|execute|start)\b|"
+                 r"\bno implementation\b", normalized):
+        prohibitions.append("implementation")
+    if re.search(
+            r"\b(?:make no changes|do not modify|read-only|no mutation)\b|"
+            r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
+            r"\bwithout\s+modifying\b", normalized):
+        prohibitions.append("mutation")
+    if re.search(r"\bnot\s+(?:a\s+)?repair\b|\bdo not repair\b", normalized):
+        prohibitions.append("repair")
+    if re.search(r"\bnot\s+(?:a\s+)?continuation\b|\bdo not continue\b", normalized):
+        prohibitions.append("continuation")
+    elif re.search(
+            r"\bnot\s+(?:a\s+)?repair\s+(?:or|and)\s+continuation\b",
+            normalized):
+        prohibitions.append("continuation")
+    if re.search(r"\bnot\s+new\s+work\b", normalized):
+        prohibitions.append("new-work")
+    value = {
+        "schema_version": 1,
+        "primary_operation": primary,
+        "relation": relation,
+        "prohibitions": sorted(set(prohibitions)),
+        "explicitness": explicitness,
+        "evidence": sorted(set(evidence))[:16],
+        "blocked": blocked,
+        "block_reason": block_reason,
+    }
+    value["control_sha256"] = _sha(_canonical_json(value))
+    return value
+
+
+def validate_request_control(value):
+    """Validate one closed privacy-safe lifecycle control projection."""
+    fields = {
+        "schema_version", "primary_operation", "relation", "prohibitions",
+        "explicitness", "evidence", "blocked", "block_reason",
+        "control_sha256",
+    }
+    operations = {
+        "plan", "execute", "review", "status", "cancel", "recover", "unknown"}
+    relations = {
+        "new", "revise-exact", "start-exact", "continue-active",
+        "repair-active", "read-only", "cancel-generation",
+        "supersede-generation", "quarantine-generation", "unclear"}
+    prohibition_values = {
+        "implementation", "mutation", "repair", "continuation", "new-work"}
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("primary_operation") not in operations \
+            or value.get("relation") not in relations \
+            or value.get("explicitness") not in {
+                "host-bound", "explicit", "defaulted", "inferred", "unknown"} \
+            or type(value.get("blocked")) is not bool:
+        raise RuntimeError("request control fields are unknown or invalid")
+    prohibitions = value.get("prohibitions")
+    evidence = value.get("evidence")
+    block_reason = value.get("block_reason")
+    if not isinstance(prohibitions, list) or len(prohibitions) > 8 \
+            or prohibitions != sorted(set(prohibitions)) \
+            or any(item not in prohibition_values for item in prohibitions) \
+            or not isinstance(evidence, list) or len(evidence) > 16 \
+            or evidence != sorted(set(evidence)) \
+            or any(not isinstance(item, str)
+                   or re.fullmatch(r"[a-z0-9][a-z0-9-]{0,63}", item) is None
+                   for item in evidence) \
+            or value["blocked"] != isinstance(block_reason, str) \
+            or block_reason is not None and re.fullmatch(
+                r"[A-Z][A-Z0-9_]{0,63}", block_reason) is None:
+        raise RuntimeError("request control values are invalid")
+    claimed = value.get("control_sha256")
+    unsigned = {key: item for key, item in value.items()
+                if key != "control_sha256"}
+    if not isinstance(claimed, str) or re.fullmatch(r"[0-9a-f]{64}", claimed) is None \
+            or claimed != _sha(_canonical_json(unsigned)):
+        raise RuntimeError("request control digest does not match")
+    return value
+
+
+def _apply_lifecycle_request_policy(decision, state, control):
+    """Apply closed lifecycle legality without reinterpreting raw wording."""
+    decision = dict(decision)
+    state = dict(state or {})
+    control = validate_request_control(control)
+    relation = control["relation"]
+    phase = state.get("generation_phase")
+    state_error = state.get("state_error")
+
+    def block(code, recommendation, evidence):
+        return {
+            **decision,
+            "blocked": True,
+            "code": code,
+            "needs_owner": True,
+            "confidence": 1.0,
+            "recommendation": recommendation,
+            "evidence": [*decision.get("evidence", [])[:14], evidence],
+            "block_reason": None,
+        }
+
+    if control["blocked"]:
+        return block(
+            control["block_reason"] or "RELATION_REQUIRES_OWNER",
+            "Choose one explicit lifecycle relation before Loom changes state.",
+            "structured-control-blocked")
+    if "mutation" in control["prohibitions"] and relation != "read-only":
+        return block(
+            "MUTATION_PROHIBITED",
+            "The request prohibits mutation; use a read-only inspection instead.",
+            "mutation-prohibited")
+    if "implementation" in control["prohibitions"] \
+            and relation in {"start-exact", "continue-active", "repair-active"}:
+        return block(
+            "IMPLEMENTATION_PROHIBITED",
+            "The request prohibits implementation; review or revise the plan instead.",
+            "implementation-prohibited")
+    if relation in {"start-exact", "revise-exact"} \
+            and control["explicitness"] != "host-bound":
+        return block(
+            "EXACT_PLAN_REFERENCE_REQUIRED",
+            "Use the exact displayed-plan start or revision control so Loom can bind its presentation digest.",
+            "exact-plan-reference-required")
+
+    terminal = isinstance(phase, str) and phase.startswith("terminal-")
+    if terminal and relation in {
+            "start-exact", "continue-active", "repair-active", "revise-exact",
+            "cancel-generation", "supersede-generation",
+            "quarantine-generation"}:
+        return block(
+            "GENERATION_TERMINAL",
+            "Terminal history is immutable; create a new related generation or inspect it read-only.",
+            "terminal-relation-invalid")
+    if terminal and relation in {"new", "read-only"}:
+        if state_error in {"STALE_LIFECYCLE", "STALE_TIME"}:
+            decision["evidence"] = [
+                *decision.get("evidence", [])[:14],
+                "terminal-historical-drift",
+            ]
+        return decision
+
+    if phase in {None, "absent"} and relation not in {"new", "read-only"}:
+        return block(
+            "NO_ACTIVE_GENERATION",
+            "No active generation can receive this lifecycle relation; create new work or inspect status.",
+            "no-active-generation")
+    if phase == "reviewable" and relation == "repair-active":
+        return block(
+            "GENERATION_NOT_ACTIVE",
+            "The reviewed generation has not started; revise, start, supersede, cancel, or inspect it.",
+            "reviewable-repair-invalid")
+    if phase == "active" and relation == "revise-exact":
+        return block(
+            "PLAN_REVISION_REQUIRES_SUPERSESSION",
+            "Active reviewed semantics are frozen; supersede the generation before replanning.",
+            "active-revision-invalid")
+
+    if state_error in {"STALE_LIFECYCLE", "STALE_TIME"}:
+        if relation == "read-only":
+            return decision
+        if phase == "active":
+            if relation == "repair-active":
+                return {
+                    **decision,
+                    "intent": "repair",
+                    "blocked": False,
+                    "code": "ROUTE_REPAIR",
+                    "needs_owner": False,
+                    "confidence": 1.0,
+                    "recommendation": "",
+                    "evidence": [
+                        *decision.get("evidence", [])[:14],
+                        "explicit-active-repair",
+                    ],
+                    "block_reason": None,
+                }
+            return block(
+                "ACTIVE_WORLD_CHANGED",
+                "The active world changed; explicitly repair/replan it before continuing or superseding.",
+                "active-world-changed")
+        if phase == "reviewable":
+            if relation == "revise-exact":
+                return decision
+            return block(
+                "PLAN_DECISION_STALE",
+                "The reviewed world changed; revise the exact plan before starting it.",
+                "reviewed-world-changed")
+        if relation == "repair-active":
+            return {
+                **decision,
+                "intent": "repair",
+                "blocked": False,
+                "code": "ROUTE_REPAIR",
+                "needs_owner": False,
+                "confidence": 1.0,
+                "recommendation": "",
+                "evidence": [
+                    *decision.get("evidence", [])[:14],
+                    "explicit-legacy-repair",
+                ],
+                "block_reason": None,
+            }
+        return block(
+            "PLAN_DECISION_STALE",
+            "The plan world changed; explicitly repair or revise it before mutation.",
+            "plan-world-changed")
+
+    if state_error and relation != "read-only":
+        result = block(
+            str(state_error), _state_block_recommendation(state),
+            "invalid-lifecycle-state")
+        result["block_reason"] = _lifecycle_block_reason(state)
+        return result
+    if phase == "active" and relation == "unclear":
+        return block(
+            "RELATION_REQUIRES_OWNER",
+            "Choose continue, repair, supersede/new, cancel, or read-only.",
+            "active-relation-unclear")
+    return decision
 
 
 def compose_world_fingerprint(components):
@@ -1557,11 +1944,17 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
     plan_ready = names == loom_gate.SMALL_EVENT_ORDER[:2]
     authorized = names == loom_gate.SMALL_EVENT_ORDER[:3]
     terminal = names == loom_gate.SMALL_EVENT_ORDER
+    terminal_state = terminal and status == "done"
+    generation_phase = (
+        "terminal-completed" if terminal_state else
+        "active" if authorized else
+        "reviewable" if plan_ready else "reviewable")
     if checkpoint.get("repo_state_hash") != lifecycle_repo_hash:
         return {
             "pack_exists": True, "authorized": False,
-            "active_frontier": False, "terminal": False,
+            "active_frontier": False, "terminal": terminal_state,
             "drift": True, "failed": False,
+            "generation_phase": generation_phase,
             "state_error": "STALE_LIFECYCLE",
             "state_detail": "repository state differs from the compact lifecycle checkpoint",
             "state_path": "plans/.loom-small-lifecycle.json",
@@ -1575,13 +1968,14 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
         "authorized": authorized,
         "active_frontier": (
             plan_ready or authorized) and status in {"ready", "in-progress"},
-        "terminal": terminal and status == "done",
+        "terminal": terminal_state,
         "drift": False,
         "failed": False,
+        "generation_phase": generation_phase,
     }
     if verified > current:
         return invalid
-    if (plan_ready or authorized) \
+    if (plan_ready or authorized) and not result["terminal"] \
             and (current - verified).days > route["freshness_window_days"]:
         result.update({
             "plan_ready": False, "authorized": False, "active_frontier": False,
@@ -1595,10 +1989,237 @@ def _inspect_small_lifecycle(pack, lifecycle_repo_hash, today):
     return result
 
 
-def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
+def _apply_manifest_freshness(result, manifest, today):
+    """Apply one freshness contract to historical and v3 plan stores."""
+    result = dict(result)
+    if not (result["plan_ready"] or result["authorized"]) \
+            or result["failed"] or result["terminal"]:
+        return result
+    try:
+        frontmatter, _ = loom_lint.parse_frontmatter(
+            _bounded_read(
+                manifest, MAX_CONFIG_BYTES,
+                "planning-pack manifest").decode("utf-8"))
+        verified = dt.date.fromisoformat(str((frontmatter or {})["last_verified"]))
+        window = int((frontmatter or {})["freshness_window_days"])
+        current = today or dt.datetime.now(dt.timezone.utc).date()
+        if verified > current:
+            raise ValueError("manifest last_verified is in the future")
+        if (current - verified).days > window:
+            prior_phase = result["generation_phase"]
+            result.update({
+                "plan_ready": False,
+                "authorized": False,
+                "active_frontier": False,
+                "terminal": False,
+                "drift": True,
+                "state_error": "STALE_TIME",
+                "state_detail": (
+                    f"planning evidence is {(current - verified).days} days old; "
+                    f"the sealed freshness window is {window} days"),
+                "state_path": "plans/MANIFEST.md",
+                "state_lifecycle": "stale",
+                "state_finding_codes": ["FRESHNESS_EXPIRED"],
+                "state_finding_count": 1,
+                "generation_phase": prior_phase,
+            })
+    except (OSError, UnicodeError, KeyError, TypeError, ValueError) as exc:
+        result.update({
+            "authorized": False,
+            "active_frontier": False,
+            "terminal": False,
+            "failed": True,
+            "state_error": "INVALID_LIFECYCLE",
+            "state_detail": (
+                "planning-pack freshness metadata is invalid: "
+                + " ".join(str(exc).split())[:320]),
+            "state_path": "plans/MANIFEST.md",
+            "state_lifecycle": "invalid",
+            "state_finding_codes": ["INVALID_FRESHNESS"],
+            "state_finding_count": 1,
+        })
+    return result
+
+
+def _apply_v3_freshness(result, generation_root, lifecycle_repo_hash, today):
+    """Apply freshness from the exact human projection used by this v3 plan shape."""
+    result = dict(result)
+    if not (result["plan_ready"] or result["authorized"]) \
+            or result["failed"] or result["terminal"]:
+        return result
+    generation_root = Path(generation_root)
+    manifest = generation_root / "MANIFEST.md"
+    if os.path.lexists(manifest):
+        return _apply_manifest_freshness(result, manifest, today)
+    small_record = generation_root / ".loom-small-lifecycle.json"
+    small_work_order = generation_root / "WO-001.md"
+    if not (os.path.lexists(small_record) or os.path.lexists(small_work_order)):
+        return _apply_manifest_freshness(result, manifest, today)
+    projection = _inspect_small_lifecycle(
+        generation_root, lifecycle_repo_hash, today)
+    if projection is None or projection.get("failed"):
+        result.update({
+            "authorized": False,
+            "active_frontier": False,
+            "terminal": False,
+            "failed": True,
+            "state_error": "INVALID_LIFECYCLE",
+            "state_detail": "compact planning freshness projection is invalid",
+            "state_path": "plans/.loom-small-lifecycle.json",
+            "state_lifecycle": "invalid",
+            "state_finding_codes": ["INVALID_FRESHNESS"],
+            "state_finding_count": 1,
+        })
+        return result
+    if projection.get("state_error") == "STALE_TIME":
+        prior_phase = result["generation_phase"]
+        result.update({
+            "plan_ready": False,
+            "authorized": False,
+            "active_frontier": False,
+            "terminal": False,
+            "drift": True,
+            "state_error": "STALE_TIME",
+            "state_detail": projection["state_detail"],
+            "state_path": "plans/.loom-small-lifecycle.json",
+            "state_lifecycle": "stale",
+            "state_finding_codes": ["FRESHNESS_EXPIRED"],
+            "state_finding_count": 1,
+            "generation_phase": prior_phase,
+        })
+    elif projection.get("state_error") == "STALE_LIFECYCLE" \
+            and not result.get("drift"):
+        result.update({
+            "authorized": False,
+            "active_frontier": False,
+            "terminal": False,
+            "failed": True,
+            "state_error": "INVALID_LIFECYCLE",
+            "state_detail": "compact lifecycle projection disagrees with v3 authority",
+            "state_path": "plans/.loom-small-lifecycle.json",
+            "state_lifecycle": "invalid",
+            "state_finding_codes": ["INVALID_V3_PROJECTION"],
+            "state_finding_count": 1,
+        })
+    return result
+
+
+def _inspect_v3_lifecycle(pack, lifecycle_repo_hash, head_witness, today=None):
+    project = Path(pack).parent
+    try:
+        resolved = loom_plan_store.resolve(project)
+        semantics_value = json.loads(
+            _bounded_read(
+                resolved.generation_root / "plan-semantics.json",
+                MAX_CONFIG_BYTES, "reviewed plan semantics").decode("utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+        reviewed_world = loom_lifecycle_kernel.validate_reviewed_world_observation(
+            json.loads(
+                _bounded_read(
+                    resolved.generation_root / "reviewed-world.json",
+                    MAX_CONFIG_BYTES, "reviewed world observation").decode("utf-8"),
+                object_pairs_hook=loom_lifecycle._strict_object))
+        ledger_value = json.loads(
+            _bounded_read(
+                resolved.generation_root / "lifecycle.json",
+                MAX_CONFIG_BYTES, "lifecycle ledger").decode("utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+        semantics = loom_lifecycle_kernel.validate_reviewed_plan_semantics(
+            semantics_value)
+        if head_witness is None:
+            raise loom_lifecycle_kernel.LifecycleKernelError(
+                "lifecycle head witness is unavailable")
+        index_value = {
+            "schema_version": 1,
+            "project_id": resolved.index.project_id,
+            "generation_id": resolved.index.generation_id,
+            "storage_kind": resolved.index.storage_kind,
+            "generation_path": resolved.index.generation_path,
+            "index_sha256": resolved.index.index_sha256,
+        }
+        if reviewed_world["project_id"] != semantics.project_id \
+                or reviewed_world["generation_id"] != semantics.generation_id \
+                or reviewed_world["state_sha256"] != \
+                semantics.reviewed_world_sha256 \
+                or reviewed_world["observation_sha256"] != \
+                semantics.reviewed_world_observation_sha256:
+            raise loom_lifecycle_kernel.LifecycleKernelError(
+                "reviewed world observation does not match plan semantics")
+        state = loom_lifecycle_kernel.fold(
+            index_value, semantics_value, ledger_value, head_witness)
+    except (
+            OSError, UnicodeError, json.JSONDecodeError, ValueError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError) as exc:
+        return {
+            "pack_exists": True,
+            "plan_ready": False,
+            "authorized": False,
+            "active_frontier": False,
+            "terminal": False,
+            "drift": False,
+            "failed": True,
+            "generation_phase": "invalid",
+            "transition_observation": "ambiguous",
+            "authority_validity": "corrupt",
+            "state_error": "INVALID_LIFECYCLE",
+            "state_detail": loom_block_reason.safe_text(
+                "v3 lifecycle verification failed: "
+                + " ".join(str(exc).split())[:180],
+                "v3 lifecycle verification failed and unsafe detail was withheld"),
+            "state_path": "plans/active-generation.json",
+            "state_lifecycle": "invalid",
+            "state_finding_codes": ["INVALID_V3_AUTHORITY"],
+            "state_finding_count": 1,
+        }
+    terminal = state.generation_phase.startswith("terminal-")
+    exact_world = lifecycle_repo_hash == state.expected_world_sha256
+    result = {
+        "pack_exists": True,
+        "plan_ready": state.generation_phase == "reviewable",
+        "authorized": state.generation_phase == "active",
+        "active_frontier": (
+            state.generation_phase == "active"
+            and state.frontier in {"selected", "blocked"}),
+        "terminal": terminal,
+        "drift": not exact_world,
+        "failed": False,
+        "generation_phase": state.generation_phase,
+        "transition_observation": state.transition_observation,
+        "authority_validity": state.authority_validity,
+        "world_relation": "exact" if exact_world else "changed",
+        "semantic_relation": state.semantic_relation,
+        "action_relation": state.action_relation,
+        "selected_work_order_id": state.selected_work_order_id,
+        "blocked_work_order_id": state.blocked_work_order_id,
+        "generation_id": state.generation_id,
+        "plan_semantics_sha256": state.plan_semantics_sha256,
+        "lifecycle_sha256": state.lifecycle_sha256,
+        "witness_sha256": state.witness_sha256,
+    }
+    if not exact_world:
+        result.update({
+            "state_error": "STALE_LIFECYCLE",
+            "state_detail": (
+                "repository state differs from the latest accepted v3 world"),
+            "state_path": "plans/active-generation.json",
+            "state_lifecycle": "stale",
+            "state_finding_codes": ["REPOSITORY_DRIFT"],
+            "state_finding_count": 1,
+        })
+    result = _apply_v3_freshness(
+        result, resolved.generation_root, lifecycle_repo_hash, today)
+    return normalize_lifecycle_axes(result)
+
+
+def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None,
+                       head_witness=None):
     pack = Path(pack)
     if _path_has_link_or_junction(pack):
         raise RuntimeError("pack lifecycle must not traverse a symlink or junction")
+    if os.path.lexists(pack / loom_plan_store.INDEX_NAME):
+        return _inspect_v3_lifecycle(
+            pack, lifecycle_repo_hash, head_witness, today=today)
     small = _inspect_small_lifecycle(pack, lifecycle_repo_hash, today)
     if small is not None:
         return small
@@ -1677,7 +2298,9 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                         break
                 return {
                     "pack_exists": True, "authorized": False,
-                    "active_frontier": False, "terminal": False,
+                    "active_frontier": False,
+                    "terminal": bool(statuses) and all(
+                        item == "done" for item in statuses),
                     "drift": False, "failed": True,
                     "state_error": "INVALID_LIFECYCLE",
                     "state_detail": (
@@ -1696,6 +2319,12 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
             completions = value["work_order_completions"]
             checkpoint = completions[-1] if completions else events[-1]
             if checkpoint.get("repo_state_hash") != lifecycle_repo_hash:
+                terminal_state = bool(statuses) and all(
+                    item == "done" for item in statuses)
+                generation_phase = (
+                    "terminal-completed" if terminal_state else
+                    "active" if authorized else
+                    "reviewable")
                 receipt = loom_lifecycle.validate_regate_receipt(
                     pack, lifecycle_repo_hash, checkpoint.get("repo_state_hash"))
                 if receipt is not None:
@@ -1706,6 +2335,7 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                             item in {"ready", "in-progress"} for item in statuses),
                         "terminal": bool(statuses) and all(
                             item == "done" for item in statuses),
+                        "generation_phase": generation_phase,
                         "drift": False,
                         "failed": any(item == "invalid" for item in statuses),
                         "regated": True,
@@ -1715,8 +2345,9 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
                     }
                 return {
                     "pack_exists": True, "authorized": False,
-                    "active_frontier": False, "terminal": False,
+                    "active_frontier": False, "terminal": terminal_state,
                     "drift": True, "failed": False,
+                    "generation_phase": generation_phase,
                     "state_error": "STALE_LIFECYCLE",
                     "state_detail": (
                         "repository state differs from the latest sealed lifecycle checkpoint"),
@@ -1751,6 +2382,11 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
         "drift": False,
         "failed": any(item == "invalid" for item in statuses),
     }
+    result["generation_phase"] = (
+        "invalid" if result["failed"] else
+        "absent" if not result["pack_exists"] else
+        "terminal-completed" if result["terminal"] else
+        "active" if result["authorized"] else "reviewable")
     if result["failed"]:
         result["state_error"] = "INVALID_LIFECYCLE"
         result["state_detail"] = "one or more work-order frontier records are invalid"
@@ -1759,48 +2395,31 @@ def _inspect_lifecycle(pack, lifecycle_repo_hash, *, today=None):
         result["state_finding_codes"] = ["INVALID_WORK_ORDER"]
         result["state_finding_count"] = min(
             sum(item == "invalid" for item in statuses), 4096)
-    if (result["plan_ready"] or authorized) and not result["failed"]:
-        manifest = pack / "MANIFEST.md"
-        try:
-            frontmatter, _ = loom_lint.parse_frontmatter(
-                _bounded_read(
-                    manifest, MAX_CONFIG_BYTES,
-                    "planning-pack manifest").decode("utf-8"))
-            verified = dt.date.fromisoformat(str((frontmatter or {})["last_verified"]))
-            window = int((frontmatter or {})["freshness_window_days"])
-            current = today or dt.datetime.now(dt.timezone.utc).date()
-            if verified > current:
-                raise ValueError("manifest last_verified is in the future")
-            if (current - verified).days > window:
-                result.update({
-                    "plan_ready": False,
-                    "authorized": False,
-                    "active_frontier": False,
-                    "terminal": False,
-                    "drift": True,
-                    "state_error": "STALE_TIME",
-                    "state_detail": (
-                        f"planning evidence is {(current - verified).days} days old; "
-                        f"the sealed freshness window is {window} days"),
-                    "state_path": "plans/MANIFEST.md",
-                    "state_lifecycle": "stale",
-                    "state_finding_codes": ["FRESHNESS_EXPIRED"],
-                    "state_finding_count": 1,
-                })
-        except (OSError, UnicodeError, KeyError, TypeError, ValueError) as exc:
-            result.update({
-                "authorized": False,
-                "active_frontier": False,
-                "terminal": False,
-                "failed": True,
-                "state_error": "INVALID_LIFECYCLE",
-                "state_detail": ("planning-pack freshness metadata is invalid: "
-                                 + " ".join(str(exc).split())[:320]),
-                "state_path": "plans/MANIFEST.md",
-                "state_lifecycle": "invalid",
-                "state_finding_codes": ["INVALID_FRESHNESS"],
-                "state_finding_count": 1,
-            })
+    return _apply_manifest_freshness(result, pack / "MANIFEST.md", today)
+
+
+def normalize_lifecycle_axes(value):
+    """Preserve terminal history without treating later world drift as active repair."""
+    if not isinstance(value, dict):
+        raise RuntimeError("lifecycle observation is invalid")
+    result = dict(value)
+    if "generation_phase" not in result:
+        result["generation_phase"] = (
+            "invalid" if result.get("failed") else
+            "absent" if not result.get("pack_exists") else
+            "terminal-completed" if result.get("terminal") else
+            "active" if result.get("authorized") else "reviewable")
+    if result.get("terminal") and result.get("state_error") in {
+            "STALE_LIFECYCLE", "STALE_TIME"}:
+        result["historical_drift"] = True
+        result["drift"] = False
+        result["state_lifecycle"] = "terminal-historical-drift"
+        for key in (
+                "state_error", "state_detail", "state_path",
+                "state_finding_codes", "state_finding_count"):
+            result.pop(key, None)
+    else:
+        result.setdefault("historical_drift", False)
     return result
 
 
@@ -1809,6 +2428,14 @@ def _pack_route_contract(pack, state):
     if not state.get("pack_exists"):
         return None
     pack = Path(pack)
+    if os.path.lexists(pack / loom_plan_store.INDEX_NAME):
+        try:
+            pack = loom_plan_store.resolve(pack.parent).generation_root
+        except loom_plan_store.PlanStoreError as exc:
+            if state.get("state_error") is not None:
+                return None
+            raise RuntimeError(
+                f"indexed planning route identity is unavailable: {exc}") from exc
     manifest = pack / "MANIFEST.md"
     if not manifest.is_file():
         if state.get("state_error") not in {None, "STALE_LIFECYCLE", "STALE_TIME"}:
@@ -2050,7 +2677,8 @@ def _domain_authority_is_explicitly_unavailable(request, decision, domains_resul
 
 
 def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
-                   prepared_time=None, touch_paths=()):
+                   prepared_time=None, touch_paths=(),
+                   lifecycle_witness_reader=None):
     """Read one complete preparation snapshot through owned bounded primitives."""
     pack_rel = pack.relative_to(project.root).as_posix()
     snapshot = loom_survey.workspace_snapshot(
@@ -2059,9 +2687,16 @@ def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
     repo_state = snapshot.state
     inspection = loom_project_inspection.inspect(
         snapshot, target_identity=project.canonical_target_identity)
-    state = _inspect_lifecycle(
+    head_witness = None
+    if os.path.lexists(pack / loom_plan_store.INDEX_NAME):
+        if not callable(lifecycle_witness_reader):
+            head_witness = None
+        else:
+            head_witness = lifecycle_witness_reader(project.project_id)
+    state = normalize_lifecycle_axes(_inspect_lifecycle(
         pack, repo_state.state_hash,
-        today=(prepared_time.date() if prepared_time is not None else None))
+        today=(prepared_time.date() if prepared_time is not None else None),
+        head_witness=head_witness))
     components = {
         "target_survey_hash": repo_state.state_hash,
         "pack_hash": _hash_frontier(pack),
@@ -2077,7 +2712,7 @@ def _observe_world(project, pack, config, config_hash, owner_root, instance_id,
 def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
                        explicit_target=None, candidate_roots=None,
                        explicit_config=None, owner_home=None, now=None,
-                       bound_intent=None):
+                       bound_intent=None, lifecycle_witness_reader=None):
     """Return one immutable, non-authorizing PreparedInvocation."""
     _canonical_uuid(instance_id, "instance_id")
     _canonical_uuid(invocation_id, "invocation_id")
@@ -2100,14 +2735,16 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
         request_touch_paths = _request_touch_paths(request)
         first_repo, first_state, first_components, first_inspection = _observe_world(
             project, pack, config, config_hash, owner_root, instance_id,
-            prepared_time, request_touch_paths)
+            prepared_time, request_touch_paths,
+            lifecycle_witness_reader=lifecycle_witness_reader)
         check_config = _load_config(project.root, explicit_config, owner_root)
         if check_config != (config, config_source, config_hash, config_error):
             raise RuntimeBlocked(
                 "PROJECT_INDETERMINATE", "selected config changed during preparation")
         second_repo, second_state, second_components, second_inspection = _observe_world(
             project, pack, config, config_hash, owner_root, instance_id,
-            prepared_time, request_touch_paths)
+            prepared_time, request_touch_paths,
+            lifecycle_witness_reader=lifecycle_witness_reader)
         if (first_repo, first_state, first_components) != \
                 (second_repo, second_state, second_components) \
                 or first_inspection["receipt_digest"] \
@@ -2125,23 +2762,40 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
     project_inspection = dict(first_inspection)
     decision = resolve_intent(request, state)
     if bound_intent is not None:
-        if bound_intent != "plan":
+        if bound_intent not in {"plan", "execute"}:
             raise RuntimeError("bound intent is invalid")
+        route_code = "ROUTE_PLAN" if bound_intent == "plan" else "ROUTE_EXECUTE"
+        binding_evidence = (
+            "bound-plan-revision" if bound_intent == "plan"
+            else "bound-exact-plan-start")
         decision = {
             **decision,
-            "intent": "plan",
+            "intent": bound_intent,
             "blocked": False,
-            "code": "ROUTE_PLAN",
+            "code": route_code,
             "recommendation": "",
             "evidence": [
                 *[item for item in decision["evidence"]
                   if item not in {"clause-role-conflict", "negated-control"}][:14],
-                "bound-plan-revision",
+                binding_evidence,
             ],
             "confidence": 1.0,
             "needs_owner": False,
             "block_reason": None,
         }
+    lifecycle_control = request_control(
+        request, state=state,
+        host_control=(
+            {
+                "primary_operation": "plan",
+                "relation": "revise-exact",
+            } if bound_intent == "plan" else {
+                "primary_operation": "execute",
+                "relation": "start-exact",
+            } if bound_intent == "execute" else None))
+    if decision["intent"] in {"plan", "resume", "execute", "repair", "cancel"}:
+        decision = _apply_lifecycle_request_policy(
+            decision, state, lifecycle_control)
     try:
         pack_route = (_pack_route_contract(pack, state)
                       if decision["intent"] != "plan" else None)
@@ -2245,32 +2899,6 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
                 + ". No project work or fallback was authorized; repair that config first."),
             "evidence": ["invalid-config"],
             "block_reason": _config_block_reason(config_error),
-        })
-    elif state.get("state_error") in {"STALE_LIFECYCLE", "STALE_TIME"} \
-            and decision["intent"] not in {
-                "status", "why", "undo", "forget", "remember"}:
-        decision.update({
-            "intent": "repair",
-            "blocked": False,
-            "code": "AUTO_REGATE_REQUIRED",
-            "needs_owner": False,
-            "confidence": 1.0,
-            "recommendation": (
-                "Regate the changed plan sections internally before execution."),
-            "evidence": [
-                "elapsed-time-drift" if state.get("state_error") == "STALE_TIME"
-                else "target-drift"],
-        })
-    elif state.get("state_error") and decision["intent"] not in {
-            "status", "why", "undo", "forget", "remember"}:
-        decision.update({
-            "blocked": True,
-            "code": str(state["state_error"]),
-            "needs_owner": True,
-            "confidence": 0.0,
-            "recommendation": _state_block_recommendation(state),
-            "evidence": ["invalid-lifecycle-state"],
-            "block_reason": _lifecycle_block_reason(state),
         })
     _synchronize_block_reason(
         decision,

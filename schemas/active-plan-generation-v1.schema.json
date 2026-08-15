@@ -1,0 +1,26 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/active-plan-generation-v1.schema.json",
+  "title": "Loom active plan generation index",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "project_id", "generation_id", "storage_kind", "generation_path", "index_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "project_id": {"$ref": "#/$defs/id"},
+    "generation_id": {"$ref": "#/$defs/id"},
+    "storage_kind": {"enum": ["generation-dir", "legacy-root"]},
+    "generation_path": {
+      "oneOf": [
+        {"const": "plans"},
+        {"type": "string", "pattern": "^plans/generations/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+        {"type": "string", "pattern": "^plans/generations/revisions/[A-Za-z0-9][A-Za-z0-9._:-]{0,127}/r[0-9]{6}-[0-9a-f]{64}$"}
+      ]
+    },
+    "index_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$"},
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

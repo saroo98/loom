@@ -141,6 +141,11 @@ class RealProcessControlPlaneTests(unittest.TestCase):
                 "instances/*/runtime/projects/*/orchestrations/*.json")
             if path.name != loom_orchestrator.ACTIVE_POINTER_FILE)
 
+    @staticmethod
+    def action_pack(action_path):
+        action = json.loads(Path(action_path).read_text(encoding="utf-8"))
+        return loom_orchestrator._action_pack_root(action)
+
     @classmethod
     def assert_current_action(cls, test, home, expected_action_id):
         pointer = cls.pointer(home)
@@ -192,17 +197,18 @@ class RealProcessControlPlaneTests(unittest.TestCase):
         self.assertEqual(0, opened.returncode, opened.stderr.decode("utf-8", errors="replace"))
         opened_result = self.result(opened)
         action_path = Path(opened_result["action_path"])
+        pack = self.action_pack(action_path)
         action_path.unlink()
         pointer_path = self.pointer_path(self.home)
         pointer_before = pointer_path.read_bytes()
-        pack_before = loom_reliability.deterministic_manifest(self.repo / "plans")
+        pack_before = loom_reliability.deterministic_manifest(pack)
 
         retried = self.run_invoke()
 
         self.assertEqual(2, retried.returncode, retried.stderr.decode("utf-8", errors="replace"))
         self.assertEqual("RECOVERY_DECISION_REQUIRED", self.result(retried)["code"])
         self.assertEqual(pointer_before, pointer_path.read_bytes())
-        self.assertEqual(pack_before, loom_reliability.deterministic_manifest(self.repo / "plans"))
+        self.assertEqual(pack_before, loom_reliability.deterministic_manifest(pack))
         recovery = list(Path(self.home).glob(
             "instances/*/runtime/projects/*/planning-recovery/*"))
         self.assertEqual([], recovery)
@@ -210,6 +216,8 @@ class RealProcessControlPlaneTests(unittest.TestCase):
     def test_mismatched_pointer_blocks_without_mutation(self):
         opened = self.run_invoke()
         self.assertEqual(0, opened.returncode, opened.stderr.decode("utf-8", errors="replace"))
+        opened_result = self.result(opened)
+        pack = self.action_pack(opened_result["action_path"])
         pointer_path = self.pointer_path(self.home)
         pointer = self.pointer(self.home)
         pointer["project_id"] = "p-" + "0" * 32
@@ -217,21 +225,20 @@ class RealProcessControlPlaneTests(unittest.TestCase):
         pointer_path.write_text(
             json.dumps(pointer, sort_keys=True, separators=(",", ":")), encoding="utf-8")
         pointer_before = pointer_path.read_bytes()
-        pack_before = loom_reliability.deterministic_manifest(self.repo / "plans")
+        pack_before = loom_reliability.deterministic_manifest(pack)
 
         retried = self.run_invoke()
 
         self.assertEqual(2, retried.returncode, retried.stderr.decode("utf-8", errors="replace"))
         self.assertEqual("ACTION_POINTER_CONFLICT", self.result(retried)["code"])
         self.assertEqual(pointer_before, pointer_path.read_bytes())
-        self.assertEqual(pack_before, loom_reliability.deterministic_manifest(self.repo / "plans"))
+        self.assertEqual(pack_before, loom_reliability.deterministic_manifest(pack))
 
     def test_recoverable_initialization_process_deaths_converge(self):
         boundaries = (
+            "after-active-pointer",
             "after-initializing-action",
             "after-prepared-action",
-            "after-pack-install",
-            "after-installed-action",
         )
         for boundary in boundaries:
             with self.subTest(boundary=boundary):
@@ -335,7 +342,7 @@ class RealProcessControlPlaneTests(unittest.TestCase):
         seed = json.loads(old_action_path.read_text(
             encoding="utf-8"))["pack_seed"]["manifest"]
         tombstone = self.repo / f".loom-recovery-{opened_result['action_id']}"
-        (self.repo / "plans").rename(tombstone)
+        self.action_pack(old_action_path).rename(tombstone)
         recovery_root = loom_reliability.ensure_private_directory(
             old_action_path.parent.parent,
             [loom_orchestrator.RECOVERY_DIRECTORY, opened_result["action_id"]])

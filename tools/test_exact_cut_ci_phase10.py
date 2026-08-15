@@ -266,6 +266,77 @@ class ExactCutCiPhase10Tests(unittest.TestCase):
                 loom_exact_cut_ci.load_serial_failure_diagnostic(
                     duplicate, result)
 
+    def test_completed_suite_failure_does_not_emit_interrupted_progress(self):
+        """A terminal checkpoint cannot stale an already sealed failure sidecar."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "source"
+            source.mkdir()
+            cut = root / "build" / "cut"
+            cut.parent.mkdir()
+            output = root / "receipt.json"
+            failure_output = root / "serial-failure-diagnostic.json"
+            progress_output = root / "serial-progress-diagnostic.json"
+            progress = loom_exact_cut_ci.loom_suite_harness.seal_progress_checkpoint({
+                "schema_version": 1,
+                "status": "completed",
+                "authorizing": False,
+                "diagnostic_policy_sha256": (
+                    loom_exact_cut_ci.loom_suite_harness._POLICY[
+                        "policy_sha256"]),
+                "selected_modules_sha256": None,
+                "checkpoint_sequence": 2,
+                "completed_test_count": 1,
+                "last_started_test": "tests.ExactFailure",
+                "last_completed_test": "tests.ExactFailure",
+            })
+            operation = {
+                "status": "failed", "returncode": 1,
+                "primary_failure": "nonzero-exit",
+                "survivors_confirmed_zero": True,
+                "protected_roots_unchanged": True,
+                "network_isolation_proven": False,
+                "containment_provider": "windows-job-object",
+                "receipt_sha256": "e" * 64,
+            }
+            error = loom_exact_cut_ci.loom_release.ReleaseError(
+                "private ordinary test failure",
+                details={"suite": {
+                    "passed": False, "capability_complete": False,
+                    "capability_status": "failed", "returncode": 1,
+                    "primary_failure": "nonzero-exit",
+                    "operation_receipt_sha256": "e" * 64,
+                    "operation": operation,
+                    "progress_checkpoint": progress,
+                    "tests_run": 1, "failure_count": 1,
+                    "error_count": 0,
+                    "failed_tests": [{
+                        "test": "tests.ExactFailure", "status": "failed"}],
+                    "failure_diagnostics": [{
+                        "test": "tests.ExactFailure", "status": "failed",
+                        "exception_type": "AssertionError",
+                    }],
+                    "skip_receipts": [], "timings": [],
+                }})
+            with mock.patch.object(
+                    loom_exact_cut_ci.loom_release, "build_public",
+                    return_value={"root_sha256": "a" * 64}), \
+                    mock.patch.object(
+                        loom_exact_cut_ci.loom_release, "verify_cut",
+                        side_effect=error):
+                result = loom_exact_cut_ci.run(
+                    source, cut, output,
+                    failure_diagnostic_output=failure_output,
+                    progress_diagnostic_output=progress_output)
+
+            self.assertEqual("ReleaseError", result["error_type"])
+            diagnostic = loom_exact_cut_ci.load_serial_failure_diagnostic(
+                failure_output, result)
+            self.assertEqual(
+                result["receipt_sha256"],
+                diagnostic["exact_cut_receipt_sha256"])
+            self.assertFalse(progress_output.exists())
+
     def test_native_operation_projections_survive_the_exact_cut_sidecar(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

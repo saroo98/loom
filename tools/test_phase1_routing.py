@@ -81,8 +81,8 @@ class OneCommandRoutingTests(unittest.TestCase):
 
     def test_eight_conversational_controls_route_exactly(self):
         cases = (
-            ("Continue", {"pack_exists": True}, "resume"),
-            ("Resume the plan", {"pack_exists": True}, "resume"),
+            ("Continue", {"pack_exists": True}, "execute"),
+            ("Resume the plan", {"pack_exists": True}, "execute"),
             ("Show me where we are", {}, "status"),
             ("Review this", {}, "review"),
             ("Repair the stale plan", {"drift": True}, "repair"),

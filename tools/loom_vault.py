@@ -21,7 +21,11 @@ import uuid
 from contextlib import closing
 from pathlib import Path
 
-from loom_reliability import _is_trusted_os_alias
+from loom_reliability import (
+    ReliabilityError,
+    _is_trusted_os_alias,
+    validate_exact_tree_manifest,
+)
 
 
 VAULT_SCHEMA_VERSION = 3
@@ -38,6 +42,9 @@ MAX_ENTITY_TYPE = 256
 MAX_PLAN_REVISION_ARCHIVE_STORED_BYTES = 4 * 1024 * 1024
 PLAN_REVISION_ARCHIVE_CHUNK_BYTES = 512 * 1024
 MAX_PLAN_REVISION_ARCHIVE_PARTS = 8
+MAX_PLAN_GENERATION_ARCHIVE_STORED_BYTES = 24 * 1024 * 1024
+PLAN_GENERATION_ARCHIVE_CHUNK_BYTES = 512 * 1024
+MAX_PLAN_GENERATION_ARCHIVE_PARTS = 48
 MAX_RECENT_EFFECTS = 4096
 BUSY_TIMEOUT_MS = 5000
 OWNER_NAMESPACE = uuid.UUID("4d137292-4498-4d60-8127-181d9e270c30")
@@ -77,6 +84,87 @@ class _ClosingConnection(sqlite3.Connection):
 def _canonical(value):
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _validate_plan_generation_archive_payload(payload, project_id):
+    fields = {
+        "schema_version", "project_id", "generation_id", "terminal_phase",
+        "active_index_sha256", "lifecycle_sha256", "plan_semantics_sha256",
+        "tree_sha256", "tree_manifest", "files", "archive_sha256",
+    }
+    digest_fields = {
+        "active_index_sha256", "lifecycle_sha256",
+        "plan_semantics_sha256", "tree_sha256", "archive_sha256",
+    }
+    if not isinstance(project_id, str) or len(project_id) != 34 \
+            or not project_id.startswith("p-") \
+            or any(character not in "0123456789abcdef"
+                   for character in project_id[2:]) \
+            or not isinstance(payload, dict) or set(payload) != fields \
+            or payload.get("schema_version") != 1 \
+            or payload.get("project_id") != project_id \
+            or not isinstance(payload.get("generation_id"), str) \
+            or not 1 <= len(payload["generation_id"]) <= 128 \
+            or payload.get("terminal_phase") not in {
+                "terminal-completed", "terminal-cancelled",
+                "terminal-superseded", "terminal-quarantined",
+            } \
+            or any(not isinstance(payload.get(field), str)
+                   or len(payload[field]) != 64
+                   or any(character not in "0123456789abcdef"
+                          for character in payload[field])
+                   for field in digest_fields) \
+            or not isinstance(payload.get("tree_manifest"), dict) \
+            or not isinstance(payload.get("files"), list) \
+            or not 1 <= len(payload["files"]) <= 512:
+        raise VaultError("plan generation archive payload is invalid")
+    try:
+        validate_exact_tree_manifest(
+            payload["tree_manifest"], max_entries=1024,
+            max_file_bytes=4 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+    except ReliabilityError as exc:
+        raise VaultError("plan generation archive tree manifest is invalid") from exc
+    if payload["tree_sha256"] != payload["tree_manifest"]["root_sha256"]:
+        raise VaultError("plan generation archive tree identity is invalid")
+    manifested_files = [
+        entry for entry in payload["tree_manifest"]["entries"]
+        if entry["kind"] == "file"
+    ]
+    if len(manifested_files) != len(payload["files"]):
+        raise VaultError("plan generation archive file inventory is invalid")
+    total = 0
+    for expected, archived in zip(manifested_files, payload["files"]):
+        if not isinstance(archived, dict) or set(archived) != {
+                "path", "sha256", "size", "content_base64"} \
+                or archived.get("path") != expected["path"] \
+                or archived.get("sha256") != expected["sha256"] \
+                or archived.get("size") != expected["bytes"] \
+                or not isinstance(archived.get("content_base64"), str):
+            raise VaultError("plan generation archive file inventory is invalid")
+        try:
+            raw = base64.b64decode(archived["content_base64"], validate=True)
+        except (ValueError, base64.binascii.Error) as exc:
+            raise VaultError("plan generation archive file is invalid base64") from exc
+        total += len(raw)
+        if len(raw) != expected["bytes"] \
+                or len(raw) > 4 * 1024 * 1024 \
+                or hashlib.sha256(raw).hexdigest() != expected["sha256"] \
+                or base64.b64encode(raw).decode("ascii") != \
+                archived["content_base64"]:
+            raise VaultError("plan generation archive file digest is invalid")
+    if total != payload["tree_manifest"]["total_bytes"] \
+            or total > 16 * 1024 * 1024:
+        raise VaultError("plan generation archive byte inventory is invalid")
+    unsigned_payload = dict(payload)
+    claimed_archive_sha256 = unsigned_payload.pop("archive_sha256")
+    if hashlib.sha256(_canonical(unsigned_payload)).hexdigest() != \
+            claimed_archive_sha256:
+        raise VaultError("plan generation archive content digest is invalid")
+    encoded = _canonical(payload)
+    if not encoded or len(encoded) > MAX_PLAN_GENERATION_ARCHIVE_STORED_BYTES:
+        raise VaultError("plan generation archive exceeds its storage bound")
+    return encoded
 
 
 def memory_context_cost(record):
@@ -1374,6 +1462,257 @@ class OwnerVault:
                 or hashlib.sha256(_canonical(unsigned_payload)).hexdigest() != \
                 claimed_archive_sha256:
             raise VaultError("plan revision archive content digest is invalid")
+        return payload
+
+    def put_plan_generation_archive(
+            self, *, record_id, project_id, payload, created_at):
+        """Atomically retain one terminal plan generation and its forgetting identity."""
+        record_id = _uuid(record_id, "plan generation archive id")
+        if not isinstance(created_at, str) or not created_at:
+            raise VaultError("plan generation creation time is invalid")
+        encoded = _validate_plan_generation_archive_payload(payload, project_id)
+        payload_sha256 = hashlib.sha256(encoded).hexdigest()
+        chunks = [
+            encoded[offset:offset + PLAN_GENERATION_ARCHIVE_CHUNK_BYTES]
+            for offset in range(
+                0, len(encoded), PLAN_GENERATION_ARCHIVE_CHUNK_BYTES)
+        ]
+        if not 1 <= len(chunks) <= MAX_PLAN_GENERATION_ARCHIVE_PARTS:
+            raise VaultError("plan generation archive chunk inventory is invalid")
+        manifest = {
+            "schema_version": 1,
+            "kind": "loom-plan-generation-vault-manifest-v1",
+            "generation_id": payload["generation_id"],
+            "archive_sha256": payload["archive_sha256"],
+            "payload_sha256": payload_sha256,
+            "part_count": len(chunks),
+            "total_bytes": len(encoded),
+        }
+        parts = [{
+            "schema_version": 1,
+            "kind": "loom-plan-generation-vault-part-v1",
+            "index": index,
+            "part_sha256": hashlib.sha256(chunk).hexdigest(),
+            "payload_base64": base64.b64encode(chunk).decode("ascii"),
+        } for index, chunk in enumerate(chunks, 1)]
+        record = self._validate_record({
+            "id": record_id,
+            "scope": "project",
+            "domain": "loom-planning",
+            "project_id": project_id,
+            "category": "plan-generation",
+            "statement": (
+                "Private terminal Loom plan generation retained for recovery "
+                "and owner-controlled forgetting."),
+            "provenance": "observed",
+            "status": "archived",
+            "confidence": 1.0,
+            "evidence_count": 1,
+            "created_at": created_at,
+            "preference_key": None,
+            "preference_value": None,
+        })
+        domain_tag, project_tag, _component_tag, _device_tag = self._tags(record)
+        entity_values = [
+            ("plan-generation-archive", manifest),
+            *[(f"plan-generation-archive-part-{index:04d}", part)
+              for index, part in enumerate(parts, 1)],
+        ]
+
+        def open_entity(connection, row):
+            aad = (
+                f"entity:{self._metadata(connection)['owner_vault_id']}:"
+                f"{row['entity_type']}:{row['entity_id']}").encode()
+            try:
+                return json.loads(self.crypto.open(
+                    row["ciphertext"], aad).decode("utf-8"))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                raise VaultError(
+                    "plan generation archive authentication failed") from exc
+
+        def write(connection):
+            if connection.execute(
+                    "SELECT 1 FROM tombstones WHERE record_id=?",
+                    (record_id,)).fetchone():
+                return {
+                    "record_id": record_id,
+                    "archive_sha256": payload["archive_sha256"],
+                    "idempotent": True,
+                    "forgotten": True,
+                }
+            existing_record = connection.execute(
+                "SELECT * FROM memory_records WHERE record_id=?",
+                (record_id,)).fetchone()
+            existing_entities = connection.execute(
+                "SELECT * FROM state_entities WHERE entity_id=? "
+                "AND (entity_type='plan-generation-archive' "
+                "OR entity_type LIKE 'plan-generation-archive-part-%') "
+                "ORDER BY entity_type",
+                (record_id,)).fetchall()
+            if existing_record is not None or existing_entities:
+                if existing_record is None \
+                        or self._decrypt_record(existing_record) != record:
+                    raise VaultError("plan generation archive identity conflicts")
+                observed = {
+                    row["entity_type"]: open_entity(connection, row)
+                    for row in existing_entities
+                }
+                if observed != dict(entity_values):
+                    raise VaultError("plan generation archive content conflicts")
+                return {
+                    "record_id": record_id,
+                    "archive_sha256": payload["archive_sha256"],
+                    "idempotent": True,
+                    "forgotten": False,
+                }
+            if connection.execute(
+                    "SELECT COUNT(*) FROM memory_records").fetchone()[0] \
+                    >= MAX_MEMORY_RECORDS:
+                raise VaultError("retained memory record bound reached")
+            if connection.execute(
+                    "SELECT COUNT(*) FROM state_entities").fetchone()[0] \
+                    + len(entity_values) > MAX_STATE_ENTITIES:
+                raise VaultError(
+                    "state entity bound reached before plan generation archive")
+            for entity_type, _value in entity_values:
+                if connection.execute(
+                        "SELECT COUNT(*) FROM state_entities WHERE entity_type=?",
+                        (entity_type,)).fetchone()[0] >= MAX_ENTITY_TYPE:
+                    raise VaultError(
+                        "state entity type bound reached before plan generation archive")
+            receipt = {
+                "added": 0, "updated": 0, "deduplicated": 0,
+                "forgotten": 0, "recomputed": 0, "quarantined": 0,
+            }
+            memory_event = self._next_event(
+                connection, kind="memory-upsert", payload=record,
+                scope=record["scope"], domain_tag=domain_tag,
+                project_tag=project_tag)
+            memory_event.update({
+                "scope": record["scope"], "domain": domain_tag,
+                "project_id": project_tag,
+            })
+            self._apply_event(
+                connection, event=memory_event,
+                body={"kind": "memory-upsert", "payload": record},
+                receipt=receipt)
+            for entity_type, value in entity_values:
+                body = {
+                    "kind": "state-entity-upsert",
+                    "payload": {
+                        "entity_type": entity_type,
+                        "entity_id": record_id,
+                        "value": value,
+                    },
+                }
+                event = self._next_event(
+                    connection, kind=body["kind"], payload=body["payload"],
+                    scope="vault", domain_tag=None, project_tag=None)
+                event.update({
+                    "scope": "vault", "domain": None, "project_id": None,
+                })
+                self._apply_event(
+                    connection, event=event, body=body, receipt=receipt)
+            return {
+                "record_id": record_id,
+                "archive_sha256": payload["archive_sha256"],
+                "idempotent": False,
+                "forgotten": False,
+            }
+
+        return self.run_transaction(write)
+
+    def get_plan_generation_archive(self, record_id):
+        record_id = _uuid(record_id, "plan generation archive id")
+        identity = self.identity()["owner_vault_id"]
+        with self._connect() as connection:
+            record_row = connection.execute(
+                "SELECT * FROM memory_records WHERE record_id=?",
+                (record_id,)).fetchone()
+            rows = connection.execute(
+                "SELECT * FROM state_entities WHERE entity_id=? "
+                "AND (entity_type='plan-generation-archive' "
+                "OR entity_type LIKE 'plan-generation-archive-part-%') "
+                "ORDER BY entity_type",
+                (record_id,)).fetchall()
+        if record_row is None and not rows:
+            return None
+        if record_row is None:
+            raise VaultError("plan generation archive metadata is missing")
+        record = self._decrypt_record(record_row)
+        if record.get("category") != "plan-generation" \
+                or record.get("status") != "archived":
+            raise VaultError("plan generation archive metadata is invalid")
+        values = {}
+        for row in rows:
+            aad = (
+                f"entity:{identity}:{row['entity_type']}:{record_id}").encode()
+            try:
+                values[row["entity_type"]] = json.loads(self.crypto.open(
+                    row["ciphertext"], aad).decode("utf-8"))
+            except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+                raise VaultError(
+                    "plan generation archive authentication failed") from exc
+        manifest = values.pop("plan-generation-archive", None)
+        if not isinstance(manifest, dict) \
+                or set(manifest) != {
+                    "schema_version", "kind", "generation_id",
+                    "archive_sha256", "payload_sha256", "part_count",
+                    "total_bytes",
+                } \
+                or manifest.get("schema_version") != 1 \
+                or manifest.get("kind") != \
+                "loom-plan-generation-vault-manifest-v1" \
+                or type(manifest.get("part_count")) is not int \
+                or not 1 <= manifest["part_count"] <= \
+                MAX_PLAN_GENERATION_ARCHIVE_PARTS \
+                or type(manifest.get("total_bytes")) is not int \
+                or not 1 <= manifest["total_bytes"] <= \
+                MAX_PLAN_GENERATION_ARCHIVE_STORED_BYTES:
+            raise VaultError("plan generation archive manifest is invalid")
+        raw_parts = []
+        for index in range(1, manifest["part_count"] + 1):
+            part = values.pop(
+                f"plan-generation-archive-part-{index:04d}", None)
+            if not isinstance(part, dict) \
+                    or set(part) != {
+                        "schema_version", "kind", "index",
+                        "part_sha256", "payload_base64",
+                    } \
+                    or part.get("schema_version") != 1 \
+                    or part.get("kind") != \
+                    "loom-plan-generation-vault-part-v1" \
+                    or part.get("index") != index \
+                    or not isinstance(part.get("part_sha256"), str) \
+                    or not isinstance(part.get("payload_base64"), str):
+                raise VaultError("plan generation archive part is invalid")
+            try:
+                raw = base64.b64decode(part["payload_base64"], validate=True)
+            except (ValueError, base64.binascii.Error) as exc:
+                raise VaultError(
+                    "plan generation archive part is invalid base64") from exc
+            if not raw or len(raw) > PLAN_GENERATION_ARCHIVE_CHUNK_BYTES \
+                    or hashlib.sha256(raw).hexdigest() != part["part_sha256"]:
+                raise VaultError("plan generation archive part digest is invalid")
+            raw_parts.append(raw)
+        if values:
+            raise VaultError("plan generation archive has unexpected parts")
+        encoded = b"".join(raw_parts)
+        if len(encoded) != manifest["total_bytes"] \
+                or hashlib.sha256(encoded).hexdigest() != \
+                manifest.get("payload_sha256"):
+            raise VaultError("plan generation archive payload digest is invalid")
+        try:
+            payload = json.loads(encoded.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError) as exc:
+            raise VaultError("plan generation archive payload is invalid") from exc
+        if not isinstance(payload, dict) \
+                or payload.get("archive_sha256") != manifest.get("archive_sha256") \
+                or payload.get("generation_id") != \
+                manifest.get("generation_id") \
+                or payload.get("project_id") != record["project_id"]:
+            raise VaultError("plan generation archive payload identity is invalid")
+        _validate_plan_generation_archive_payload(payload, record["project_id"])
         return payload
 
     def quarantine_import(self, kind, payload):

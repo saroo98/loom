@@ -59,7 +59,85 @@ def binding():
     }
 
 
+def v2_binding(draft=None):
+    draft = draft or semantic_draft(3)
+    reviewed = loom_plan_presentation.compile_reviewed_semantics(
+        draft,
+        project_id="p-123",
+        generation_id="generation-1",
+        revision=1,
+        reviewed_world_sha256="a" * 64,
+        plan_contract_sha256="b" * 64,
+        reviewed_world_observation_sha256="e" * 64,
+        domain_bindings_sha256=None,
+    )
+    value = binding()
+    value.update({
+        "generation_id": "generation-1",
+        "plan_semantics_sha256": reviewed["plan_semantics_sha256"],
+        "execution_policy": "strict-serial-sequence-v1",
+        "execution_sequence_sha256": hashlib.sha256(json.dumps(
+            ["WO-001", "WO-002", "WO-003"], sort_keys=True,
+            separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest(),
+        "domain_bindings_sha256": None,
+        "reviewed_world_observation_sha256": "e" * 64,
+    })
+    return value
+
+
 class PlanPresentationTests(unittest.TestCase):
+    def test_v2_execution_order_is_bound_by_sequence_not_identifier_spelling(self):
+        """Break caught: v2 silently recovers priority from WO ID spelling."""
+        draft = semantic_draft(2)
+        draft["work_orders"][0]["id"] = "WO-900"
+        draft["work_orders"][1]["id"] = "WO-100"
+        draft["work_orders"][1]["depends_on"] = ["WO-900"]
+        bound = v2_binding(draft)
+        bound["execution_sequence_sha256"] = hashlib.sha256(json.dumps(
+            ["WO-900", "WO-100"], sort_keys=True, separators=(",", ":"),
+            ensure_ascii=False).encode("utf-8")).hexdigest()
+
+        value = loom_plan_presentation.compile_presentation(
+            draft, tier="M", binding=bound)
+
+        self.assertEqual(["WO-900", "WO-100"], value["execution_sequence"])
+        self.assertLess(
+            value["complete_inline_markdown"].index("1. WO-900"),
+            value["complete_inline_markdown"].index("2. WO-100"),
+        )
+        loom_plan_presentation.validate(value)
+
+        with self.assertRaisesRegex(
+                loom_plan_presentation.PresentationError, "identity"):
+            loom_plan_presentation.compile_presentation(
+                draft, tier="M", binding=binding())
+
+    def test_v2_binds_generation_semantics_and_reviewed_execution_sequence(self):
+        """Break caught: mutable pack state is mistaken for reviewed plan meaning."""
+        draft = semantic_draft(3)
+
+        value = loom_plan_presentation.compile_presentation(
+            draft, tier="M", binding=v2_binding(draft))
+
+        self.assertEqual(2, value["schema_version"])
+        self.assertEqual("plan-presentation-v2", value["format"])
+        self.assertEqual("generation-1", value["binding"]["generation_id"])
+        self.assertEqual(
+            ["WO-001", "WO-002", "WO-003"], value["execution_sequence"])
+        self.assertEqual(
+            "strict-serial-sequence-v1", value["execution_policy"])
+        self.assertIn("### Execution sequence", value["complete_inline_markdown"])
+        self.assertLess(
+            value["complete_inline_markdown"].index("1. WO-001"),
+            value["complete_inline_markdown"].index("2. WO-002"),
+        )
+        loom_plan_presentation.validate(value)
+        report = loom_lint.Report()
+        loom_lint.validate_schema(
+            report, "plan-presentation.schema.json", value,
+            "plan-presentation.schema.json")
+        self.assertEqual([], report.errors)
+
     def test_small_plan_is_complete_deterministic_and_schema_valid(self):
         first = loom_plan_presentation.compile_presentation(
             semantic_draft(), tier="S", binding=binding())

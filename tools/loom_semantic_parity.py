@@ -47,12 +47,14 @@ ENTITIES = {
     "orchestration-action": {
         "schema": "schemas/orchestration-action.schema.json",
         "schema_required": ("required",),
-        "schema_version": ("properties", "schema_version", "const"),
+        "schema_current_extras": (
+            "generation_id", "request_control", "lifecycle_transition"),
+        "schema_version": ("properties", "schema_version", "enum"),
         "module": "tools/loom_orchestrator.py",
         "validator": ("module-set", "ACTION_FIELDS"),
         "writer": ("module-dict", "action"),
         "writer_extras": ("action_hash",),
-        "readable_versions": [6, 7, 8, 9, 10],
+        "readable_versions": [6, 7, 8, 9, 10, 11],
         "reader": "_validate_action",
         "compatibility_tests": ("tools/test_production_orchestrator.py",),
         "documentation": "docs/architecture.md",

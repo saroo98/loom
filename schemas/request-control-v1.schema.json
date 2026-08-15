@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "loom/schemas/request-control-v1.schema.json",
+  "title": "Loom structured lifecycle request control",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "primary_operation", "relation", "prohibitions", "explicitness", "evidence", "blocked", "block_reason", "control_sha256"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "primary_operation": {"enum": ["plan", "execute", "review", "status", "cancel", "recover", "unknown"]},
+    "relation": {"enum": ["new", "revise-exact", "start-exact", "continue-active", "repair-active", "read-only", "cancel-generation", "supersede-generation", "quarantine-generation", "unclear"]},
+    "prohibitions": {"type": "array", "maxItems": 8, "uniqueItems": true, "items": {"enum": ["implementation", "mutation", "repair", "continuation", "new-work"]}},
+    "explicitness": {"enum": ["host-bound", "explicit", "defaulted", "inferred", "unknown"]},
+    "evidence": {"type": "array", "maxItems": 16, "uniqueItems": true, "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,63}$"}},
+    "blocked": {"type": "boolean"},
+    "block_reason": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[A-Z][A-Z0-9_]{0,63}$"}]},
+    "control_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

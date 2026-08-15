@@ -19,6 +19,7 @@ import loom_install  # noqa: E402
 import loom_fault_harness  # noqa: E402
 import loom_message  # noqa: E402
 import loom_orchestrator  # noqa: E402
+import loom_plan_store  # noqa: E402
 import loom_release  # noqa: E402
 import loom_reliability  # noqa: E402
 
@@ -41,6 +42,11 @@ def _receipt_quarantine(home, repo, receipt):
             return Path(repo) / receipt["project_quarantine_relative"]
         raise AssertionError("receipt has no quarantine locator")
     return Path(home).joinpath(*receipt["quarantine_relative"].split("/"))
+
+
+def _owned_pack(result):
+    action = json.loads(Path(result["action_path"]).read_text(encoding="utf-8"))
+    return loom_orchestrator._action_pack_root(action)
 
 
 class ControlPlaneRecoveryTests(unittest.TestCase):
@@ -139,7 +145,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         quarantine = _receipt_quarantine(self.home, self.repo, receipt)
         self.assertEqual(first_action["pack_seed"]["manifest"],
                          loom_reliability.exact_tree_manifest(quarantine))
-        self.assertTrue((self.repo / "plans").is_dir())
+        self.assertTrue(_owned_pack(second).is_dir())
 
     def test_historical_v2_recovery_receipt_remains_readable(self):
         first = self.invoke()
@@ -179,10 +185,11 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
     def test_rehashed_v3_recovery_tampering_fails_before_project_mutation(self):
         first = self.invoke()
-        self.supersede()
+        second = self.supersede()
         action_path = Path(first["action_path"])
         original = self.action(first)
-        before = loom_reliability.deterministic_manifest(self.repo / "plans")
+        current_pack = _owned_pack(second)
+        before = loom_reliability.deterministic_manifest(current_pack)
         mutations = {
             "scope": lambda receipt: receipt.update({"quarantine_scope": "project-local"}),
             "relocated-scope": lambda receipt: receipt.update({
@@ -225,7 +232,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                     loom_orchestrator._read_action(
                         action_path, owner_home=self.home, install_root=self.installed)
                 self.assertEqual(
-                    before, loom_reliability.deterministic_manifest(self.repo / "plans"))
+                    before, loom_reliability.deterministic_manifest(current_pack))
 
     def test_pristine_seed_recovers_and_retry_proceeds(self):
         first = self.invoke()
@@ -257,7 +264,8 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                     pointer_path = action_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
                     action_before = action_path.read_bytes()
                     pointer_before = pointer_path.read_bytes()
-                    pack_before = loom_reliability.exact_tree_manifest(repo / "plans")
+                    pack = _owned_pack(first)
+                    pack_before = loom_reliability.exact_tree_manifest(pack)
 
                     loom_orchestrator.invoke(
                         request=request, cwd=repo, home=home,
@@ -267,13 +275,13 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                     self.assertEqual(pointer_before, pointer_path.read_bytes())
                     self.assertEqual(
                         pack_before,
-                        loom_reliability.exact_tree_manifest(repo / "plans"))
+                        loom_reliability.exact_tree_manifest(pack))
                 finally:
                     temporary.cleanup()
 
     def test_owner_modified_pack_blocks_until_explicit_safe_cancellation(self):
         first = self.invoke()
-        manifest = self.repo / "plans" / "MANIFEST.md"
+        manifest = _owned_pack(first) / "MANIFEST.md"
         manifest.write_text(
             manifest.read_text(encoding="utf-8") + "\nOwner-authored content.\n",
             encoding="utf-8")
@@ -312,7 +320,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                 temporary, home, repo = self.make_case()
                 try:
                     first = self.invoke_case(home, repo)
-                    pack = repo / "plans"
+                    pack = _owned_pack(first)
                     if scenario == "unknown":
                         _write(pack / "owner-notes.md", "owner material\n")
                     elif scenario == "file-link":
@@ -448,22 +456,26 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                          cancelled["recovery_receipt"]["source_disposition"])
         self.assertEqual(before, loom_reliability.deterministic_manifest(stage))
 
-    def test_partial_seed_install_recovers_on_next_invocation(self):
-        def interrupted(stage, pack, expected, expected_source_identity):
+    def test_partial_seed_stage_is_preserved_and_requires_owner_recovery(self):
+        def interrupted(stage, *_args, **_kwargs):
+            _write(Path(stage) / "partial-seed.txt", "partial\n")
             raise OSError("seeded interruption")
 
         with mock.patch.object(
-                loom_orchestrator, "_copy_seed_stage", side_effect=interrupted):
+                loom_orchestrator, "_seed_manifest", side_effect=interrupted):
             with self.assertRaisesRegex(OSError, "seeded interruption"):
                 self.invoke()
         self.assertFalse((self.repo / "plans").exists())
-        self.assertEqual(1, len(list(self.repo.glob(".loom-plan-stage-*"))))
+        stages = list(self.repo.glob(".loom-plan-stage-*"))
+        self.assertEqual(1, len(stages))
+        before = loom_reliability.deterministic_manifest(stages[0])
 
-        resumed = self.invoke()
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError,
+                "cannot be proven from the exact v2 seed"):
+            self.invoke()
 
-        self.assertEqual("interrupted-initialization",
-                         resumed["prior_recovery"]["reason"])
-        self.assertTrue(resumed["prior_recovery"]["complete_seed"])
+        self.assertEqual(before, loom_reliability.deterministic_manifest(stages[0]))
 
     def test_quarantine_rename_resumes_idempotently(self):
         self.invoke()
@@ -560,13 +572,14 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         pointer["pointer_hash"] = loom_orchestrator._pointer_hash(pointer)
         pointer_path.write_text(
             json.dumps(pointer, sort_keys=True, separators=(",", ":")), encoding="utf-8")
-        before = loom_reliability.deterministic_manifest(self.repo / "plans")
+        current_pack = _owned_pack(second)
+        before = loom_reliability.deterministic_manifest(current_pack)
 
         with self.assertRaisesRegex(
                 loom_orchestrator.OrchestratorError, "recovery receipt v3 digest"):
             self.invoke()
 
-        self.assertEqual(before, loom_reliability.deterministic_manifest(self.repo / "plans"))
+        self.assertEqual(before, loom_reliability.deterministic_manifest(current_pack))
         self.assertEqual("pending", self.action(second)["status"])
 
     def test_expired_seed_is_recovered_before_retry(self):
@@ -597,7 +610,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
     def test_cancel_preserves_owner_added_empty_directory_and_is_terminal(self):
         opened = self.invoke()
-        owner_directory = self.repo / "plans" / "owner-empty"
+        owner_directory = _owned_pack(opened) / "owner-empty"
         owner_directory.mkdir()
 
         cancelled = loom_orchestrator.cancel(opened["action_path"])
@@ -613,7 +626,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
     @unittest.skipUnless(os.name == "nt", "NTFS alternate streams require Windows")
     def test_cancel_preserves_owner_added_alternate_data_stream(self):
         opened = self.invoke()
-        manifest = self.repo / "plans" / "MANIFEST.md"
+        manifest = _owned_pack(opened) / "MANIFEST.md"
         stream = Path(str(manifest) + ":loom-owner-test")
         try:
             stream.write_bytes(b"owner-stream-bytes")
@@ -631,8 +644,8 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         opened = self.invoke()
         action_path = Path(opened["action_path"])
         action = json.loads(action_path.read_text(encoding="utf-8"))
-        action["pack_seed"]["manifest"] = loom_reliability.deterministic_manifest(
-            self.repo / "plans")
+        pack = _owned_pack(opened)
+        action["pack_seed"]["manifest"] = loom_reliability.deterministic_manifest(pack)
         action["action_hash"] = loom_orchestrator._action_hash(action)
         action_path.write_text(
             json.dumps(action, sort_keys=True, separators=(",", ":")), encoding="utf-8")
@@ -642,7 +655,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         self.assertEqual(1, cancelled["recovery_receipt"]["manifest_schema_version"])
         self.assertEqual("preserved-in-place",
                          cancelled["recovery_receipt"]["source_disposition"])
-        self.assertTrue((self.repo / "plans" / "MANIFEST.md").is_file())
+        self.assertTrue((pack / "MANIFEST.md").is_file())
 
     def test_historical_cancelled_actions_remain_readable_after_upgrade(self):
         for schema_version in (
@@ -662,6 +675,9 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
                         action["schema_version"] = 7
                     elif schema_version == \
                             loom_orchestrator.OWNER_MESSAGE_ACTION_SCHEMA_VERSION:
+                        action = {
+                            key: value for key, value in action.items()
+                            if key in loom_orchestrator.ACTION_FIELDS_V10}
                         action["schema_version"] = schema_version
                         action["owner_message"] = loom_message.build(
                             state="progress",
@@ -683,7 +699,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
                     self.assertNotEqual("ACTION_CORRUPT", retried.get("code"))
                     self.assertIn(retried["status"], {"blocked", "action-required"})
-                    self.assertTrue((repo / "plans" / "MANIFEST.md").is_file())
+                    self.assertTrue((_owned_pack(retried) / "MANIFEST.md").is_file())
                 finally:
                     temporary.cleanup()
 

@@ -200,7 +200,7 @@ class TransparencySurfaceTests(unittest.TestCase):
             f"Forget memory {record['id']}", cwd=project,
             invocation_id="00000000-0000-4000-8000-000000009006",
             now="2026-07-14T10:13:00Z")
-        self.assertEqual(forgotten.status, "completed")
+        self.assertEqual(forgotten.status, "completed", forgotten.to_dict())
         self.assertEqual(loom_memory.inspect_record(
             self.home, self.instance, record["id"])["content_erased"], True)
 

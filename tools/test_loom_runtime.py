@@ -19,8 +19,12 @@ import loom_runtime
 import loom_survey
 import loom_gate
 import loom_lifecycle
+import loom_lifecycle_kernel
 import loom_lint
 from test_loom_lint import good_pack
+from test_lifecycle_kernel import (
+    HEX_B, _canonical_state_inputs, _canonical_world_observation,
+)
 
 
 def git(repo, *args):
@@ -96,6 +100,7 @@ class StableSurveyCountTests(RuntimeFixture):
         self.assertIn(
             "project-inspection-incomplete", prepared.route_contract["evidence"])
 
+
     def test_large_multisection_plan_reaches_prepared_plan_route(self):
         request = "\n".join([
             "Plan a production backend service for a public dictionary.",
@@ -115,6 +120,144 @@ class StableSurveyCountTests(RuntimeFixture):
         self.assertEqual("plan", prepared.intent)
         self.assertFalse(prepared.route_contract["blocked"])
         self.assertNotEqual("INTENT_AMBIGUOUS", prepared.route_contract["code"])
+
+
+class V3LifecycleInspectionTests(RuntimeFixture):
+    def test_v3_tier_s_freshness_uses_the_compact_projection(self):
+        """Break caught: indexed Tier S state was rejected for lacking MANIFEST.md."""
+        generation = self.repo / "plans" / "generations" / "small-generation"
+        generation.mkdir(parents=True)
+        work_order = generation / "WO-001.md"
+        today = dt.date.today()
+        record = generation / ".loom-small-lifecycle.json"
+        self.assertEqual(
+            0, loom_gate.small_start(record, self.repo, work_order, ["cli"]))
+        work_order.write_text(
+            "---\nid: WO-001\ntitle: Small\nstatus: ready\ndepends_on: []\n"
+            "blocks: []\nrouting: strong-coding\nsize: S\ntouches: [README.md]\n"
+            f"last_verified: {today.isoformat()}\n---\n"
+            "## Intent\nSmall change.\n## Context\nBounded.\n"
+            "## Preconditions\nWorld exact.\n## Task\nUpdate README.md.\n"
+            "## Acceptance criteria\n- [ ] update verified\n"
+            "- [ ] Negative: git diff contains only README.md\n"
+            "## Out of scope\nOther files.\n## Escalation triggers\nWorld drift.\n"
+            "## Epistemic notes\n[FACT] baseline.\n## Close-out\nPending.\n",
+            encoding="utf-8")
+        self.assertEqual(0, loom_gate.small_seal(record, self.repo, work_order))
+        checkpoint = json.loads(record.read_text(encoding="utf-8"))["events"][-1]
+        canonical = {
+            "pack_exists": True, "plan_ready": True, "authorized": False,
+            "active_frontier": False, "terminal": False, "drift": False,
+            "failed": False, "generation_phase": "reviewable",
+        }
+
+        current = loom_runtime._apply_v3_freshness(
+            canonical, generation, checkpoint["repo_state_hash"], today)
+        stale = loom_runtime._apply_v3_freshness(
+            canonical, generation, checkpoint["repo_state_hash"],
+            today + dt.timedelta(days=15))
+
+        self.assertFalse(current["failed"])
+        self.assertTrue(current["plan_ready"])
+        self.assertEqual("STALE_TIME", stale["state_error"])
+        self.assertEqual("reviewable", stale["generation_phase"])
+
+    def test_indexed_route_contract_comes_from_the_active_generation(self):
+        """Break caught: continuation reads the obsolete singleton root pack."""
+        index, _semantics, ledger, _witness = _canonical_state_inputs(
+            loom_lifecycle_kernel, authorized=True)
+        generation = self.repo / index["generation_path"]
+        generation.mkdir(parents=True)
+        (self.repo / "plans" / "active-generation.json").write_text(
+            json.dumps(index, sort_keys=True) + "\n", encoding="utf-8")
+        (generation / "lifecycle.json").write_text(
+            json.dumps(ledger, sort_keys=True) + "\n", encoding="utf-8")
+        (generation / "MANIFEST.md").write_text(
+            "---\nartifact: manifest\nproject: fixture\ntier: M\n"
+            "status: active\nlast_verified: " + dt.date.today().isoformat() + "\n"
+            "loom_version: " + loom_lint.current_version() + "\n"
+            "domain_id: cli\ndomain_ids: [cli]\ndomain_coverage: adapter\n"
+            "execution_policy: strict-serial-sequence-v1\n"
+            "execution_sequence: [WO-001, WO-002]\n---\n",
+            encoding="utf-8")
+
+        route = loom_runtime._pack_route_contract(
+            self.repo / "plans", {"pack_exists": True})
+
+        self.assertEqual({"tier": "M", "domains": ["cli"]}, route)
+
+    def test_prepare_invocation_reads_witness_for_each_stable_v3_observation(self):
+        """Break caught: preparation drops encrypted rollback authority."""
+        plans = self.repo / "plans"
+        plans.mkdir()
+        (plans / "active-generation.json").write_text(
+            "{}\n", encoding="utf-8")
+        witness = {"private": "exact-witness-projection"}
+        project_ids = []
+        observed_witnesses = []
+
+        def read_witness(project_id):
+            project_ids.append(project_id)
+            return witness
+
+        def inspect(_pack, _repo_hash, *, today=None, head_witness=None):
+            observed_witnesses.append(head_witness)
+            return {
+                "pack_exists": False,
+                "authorized": False,
+                "active_frontier": False,
+                "terminal": False,
+                "drift": False,
+                "failed": False,
+            }
+
+        with mock.patch.object(
+                loom_runtime, "_inspect_lifecycle", side_effect=inspect):
+            prepared = self.prepare(
+                "Plan a tiny Python command-line greeting tool. Planning only.",
+                lifecycle_witness_reader=read_witness)
+
+        self.assertEqual([prepared.project_id, prepared.project_id], project_ids)
+        self.assertEqual([witness, witness], observed_witnesses)
+
+    def test_active_generation_routes_continuation_from_canonical_authority(self):
+        """Break caught: runtime treats an indexed active generation as no plan."""
+        index, semantics, ledger, witness = _canonical_state_inputs(
+            loom_lifecycle_kernel, authorized=True)
+        generation = self.repo / index["generation_path"]
+        generation.mkdir(parents=True)
+        (self.repo / "plans" / "active-generation.json").write_text(
+            json.dumps(index, sort_keys=True) + "\n", encoding="utf-8")
+        (generation / "plan-semantics.json").write_text(
+            json.dumps(semantics, sort_keys=True) + "\n", encoding="utf-8")
+        (generation / "reviewed-world.json").write_text(
+            json.dumps(
+                _canonical_world_observation(loom_lifecycle_kernel),
+                sort_keys=True) + "\n",
+            encoding="utf-8")
+        (generation / "lifecycle.json").write_text(
+            json.dumps(ledger, sort_keys=True) + "\n", encoding="utf-8")
+        verified = dt.date.today()
+        (generation / "MANIFEST.md").write_text(
+            "---\nexecution_policy: strict-serial-sequence-v1\n"
+            "execution_sequence: [WO-001, WO-002]\n"
+            f"last_verified: {verified.isoformat()}\n"
+            "freshness_window_days: 14\n---\n",
+            encoding="utf-8")
+
+        state = loom_runtime._inspect_lifecycle(
+            self.repo / "plans", HEX_B, today=verified,
+            head_witness=witness)
+        stale = loom_runtime._inspect_lifecycle(
+            self.repo / "plans", HEX_B,
+            today=verified + dt.timedelta(days=15), head_witness=witness)
+
+        self.assertEqual("active", state["generation_phase"])
+        self.assertTrue(state["active_frontier"])
+        self.assertEqual("execute", loom_runtime._continue_route_intent(state))
+        self.assertFalse(stale["authorized"])
+        self.assertEqual("active", stale["generation_phase"])
+        self.assertEqual("STALE_TIME", stale["state_error"])
 
 
 class PlanScopeDecisionTests(RuntimeFixture):
@@ -401,7 +544,7 @@ class IntentRoutingTests(unittest.TestCase):
     def test_every_required_plain_language_phrase_routes_with_state(self):
         cases = [
             ("Build a command-line tool", {}, "plan"),
-            ("Continue", {"pack_exists": True}, "resume"),
+            ("Continue", {"pack_exists": True}, "execute"),
             ("Build the next part", {
                 "pack_exists": True, "authorized": True, "active_frontier": True,
             }, "execute"),
@@ -416,7 +559,7 @@ class IntentRoutingTests(unittest.TestCase):
             ("Forget that preference", {}, "forget"),
             ("Why did you do that?", {}, "why"),
             ("Undo the last Loom change", {}, "undo"),
-            ("Continue", {"pack_exists": True, "drift": True}, "repair"),
+            ("Continue", {"pack_exists": True, "drift": True}, "execute"),
         ]
         for request, state, expected in cases:
             with self.subTest(request=request):
@@ -1024,7 +1167,7 @@ class InvalidWorldStateTests(RuntimeFixture):
                          prepared.domains)
         self.assertTrue(prepared.route_contract["recommendation"])
 
-    def test_drift_routes_to_internal_selective_regate_then_execution(self):
+    def test_active_drift_requires_explicit_selective_regate_then_execution(self):
         pack = self.authorize_fixture_pack()
         (pack / "plan-dependencies.json").write_text(json.dumps({
             "schema_version": 1,
@@ -1039,10 +1182,16 @@ class InvalidWorldStateTests(RuntimeFixture):
             "VALUE = 1\n", encoding="utf-8")
 
         stale = self.prepare("Continue")
-        self.assertEqual(stale.intent, "repair")
-        self.assertEqual(stale.route_contract["code"], "AUTO_REGATE_REQUIRED")
-        self.assertFalse(stale.route_contract["blocked"])
-        self.assertFalse(stale.route_contract["needs_owner"])
+        self.assertEqual(stale.intent, "execute")
+        self.assertEqual(stale.route_contract["code"], "ACTIVE_WORLD_CHANGED")
+        self.assertTrue(stale.route_contract["blocked"])
+        self.assertTrue(stale.route_contract["needs_owner"])
+
+        repair = self.prepare("Repair the drifted active plan.")
+        self.assertEqual(repair.intent, "repair")
+        self.assertEqual(repair.route_contract["code"], "ROUTE_REPAIR")
+        self.assertFalse(repair.route_contract["blocked"])
+        self.assertFalse(repair.route_contract["needs_owner"])
 
         verified = []
         result = loom_lifecycle.reconcile(
@@ -1066,8 +1215,9 @@ class InvalidWorldStateTests(RuntimeFixture):
             key: value for key, value in receipt.items() if key != "receipt_hash"})
         receipt_path.write_text(json.dumps(receipt), encoding="utf-8")
         rejected = self.prepare("Continue")
-        self.assertEqual(rejected.intent, "repair")
-        self.assertEqual(rejected.route_contract["code"], "AUTO_REGATE_REQUIRED")
+        self.assertEqual(rejected.intent, "execute")
+        self.assertEqual(rejected.route_contract["code"], "ACTIVE_WORLD_CHANGED")
+        self.assertTrue(rejected.route_contract["blocked"])
 
     def test_explicit_owner_control_intents_survive_stale_lifecycle(self):
         self.authorize_fixture_pack()

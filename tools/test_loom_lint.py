@@ -228,6 +228,62 @@ class LintTests(unittest.TestCase):
         rep = self.lint()
         self.assertEqual(rep.errors, [], f"unexpected: {rep.findings}")
 
+    def test_execution_sequence_rejects_multiple_ready_projections(self):
+        """Break caught: a lint-clean pack cannot be consumed by the executor."""
+        self.assertTrue(
+            hasattr(loom_lint, "validate_execution_projection"),
+            "execution projection validation is required",
+        )
+        report = loom_lint.Report()
+        manifest = Path(self.root) / "MANIFEST.md"
+        policy = json.loads((
+            Path(__file__).resolve().parents[1] / "contracts" /
+            "plan-execution-policy-v1.json").read_text(encoding="utf-8"))
+        manifest_frontmatter = {
+            "execution_policy": "strict-serial-sequence-v1",
+            "execution_sequence": ["WO-001", "WO-002"],
+            "execution_policy_sha256": policy["policy_sha256"],
+        }
+        work_orders = {
+            "WO-001": {
+                "deps": [], "status": "ready", "path": "WO-001.md",
+            },
+            "WO-002": {
+                "deps": ["WO-001"], "status": "ready", "path": "WO-002.md",
+            },
+        }
+
+        loom_lint.validate_execution_projection(
+            report, manifest, manifest_frontmatter, work_orders)
+
+        self.assertTrue(any(
+            item["code"] == "E27" and "WO-002" in item["msg"]
+            for item in report.errors
+        ), report.findings)
+
+    def test_execution_sequence_rejects_wrong_shared_policy_digest(self):
+        """Break caught: a named policy silently means different bounds to readers."""
+        report = loom_lint.Report()
+        manifest = Path(self.root) / "MANIFEST.md"
+        manifest_frontmatter = {
+            "execution_policy": "strict-serial-sequence-v1",
+            "execution_sequence": ["WO-001"],
+            "execution_policy_sha256": "0" * 64,
+        }
+        work_orders = {
+            "WO-001": {
+                "deps": [], "status": "ready", "path": "WO-001.md",
+            },
+        }
+
+        loom_lint.validate_execution_projection(
+            report, manifest, manifest_frontmatter, work_orders)
+
+        self.assertTrue(any(
+            item["code"] == "E27" and "policy digest" in item["msg"]
+            for item in report.errors
+        ), report.findings)
+
     def test_missing_or_incomplete_plan_dependency_map_blocks(self):
         path = Path(self.root) / "plan-dependencies.json"
         path.unlink()

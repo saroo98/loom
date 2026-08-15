@@ -76,7 +76,7 @@ class ReleaseStandardTests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_exhaustive_suite_ceiling_has_supported_runner_headroom(self):
-        self.assertEqual(2700, loom_release.FULL_SUITE_MAX_SECONDS)
+        self.assertEqual(3300, loom_release.FULL_SUITE_MAX_SECONDS)
         root = Path(__file__).resolve().parents[1]
         workflow_timeouts = {
             "quality.yml": 90,
