@@ -220,7 +220,8 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
         for field, invalid in (
                 ("intent", "execute"),
                 ("needs_owner", False),
-                ("routine_question_count", 1)):
+                ("routine_question_count", 1),
+                ("recommendation", 17)):
             with self.subTest(unsafe_field=field):
                 unsafe_route = dict(route)
                 unsafe_route[field] = invalid

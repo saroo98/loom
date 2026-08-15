@@ -1572,6 +1572,14 @@ def _validate_route(route, *, schema_version=SCHEMA_VERSION):
     if type(route.get("routine_question_count")) is not int \
             or route["routine_question_count"] != 0:
         raise RuntimeError("pure prepared route cannot ask a routine question")
+    if not isinstance(route.get("recommendation"), str) \
+            or len(route["recommendation"]) > 1000 \
+            or not isinstance(route.get("code"), str) or not route["code"] \
+            or not isinstance(route.get("evidence"), list) \
+            or len(route["evidence"]) > 16 \
+            or not all(isinstance(item, str) and len(item) <= 200
+                       for item in route["evidence"]):
+        raise RuntimeError("route text/evidence is invalid")
     if route.get("code") == "PLAN_EXECUTION_CONTRADICTION" \
             and (route.get("intent") != "plan"
                  or route.get("blocked")
@@ -1590,14 +1598,6 @@ def _validate_route(route, *, schema_version=SCHEMA_VERSION):
             or not loom_project_inspection.DIGEST_RE.fullmatch(
                 route["project_inspection_digest"]):
         raise RuntimeError("route project inspection binding is invalid")
-    if not isinstance(route.get("recommendation"), str) \
-            or len(route["recommendation"]) > 1000 \
-            or not isinstance(route.get("code"), str) or not route["code"] \
-            or not isinstance(route.get("evidence"), list) \
-            or len(route["evidence"]) > 16 \
-            or not all(isinstance(item, str) and len(item) <= 200
-                       for item in route["evidence"]):
-        raise RuntimeError("route text/evidence is invalid")
     if route["blocked"] and (not route["needs_owner"]
                               or not route["recommendation"].strip()):
         raise RuntimeError("blocked route requires one owner recommendation")
