@@ -2293,7 +2293,7 @@ _COMPLETED_PLAN_REPLAY_STALE = object()
 
 
 def _completed_plan_replay(directory, prepared, target, *, request, cwd,
-                           owner_home, install_root):
+                           owner_home, install_root, lifecycle_state=None):
     """Return one completed plan only when its exact post-plan world still exists."""
     target = Path(target)
     plans = target / "plans"
@@ -2361,7 +2361,10 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
             continue
         if action.get("survey_hash") != current_survey_hash \
                 or plan_author.get("manifest") != current_manifest:
-            stale_match = True
+            stale_match = stale_match or (
+                lifecycle_state is not None
+                and lifecycle_state.generation_phase == "reviewable"
+                and lifecycle_state.generation_id == action.get("generation_id"))
             continue
         matches.append((
             str(plan_author.get("completed_at", "")),
@@ -8506,7 +8509,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             raise OrchestratorError(exc.code, exc.message) from exc
                         replay = _completed_plan_replay(
                             directory, prepared, target, request=request, cwd=cwd,
-                            owner_home=home, install_root=install_root)
+                            owner_home=home, install_root=install_root,
+                            lifecycle_state=lifecycle_state)
                     replay_stale = replay is _COMPLETED_PLAN_REPLAY_STALE
                     if replay is not None and not replay_stale:
                         result = replay
@@ -9802,12 +9806,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     if completed_plan_replay_stale and not prepared.route_contract["blocked"]:
         values = prepared.to_dict()
         values.pop("prepared_hash")
+        stale_state = {
+            **request_control_state,
+            "state_error": "STALE_LIFECYCLE",
+        }
         values["route_contract"] = loom_runtime._synchronize_block_reason(
             loom_runtime._apply_lifecycle_request_policy(
-                values["route_contract"], {
-                    "generation_phase": "reviewable",
-                    "state_error": "STALE_LIFECYCLE",
-                }, request_control),
+                values["route_contract"], stale_state, request_control),
             category="lifecycle")
         prepared = loom_runtime.PreparedInvocation.build(
             **values, operation_fingerprint=prepared.operation_fingerprint)

@@ -4597,6 +4597,27 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertIsNone(loom_orchestrator._read_active_pointer(action_directory))
         self.assertEqual(mutated, manifest.read_bytes())
 
+    def test_cancelled_completed_plan_same_request_starts_legitimate_new_plan(self):
+        action, _completed = self.complete_machine_authored_plan()
+        action_path = Path(action["action_path"])
+        sealed = action_path.read_bytes()
+        cancelled = loom_orchestrator.invoke(
+            request="Cancel the current reviewed Loom plan.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        self.assertEqual("generation-cancelled", cancelled["code"])
+
+        replacement = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", replacement["status"])
+        self.assertEqual("plan", replacement["intent"])
+        _path, replacement_action, _security = loom_orchestrator._read_action(
+            replacement["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("new", replacement_action["request_control"]["relation"])
+        self.assertEqual(sealed, action_path.read_bytes())
+
     def test_medium_whole_accounting_plan_requires_architecture_and_security(self):
         contract = loom_orchestrator._artifact_contract(
             "M", ["accounting", "desktop"],
