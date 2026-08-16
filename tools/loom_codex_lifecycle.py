@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 
 import loom_orchestrator
 import loom_owner
+import loom_executor_guard
 import loom_reliability
 import loom_runtime
 
@@ -26,6 +27,8 @@ SUPPORTED_EVENTS = {
     "Stop", "SubagentStart", "SubagentStop",
 }
 STRUCTURED_WRITE_TOOLS = {"apply_patch", "Edit", "Write"}
+PROCESS_TOOLS = {"Bash", "Shell", "UnifiedExec", "exec_command", "shell_command"}
+READ_ONLY_TOOLS = {"Read", "Glob", "Grep", "LS"}
 PATH_KEYS = {"path", "file_path", "target_file", "target_path"}
 
 
@@ -37,7 +40,7 @@ def _strict_object(pairs):
     value = {}
     for key, item in pairs:
         if key in value:
-            raise LifecycleError(f"hook event contains duplicate field: {key}")
+            raise LifecycleError("hook event contains a duplicate field")
         value[key] = item
     return value
 
@@ -151,6 +154,74 @@ def _authorized(patterns, relative):
     return any(fnmatch.fnmatchcase(relative, pattern) for pattern in patterns)
 
 
+def _guarded_executor(action):
+    return action.get("intent") in {"execute", "repair"} \
+        and isinstance(action.get("generation_id"), str)
+
+
+def _guard_directory(action):
+    return loom_orchestrator._orchestration_directory(
+        action["owner_home"], action["instance_id"], action["project_id"])
+
+
+def _lifecycle_control_operation(name):
+    if not isinstance(name, str):
+        return None
+    match = re.fullmatch(
+        r"mcp__loom__(invoke|resolve|status|complete|author|start|revise|cancel)",
+        name)
+    if match is None:
+        match = re.fullmatch(
+            r"loom[.:/](invoke|resolve|status|complete|author|start|revise|cancel)",
+            name)
+    return match.group(1) if match is not None else None
+
+
+def _lifecycle_control_tool(name):
+    return _lifecycle_control_operation(name) is not None
+
+
+def _guard_is_frozen(action):
+    directory = _guard_directory(action)
+    try:
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(directory)):
+            return loom_executor_guard.read(
+                directory, action)["freeze"] is not None
+    except loom_reliability.ReliabilityError as exc:
+        raise LifecycleError("executor guard lock is unavailable") from exc
+
+
+def _begin_guarded_operation(action, event, *, operation_kind):
+    directory = _guard_directory(action)
+    try:
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(directory)):
+            return loom_executor_guard.begin_operation(
+                directory, action, event, operation_kind=operation_kind)
+    except loom_reliability.ReliabilityError as exc:
+        raise LifecycleError("executor guard lock is unavailable") from exc
+
+
+def _observe_guarded_post(action, event):
+    if not _guarded_executor(action):
+        return
+    directory = _guard_directory(action)
+    path = loom_executor_guard.guard_path(directory, action)
+    if not path.exists():
+        return
+    name = event.get("tool_name")
+    try:
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(directory)):
+            loom_executor_guard.observe_post(
+                directory, action, event,
+                lifecycle_control=_lifecycle_control_tool(name),
+                nonmutating=name in READ_ONLY_TOOLS)
+    except loom_reliability.ReliabilityError as exc:
+        raise LifecycleError("executor guard lock is unavailable") from exc
+
+
 def _record(home, event, action, *, outcome):
     root = loom_reliability._absolute(home, "Loom lifecycle home", must_exist=True)
     adapters = root / "adapters"
@@ -228,11 +299,20 @@ def _denial_reason(code, paths):
     digest = hashlib.sha256(json.dumps(
         sealed_paths, sort_keys=False, separators=(",", ":"),
         ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
-    boundary = (
-        "outside the active target" if code == "OUTSIDE_PROJECT_TARGET"
-        else "outside declared touches")
+    boundary = {
+        "OUTSIDE_PROJECT_TARGET": "outside the active target",
+        "UNAUTHORIZED_PROJECT_TOUCH": "outside declared touches",
+        "WRITE_SCOPE_UNPROVEN": "whose exact path scope could not be proven",
+        "PROCESS_MUTATION_UNPROVEN": (
+            "because raw process effects are not mechanically confined"),
+        "TOOL_EFFECT_UNPROVEN": (
+            "because this tool's mutation effects are not mechanically known"),
+        "EXECUTION_FROZEN": "because executor cancellation is being reconciled",
+        "EXECUTOR_GUARD_UNPROVEN": (
+            "because exact host-operation coverage is not established"),
+    }[code]
     reason = (
-        f"Loom blocked a structured write {boundary}. code={code}; "
+        f"Loom blocked an active-action operation {boundary}. code={code}; "
         f"path_count={len(sealed_paths)}; path_set_sha256={digest}")
     if len(reason.encode("utf-8")) > MAX_DENIAL_REASON_BYTES:
         raise LifecycleError("structured-write rejection exceeds its bound")
@@ -275,9 +355,10 @@ def handle(event, *, home, install_root):
         paths = _tool_paths(event)
         if not patterns or not paths:
             _record(home, event, action, outcome="scope-unproven")
-            return 0, {"systemMessage":
-                "Loom could not prove this structured write's path scope. "
-                "Verified request transport does not imply tool confinement."}
+            return _denied(
+                action, _denial_reason("WRITE_SCOPE_UNPROVEN", []),
+                "WRITE_SCOPE_UNPROVEN", home=home,
+                install_root=install_root)
         try:
             relatives = [_relative_path(target, event["cwd"], path) for path in paths]
         except LifecycleError as exc:
@@ -293,12 +374,85 @@ def handle(event, *, home, install_root):
             return _denied(
                 action, reason, "UNAUTHORIZED_PROJECT_TOUCH",
                 home=home, install_root=install_root)
+        if _guarded_executor(action):
+            try:
+                _begin_guarded_operation(
+                    action, event, operation_kind="structured-write")
+            except loom_executor_guard.GuardFrozen:
+                _record(home, event, action, outcome="blocked-execution-frozen")
+                return _denied(
+                    action, _denial_reason("EXECUTION_FROZEN", []),
+                    "EXECUTION_FROZEN", home=home,
+                    install_root=install_root)
+            except loom_executor_guard.GuardPending:
+                _record(home, event, action, outcome="blocked-guard-unproven")
+                return _denied(
+                    action, _denial_reason("EXECUTOR_GUARD_UNPROVEN", []),
+                    "EXECUTOR_GUARD_UNPROVEN", home=home,
+                    install_root=install_root)
+            except loom_executor_guard.GuardError:
+                _record(home, event, action, outcome="blocked-guard-invalid")
+                return _denied(
+                    action, _denial_reason("EXECUTOR_GUARD_UNPROVEN", []),
+                    "EXECUTOR_GUARD_UNPROVEN", home=home,
+                    install_root=install_root)
         _record(home, event, action, outcome="authorized-structured-write")
         return 0, None
+    if name == "PreToolUse" and _lifecycle_control_tool(event.get("tool_name")):
+        operation = _lifecycle_control_operation(event.get("tool_name"))
+        if _guarded_executor(action) and operation == "complete":
+            try:
+                frozen = _guard_is_frozen(action)
+            except loom_executor_guard.GuardError:
+                _record(home, event, action, outcome="blocked-guard-invalid")
+                return _denied(
+                    action, _denial_reason("EXECUTOR_GUARD_UNPROVEN", []),
+                    "EXECUTOR_GUARD_UNPROVEN", home=home,
+                    install_root=install_root)
+            if frozen:
+                _record(home, event, action, outcome="blocked-execution-frozen")
+                return _denied(
+                    action, _denial_reason("EXECUTION_FROZEN", []),
+                    "EXECUTION_FROZEN", home=home,
+                    install_root=install_root)
+        _record(home, event, action, outcome="authorized-loom-control")
+        return 0, None
+    if name == "PreToolUse" and event.get("tool_name") in PROCESS_TOOLS:
+        _record(home, event, action, outcome="blocked-unsupervised-process")
+        return _denied(
+            action, _denial_reason("PROCESS_MUTATION_UNPROVEN", []),
+            "PROCESS_MUTATION_UNPROVEN", home=home,
+            install_root=install_root)
+    if name == "PreToolUse" and event.get("tool_name") in READ_ONLY_TOOLS:
+        _record(home, event, action, outcome="authorized-read-only")
+        return 0, None
+    if name == "PreToolUse":
+        _record(home, event, action, outcome="blocked-unproven-tool")
+        return _denied(
+            action, _denial_reason("TOOL_EFFECT_UNPROVEN", []),
+            "TOOL_EFFECT_UNPROVEN", home=home,
+            install_root=install_root)
+    if name == "PostToolUse":
+        _observe_guarded_post(action, event)
     _record(home, event, action, outcome="observed")
     if name in {"PreCompact", "PostCompact", "SubagentStart"}:
         return 0, _context(action, name)
     return 0, None
+
+
+def _failure_output(code):
+    if code not in {"HOOK_EVENT_INVALID", "HOOK_AUTHORITY_UNAVAILABLE"}:
+        raise LifecycleError("hook failure identity is invalid")
+    output = {
+        "systemMessage": (
+            "Loom lifecycle check failed closed. "
+            f"code={code}; no owner or project input was emitted."),
+    }
+    if len(json.dumps(
+            output, separators=(",", ":"), ensure_ascii=True
+            ).encode("utf-8")) > MAX_DENIAL_OUTPUT_BYTES:
+        raise LifecycleError("hook failure output exceeds its bound")
+    return output
 
 
 def main(argv=None):
@@ -309,11 +463,18 @@ def main(argv=None):
     args = parser.parse_args(argv)
     try:
         event = _read_event(sys.stdin.buffer)
+    except LifecycleError:
+        print(json.dumps(
+            _failure_output("HOOK_EVENT_INVALID"), separators=(",", ":")))
+        return 2
+    try:
         code, output = handle(event, home=args.home, install_root=args.install_root)
     except (LifecycleError, loom_orchestrator.OrchestratorError,
-            loom_owner.OwnerError, loom_reliability.ReliabilityError) as exc:
-        print(json.dumps({"systemMessage": f"Loom lifecycle check failed closed: {exc}"},
-                         separators=(",", ":")))
+            loom_owner.OwnerError, loom_reliability.ReliabilityError,
+            loom_executor_guard.GuardError):
+        print(json.dumps(
+            _failure_output("HOOK_AUTHORITY_UNAVAILABLE"),
+            separators=(",", ":")))
         return 2
     if output is not None:
         print(json.dumps(output, separators=(",", ":"), ensure_ascii=False))

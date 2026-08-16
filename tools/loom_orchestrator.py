@@ -64,6 +64,7 @@ import loom_survey
 import loom_transparency
 import loom_vault_adapter
 import loom_execution_chain
+import loom_executor_guard
 
 
 SCHEMA_VERSION = 1
@@ -1359,6 +1360,21 @@ def _validate_action(value, path, *, allow_pre_ux104_reprepare=False):
     if isinstance(value["host_result"], dict) and "plan_revision" in value["host_result"]:
         _validate_plan_revision_record(
             value["host_result"]["plan_revision"], action=value)
+    if isinstance(value["host_result"], dict) \
+            and "executor_quiescence" in value["host_result"]:
+        evidence = value["host_result"]["executor_quiescence"]
+        if not isinstance(evidence, dict):
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "executor quiescence evidence is invalid")
+        if evidence.get("case") == "verified-host-terminal":
+            try:
+                loom_executor_guard.validate_evidence(
+                    Path(path).parent, value, evidence,
+                    project_world_sha256=evidence.get("project_world_sha256"))
+            except loom_executor_guard.GuardError as exc:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT",
+                    "executor quiescence does not match its trusted host ledger") from exc
     if created >= expires \
             or any(not isinstance(value[field], str) or not Path(value[field]).is_absolute()
                    for field in ("owner_home", "install_root", "cwd", "journal_path")) \
@@ -2911,6 +2927,17 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         # authoritative and is changed only by the subsequent repair command.
         _observe_v3_repair_scope(
             action, path, memory, require_action_world=False)
+        action, evidence, _frozen = _seal_trusted_executor_quiescence(
+            path, action, security, owner_home=owner_home,
+            install_root=install_root,
+            reason_code="authority-retirement")
+        if evidence is None:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "repair supersession is frozen safely while Loom waits for "
+                "the exact host operation to close; the current plan remains "
+                "authoritative and new mutation is denied",
+                status="action-required")
         controller, opened = _reopen(action)
         controller.interrupt(opened, code="repair-superseded", now=now)
         action["status"] = "cancelled"
@@ -2967,6 +2994,8 @@ def _cancel_active_request(*, directory, request, owner_home, install_root, now)
             "The named action is not the pending action for this project; nothing was cancelled.")
     result = _cancel_under_lock(
         path, now=now, owner_home=owner_home, install_root=install_root)
+    if result.get("status") == "action-required":
+        return result
     return {
         **result,
         "success": True,
@@ -2985,7 +3014,7 @@ def _transition_project_generation_terminal(
             "REQUEST_CONTROL_INVALID", "generation terminal relation is invalid")
     witness_store = _lifecycle_witness_store(memory, directory, project_id)
     try:
-        resolved, semantics, _ledger, _witness, state = \
+        resolved, semantics, ledger, _witness, state = \
             loom_lifecycle_transition.observe(
                 target, witness_store=witness_store)
     except loom_lifecycle_transition.LifecycleTransitionError as exc:
@@ -2996,31 +3025,110 @@ def _transition_project_generation_terminal(
         raise OrchestratorError(
             "PROJECT_CHANGED", "the active generation belongs to another project")
 
+    private_projection = None
+    if state.generation_phase == "active":
+        try:
+            executor_id = loom_lifecycle_transition._active_executor_action_id(
+                state, ledger)
+        except loom_lifecycle_transition.LifecycleTransitionError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "the active generation has no exact executor identity",
+                status="action-required") from exc
+        executor_path = Path(directory) / f"{executor_id}.json"
+        path, executor, security = _read_action(
+            executor_path, owner_home=owner_home,
+            install_root=install_root)
+        executor, evidence, frozen = _seal_trusted_executor_quiescence(
+            path, executor, security, owner_home=owner_home,
+            install_root=install_root,
+            reason_code="authority-retirement")
+        if evidence is None:
+            return {
+                "status": "action-required",
+                "code": "EXECUTOR_QUIESCENCE_REQUIRED",
+                "success": False,
+                "project_id": project_id,
+                "generation_id": state.generation_id,
+                "action_id": executor["action_id"],
+                "freeze_sha256": frozen["freeze"]["freeze_sha256"],
+                "user_message": (
+                    "The generation transition is frozen safely while Loom "
+                    "waits for the exact host operation to close. The current "
+                    "plan remains authoritative and new mutation is denied."),
+            }
+        private_projection = {
+            "schema_version": 1,
+            "operation": "executor-terminal",
+            "relation": relation,
+            "action_id": executor["action_id"],
+            "preterminal_action_sha256": executor["action_hash"],
+            "source_state_sha256": state.state_sha256,
+            "executor_quiescence": evidence,
+        }
+        # The lifecycle transition writes its target ledger before invoking
+        # project_projection.  Validate the owner-private projection while the
+        # orchestration lock still protects the exact source, then revalidate
+        # it in the callback to detect any intervening private-state change.
+        _validate_executor_terminal_projection(
+            private_projection, source_state=state, source_ledger=ledger,
+            directory=directory, owner_home=owner_home,
+            install_root=install_root, relation=relation,
+            require_preterminal=True)
+
     def project_terminal(_source_state, _decision, target_ledger):
         current = loom_plan_store.resolve(target)
         target_state = loom_lifecycle_kernel.fold(
             current.index, semantics, target_ledger, witness_store.read())
-        _write_v3_pack_projection(current.generation_root, target_state)
+        executor_projection = None
+        if state.generation_phase == "active":
+            executor_projection = _validate_executor_terminal_projection(
+                private_projection, source_state=_source_state,
+                source_ledger=ledger, directory=directory,
+                owner_home=owner_home, install_root=install_root,
+                relation=relation, require_preterminal=True)
         pointer = _read_active_pointer(directory)
-        if pointer is None:
+        pointer_projection = None
+        pending_successor = False
+        if pointer is not None:
+            action_path = Path(directory) / f"{pointer['action_id']}.json"
+            pointer_projection = _read_action(
+                action_path, owner_home=owner_home,
+                install_root=install_root)
+            _path, pointer_action, _security = pointer_projection
+            pending_successor = pointer_action["project_id"] == project_id \
+                and pointer_action.get("generation_id") != state.generation_id \
+                and pointer_action.get("status") not in TERMINAL_ACTION_STATUSES \
+                and _extract_planning_mode(
+                    pointer_action.get("request_control")) in {
+                        "candidate-successor", "current-world-replan"}
+            if not pending_successor \
+                    and (pointer_action["project_id"] != project_id
+                         or pointer_action.get("generation_id") !=
+                         state.generation_id):
+                raise OrchestratorError(
+                    "ACTION_POINTER_CONFLICT",
+                    "the active action does not belong to the generation being retired")
+
+        # All private evidence and pointer identities are proven before the
+        # first projection write.  Recovery may finish a proven partial write,
+        # but invalid evidence can never project a terminal plan.
+        _write_v3_pack_projection(current.generation_root, target_state)
+        if executor_projection is not None:
+            executor_path, executor_action, executor_security = \
+                executor_projection
+            executor_action["status"] = (
+                "superseded" if relation == "supersede-generation"
+                else "cancelled")
+            _write_action(
+                executor_path, executor_action, executor_security)
+        if pointer_projection is None or pending_successor:
             return
-        action_path = Path(directory) / f"{pointer['action_id']}.json"
-        path, action, security = _read_action(
-            action_path, owner_home=owner_home, install_root=install_root)
-        pending_successor = action["project_id"] == project_id \
-            and action.get("generation_id") != state.generation_id \
-            and action.get("status") not in TERMINAL_ACTION_STATUSES \
-            and _extract_planning_mode(action.get("request_control")) in {
-                "candidate-successor", "current-world-replan"}
-        if pending_successor:
-            return
-        if action["project_id"] != project_id \
-                or action.get("generation_id") != state.generation_id:
-            raise OrchestratorError(
-                "ACTION_POINTER_CONFLICT",
-                "the active action does not belong to the generation being retired")
+        path, action, security = pointer_projection
         if action["status"] not in TERMINAL_ACTION_STATUSES:
-            action["status"] = "cancelled"
+            action["status"] = (
+                "superseded" if relation == "supersede-generation"
+                else "cancelled")
             _write_action(path, action, security)
         _clear_active_pointer(directory, action["action_id"])
 
@@ -3046,6 +3154,7 @@ def _transition_project_generation_terminal(
             target, command, witness_store=witness_store,
             envelope_root=Path(directory) / "lifecycle-transitions",
             project_projection=project_terminal,
+            private_projection=private_projection,
             lock_path=_orchestration_lock(directory), _lock_held=True)
     except (
             loom_lifecycle_transition.LifecycleTransitionError,
@@ -4267,6 +4376,14 @@ def _ensure_recovered_action_projection(
             raise OrchestratorError(
                 "LIFECYCLE_PROJECTION_INVALID",
                 "recovered action could not be verified after write")
+    if candidate["intent"] in {"execute", "repair"} \
+            and candidate.get("generation_id") is not None:
+        try:
+            loom_executor_guard.initialize(directory, candidate)
+        except loom_executor_guard.GuardError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_UNAVAILABLE",
+                "recovered executor guard could not be initialized safely") from exc
     pointer = _read_active_pointer(directory)
     expected_pointer = {
         "action_id": candidate["action_id"],
@@ -4534,12 +4651,29 @@ def _recover_pending_v3_lifecycle(
                 action, directory=directory, memory=memory,
                 work_order=action["work_order"], receipt=receipt)
             return
-        if private is not None:
-            raise OrchestratorError(
-                "LIFECYCLE_PROJECTION_INVALID",
-                "non-action lifecycle transition carries private action state")
-        _write_v3_pack_projection(resolved.generation_root, target_state)
         if relation in {"cancel-generation", "supersede-generation"}:
+            executor_projection = None
+            if source_state.generation_phase == "active":
+                executor_projection = _validate_executor_terminal_projection(
+                    private, source_state=source_state,
+                    source_ledger=envelope["source_ledger"],
+                    directory=directory, owner_home=owner_home,
+                    install_root=install_root, relation=relation,
+                    require_preterminal=False)
+            elif private is not None:
+                raise OrchestratorError(
+                    "LIFECYCLE_PROJECTION_INVALID",
+                    "idle generation terminal transition carries executor state")
+            _write_v3_pack_projection(resolved.generation_root, target_state)
+            if executor_projection is not None:
+                executor_path, executor, executor_security = executor_projection
+                expected_terminal = (
+                    "superseded" if relation == "supersede-generation"
+                    else "cancelled")
+                if executor["status"] == "pending":
+                    executor["status"] = expected_terminal
+                    _write_action(
+                        executor_path, executor, executor_security)
             pointer = _read_active_pointer(directory)
             if pointer is None:
                 return
@@ -4557,6 +4691,12 @@ def _recover_pending_v3_lifecycle(
                     else "cancelled")
                 _write_action(path, action, security)
             _clear_active_pointer(directory, action["action_id"])
+            return
+        if private is not None:
+            raise OrchestratorError(
+                "LIFECYCLE_PROJECTION_INVALID",
+                "non-action lifecycle transition carries private action state")
+        _write_v3_pack_projection(resolved.generation_root, target_state)
 
     try:
         return loom_lifecycle_transition.recover_pending(
@@ -8971,6 +9111,9 @@ AUTHORIZED_CONTINUATION_FIELDS = {
 }
 AUTHORIZED_CONTINUATION_REJECTION_CODES = {
     "OUTSIDE_PROJECT_TARGET", "UNAUTHORIZED_PROJECT_TOUCH",
+    "WRITE_SCOPE_UNPROVEN", "PROCESS_MUTATION_UNPROVEN",
+    "TOOL_EFFECT_UNPROVEN", "EXECUTION_FROZEN",
+    "EXECUTOR_GUARD_UNPROVEN",
 }
 
 
@@ -10590,6 +10733,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         action["initial_pack_hash"] = _pack_hash(Path(target) / "plans")
     action = _write_action(path, action, action_security)
     if prepared.intent != "plan":
+        if prepared.intent in {"execute", "repair"} \
+                and action.get("generation_id") is not None:
+            try:
+                loom_executor_guard.initialize(path.parent, action)
+            except loom_executor_guard.GuardError as exc:
+                raise OrchestratorError(
+                    "EXECUTOR_GUARD_UNAVAILABLE",
+                    "the exact host-operation guard could not be initialized") from exc
         _write_active_pointer(
             path.parent, action_id=action_id, project_id=prepared.project_id)
     return _pending_action_result(
@@ -10769,6 +10920,20 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
         raise OrchestratorError(
             "ACTION_TERMINAL", f"action is already {action['status']}",
             status=action["status"])
+    if action["intent"] in {"execute", "repair"} \
+            and action.get("generation_id") is not None:
+        try:
+            guard = loom_executor_guard.read(path.parent, action)
+        except loom_executor_guard.GuardError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_INVALID",
+                "executor completion guard is invalid or unavailable") from exc
+        if guard["freeze"] is not None:
+            raise OrchestratorError(
+                "EXECUTION_FROZEN",
+                "executor completion is unavailable while exact authority "
+                "retirement is waiting for host-operation closure",
+                status="action-required")
     instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
     if instant > loom_runtime._parse_time(action["expires_at"]):
         controller, opened = _reopen(action)
@@ -11090,6 +11255,120 @@ def cancel(action_path, *, now=None, owner_home=None, install_root=None):
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
 
 
+def _validate_executor_terminal_projection(
+        value, *, source_state, source_ledger, directory, owner_home,
+        install_root, relation, require_preterminal):
+    fields = {
+        "schema_version", "operation", "relation", "action_id",
+        "preterminal_action_sha256", "source_state_sha256",
+        "executor_quiescence",
+    }
+    try:
+        expected_action_id = \
+            loom_lifecycle_transition._active_executor_action_id(
+                source_state, source_ledger)
+    except loom_lifecycle_transition.LifecycleTransitionError as exc:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal projection has no active lifecycle subject") from exc
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 1 \
+            or value.get("operation") != "executor-terminal" \
+            or value.get("relation") != relation \
+            or value.get("action_id") != expected_action_id \
+            or value.get("source_state_sha256") != source_state.state_sha256 \
+            or not isinstance(value.get("preterminal_action_sha256"), str) \
+            or re.fullmatch(
+                r"[0-9a-f]{64}", value["preterminal_action_sha256"]) is None:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal projection does not match lifecycle authority")
+    path, action, security = _read_action(
+        Path(directory) / f"{expected_action_id}.json",
+        owner_home=owner_home, install_root=install_root)
+    expected_terminal = (
+        "superseded" if relation == "supersede-generation" else "cancelled")
+    if action["project_id"] != source_state.project_id \
+            or action.get("generation_id") != source_state.generation_id \
+            or action["intent"] not in {"execute", "repair"} \
+            or action["status"] not in {"pending", expected_terminal} \
+            or require_preterminal \
+            and action["action_hash"] != value["preterminal_action_sha256"]:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal action does not match its sealed projection")
+    evidence = value["executor_quiescence"]
+    try:
+        loom_executor_guard.validate_evidence(
+            directory, action, evidence,
+            project_world_sha256=source_state.expected_world_sha256)
+    except loom_executor_guard.GuardError as exc:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal evidence does not match its trusted host ledger") \
+            from exc
+    if evidence.get("terminal_state") != "cancelled":
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal evidence has the wrong terminal state")
+    return path, action, security
+
+
+def _executor_lifecycle_state(action, directory, *, owner_home, install_root):
+    target = Path(action["explicit_target"] or action["cwd"])
+    instance_id, memory = _memory_backend(owner_home, install_root, target)
+    if instance_id != action["instance_id"]:
+        raise OrchestratorError(
+            "ACTION_OWNER_MISMATCH", "executor belongs to another owner instance")
+    witness_store = _lifecycle_witness_store(
+        memory, directory, action["project_id"])
+    try:
+        _resolved, _semantics, ledger, _witness, state = \
+            loom_lifecycle_transition.observe(
+                target, witness_store=witness_store)
+        active_action_id = loom_lifecycle_transition._active_executor_action_id(
+            state, ledger)
+    except loom_lifecycle_transition.LifecycleTransitionError as exc:
+        raise OrchestratorError(
+            "INVALID_LIFECYCLE",
+            "executor lifecycle authority cannot be observed safely") from exc
+    if state.generation_phase != "active" \
+            or state.project_id != action["project_id"] \
+            or state.generation_id != action.get("generation_id") \
+            or active_action_id != action["action_id"]:
+        raise OrchestratorError(
+            "ACTION_IDENTITY_CHANGED",
+            "executor no longer matches the exact active lifecycle authority")
+    return state, ledger
+
+
+def _seal_trusted_executor_quiescence(
+        path, action, security, *, owner_home, install_root, reason_code):
+    directory = Path(path).parent
+    state, _ledger = _executor_lifecycle_state(
+        action, directory, owner_home=owner_home,
+        install_root=install_root)
+    try:
+        frozen = loom_executor_guard.freeze(
+            directory, action, reason_code=reason_code)
+        evidence = loom_executor_guard.seal_quiescence(
+            directory, action,
+            project_world_sha256=state.expected_world_sha256,
+            terminal_state="cancelled")
+    except loom_executor_guard.GuardPending:
+        return action, None, frozen
+    except loom_executor_guard.GuardError as exc:
+        raise OrchestratorError(
+            "EXECUTOR_GUARD_INVALID",
+            "executor cancellation guard is invalid or unsafe") from exc
+    action["host_result"] = {
+        **(action.get("host_result") or {}),
+        "executor_quiescence": evidence,
+    }
+    action = _write_action(path, action, security)
+    return action, evidence, frozen
+
+
 def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=None):
     path, action, action_security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
@@ -11102,6 +11381,28 @@ def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=N
         raise OrchestratorError(
             "ACTION_TERMINAL", f"action is already {action['status']}",
             status=action["status"])
+    executor_action = action["status"] == "pending" \
+        and action.get("generation_id") is not None \
+        and action["intent"] in {"execute", "repair"}
+    if executor_action:
+        action, evidence, frozen = _seal_trusted_executor_quiescence(
+            path, action, action_security,
+            owner_home=owner_home or action["owner_home"],
+            install_root=install_root or action["install_root"],
+            reason_code="authority-retirement")
+        if evidence is None:
+            return {
+                "status": "action-required",
+                "code": "EXECUTOR_QUIESCENCE_REQUIRED",
+                "success": False,
+                "action_id": action["action_id"],
+                "session_id": action["session_id"],
+                "freeze_sha256": frozen["freeze"]["freeze_sha256"],
+                "user_message": (
+                    "Cancellation is frozen safely while Loom waits for the "
+                    "exact host operation to close. The current plan remains "
+                    "authoritative and no new mutation or process operation is allowed."),
+            }
     if action["status"] == "pending":
         controller, opened = _reopen(action)
         controller.interrupt(opened, code="owner-cancelled", now=now)

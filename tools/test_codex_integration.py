@@ -120,6 +120,12 @@ class CodexIntegrationTests(unittest.TestCase):
         self.assertIn(str(self.launcher), command_text)
         self.assertNotIn("PLUGIN_ROOT", command_text)
 
+    def test_pre_tool_hook_covers_unknown_and_process_capable_tools(self):
+        """Break caught: process or newly introduced tools run before Loom can deny them."""
+        installed = loom_codex_integration._commands(self.launcher, self.home)
+        self.assertEqual(".*", installed["PreToolUse"]["matcher"])
+        self.assertEqual(".*", installed["PostToolUse"]["matcher"])
+
     def test_unowned_loom_hook_fails_closed(self):
         hooks = {"hooks": {"UserPromptSubmit": [{
             "hooks": [{"type": "command", "command": "python ~/.loom/other.py"}]}]}}

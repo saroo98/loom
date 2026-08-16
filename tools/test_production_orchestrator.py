@@ -28,6 +28,7 @@ import loom_lifecycle  # noqa: E402
 import loom_lifecycle_kernel  # noqa: E402
 import loom_lifecycle_transition  # noqa: E402
 import loom_codex_lifecycle  # noqa: E402
+import loom_executor_guard  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_adapter_protocol  # noqa: E402
 import loom_domain_discovery  # noqa: E402
@@ -886,6 +887,20 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         return action, completed
 
+    def arm_executor_guard(self, started, *, suffix="1"):
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-" + suffix,
+                "turn_id": "host-turn-" + suffix,
+                "tool_use_id": "start-" + suffix,
+                "tool_name": "mcp__loom__start", "tool_input": {},
+            }, lifecycle_control=True)
+        return path, action
+
     def test_legacy_test_backend_requires_exact_disposable_marker(self):
         marker = self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER
         self.assertTrue(loom_orchestrator._disposable_test_legacy_backend_allowed(
@@ -1664,6 +1679,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertIsNotNone(recovered_action["initial_pack_hash"])
         self.assertEqual(
             "completed", recovered_action["lifecycle_transition"]["status"])
+        recovered_guard = loom_executor_guard.read(
+            execution_action_path.parent, recovered_action)
+        self.assertEqual("awaiting-host", recovered_guard["coverage_state"])
         pointer = loom_orchestrator._read_active_pointer(
             execution_action_path.parent)
         self.assertEqual(execution_action_id, pointer["action_id"])
@@ -2182,6 +2200,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=completed[
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
         action_path, sealed_action, _security = loom_orchestrator._read_action(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
@@ -2874,6 +2893,55 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
             self.assertEqual("PLAN_PROJECTION_INVALID", raised.exception.code)
 
+    def test_repair_supersession_waits_for_exact_open_operation_closure(self):
+        """Repair cannot retire a live executor while a guarded write is open."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action = self.arm_executor_guard(started)
+        write_event = {
+            "hook_event_name": "PreToolUse", "cwd": str(self.repo),
+            "session_id": "host-session-1", "turn_id": "host-turn-2",
+            "tool_use_id": "write-before-repair", "tool_name": "Write",
+            "tool_input": {"file_path": "src/app.py"},
+        }
+        loom_executor_guard.begin_operation(
+            path.parent, action, write_event,
+            operation_kind="structured-write")
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as pending:
+            loom_orchestrator.invoke(
+                request="Repair the broken Loom lifecycle.", cwd=self.repo,
+                home=self.home, install_root=self.installed)
+
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", pending.exception.code)
+        _path, still_active, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", still_active["status"])
+        self.assertEqual(
+            still_active["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "authority-retirement",
+            loom_executor_guard.read(path.parent, still_active)[
+                "freeze"]["reason_code"])
+
+        loom_executor_guard.observe_post(
+            path.parent, still_active,
+            {**write_event, "hook_event_name": "PostToolUse"})
+        repairing = loom_orchestrator.invoke(
+            request="Repair the broken Loom lifecycle.", cwd=self.repo,
+            home=self.home, install_root=self.installed)
+        self.assertEqual("action-required", repairing["status"])
+        self.assertEqual("repair", repairing["intent"])
+        _path, retired, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", retired["status"])
+
     def test_cancelled_attempt_can_be_repaired_and_resumed_without_replanning(self):
         """Break caught: explicit v3 repair falls into the historical pack reconciler."""
         plan_action, planned = self.complete_machine_authored_plan()
@@ -2882,13 +2950,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=planned[
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
         loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
         _write(self.repo / "src" / "app.py", "VALUE = 2\n")
 
         repairing = loom_orchestrator.invoke(
-            request="Repair the failed active action.", cwd=self.repo,
+            request="Repair the broken Loom lifecycle.", cwd=self.repo,
             home=self.home, install_root=self.installed)
 
         self.assertEqual("action-required", repairing["status"])
@@ -2934,6 +3003,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=planned[
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
         loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
@@ -2950,7 +3020,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 side_effect=interrupt_repair):
             with self.assertRaises(loom_orchestrator.OrchestratorError):
                 loom_orchestrator.invoke(
-                    request="Repair the failed active action.", cwd=self.repo,
+                    request="Repair the broken Loom lifecycle.", cwd=self.repo,
                     home=self.home, install_root=self.installed)
 
         transition_root = (
@@ -2999,12 +3069,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=planned[
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
         loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
         _write(self.repo / "src" / "app.py", "VALUE = 2\n")
         repairing = loom_orchestrator.invoke(
-            request="Repair the failed active action.", cwd=self.repo,
+            request="Repair the broken Loom lifecycle.", cwd=self.repo,
             home=self.home, install_root=self.installed)
         repair_result = self.root / "repair-recovery-result.json"
         _write(repair_result, json.dumps({
@@ -3169,6 +3240,171 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertIsNone(
             loom_orchestrator._read_active_pointer(action_path.parent))
 
+    def test_active_generation_cancel_freezes_without_terminal_host_proof(self):
+        """Break caught: generation cancellation erases a live executor authority."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        action_path = Path(started["action_path"])
+        before = loom_plan_store.resolve(self.repo)
+        before_ledger = json.loads(
+            (before.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+
+        pending = loom_orchestrator.invoke(
+            request="Cancel the current Loom plan generation.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", pending["status"])
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", pending["code"])
+        after = loom_plan_store.resolve(self.repo)
+        self.assertEqual(before.generation_id, after.generation_id)
+        self.assertEqual(
+            before_ledger,
+            json.loads((after.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8")))
+        path, action, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", action["status"])
+        self.assertEqual(
+            action["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "authority-retirement",
+            loom_executor_guard.read(
+                path.parent, action)["freeze"]["reason_code"])
+
+    def test_active_generation_cancel_uses_exact_closed_host_guard(self):
+        """Break caught: no production path writes generation quiescence evidence."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
+
+        cancelled = loom_orchestrator.invoke(
+            request="Cancel the current Loom plan generation.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("generation-cancelled", cancelled["code"])
+        resolved = loom_plan_store.resolve(self.repo)
+        ledger = json.loads(
+            (resolved.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual("generation-cancelled", ledger["events"][-1]["event_type"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        _path, terminal, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", terminal["status"])
+        evidence = terminal["host_result"]["executor_quiescence"]
+        self.assertEqual("verified-host-terminal", evidence["case"])
+        loom_executor_guard.validate_evidence(
+            path.parent, terminal, evidence,
+            project_world_sha256=evidence["project_world_sha256"])
+
+    def test_terminal_generation_recovery_revalidates_frozen_host_evidence(self):
+        """Break caught: restart clears a prepared terminal transition unchecked."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
+        real_transition = loom_orchestrator.loom_lifecycle_transition.transition
+
+        def interrupt_terminal(*args, **kwargs):
+            if args[1]["relation"] == "cancel-generation":
+                kwargs["fault_at"] = "after-project-commit"
+            return real_transition(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_orchestrator.loom_lifecycle_transition, "transition",
+                side_effect=interrupt_terminal), \
+                self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.invoke(
+                request="Cancel the current Loom plan generation.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+
+        _path, prepared, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", prepared["status"])
+        self.assertEqual(
+            prepared["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "verified-host-terminal",
+            prepared["host_result"]["executor_quiescence"]["case"])
+
+        status = loom_orchestrator.invoke(
+            request="Status", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", status["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        _path, recovered, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", recovered["status"])
+        envelope = next(
+            value for value in (
+                json.loads(item.read_text(encoding="utf-8"))
+                for item in (path.parent / "lifecycle-transitions").glob("*.json"))
+            if value.get("command", {}).get("relation") == "cancel-generation")
+        self.assertEqual("completed", envelope["status"])
+
+    def test_generation_cancel_validates_executor_projection_before_plan_write(self):
+        """Invalid private executor evidence cannot project a terminal plan first."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, _action = self.arm_executor_guard(started)
+        before = loom_reliability.exact_tree_manifest(
+            loom_plan_store.resolve(self.repo).generation_root)
+
+        with mock.patch.object(
+                loom_orchestrator, "_validate_executor_terminal_projection",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "LIFECYCLE_PROJECTION_INVALID",
+                    "seeded private projection rejection")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError):
+                loom_orchestrator.invoke(
+                    request="Cancel the current Loom plan generation.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(loom_reliability.exact_tree_manifests_equal(
+            before, loom_reliability.exact_tree_manifest(
+                loom_plan_store.resolve(self.repo).generation_root)))
+        self.assertEqual(
+            started["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+
     def test_exact_start_and_revision_race_has_one_live_attempt(self):
         """Start and revise serialize without splitting lifecycle authority."""
         plan_action, planned = self.complete_machine_authored_plan()
@@ -3243,8 +3479,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("pending", live_action["status"])
         self.assertEqual(accepted[0]["intent"], live_action["intent"])
 
-    def test_exact_start_and_generation_cancel_race_ends_cancelled(self):
-        """Concurrent start/cancel commands linearize to one terminal generation."""
+    def test_exact_start_and_generation_cancel_race_has_one_safe_linearization(self):
+        """Concurrent start/cancel either retires review or freezes live execution."""
         plan_action, planned = self.complete_machine_authored_plan()
         presentation = planned["plan_presentation"]["presentation_sha256"]
         real_resolve_intent = loom_orchestrator.loom_runtime.resolve_intent
@@ -3288,19 +3524,37 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 lambda operation: operation(),
                 (attempt_start, attempt_cancel)))
 
-        self.assertEqual(
-            1, sum(item.get("code") == "generation-cancelled"
-                   for item in outcomes), outcomes)
+        cancelled = [
+            item for item in outcomes
+            if item.get("code") == "generation-cancelled"]
         resolved = loom_plan_store.resolve(self.repo)
         ledger = json.loads(
             (resolved.generation_root / "lifecycle.json").read_text(
                 encoding="utf-8"))
         events = [item["event_type"] for item in ledger["events"]]
-        self.assertEqual(1, events.count("generation-cancelled"))
         self.assertLessEqual(events.count("implementation-authorized"), 1)
         self.assertLessEqual(events.count("work-order-started"), 1)
-        self.assertIsNone(loom_orchestrator._read_active_pointer(
-            Path(plan_action["action_path"]).parent))
+        directory = Path(plan_action["action_path"]).parent
+        pointer = loom_orchestrator._read_active_pointer(directory)
+        if cancelled:
+            self.assertEqual(1, len(cancelled), outcomes)
+            self.assertEqual(1, events.count("generation-cancelled"))
+            self.assertIsNone(pointer)
+        else:
+            waiting = [
+                item for item in outcomes
+                if item.get("code") == "EXECUTOR_QUIESCENCE_REQUIRED"]
+            self.assertEqual(1, len(waiting), outcomes)
+            self.assertEqual(0, events.count("generation-cancelled"))
+            self.assertIsNotNone(pointer)
+            _path, active, _security = loom_orchestrator._read_action(
+                directory / (pointer["action_id"] + ".json"),
+                owner_home=self.home, install_root=self.installed)
+            self.assertEqual("pending", active["status"])
+            self.assertEqual(
+                "authority-retirement",
+                loom_executor_guard.read(directory, active)[
+                    "freeze"]["reason_code"])
 
     def test_two_concurrent_new_plans_leave_one_live_owner_attempt(self):
         """Independent new requests serialize to one recoverable planning frontier."""
@@ -4374,6 +4628,139 @@ class ProductionOrchestratorTests(unittest.TestCase):
             Path(started["action_path"]).parent)
         self.assertEqual(started["action_id"], pointer["action_id"])
 
+    def test_started_execution_initializes_guard_before_exposing_pointer(self):
+        """Break caught: execution begins with no durable host-operation ledger."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        guard = loom_executor_guard.read(path.parent, action)
+        self.assertEqual("awaiting-host", guard["coverage_state"])
+        pointer = loom_orchestrator._read_active_pointer(path.parent)
+        self.assertEqual(action["action_id"], pointer["action_id"])
+
+    def test_active_cancel_freezes_and_preserves_authority_without_host_proof(self):
+        """Break caught: action cancellation clears enforcement on an unproven executor."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+
+        pending = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", pending["status"])
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", pending["code"])
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("pending", action["status"])
+        self.assertEqual(
+            action["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "authority-retirement",
+            loom_executor_guard.read(path.parent, action)["freeze"]["reason_code"])
+
+    def test_frozen_executor_cannot_complete_around_pending_cancellation(self):
+        """Direct completion cannot bypass the durable authority-retirement freeze."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        pending = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", pending["code"])
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.complete(
+                started["action_path"], owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("EXECUTION_FROZEN", blocked.exception.code)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("pending", action["status"])
+        self.assertEqual(
+            action["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+
+    def test_closed_host_guard_writes_quiescence_then_cancels_exact_action(self):
+        """Break caught: only tests can populate host_result.executor_quiescence."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
+
+        cancelled = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        _path, sealed, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        evidence = sealed["host_result"]["executor_quiescence"]
+        self.assertEqual("verified-host-terminal", evidence["case"])
+        loom_executor_guard.validate_evidence(
+            path.parent, sealed, evidence,
+            project_world_sha256=evidence["project_world_sha256"])
+
+    def test_cancel_waits_for_preexisting_write_and_completes_after_exact_post(self):
+        """Break caught: cancellation treats a PreToolUse without PostToolUse as closed."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        control = {
+            "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+            "session_id": "host-session-1", "turn_id": "host-turn-1",
+            "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+            "tool_input": {},
+        }
+        loom_executor_guard.observe_post(
+            path.parent, action, control, lifecycle_control=True)
+        pre = {
+            **control, "hook_event_name": "PreToolUse",
+            "tool_use_id": "write-1", "tool_name": "Write",
+            "tool_input": {"file_path": "src/app.py"},
+        }
+        loom_executor_guard.begin_operation(
+            path.parent, action, pre, operation_kind="structured-write")
+        pending = loom_orchestrator.cancel(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("action-required", pending["status"])
+        loom_executor_guard.observe_post(
+            path.parent, action, {**pre, "hook_event_name": "PostToolUse"})
+        completed = loom_orchestrator.cancel(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", completed["status"])
+
     def test_successor_executor_binding_detects_action_receipt_and_pointer_change(self):
         plan_action, planned = self.complete_machine_authored_plan()
         started = loom_orchestrator.start(
@@ -4470,6 +4857,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
             plan_action["action_path"],
             presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        started_path, started_action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            started_path.parent, started_action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
         cancelled = loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)

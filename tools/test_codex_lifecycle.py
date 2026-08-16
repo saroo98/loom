@@ -3,6 +3,7 @@
 import io
 import hashlib
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -10,6 +11,8 @@ from pathlib import Path
 from unittest import mock
 
 import loom_codex_lifecycle
+import loom_executor_guard
+import loom_reliability
 
 
 class CodexLifecycleTests(unittest.TestCase):
@@ -220,17 +223,183 @@ class CodexLifecycleTests(unittest.TestCase):
         self.assertEqual(
             "deny", output["hookSpecificOutput"]["permissionDecision"])
 
-    def test_unknown_structured_input_warns_without_claiming_enforcement(self):
+    def test_unknown_structured_input_is_denied_before_execution(self):
+        """Break caught: an unprovable structured write is allowed after a warning."""
         code, output = self.handle(self.event(
             tool_name="Write", tool_input={"unknown": "value"}))
         self.assertEqual(0, code)
-        self.assertIn("could not prove", output["systemMessage"])
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("code=WRITE_SCOPE_UNPROVEN", output["systemMessage"])
 
-    def test_shell_is_observed_but_not_misrepresented_as_confined(self):
+    def test_unsupervised_shell_and_process_mutation_is_denied(self):
+        """Break caught: raw process execution bypasses the active plan before PostToolUse."""
+        commands = [
+            "echo ok > result.txt",
+            "python build.py",
+            "cmd /c del result.txt",
+            "powershell -Command Remove-Item result.txt",
+            "tool.exe &",
+            "tool.exe | other.exe",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                code, output = self.handle(self.event(
+                    tool_name="Bash", tool_input={"command": command}))
+                self.assertEqual(0, code)
+                self.assertEqual(
+                    "deny", output["hookSpecificOutput"]["permissionDecision"])
+                self.assertIn(
+                    "code=PROCESS_MUTATION_UNPROVEN", output["systemMessage"])
+
+    def test_unknown_tool_is_denied_when_mutation_cannot_be_excluded(self):
+        """Break caught: a new host tool silently escapes active-action enforcement."""
         code, output = self.handle(self.event(
-            tool_name="Bash", tool_input={"command": "echo ok"}))
+            tool_name="FutureMutationTool", tool_input={"value": "opaque"}))
+        self.assertEqual(0, code)
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("code=TOOL_EFFECT_UNPROVEN", output["systemMessage"])
+
+    def test_exact_loom_lifecycle_control_remains_available(self):
+        """Break caught: catch-all hook matching blocks Loom's own safe transition."""
+        code, output = self.handle(self.event(
+            tool_name="mcp__loom__cancel", tool_input={}))
+        self.assertEqual((0, None), (code, output))
+
+        code, output = self.handle(self.event(
+            tool_name="mcp__loom__cancel_extra", tool_input={}))
+        self.assertEqual(0, code)
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("code=TOOL_EFFECT_UNPROVEN", output["systemMessage"])
+
+    def test_mechanically_read_only_tool_remains_available(self):
+        """Break caught: fail-closed mutation policy blocks a host read operation."""
+        code, output = self.handle(self.event(
+            tool_name="Read", tool_input={"file_path": "src/app.py"}))
         self.assertEqual(0, code)
         self.assertIsNone(output)
+
+    def _guarded_execution(self):
+        owner = self.root / "owner"
+        if os.name == "nt":
+            import loom_windows_acl
+            loom_windows_acl.create_private_directory(owner)
+        else:
+            owner.mkdir(mode=0o700)
+        self.action.update({
+            "owner_home": str(owner),
+            "instance_id": "10000000-0000-4000-8000-000000000001",
+            "generation_id": "generation-" + "2" * 32,
+            "operation_id": "3" * 64,
+            "intent": "execute",
+            "work_order": "work-orders/WO-001-feature.md",
+        })
+        directory = loom_reliability.ensure_private_directory(owner, [
+            "instances", self.action["instance_id"], "runtime", "projects",
+            self.action["project_id"], "orchestrations",
+        ])
+        loom_executor_guard.initialize(directory, self.action)
+        loom_executor_guard.observe_post(
+            directory, self.action, self.event(
+                name="PostToolUse", session_id="host-session-1",
+                turn_id="host-turn-1", tool_use_id="start-1",
+                tool_name="mcp__loom__start", tool_input={}),
+            lifecycle_control=True)
+        return directory
+
+    def test_execute_hook_opens_and_closes_exact_structured_operation(self):
+        """Break caught: PostToolUse cannot prove which allowed write actually closed."""
+        directory = self._guarded_execution()
+        pre = self.event(
+            session_id="host-session-1", turn_id="host-turn-1",
+            tool_use_id="write-1", tool_name="Write",
+            tool_input={"file_path": "src/app.py"})
+        post = {**pre, "hook_event_name": "PostToolUse"}
+        with mock.patch.object(
+                loom_codex_lifecycle, "_work_order_touches",
+                return_value=(self.root, ["src/app.py"])):
+            code, output = self.handle(pre)
+            self.assertEqual((0, None), (code, output))
+            self.assertEqual(
+                "open", loom_executor_guard.read(
+                    directory, self.action)["operations"][0]["state"])
+            code, output = self.handle(post)
+            self.assertEqual((0, None), (code, output))
+        self.assertEqual(
+            "closed", loom_executor_guard.read(
+                directory, self.action)["operations"][0]["state"])
+
+    def test_execute_hook_denies_new_write_after_persisted_freeze(self):
+        """Break caught: restart-visible cancellation freeze is ignored by PreToolUse."""
+        directory = self._guarded_execution()
+        loom_executor_guard.freeze(
+            directory, self.action, reason_code="owner-cancelled")
+        with mock.patch.object(
+                loom_codex_lifecycle, "_work_order_touches",
+                return_value=(self.root, ["src/app.py"])):
+            code, output = self.handle(self.event(
+                session_id="host-session-1", turn_id="host-turn-2",
+                tool_use_id="write-2", tool_name="Write",
+                tool_input={"file_path": "src/app.py"}))
+        self.assertEqual(0, code)
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("code=EXECUTION_FROZEN", output["systemMessage"])
+        self.assertEqual([], loom_executor_guard.read(
+            directory, self.action)["operations"])
+
+    def test_malformed_guarded_write_is_an_explicit_bounded_denial(self):
+        """Break caught: missing host identity escapes as an unstructured hook error."""
+        self._guarded_execution()
+        with mock.patch.object(
+                loom_codex_lifecycle, "_work_order_touches",
+                return_value=(self.root, ["src/app.py"])):
+            code, output = self.handle(self.event(
+                tool_name="Write", tool_input={"file_path": "src/app.py"}))
+        serialized = json.dumps(
+            output, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        self.assertEqual(0, code)
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("code=EXECUTOR_GUARD_UNPROVEN", output["systemMessage"])
+        self.assertLessEqual(
+            len(serialized), loom_codex_lifecycle.MAX_DENIAL_OUTPUT_BYTES)
+
+    def test_loom_control_pre_and_post_do_not_poison_the_guard(self):
+        """Break caught: allowed lifecycle closure is classified as an unknown mutation."""
+        directory = self._guarded_execution()
+        event = self.event(
+            session_id="host-session-1", turn_id="host-turn-2",
+            tool_use_id="complete-1", tool_name="mcp__loom__complete",
+            tool_input={})
+        self.assertEqual((0, None), self.handle(event))
+        self.assertEqual(
+            (0, None), self.handle({**event, "hook_event_name": "PostToolUse"}))
+        guard = loom_executor_guard.read(directory, self.action)
+        self.assertFalse(guard["coverage_failure"])
+        self.assertEqual([], guard["operations"])
+
+    def test_frozen_executor_denies_completion_but_allows_cancel_retry(self):
+        """A completion control cannot escape a durable cancellation freeze."""
+        directory = self._guarded_execution()
+        loom_executor_guard.freeze(
+            directory, self.action, reason_code="authority-retirement")
+        complete_event = self.event(
+            session_id="host-session-1", turn_id="host-turn-2",
+            tool_use_id="complete-frozen", tool_name="mcp__loom__complete",
+            tool_input={})
+
+        code, output = self.handle(complete_event)
+        self.assertEqual(0, code)
+        self.assertEqual(
+            "deny", output["hookSpecificOutput"]["permissionDecision"])
+        self.assertIn("code=EXECUTION_FROZEN", output["systemMessage"])
+        self.assertEqual(
+            (0, None), self.handle({
+                **complete_event, "tool_use_id": "cancel-retry",
+                "tool_name": "mcp__loom__cancel"}))
 
     def test_compaction_context_is_bounded_and_not_new_authority(self):
         code, output = self.handle(self.event(name="PreCompact"))
@@ -251,6 +420,22 @@ class CodexLifecycleTests(unittest.TestCase):
                + json.dumps({"cwd": str(self.root)}).encode("utf-8")[1:])
         with self.assertRaisesRegex(loom_codex_lifecycle.LifecycleError, "duplicate"):
             loom_codex_lifecycle._read_event(io.BytesIO(raw))
+
+    def test_launcher_failure_is_bounded_and_does_not_echo_private_input(self):
+        private = "owner-secret-" + "x" * 12000
+        output = io.StringIO()
+        with mock.patch.object(
+                loom_codex_lifecycle, "_read_event",
+                side_effect=loom_codex_lifecycle.LifecycleError(private)), \
+                redirect_stdout(output):
+            code = loom_codex_lifecycle.main([
+                "--home", str(self.root / ".loom"),
+                "--install-root", str(self.root)])
+        raw = output.getvalue().encode("utf-8")
+        self.assertEqual(2, code)
+        self.assertLessEqual(len(raw), loom_codex_lifecycle.MAX_DENIAL_OUTPUT_BYTES)
+        self.assertNotIn("owner-secret", output.getvalue())
+        self.assertIn("code=HOOK_EVENT_INVALID", output.getvalue())
 
 
 if __name__ == "__main__":
