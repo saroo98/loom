@@ -58,8 +58,12 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
             decision["recommendation"].count("?"), request)
         control = loom_runtime.request_control(request, state=dict(state or {}))
         self.assertEqual("plan", control["primary_operation"], request)
-        self.assertEqual("new", control["relation"], request)
+        self.assertEqual("unclear", control["relation"], request)
         self.assertFalse(control["blocked"], request)
+        self.assertIn("planning-inline-recovery", control["evidence"], request)
+        self.assertIn(
+            "semantic-clarification" if needs_owner else "semantic-assistance",
+            control["evidence"], request)
         self.assertIn("implementation", control["prohibitions"], request)
         return decision, control
 

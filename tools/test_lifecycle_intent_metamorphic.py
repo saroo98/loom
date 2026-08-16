@@ -6,6 +6,56 @@ import loom_runtime
 
 
 class LifecycleIntentMetamorphicTests(unittest.TestCase):
+    def test_product_prefixes_cannot_mint_legacy_control_authority(self):
+        """Break caught: a product noun after a control verb is ignored."""
+        requests = (
+            "Cancel button styling.",
+            "Close this modal.",
+            "Keep going indicator.",
+            "Repair the plan parser.",
+            "Fix the stale plan template.",
+            "Remember button styling.",
+            "Forget password screen.",
+            "Show status page design.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "absent"})
+
+                self.assertFalse(decision["blocked"], decision)
+                self.assertEqual("plan", decision["intent"])
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-assistance", control["evidence"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
+
+    def test_full_object_legacy_controls_remain_available(self):
+        """Exact lifecycle/memory/status objects retain their closed controls."""
+        cases = (
+            ("Cancel the current Loom action.", "cancel"),
+            ("Close this project.", "close"),
+            ("Continue the active Loom plan.", "execute"),
+            ("Repair the active Loom plan.", "repair"),
+            ("Remember that plans should stay concise.", "remember"),
+            ("Forget the selected owner preference.", "forget"),
+            ("Show the current Loom status.", "status"),
+        )
+
+        for request, intent in cases:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "absent"})
+
+                self.assertFalse(decision["blocked"], decision)
+                self.assertEqual(intent, decision["intent"])
+                self.assertFalse(control["blocked"], control)
+                self.assertNotIn("semantic-assistance", control["evidence"])
+
     def test_unanchored_owner_language_is_inline_assistance_not_plan_authority(self):
         """Break caught: ordinary or hypothetical wording creates plan authority."""
         requests = (

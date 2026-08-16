@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -1086,6 +1087,110 @@ class ProductionOrchestratorTests(unittest.TestCase):
                         for path in self.home.glob(
                             "instances/*/runtime/projects/*/orchestrations/*.json")))
         self.assertNotEqual(messages[0], messages[1])
+
+    def test_installed_inline_capsules_distinguish_closed_same_domain_capabilities(self):
+        """Break caught: installed same-domain assistance collapses to generic output."""
+        before = loom_reliability.deterministic_manifest(self.repo)
+        before_actions = sorted(
+            path.relative_to(self.home).as_posix()
+            for path in self.home.glob(
+                "instances/*/runtime/projects/*/orchestrations/*.json"))
+        cases = (
+            (
+                "I need CSV export for inventory reports. Private marker sapphire-17.",
+                "tabular data export with explicit field and failure behavior",
+                "sapphire-17",
+            ),
+            (
+                "I need password reset and account recovery. Private marker topaz-23.",
+                "credential reset and account recovery behavior",
+                "topaz-23",
+            ),
+            (
+                "I need accessible search and keyboard navigation. "
+                "Private marker onyx-31.",
+                "accessible search and keyboard navigation behavior",
+                "onyx-31",
+            ),
+            (
+                "I need local backup and restore recovery. Private marker quartz-47.",
+                "backup, restore, integrity, and recovery behavior",
+                "quartz-47",
+            ),
+        )
+        messages = []
+
+        for request, expected_requirement, private_marker in cases:
+            with self.subTest(expected_requirement=expected_requirement):
+                completed = self.cli(
+                    "invoke", "--request", request, "--cwd", self.repo,
+                    "--home", self.home, "--install-root", self.installed)
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                result = json.loads(completed.stdout)
+                message = result["user_message"]
+                messages.append(message)
+                self.assertEqual("completed", result["status"])
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertIn(expected_requirement, message.casefold())
+                self.assertIn("semantic-outcome-v2.unclassified.", message)
+                self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+                self.assertNotIn("action_path", result)
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+                self.assertFalse((self.repo / "plans").exists())
+                self.assertEqual(
+                    before_actions,
+                    sorted(
+                        path.relative_to(self.home).as_posix()
+                        for path in self.home.glob(
+                            "instances/*/runtime/projects/*/orchestrations/*.json")))
+
+        self.assertEqual(len(cases), len(set(messages)))
+
+    def test_installed_product_prefix_requests_preserve_all_authority_state(self):
+        """Break caught: installed prefix parsing mutates lifecycle or memory state."""
+        requests = (
+            "Cancel button styling.",
+            "Close this modal.",
+            "Keep going indicator.",
+            "Repair the plan parser.",
+            "Fix the stale plan template.",
+            "Remember button styling.",
+            "Forget password screen.",
+            "Show status page design.",
+        )
+        repo_before = loom_reliability.deterministic_manifest(self.repo)
+
+        for request in requests:
+            with self.subTest(request=request):
+                completed = self.cli(
+                    "invoke", "--request", request, "--cwd", self.repo,
+                    "--home", self.home, "--install-root", self.installed)
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                result = json.loads(completed.stdout)
+                self.assertEqual("completed", result["status"])
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertNotIn("action_path", result)
+                self.assertEqual(
+                    repo_before,
+                    loom_reliability.deterministic_manifest(self.repo))
+                self.assertFalse((self.repo / "plans").exists())
+                self.assertEqual(
+                    [], list(self.home.glob(
+                        "instances/*/runtime/projects/*/orchestrations/*.json")))
+                vault = self.home / "vault" / "owner.sqlite3"
+                if vault.exists():
+                    with sqlite3.connect(vault) as connection:
+                        self.assertEqual(
+                            0,
+                            connection.execute(
+                                "SELECT COUNT(*) FROM memory_records"
+                            ).fetchone()[0])
+                        self.assertEqual(
+                            0,
+                            connection.execute(
+                                "SELECT COUNT(*) FROM tombstones"
+                            ).fetchone()[0])
 
     def test_no_write_inline_recovery_preserves_invalid_config_failure(self):
         """Break caught: no-write recovery erases repository config authority."""
@@ -4950,6 +5055,89 @@ class ProductionOrchestratorTests(unittest.TestCase):
             fresh["action_id"],
             loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
 
+    def test_pre_ux104_fresh_pointer_publication_preserves_unexpected_pointer(self):
+        """Break caught: fresh publication replaces bytes created after retirement."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        foreign = {
+            "schema_version": 1,
+            "action_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "project_id": old_action["project_id"],
+            "state": "active",
+        }
+        foreign["pointer_hash"] = loom_orchestrator._pointer_hash(foreign)
+        foreign_bytes = loom_session._canonical_json(foreign) + b"\n"
+        original_write = loom_orchestrator._write_action
+        injected = False
+
+        def write_then_compete(path, value, security=None):
+            nonlocal injected
+            result = original_write(path, value, security)
+            if not injected and value["action_id"] != opened["action_id"] \
+                    and value["status"] == "initializing" \
+                    and not pointer_path.exists():
+                injected = True
+                loom_session._atomic_json(pointer_path, foreign)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action", side_effect=write_then_compete):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(foreign_bytes, pointer_path.read_bytes())
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_fresh_pointer_publication_crash_retry_converges(self):
+        """Break caught: a lost response after fresh pointer commit cannot retry safely."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        request = "Plan a separate current-world README improvement."
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def crash_after_fresh_pointer(source, destination, **kwargs):
+            nonlocal injected
+            outcome = original_atomic(source, destination, **kwargs)
+            if not injected and Path(source).name == "successor-active-pointer.json" \
+                    and Path(destination) == pointer_path:
+                injected = True
+                raise RuntimeError("crash after fresh pointer publication")
+            return outcome
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=crash_after_fresh_pointer):
+            with self.assertRaisesRegex(
+                    RuntimeError, "fresh pointer publication"):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        committed = pointer_path.read_bytes()
+        self.assertNotEqual(opened["action_id"], json.loads(
+            committed.decode("utf-8"))["action_id"])
+
+        fresh = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", fresh["status"])
+        self.assertEqual(
+            fresh["action_id"],
+            loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
     def test_pre_ux104_reprepare_rejects_other_action_corruption(self):
         """Break caught: recovery-only compatibility bypasses normal validation."""
         _opened, old_path, _old_action = \
@@ -8668,9 +8856,15 @@ planning_obligations: [{obligations}]
                 ["semantic-outcome-v1.accounting.999999"],
                 ["semantic-outcome-v1.cli.0"],
                 ["semantic-outcome-v1.unknown.0"],
+                ["semantic-outcome-v2.accounting.owner-private-export"],
+                ["semantic-outcome-v2.cli.tabular-data-export"],
                 [
                     "semantic-outcome-v1.accounting.0",
                     "semantic-outcome-v1.accounting.generic",
+                ],
+                [
+                    "semantic-outcome-v1.accounting.0",
+                    "semantic-outcome-v2.accounting.tabular-data-export",
                 ]):
             with self.subTest(tokens=tokens):
                 action = json.loads(json.dumps(base))

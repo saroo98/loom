@@ -111,6 +111,8 @@ RECOVERY_CONTROL_RECEIPT = "receipt.json"
 RECOVERY_CONTROL_TARGET_ACTION = "target-action.json"
 RECOVERY_CONTROL_ORIGINAL_ACTION = "original-action.json"
 RECOVERY_CONTROL_ACTIVE_POINTER = "active-pointer.json"
+RECOVERY_CONTROL_SUCCESSOR_POINTER = "successor-active-pointer.json"
+RECOVERY_CONTROL_SUCCESSOR_RECEIPT = "successor-pointer-receipt.json"
 MAX_RECOVERY_FILES = 8
 MAX_RECOVERY_FILE_BYTES = 256 * 1024
 MAX_RECOVERY_TOTAL_BYTES = MAX_RECOVERY_FILES * MAX_RECOVERY_FILE_BYTES
@@ -1680,12 +1682,17 @@ def _pointer_hash(value):
     return _hash(body)
 
 
-def _write_active_pointer(directory, *, action_id, project_id):
+def _active_pointer_value(*, action_id, project_id):
     value = {
         "schema_version": 1, "action_id": action_id, "project_id": project_id,
         "state": "active",
     }
     value["pointer_hash"] = _pointer_hash(value)
+    return value
+
+
+def _write_active_pointer(directory, *, action_id, project_id):
+    value = _active_pointer_value(action_id=action_id, project_id=project_id)
     loom_session._atomic_json(_active_pointer_path(directory), value)
     return value
 
@@ -2239,6 +2246,11 @@ _RECOVERY_CONTROL_RECEIPT_FIELDS = {
     "target_action_sha256", "target_action_identity", "target_action_hash",
     "receipt_hash",
 }
+_RECOVERY_SUCCESSOR_POINTER_RECEIPT_FIELDS = {
+    "schema_version", "source_action_id", "source_recovery_receipt_hash",
+    "project_id", "successor_action_id", "successor_action_hash",
+    "pointer_sha256", "receipt_hash",
+}
 
 
 def _write_private_file_exclusive(path, payload):
@@ -2252,7 +2264,10 @@ def _write_private_file_exclusive(path, payload):
     try:
         loom_reliability._absolute(
             path.parent, "recovery control parent", must_exist=True)
-        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600)
         offset = 0
         while offset < len(payload):
             written = os.write(descriptor, payload[offset:])
@@ -2397,6 +2412,182 @@ def _validate_recovery_target_action(target_path, action_path, receipt,
     return value
 
 
+def _exact_private_file_bytes(path, *, max_bytes, label):
+    """Read one private control file without accepting links or identity swaps."""
+    path = Path(path)
+    if not os.path.lexists(path):
+        return None
+    try:
+        if path.is_symlink() or not path.is_file() \
+                or path.stat().st_size > max_bytes:
+            raise ValueError(f"{label} is not a bounded regular file")
+        identity = loom_reliability.observe_root_identity(path)
+        payload = path.read_bytes()
+        loom_reliability.validate_root_identity(path, identity)
+    except (OSError, ValueError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"{label} cannot be inspected safely: {exc}") from exc
+    return payload, identity
+
+
+def _ensure_exact_private_file(path, payload, *, max_bytes, label):
+    """Create once, or accept only byte-identical already-created recovery state."""
+    observed = _exact_private_file_bytes(path, max_bytes=max_bytes, label=label)
+    if observed is None:
+        try:
+            _write_private_file_exclusive(path, payload)
+        except OrchestratorError:
+            observed = _exact_private_file_bytes(
+                path, max_bytes=max_bytes, label=label)
+            if observed is None or observed[0] != payload:
+                raise
+        else:
+            observed = _exact_private_file_bytes(
+                path, max_bytes=max_bytes, label=label)
+    if observed is None or observed[0] != payload:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"{label} contains unexpected bytes; it was preserved")
+    return observed[1]
+
+
+def _successor_pointer_receipt(recovery_receipt, action, pointer_bytes):
+    body = {
+        "schema_version": 1,
+        "source_action_id": recovery_receipt["action_id"],
+        "source_recovery_receipt_hash": recovery_receipt["receipt_hash"],
+        "project_id": action["project_id"],
+        "successor_action_id": action["action_id"],
+        "successor_action_hash": action["action_hash"],
+        "pointer_sha256": hashlib.sha256(pointer_bytes).hexdigest(),
+    }
+    return {**body, "receipt_hash": _hash(body)}
+
+
+def _load_successor_pointer_receipt(transition):
+    path = Path(transition) / RECOVERY_CONTROL_SUCCESSOR_RECEIPT
+    observed = _exact_private_file_bytes(
+        path, max_bytes=4 * 1024, label="successor pointer receipt")
+    if observed is None:
+        return None
+    try:
+        value = json.loads(
+            observed[0].decode("utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt is invalid") from exc
+    body = dict(value) if isinstance(value, dict) else {}
+    claimed = body.pop("receipt_hash", None)
+    try:
+        source_id = str(uuid.UUID(str(value.get("source_action_id"))))
+        successor_id = str(uuid.UUID(str(value.get("successor_action_id"))))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt identities are invalid") from exc
+    if not isinstance(value, dict) \
+            or set(value) != _RECOVERY_SUCCESSOR_POINTER_RECEIPT_FIELDS \
+            or value.get("schema_version") != 1 \
+            or source_id != value["source_action_id"] \
+            or successor_id != value["successor_action_id"] \
+            or source_id == successor_id \
+            or re.fullmatch(r"p-[0-9a-f]{32}", str(value.get("project_id", ""))) is None \
+            or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(field, ""))) is None
+                   for field in (
+                       "source_recovery_receipt_hash", "successor_action_hash",
+                       "pointer_sha256")) \
+            or claimed != _hash(body):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt is not self-consistent")
+    return value
+
+
+def _reconcile_successor_pointer_publication(
+        transition, action_directory, control_receipt, terminal_action,
+        *, owner_home, install_root):
+    """Publish one receipt-bound successor pointer without replacing any bytes."""
+    transition = Path(transition)
+    action_directory = Path(action_directory)
+    stage_path = transition / RECOVERY_CONTROL_SUCCESSOR_POINTER
+    receipt = _load_successor_pointer_receipt(transition)
+    if receipt is None:
+        if os.path.lexists(stage_path):
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "a successor pointer stage exists without its binding receipt")
+        return None
+    source_recovery = terminal_action.get("recovery_receipt")
+    if not isinstance(source_recovery, dict) \
+            or receipt["source_action_id"] != control_receipt["action_id"] \
+            or receipt["source_action_id"] != terminal_action["action_id"] \
+            or receipt["source_recovery_receipt_hash"] != source_recovery.get(
+                "receipt_hash") \
+            or receipt["project_id"] != control_receipt["project_id"] \
+            or receipt["project_id"] != terminal_action["project_id"]:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt is not bound to recovery")
+    successor_path = action_directory / f"{receipt['successor_action_id']}.json"
+    try:
+        _path, successor, _security = _read_action(
+            successor_path, owner_home=owner_home, install_root=install_root)
+    except OrchestratorError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer action is not authentic") from exc
+    if successor["project_id"] != receipt["project_id"] \
+            or successor["action_hash"] != receipt["successor_action_hash"] \
+            or successor["status"] in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer action differs from its receipt")
+    pointer_value = _active_pointer_value(
+        action_id=successor["action_id"], project_id=successor["project_id"])
+    pointer_bytes = loom_session._canonical_json(pointer_value) + b"\n"
+    if hashlib.sha256(pointer_bytes).hexdigest() != receipt["pointer_sha256"]:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer bytes differ from their receipt")
+    pointer_path = _active_pointer_path(action_directory)
+    pointer_observed = _exact_private_file_bytes(
+        pointer_path, max_bytes=4 * 1024, label="active successor pointer")
+    stage_observed = _exact_private_file_bytes(
+        stage_path, max_bytes=4 * 1024, label="successor pointer stage")
+    if pointer_observed is not None and pointer_observed[0] != pointer_bytes:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "unexpected active pointer bytes were preserved")
+    if stage_observed is not None and stage_observed[0] != pointer_bytes:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "unexpected successor pointer stage was preserved")
+    if pointer_observed is not None:
+        return pointer_value
+    stage_identity = _ensure_exact_private_file(
+        stage_path, pointer_bytes, max_bytes=4 * 1024,
+        label="successor pointer stage")
+    try:
+        outcome = loom_reliability.atomic_rename_noreplace(
+            stage_path, pointer_path, expected_source_identity=stage_identity,
+            source_role="successor_pointer_stage",
+            destination_role="active_successor_pointer")
+        if outcome.state["namespace_state"] != "committed":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "successor pointer publication is ambiguous")
+    except loom_reliability.AtomicRenameReconciliationRequired as exc:
+        if exc.state["namespace_state"] != "committed":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "successor pointer publication is ambiguous") from exc
+    except OrchestratorError:
+        raise
+    except loom_reliability.ReliabilityError as exc:
+        observed = _exact_private_file_bytes(
+            pointer_path, max_bytes=4 * 1024, label="active successor pointer")
+        if observed is None or observed[0] != pointer_bytes:
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "successor pointer publication preserved a conflicting namespace") from exc
+    observed = _exact_private_file_bytes(
+        pointer_path, max_bytes=4 * 1024, label="active successor pointer")
+    if observed is None or observed[0] != pointer_bytes:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer publication did not verify exactly")
+    return pointer_value
+
+
 def _reconcile_recovered_action_transition(
         transition, action_path, *, owner_home, install_root,
         expected_project_id=None):
@@ -2411,6 +2602,8 @@ def _reconcile_recovered_action_transition(
     allowed = {
         RECOVERY_CONTROL_RECEIPT, RECOVERY_CONTROL_TARGET_ACTION,
         RECOVERY_CONTROL_ORIGINAL_ACTION, RECOVERY_CONTROL_ACTIVE_POINTER,
+        RECOVERY_CONTROL_SUCCESSOR_POINTER,
+        RECOVERY_CONTROL_SUCCESSOR_RECEIPT,
     }
     try:
         entries = list(os.scandir(transition))
@@ -2466,7 +2659,7 @@ def _reconcile_recovered_action_transition(
             and target_state == "absent"):
         raise OrchestratorError(
             "RECOVERY_RACE", "recovery action transition is partial or ambiguous")
-    _validate_recovery_target_action(
+    terminal_action = _validate_recovery_target_action(
         action_path, action_path, receipt,
         owner_home=owner_home, install_root=install_root)
 
@@ -2491,6 +2684,9 @@ def _reconcile_recovered_action_transition(
         if pointer_backup_state != "expected":
             raise OrchestratorError(
                 "RECOVERY_RACE", "recovery pointer transition is partial or ambiguous")
+    _reconcile_successor_pointer_publication(
+        transition, action_path.parent, receipt, terminal_action,
+        owner_home=owner_home, install_root=install_root)
     return receipt
 
 
@@ -2535,6 +2731,63 @@ def _stage_recovered_action_transition(
         transition, path, owner_home=candidate["owner_home"],
         install_root=candidate["install_root"],
         expected_project_id=candidate["project_id"])
+
+
+def _publish_recovery_bound_active_pointer(
+        directory, action_path, action, recovery_receipt):
+    """Bind a fresh pointer to one exact retired action and publish no-replace."""
+    directory = Path(directory)
+    action_path = Path(action_path)
+    if action_path.parent != directory or not isinstance(recovery_receipt, dict):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer publication is not action-scoped")
+    source_action_id = recovery_receipt.get("action_id")
+    if re.fullmatch(r"[0-9a-f-]{36}", str(source_action_id or "")) is None \
+            or source_action_id == action.get("action_id") \
+            or recovery_receipt.get("project_id") != action.get("project_id"):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer publication lacks exact recovery authority")
+    transition = (
+        directory.parent / RECOVERY_DIRECTORY / source_action_id /
+        RECOVERY_CONTROL_TRANSITION)
+    control_receipt = _reconcile_recovered_action_transition(
+        transition, directory / f"{source_action_id}.json",
+        owner_home=action["owner_home"], install_root=action["install_root"],
+        expected_project_id=action["project_id"])
+    source_path, source_action, _source_security = _read_action(
+        directory / f"{source_action_id}.json",
+        owner_home=action["owner_home"], install_root=action["install_root"])
+    del source_path
+    validated_recovery = _validate_recovery_receipt(
+        recovery_receipt, action=source_action)
+    if validated_recovery != recovery_receipt \
+            or source_action.get("recovery_receipt") != recovery_receipt \
+            or source_action["status"] not in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer recovery receipt is not authentic")
+    _path, stored_action, _security = _read_action(
+        action_path, owner_home=action["owner_home"],
+        install_root=action["install_root"])
+    if stored_action != action or action["status"] in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer action changed before publication")
+    pointer_value = _active_pointer_value(
+        action_id=action["action_id"], project_id=action["project_id"])
+    pointer_bytes = loom_session._canonical_json(pointer_value) + b"\n"
+    publication_receipt = _successor_pointer_receipt(
+        recovery_receipt, action, pointer_bytes)
+    receipt_bytes = loom_session._canonical_json(publication_receipt) + b"\n"
+    _ensure_exact_private_file(
+        transition / RECOVERY_CONTROL_SUCCESSOR_RECEIPT,
+        receipt_bytes, max_bytes=4 * 1024,
+        label="successor pointer receipt")
+    _ensure_exact_private_file(
+        transition / RECOVERY_CONTROL_SUCCESSOR_POINTER,
+        pointer_bytes, max_bytes=4 * 1024,
+        label="successor pointer stage")
+    return _reconcile_successor_pointer_publication(
+        transition, directory, control_receipt, source_action,
+        owner_home=action["owner_home"], install_root=action["install_root"])
 
 
 def _reconcile_legacy_control_transitions(
@@ -9389,6 +9642,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             bound_intent=bound_intent,
                             planning_state_override=planning_state_override,
                             preserve_active_pointer=preserve_active_pointer,
+                            pointer_recovery_receipt=recovery,
                             completed_plan_replay_stale=replay_stale)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
@@ -10621,6 +10875,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        expected_plan_decision=None, revision_context=None,
                        bound_intent=None, planning_state_override=None,
                        preserve_active_pointer=False,
+                       pointer_recovery_receipt=None,
                        completed_plan_replay_stale=False):
     action_security = ((memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
@@ -11096,8 +11351,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             directory = path.parent
             action = _write_action(path, action, action_security)
             if not preserve_active_pointer:
-                _write_active_pointer(
-                    directory, action_id=action_id, project_id=prepared.project_id)
+                if pointer_recovery_receipt is None:
+                    _write_active_pointer(
+                        directory, action_id=action_id,
+                        project_id=prepared.project_id)
+                else:
+                    _publish_recovery_bound_active_pointer(
+                        directory, path, action, pointer_recovery_receipt)
             action["initial_pack_hash"] = _pack_hash(pack)
             action["pack_seed"] = {
                 **action["pack_seed"],
@@ -11110,8 +11370,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         directory = path.parent
         action = _write_action(path, action, action_security)
         if not preserve_active_pointer:
-            _write_active_pointer(
-                directory, action_id=action_id, project_id=prepared.project_id)
+            if pointer_recovery_receipt is None:
+                _write_active_pointer(
+                    directory, action_id=action_id,
+                    project_id=prepared.project_id)
+            else:
+                _publish_recovery_bound_active_pointer(
+                    directory, path, action, pointer_recovery_receipt)
         stage, manifest, stage_identity = _seed_stage(path, action, prepared)
         action["pack_seed"] = {**action["pack_seed"], "state": "prepared",
                                "manifest": manifest}

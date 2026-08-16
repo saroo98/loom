@@ -394,6 +394,95 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
                 [valid, "semantic-outcome-v1.accounting.generic"],
                 ["accounting"])
 
+    def test_semantic_outcome_projection_distinguishes_closed_same_domain_capabilities(self):
+        """Break caught: ordinary same-domain requests collapse to one generic capsule."""
+        domains = {"active_task_domains": ["unclassified"]}
+        cases = (
+            (
+                "Add CSV export for inventory reports. Private marker sapphire-17.",
+                "semantic-outcome-v2.unclassified.tabular-data-export",
+                "tabular data export with explicit field and failure behavior",
+            ),
+            (
+                "Add password reset and account recovery. Private marker topaz-23.",
+                "semantic-outcome-v2.unclassified.credential-account-recovery",
+                "credential reset and account recovery behavior",
+            ),
+            (
+                "Improve accessible search and keyboard navigation. "
+                "Private marker onyx-31.",
+                "semantic-outcome-v2.unclassified.accessible-search-navigation",
+                "accessible search and keyboard navigation behavior",
+            ),
+            (
+                "Add local backup and restore recovery. Private marker quartz-47.",
+                "semantic-outcome-v2.unclassified.backup-restore-recovery",
+                "backup, restore, integrity, and recovery behavior",
+            ),
+        )
+
+        observed = []
+        for request, expected_token, expected_label in cases:
+            with self.subTest(request=request):
+                token = loom_runtime.semantic_outcome_evidence(request, domains)
+                opened = loom_runtime.parse_semantic_outcome_token(
+                    token, ["unclassified"])
+                observed.append((token, opened["label"]))
+                self.assertEqual(expected_token, token)
+                self.assertEqual(expected_label, opened["label"])
+                self.assertNotIn("private", token.casefold())
+                self.assertNotIn("marker", opened["label"].casefold())
+                for private_value in ("sapphire-17", "topaz-23", "onyx-31", "quartz-47"):
+                    self.assertNotIn(private_value, token)
+                    self.assertNotIn(private_value, opened["label"])
+
+        self.assertEqual(len(cases), len(set(observed)))
+
+    def test_semantic_outcome_v2_is_closed_privacy_safe_and_noninvertible(self):
+        """Break caught: a capability capsule can carry open request vocabulary."""
+        valid = (
+            "semantic-outcome-v2.unclassified.credential-account-recovery")
+        opened = loom_runtime.parse_semantic_outcome_token(
+            valid, ["unclassified"])
+        self.assertEqual(
+            "credential reset and account recovery behavior", opened["label"])
+        self.assertEqual(valid, opened["token"])
+        self.assertEqual(
+            {"token", "domain", "index", "label", "capability"}, set(opened))
+        self.assertEqual("credential-account-recovery", opened["capability"])
+        self.assertEqual(
+            valid,
+            loom_runtime.semantic_outcome_evidence(
+                "Add password reset and account recovery. "
+                "Completely different private marker emerald-59.",
+                {"active_task_domains": ["unclassified"]},
+            ),
+        )
+
+        invalid = (
+            "semantic-outcome-v2.unclassified.password-reset-for-alice",
+            "semantic-outcome-v2.unclassified.credential-account-recovery.extra",
+            "semantic-outcome-v2.unclassified.credential_account_recovery",
+            "semantic-outcome-v2.unclassified.Credential-account-recovery",
+            "semantic-outcome-v2.accounting.unknown-capability",
+        )
+        for token in invalid:
+            with self.subTest(token=token), self.assertRaises(
+                    loom_runtime.RuntimeError):
+                loom_runtime.parse_semantic_outcome_token(
+                    token, ["unclassified", "accounting"])
+
+        with self.assertRaises(loom_runtime.RuntimeError):
+            loom_runtime.semantic_outcome_from_evidence(
+                [
+                    "semantic-outcome-v1.unclassified.generic",
+                    valid,
+                ],
+                ["unclassified"],
+            )
+        with self.assertRaises(loom_runtime.RuntimeError):
+            loom_runtime.parse_semantic_outcome_token(valid, ["accounting"])
+
     def test_prepared_semantic_outcome_validation_allows_only_historical_absence(self):
         """Break caught: rehashed malformed or duplicate evidence enters orchestration."""
         with tempfile.TemporaryDirectory() as directory:

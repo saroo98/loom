@@ -486,8 +486,11 @@ _BUILD_REQUEST_RE = re.compile(
     r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
     r"add|generate|plan|draft|outline|prepare|use|fix|update|change|modify|refactor|migrate|"
     r"upgrade|replace|remove)\b")
+_CONTROL_END = r"\s*[.!?]*\s*\Z"
 _BUILD_CONTROL_RE = re.compile(
-    r"^(?:please\s+)?(?:build|implement)\s+(?:the\s+)?(?:next|remaining|rest)\b")
+    r"^(?:please\s+)?(?:build|implement)\s+(?:the\s+)?"
+    r"(?:next|remaining|rest)(?:\s+(?:part|phase|work|work\s+order|plan\s+step))?"
+    + _CONTROL_END)
 _QUESTION_BUILD_RE = re.compile(
     r"^(?:please\s+)?(?:can|could|would)\s+you\s+"
     r"(?:build|create|make|implement|develop|write|design|add|draft|outline|prepare|use|fix|"
@@ -530,26 +533,100 @@ _HIGH_CONSEQUENCE_RE = re.compile(
     r"|\b(?:force[- ]push|reset\s+--hard|clean\s+-fdx|rewrite\s+(?:the\s+)?"
     r"(?:git\s+)?history|wipe\s+(?:the\s+)?(?:disk|drive|database))\b")
 _LIFECYCLE_REPAIR_RE = re.compile(
-    r"^(?:please\s+)?(?:fix|repair)\s+(?:the\s+)?"
-    r"(?:(?:stale|broken|invalid|drifted)\s+)?(?:loom\s+)?"
-    r"(?:plan|planning pack|lifecycle)\b")
+    r"^(?:please\s+)?(?:fix|repair)\s+(?:the\s+)?(?:"
+    r"(?:(?:active|current|stale|broken|invalid|drifted|failed)\s+)*"
+    r"(?:loom\s+)?(?:plan|planning\s+pack|lifecycle|generation|action)|"
+    r"(?:drift|state|failure|problem)\s+in\s+(?:the\s+)?"
+    r"(?:(?:active|current|stale|broken|invalid|drifted)\s+)*"
+    r"(?:loom\s+)?(?:plan|planning\s+pack|lifecycle|generation|action))"
+    + _CONTROL_END)
 _STATUS_QUERY_RE = re.compile(
-    r"^(?:please\s+)?(?:update\s+me\s+(?:on|about)|give\s+me\s+an?\s+update)\b")
+    r"^(?:please\s+)?(?:"
+    r"update\s+me\s+(?:on|about)\s+(?:(?:the|our)\s+)?"
+    r"(?:(?:current|active)\s+)?(?:(?:loom|project|action)\s+)?"
+    r"(?:status|progress)|"
+    r"give\s+me\s+an?\s+update(?:\s+(?:on|about)\s+(?:(?:the|our)\s+)?"
+    r"(?:(?:current|active)\s+)?(?:(?:loom|project|action)\s+)?"
+    r"(?:status|progress))?)" + _CONTROL_END)
 _MEMORY_REMEMBER_RE = re.compile(
-    r"^(?:please\s+)?(?:remember(?:\s+(?:that|this))?|be more careful|"
-    r"be less autonomous|correct\s+(?:what you learned|my preference|that preference|"
-    r"the preference)|retain\s+(?:this|that)\s+preference|"
-    r"(?:i|we)\s+prefer\b|from now on\b)")
+    r"^(?:please\s+)?(?:"
+    r"remember\s+(?:that\b.+|this(?:\s+as\s+(?:a\s+)?(?:preference|request|"
+    r"rule|decision|instruction)|\s+(?:preference|request|rule|decision|"
+    r"instruction))?)|"
+    r"be\s+(?:more\s+careful|less\s+autonomous)|"
+    r"correct\s+(?:what\s+you\s+learned|my\s+preference|that\s+preference|"
+    r"the\s+preference)\b.*|"
+    r"retain\s+(?:this|that)\s+preference\b.*|"
+    r"(?:i|we)\s+prefer\b.+|from\s+now\s+on\b.+)" + _CONTROL_END)
 _EMBEDDED_MEMORY_REMEMBER_RE = re.compile(
-    r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?(?:remember\s+(?:that|this)|"
+    r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?(?:"
+    r"remember\s+(?:that\b|this(?:\s+as\s+(?:a\s+)?(?:preference|request|"
+    r"rule|decision|instruction)|\s+(?:preference|request|rule|decision|"
+    r"instruction))?\b)|"
     r"correct\s+(?:what you learned|my preference|that preference|the preference)|"
     r"retain\s+(?:this|that)\s+preference|(?:i|we)\s+prefer\b|from now on\b)")
 _MEMORY_FORGET_RE = re.compile(
     r"^(?:please\s+)?(?:(?:permanently|completely)\s+)?"
-    r"(?:forget\b|stop remembering\b)")
+    r"(?:forget\s+(?:that\b.+|this(?:\s+(?:preference|memory|rule|request|"
+    r"instruction))?|(?:(?:the|my|our)\s+)?(?:(?:selected|obsolete|old|current)\s+)?"
+    r"(?:owner\s+)?(?:preference|memory|rule|record)\b.*)|"
+    r"stop\s+remembering\b.+)" + _CONTROL_END)
 _EMBEDDED_MEMORY_FORGET_RE = re.compile(
     r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?"
-    r"(?:forget\b|stop remembering\b)")
+    r"(?:forget\s+(?:that\b|this(?:\s+(?:preference|memory|rule|request|"
+    r"instruction))?\b|(?:(?:the|my|our)\s+)?"
+    r"(?:(?:selected|obsolete|old|current)\s+)?(?:owner\s+)?"
+    r"(?:preference|memory|rule|record)\b)|stop\s+remembering\b)")
+_CANCEL_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:cancel|abandon)(?:\s+(?:(?:the|this)\s+)?"
+    r"(?:(?:current|pending|active|reviewed)\s+)*(?:loom\s+)?"
+    r"(?:action|request|operation|plan(?:\s+generation)?|generation)"
+    r"(?:\s+[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})?(?:\s+for\s+this\s+project)?)?"
+    + _CONTROL_END)
+_CLOSE_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:close\s+this|close\s+(?:(?:this|the)\s+)?"
+    r"(?:project|loom\s+action|current\s+plan)|finish\s+(?:this|the)\s+project|"
+    r"we\s+are\s+done|project\s+is\s+over)" + _CONTROL_END)
+_CONTINUE_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"(?:continue|keep\s+going|resume|pick\s+up|carry\s+on)"
+    r"(?:\s+(?:with\s+)?(?:the\s+)?(?:(?:current|currently\s+active|active|approved)\s+)?"
+    r"(?:loom\s+)?(?:action|plan|work|project))?|"
+    r"(?:build|implement)\s+(?:the\s+)?(?:next|remaining|rest)"
+    r"(?:\s+(?:part|phase|work|work\s+order|plan\s+step))?|next\s+part)"
+    + _CONTROL_END)
+_UNDO_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:undo(?:\s+(?:the\s+)?(?:last|previous)"
+    r"(?:\s+loom)?\s+(?:change|action|operation|adjustment|decision))?|"
+    r"undo\s+(?:the\s+)?(?:last|previous)\s+loom\s+plan|"
+    r"take\s+back\s+(?:your|the)\s+(?:last|previous)(?:\s+loom)?\s+"
+    r"(?:change|action|operation|adjustment|decision)|"
+    r"reverse\s+(?:the\s+)?(?:last|previous)(?:\s+loom)?\s+"
+    r"(?:change|action|operation|adjustment|decision))" + _CONTROL_END)
+_STATUS_REASON_SUFFIX = (
+    r"(?:\s+and\s+(?:(?:explain|show(?:\s+me)?)\s+)?why"
+    r"(?:\s+[^.!?;,\r\n]{0,96})?)?")
+_STATUS_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"status|"
+    r"what(?:'s|\s+is)\s+the\s+(?:(?:current|active)\s+)?"
+    r"(?:(?:loom|project|action)\s+)?status|"
+    r"(?:report|show|display|give)(?:\s+me)?\s+"
+    r"(?:(?:the|a|an)\s+)?(?:(?:current|active)\s+)?"
+    r"(?:(?:(?:loom|project|action)\s+){0,2})"
+    r"(?:status|progress)(?:\s+for\s+(?:this|the)\s+project)?"
+    r"|"
+    r"show\s+me\s+where(?:\s+we\s+are)?|where\s+are\s+we|"
+    r"what\s+has\s+happened(?:\s+so\s+far)?|"
+    r"(?:show|report|display|give\s+me)\s+(?:(?:the|my)\s+)?"
+    r"(?:token\s+usage|performance\s+report|cost\s+report))"
+    + _STATUS_REASON_SUFFIX + r"(?:,\s*please)?" + _CONTROL_END)
+_NEGATED_EXECUTION_CONTROL_RE = re.compile(
+    r"^(?:build|implement|execute|start|apply)(?:\s+(?:it|this|that|"
+    r"(?:the\s+)?(?:plan|work|project|changes?)|"
+    r"(?:the\s+)?(?:next|remaining|rest)(?:\s+(?:part|phase|work|"
+    r"work\s+order|plan\s+step))?))?" + _CONTROL_END)
 _POSITIVE_SOFTWARE_CLAUSE_RE = re.compile(
     r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
     r"add|generate|plan|draft|outline|prepare|use|fix|update|change|modify|refactor|migrate|"
@@ -693,6 +770,16 @@ def _split_control_clauses(request):
                 else len(normalized)
             )
             candidate = normalized[match.end():next_start].strip()
+            coordinated = " ".join(
+                (current, match.group(0).strip(), candidate)).strip()
+            coordinated_role = _classify_control_clause(coordinated)
+            if match.lastgroup in {"and", "or"} \
+                    and coordinated_role is not None \
+                    and coordinated_role["negated"]:
+                # In "do not create or modify a plan", the lifecycle object is
+                # shared by both coordinated verbs. Keep that closed negative
+                # clause intact instead of turning the second verb positive.
+                continue
             # Lists such as "frame time, draw calls, and triangle budgets" are
             # one descriptive clause. A soft separator consumes the bounded
             # control-clause budget only when its right-hand side starts a real
@@ -731,8 +818,15 @@ def _classify_control_clause(clause):
         r"^(?:please\s+)?(?:make\s+no\s+(?:changes|modifications)|"
         r"modify\s+nothing|change\s+nothing|no\s+(?:changes|modifications))\b",
         body)
+    if mutation_prohibition is None:
+        mutation_prohibition = re.match(
+            r"^(?:please\s+)?leave\s+(?:the\s+)?project\s+unchanged\b",
+            body)
     control = None
     if mutation_prohibition:
+        intent = "plan"
+        control = "implementation"
+    elif negated is not None and _NEGATED_EXECUTION_CONTROL_RE.fullmatch(body):
         intent = "plan"
         control = "implementation"
     elif negated is not None and _is_lifecycle_plan_authority_clause(body):
@@ -747,35 +841,19 @@ def _classify_control_clause(clause):
             r"^(?:please\s+)?(?:implement|execute|start|apply)\b", body):
         intent = "plan"
         control = "implementation"
-    elif re.match(
-            r"^(?:remember\b|retain\s+(?:this|that)\s+preference\b|"
-            r"correct\s+(?:what you learned|my preference|that preference|"
-            r"the preference)\b|(?:i|we)\s+prefer\b|from now on\b|"
-            r"be (?:more careful|less autonomous)\b)", body):
+    elif _MEMORY_REMEMBER_RE.fullmatch(body):
         intent = "remember"
-    elif re.match(
-            r"^(?:(?:permanently|completely)\s+)?"
-            r"(?:forget\b|stop remembering\b)", body):
+    elif _MEMORY_FORGET_RE.fullmatch(body):
         intent = "forget"
-    elif re.match(
-            r"^(?:cancel|abandon)\b(?:\s+(?:the\s+)?(?:current|pending|active))?"
-            r"(?:\s+loom)?(?:\s+(?:action|request|operation|plan))?\b", body):
+    elif _CANCEL_CONTROL_RE.fullmatch(body):
         intent = "cancel"
-    elif _LIFECYCLE_REPAIR_RE.search(body) or re.match(
-            r"^(?:please\s+)?(?:repair|fix)\b"
-            r"(?=[^.!?;]{0,160}\b"
-            r"(?:plan|planning pack|lifecycle|generation)\s*$)",
-            body):
+    elif _LIFECYCLE_REPAIR_RE.fullmatch(body):
         intent = "repair"
-    elif _BUILD_CONTROL_RE.search(body) or re.match(
-            r"^(?:please\s+)?(?:continue|keep going|resume|pick up|carry on|build the next|"
-            r"next part)\b", body):
+    elif _CONTINUE_CONTROL_RE.fullmatch(body):
         intent = "continue"
-    elif re.match(r"^(?:undo|take back|reverse (?:the )?last)\b", body):
+    elif _UNDO_CONTROL_RE.fullmatch(body):
         intent = "undo"
-    elif re.match(
-            r"^(?:report|show|display|give)\b[^.!?;]{0,120}\bstatus\b",
-            body):
+    elif _STATUS_CONTROL_RE.fullmatch(body):
         intent = "status"
     elif re.match(r"^(?:why\b|explain\b|show (?:me )?why\b)", body):
         intent = "why"
@@ -795,7 +873,7 @@ def _classify_control_clause(clause):
             r"^(?:please\s+)?quarantine\b[^.!?;]{0,160}\b(?:loom\s+)?"
             r"(?:plan\s+store|plan\s+state|generation)\b", body):
         intent = "repair"
-    elif re.match(r"^(?:close this|finish the project|we are done|project is over)\b", body):
+    elif _CLOSE_CONTROL_RE.fullmatch(body):
         intent = "close"
     elif negated is not None \
             and (_is_build_request(body)
@@ -979,7 +1057,22 @@ def _resolve_clause_roles(request, state):
             "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
             confidence=0.0, evidence=("negated-control",),
             recommendation="Keep state unchanged; state the positive outcome you want Loom to pursue.")
+    if status_with_why:
+        return _decision(
+            "status", code="ROUTE_STATUS",
+            evidence=("role:status", "role:why"))
     if not negatives and not multiple_positive_outcomes and not has_or:
+        if planning_envelope and positive_intents == {"plan"} \
+                and not _top_level_plan_authority(request)[0]:
+            return _decision(
+                "plan", code="ROUTE_PLAN", evidence=("role:plan",))
+        if len(positive_intents) == 1 and "plan" not in positive_intents:
+            intent = next(iter(positive_intents))
+            if intent == "continue":
+                intent = _continue_route_intent(state)
+            return _decision(
+                intent, code=f"ROUTE_{intent.upper()}",
+                evidence=(f"role:{intent}",))
         return None
     intent = "status" if status_with_why else next(iter(positive_intents))
     if intent == "continue":
@@ -1065,9 +1158,9 @@ def _resolve_intent_from_text(request, state=None):
         r"\binspect what (?:loom|you) learned\b|\bwhat did (?:loom|you) learn\b|"
         r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b",
         text))
-    direct_forget = bool(_MEMORY_FORGET_RE.search(text))
+    direct_forget = bool(_MEMORY_FORGET_RE.fullmatch(text))
     embedded_forget = bool(_EMBEDDED_MEMORY_FORGET_RE.search(text))
-    direct_remember = bool(_MEMORY_REMEMBER_RE.search(text))
+    direct_remember = bool(_MEMORY_REMEMBER_RE.fullmatch(text))
     embedded_remember = bool(_EMBEDDED_MEMORY_REMEMBER_RE.search(text))
     explicit_forget = direct_forget and not build_request
     explicit_remember = (direct_remember and not build_request and not profile_query)
@@ -1089,17 +1182,6 @@ def _resolve_intent_from_text(request, state=None):
             confidence=0.0, evidence=("multiple-requested-outcomes",),
             recommendation=(
                 "Record or forget the preference first; pursue the separate action next."))
-    lifecycle_negation = re.search(
-        r"\b(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?\s+"
-        r"(?:close|continue|keep going|resume|repair|fix|build|implement|review|"
-        r"inspect|forget|remember|undo)\b",
-        text)
-    if lifecycle_negation and memory_direct is None:
-        return _decision(
-            "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
-            confidence=0.0, evidence=("negated-action",),
-            recommendation=(
-                "Keep state unchanged; state the positive outcome you want Loom to pursue."))
     if memory_direct is not None:
         signals = {name: name == memory_direct for name in (
             "remember", "forget", "why", "undo", "status", "review", "repair",
@@ -1116,32 +1198,19 @@ def _resolve_intent_from_text(request, state=None):
                 r"\bwhy (?:did|do|does|is|are|was|were|has|have)\b|\bexplain why\b|"
                 r"\bstatus\s+and\s+why\b",
                 task_text)),
-            "undo": bool(re.search(
-                r"\bundo\b|\btake back\b|\breverse (?:the )?last", task_text)),
-            "status": bool(re.search(
-                r"\bshow me where\b|\bwhere are we\b|\bwhat has happened\b|"
-                r"\bshow (?:me )?the progress\b|\bwhat(?:'s| is) the status\b|"
-                r"\bprogress\b|\bstatus\b|\btoken usage\b|\bperformance report\b|"
-                r"\bcost report\b", task_text)),
+            "undo": bool(_UNDO_CONTROL_RE.fullmatch(task_text)),
+            "status": bool(
+                _STATUS_CONTROL_RE.fullmatch(task_text)
+                or _STATUS_QUERY_RE.fullmatch(task_text)),
             "review": bool(re.search(
                 r"^(?:(?:please\s+)?(?:review|inspect|audit)|"
                 r"(?:could|would|can|will)\s+you\s+(?:please\s+)?"
                 r"(?:review|inspect|audit))\b",
                 task_text)),
-            "repair": bool(re.search(
-                r"\brepair\b|\bfix (?:the )?(?:stale |broken )?plan\b|"
-                r"\bstale plan\b", task_text)),
-            "close": bool(re.search(
-                r"\bwe are done\b|\bclose this\b|\bproject is over\b|"
-                r"\bfinish the project\b", task_text)),
-            "continue": bool(re.search(
-                r"\bcontinue\b|\bkeep going\b|\bresume\b|\bpick up\b|\bcarry on\b|"
-                r"\bbuild the next\b|\bnext part\b", task_text)),
-            "cancel": bool(re.search(
-                r"^(?:please\s+)?(?:cancel|abandon)\b"
-                r"(?:\s+(?:the\s+)?(?:current|pending|active))?"
-                r"(?:\s+loom)?(?:\s+(?:action|request|operation|plan))?\b",
-                task_text)),
+            "repair": bool(_LIFECYCLE_REPAIR_RE.fullmatch(task_text)),
+            "close": bool(_CLOSE_CONTROL_RE.fullmatch(task_text)),
+            "continue": bool(_CONTINUE_CONTROL_RE.fullmatch(task_text)),
+            "cancel": bool(_CANCEL_CONTROL_RE.fullmatch(task_text)),
         }
     if build_request:
         # Product nouns such as review, status, audit, repair, undo, and forget
@@ -1214,9 +1283,11 @@ _DIRECT_PLAN_COMMAND_RE = re.compile(
 _DIRECT_READ_ONLY_CONTROL_RE = re.compile(
     r"^(?:(?:without\s+(?:modifying|changing|writing|touching)\s+"
     r"(?:any\s+)?files?|read[- ]only)\s*,?\s*)?"
-    r"(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?(?:why\b|"
-    r"(?:report|show|display|give)\b[^.!?;]{0,120}\bstatus\b|"
-    r"(?:review|inspect|audit|verify)\b)")
+    r"(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?"
+    r"(?:why\b|explain\s+why\b|show\s+(?:me\s+)?why\b|"
+    r"(?:review|inspect|audit|verify)\b|"
+    r"summarize\s+(?:(?:the|this|that)\s+)?"
+    r"(?:report|source|evidence|results?)\s+only\b)")
 _DIRECT_QUARANTINE_COMMAND_RE = re.compile(
     r"^(?:please\s+)?quarantine\b[^.!?;]{0,160}\bloom\b[^.!?;]{0,80}"
     r"\b(?:plan\s+store|plan\s+state|generation)\b")
@@ -1334,12 +1405,15 @@ def _top_level_plan_authority(request):
     return direct, plan_prohibited, False
 
 
-def _assistance_operation(*, quotation_ambiguous=False):
+def _assistance_operation(*, decision=None, quotation_ambiguous=False):
     """Return useful inline planning without creating lifecycle authority."""
-    decision = _decision(
-        "plan", code="ROUTE_PLAN", confidence=1.0,
-        evidence=(("quotation-ambiguous" if quotation_ambiguous
-                   else "semantic-assistance"),))
+    if decision is None:
+        decision = _decision(
+            "plan", code="ROUTE_PLAN", confidence=1.0,
+            evidence=(("quotation-ambiguous" if quotation_ambiguous
+                       else "semantic-assistance"),))
+    elif decision.get("blocked") or decision.get("intent") != "plan":
+        raise RuntimeError("inline assistance requires one unblocked planning decision")
     return _SemanticOperation(
         decision=MappingProxyType(_synchronize_block_reason(
             decision, category="intent")),
@@ -1368,11 +1442,6 @@ def _structural_nonplanning_operation(request):
     if len(positive) != 1:
         return None
     intent = positive[0]["intent"]
-    if any(
-            role is not positive[0]
-            and (not role["negated"] or role["control"] != "implementation")
-            for role in roles):
-        return None
     if intent == "continue" and _EXACT_START_CONTROL_RE.search(
             request.casefold()):
         return None
@@ -1400,7 +1469,9 @@ def _semantic_operation(request, state=None):
             control_text="clarify lifecycle request",
             plan_materialization="inline-clarification",
             semantic_scope="contradictory")
-    if plan_prohibited:
+    if plan_prohibited and not (
+            not decision["blocked"]
+            and decision["intent"] in {"review", "status", "why"}):
         return _assistance_operation()
     if decision.get("code") == "PLAN_EXECUTION_CONTRADICTION":
         return _SemanticOperation(
@@ -1409,29 +1480,9 @@ def _semantic_operation(request, state=None):
             plan_materialization="inline-clarification",
             semantic_scope="contradictory")
     if decision["blocked"]:
-        if decision.get("code") == "HIGH_CONSEQUENCE_UNCERTAIN":
-            return _SemanticOperation(
-                decision=MappingProxyType(decision), control_text=masked,
-                plan_materialization="none", semantic_scope="direct")
-        roles = [
-            role
-            for _separator, clause in _split_control_clauses(masked)[0]
-            if (role := _classify_control_clause(clause)) is not None
-        ]
-        if decision.get("code") == "INTENT_NEGATED" or any(
-                role["intent"] in _STRUCTURAL_NONPLANNING_INTENTS
-                for role in roles):
-            return _SemanticOperation(
-                decision=MappingProxyType(decision), control_text=masked,
-                plan_materialization="none", semantic_scope="direct")
-        provisional = _provisional_planning_clarification((
-            "semantic-control-contradiction", "current-plan-preserved"))
         return _SemanticOperation(
-            decision=MappingProxyType(_synchronize_block_reason(
-                provisional, category="intent")),
-            control_text="clarify lifecycle request",
-            plan_materialization="inline-clarification",
-            semantic_scope="contradictory")
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="none", semantic_scope="direct")
     if overflow:
         return _assistance_operation()
     if direct_plan:
@@ -1451,12 +1502,11 @@ def _semantic_operation(request, state=None):
         return _SemanticOperation(
             decision=MappingProxyType(decision), control_text=masked,
             plan_materialization="none", semantic_scope="direct")
-    if any(_DIRECT_READ_ONLY_CONTROL_RE.match(clause) is not None
-           for clause in clauses):
-        if decision["intent"] not in {"review", "status", "why"}:
-            decision = _decision(
-                "review", code="ROUTE_REVIEW", confidence=1.0,
-                evidence=("role:read-only-control",))
+    if decision["intent"] in {"review", "status", "why"} and any(
+            _DIRECT_READ_ONLY_CONTROL_RE.match(clause) is not None
+            or _STATUS_CONTROL_RE.fullmatch(clause) is not None
+            or _STATUS_QUERY_RE.fullmatch(clause) is not None
+            for clause in clauses):
         return _SemanticOperation(
             decision=MappingProxyType(decision), control_text=masked,
             plan_materialization="none", semantic_scope="nonmaterializing")
@@ -1475,13 +1525,10 @@ def _semantic_operation(request, state=None):
         return _SemanticOperation(
             decision=MappingProxyType(decision), control_text=masked,
             plan_materialization="none", semantic_scope="direct")
-    if decision["intent"] in {"review", "status", "why"}:
-        return _SemanticOperation(
-            decision=MappingProxyType(decision), control_text=masked,
-            plan_materialization="none", semantic_scope="nonmaterializing")
     # Free text that proves neither a direct plan command nor one closed
     # non-planning operation remains useful but non-authorizing assistance.
-    return _assistance_operation()
+    return _assistance_operation(
+        decision=decision if decision["intent"] == "plan" else None)
 
 
 def resolve_intent(request, state=None):
@@ -1513,14 +1560,69 @@ def _project_write_prohibited(normalized_request):
                for pattern in _PROJECT_WRITE_PROHIBITION_PATTERNS)
 
 
+SEMANTIC_OUTCOME_EVIDENCE_ROOT = "semantic-outcome-"
 SEMANTIC_OUTCOME_EVIDENCE_PREFIX = "semantic-outcome-v1."
-_SEMANTIC_OUTCOME_TOKEN_RE = re.compile(
+SEMANTIC_CAPABILITY_EVIDENCE_PREFIX = "semantic-outcome-v2."
+_SEMANTIC_OUTCOME_V1_TOKEN_RE = re.compile(
     r"semantic-outcome-v1\.([a-z0-9][a-z0-9._-]{0,63})\."
     r"(generic|0|[1-9][0-9]*)\Z")
+_SEMANTIC_OUTCOME_V2_TOKEN_RE = re.compile(
+    r"semantic-outcome-v2\.([a-z0-9][a-z0-9._-]{0,63})\."
+    r"([a-z0-9][a-z0-9-]{0,63})\Z")
 _SEMANTIC_OUTCOME_STOP_WORDS = {
     "a", "an", "and", "for", "of", "or", "plan", "the", "to", "with",
     "workflow", "project", "change", "feature", "only", "do", "not",
 }
+
+# This is a closed semantic projection, not request text or an expanding phrase
+# allowlist.  Each capability is proved by a conjunction of bounded concept atoms;
+# ambiguous multi-capability text falls back to the historical bounded outcome.
+_SEMANTIC_CONCEPT_PATTERNS = MappingProxyType({
+    "accessibility": re.compile(r"\b(?:accessib(?:le|ility)|keyboard)\b"),
+    "account-credential": re.compile(r"\b(?:accounts?|credentials?|passwords?)\b"),
+    "backup-copy": re.compile(r"\b(?:back[- ]?ups?|snapshots?)\b"),
+    "data-export": re.compile(r"\bexport(?:s|ed|ing)?\b"),
+    "recovery-transition": re.compile(
+        r"\b(?:recover(?:y|ies|ed|ing)?|reset(?:s|ting)?|"
+        r"restor(?:e|es|ed|ing|ation))\b"),
+    "search-discovery": re.compile(r"\b(?:search(?:es|ed|ing)?|find(?:ing)?)\b"),
+    "tabular-data": re.compile(
+        r"\b(?:csv|tabular|comma[- ]separated(?:\s+values?)?)\b"),
+})
+_SEMANTIC_CAPABILITY_CATALOG = MappingProxyType({
+    "accessible-search-navigation": MappingProxyType({
+        "concepts": frozenset({"accessibility", "search-discovery"}),
+        "label": "accessible search and keyboard navigation behavior",
+    }),
+    "backup-restore-recovery": MappingProxyType({
+        "concepts": frozenset({"backup-copy", "recovery-transition"}),
+        "label": "backup, restore, integrity, and recovery behavior",
+    }),
+    "credential-account-recovery": MappingProxyType({
+        "concepts": frozenset({"account-credential", "recovery-transition"}),
+        "label": "credential reset and account recovery behavior",
+    }),
+    "tabular-data-export": MappingProxyType({
+        "concepts": frozenset({"data-export", "tabular-data"}),
+        "label": "tabular data export with explicit field and failure behavior",
+    }),
+})
+
+
+def _semantic_capability(request):
+    """Return one proved closed capability, or None for absent/ambiguous scope."""
+    task_text = loom_domain.task_language(request)
+    task_text, quotes_balanced = _mask_quoted_authority(task_text)
+    if not quotes_balanced:
+        return None
+    concepts = frozenset(
+        concept for concept, pattern in _SEMANTIC_CONCEPT_PATTERNS.items()
+        if pattern.search(task_text))
+    matches = [
+        capability for capability, value in _SEMANTIC_CAPABILITY_CATALOG.items()
+        if value["concepts"].issubset(concepts)
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def semantic_outcome_evidence(request, domains_result):
@@ -1532,6 +1634,13 @@ def semantic_outcome_evidence(request, domains_result):
             or any(not isinstance(domain, str) or not ID_RE.fullmatch(domain)
                    for domain in domains):
         raise RuntimeError("semantic outcome domain scope is invalid")
+    capability = _semantic_capability(request)
+    if capability is not None:
+        domain = sorted(domains)[0]
+        token = f"{SEMANTIC_CAPABILITY_EVIDENCE_PREFIX}{domain}.{capability}"
+        parse_semantic_outcome_token(token, domains)
+        return token
+
     request_terms = set(re.findall(
         r"[a-z0-9]+", loom_domain.task_language(request))) \
         - _SEMANTIC_OUTCOME_STOP_WORDS
@@ -1565,24 +1674,38 @@ def parse_semantic_outcome_token(token, domains):
                 for domain in domains) \
             or len(set(domains)) != len(domains):
         raise RuntimeError("semantic outcome identity or domain scope is invalid")
-    match = _SEMANTIC_OUTCOME_TOKEN_RE.fullmatch(token)
+    match = _SEMANTIC_OUTCOME_V1_TOKEN_RE.fullmatch(token)
+    if match is not None:
+        domain, suffix = match.groups()
+        if domain not in domains:
+            raise RuntimeError(
+                "semantic outcome identity is outside the sealed domains")
+        if suffix == "generic":
+            return {
+                "token": token, "domain": domain, "index": None,
+                "label": f"bounded {domain} deliverable",
+            }
+        invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
+        index = int(suffix)
+        if not 0 <= index < len(invariants):
+            raise RuntimeError("semantic outcome catalog index is outside its bound")
+        return {
+            "token": token, "domain": domain, "index": index,
+            "label": invariants[index],
+        }
+
+    match = _SEMANTIC_OUTCOME_V2_TOKEN_RE.fullmatch(token)
     if match is None:
         raise RuntimeError("semantic outcome identity is noncanonical")
-    domain, suffix = match.groups()
+    domain, capability = match.groups()
     if domain not in domains:
         raise RuntimeError("semantic outcome identity is outside the sealed domains")
-    if suffix == "generic":
-        return {
-            "token": token, "domain": domain, "index": None,
-            "label": f"bounded {domain} deliverable",
-        }
-    invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
-    index = int(suffix)
-    if not 0 <= index < len(invariants):
-        raise RuntimeError("semantic outcome catalog index is outside its bound")
+    projected = _SEMANTIC_CAPABILITY_CATALOG.get(capability)
+    if projected is None:
+        raise RuntimeError("semantic outcome capability is outside its closed catalog")
     return {
-        "token": token, "domain": domain, "index": index,
-        "label": invariants[index],
+        "token": token, "domain": domain, "index": None,
+        "label": projected["label"], "capability": capability,
     }
 
 
@@ -3549,7 +3672,7 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
         outcome_evidence = semantic_outcome_evidence(request, domains_result)
         prior_evidence = [
             item for item in decision["evidence"]
-            if not item.startswith(SEMANTIC_OUTCOME_EVIDENCE_PREFIX)]
+            if not item.startswith(SEMANTIC_OUTCOME_EVIDENCE_ROOT)]
         decision["evidence"] = [*prior_evidence[:15], outcome_evidence]
     _synchronize_block_reason(
         decision,
