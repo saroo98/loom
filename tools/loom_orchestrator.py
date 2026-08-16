@@ -979,7 +979,9 @@ def _is_canonical_pre_ux104_planning_control(control):
         "7aaf553efc41778311b4743cb6a1eb0f0f7c424afddca14c95c1a0a15ed0589a"
 
 
-def _validate_action(value, path, *, allow_pre_ux104_reprepare=False):
+def _validate_action(
+        value, path, *, allow_pre_ux104_reprepare=False,
+        action_security=None):
     if type(allow_pre_ux104_reprepare) is not bool:
         raise OrchestratorError(
             "ACTION_CORRUPT", "action compatibility mode is invalid")
@@ -1366,15 +1368,20 @@ def _validate_action(value, path, *, allow_pre_ux104_reprepare=False):
         if not isinstance(evidence, dict):
             raise OrchestratorError(
                 "ACTION_CORRUPT", "executor quiescence evidence is invalid")
-        if evidence.get("case") == "verified-host-terminal":
+        if evidence.get("case") in {
+                "verified-host-terminal", "host-never-admitted"}:
             try:
                 loom_executor_guard.validate_evidence(
                     Path(path).parent, value, evidence,
-                    project_world_sha256=evidence.get("project_world_sha256"))
+                    project_world_sha256=evidence.get("project_world_sha256"),
+                    security=action_security)
             except loom_executor_guard.GuardError as exc:
                 raise OrchestratorError(
                     "ACTION_CORRUPT",
                     "executor quiescence does not match its trusted host ledger") from exc
+        elif evidence.get("case") != "supervisor-terminal":
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "executor quiescence evidence case is unsupported")
     if created >= expires \
             or any(not isinstance(value[field], str) or not Path(value[field]).is_absolute()
                    for field in ("owner_home", "install_root", "cwd", "journal_path")) \
@@ -1454,7 +1461,8 @@ def _read_action(path, *, owner_home=None, install_root=None,
         security = (crypto, opened.identity()["owner_vault_id"])
     return path, _validate_action(
         value, path,
-        allow_pre_ux104_reprepare=allow_pre_ux104_reprepare), security
+        allow_pre_ux104_reprepare=allow_pre_ux104_reprepare,
+        action_security=security), security
 
 
 def _is_pre_ux104_reprepare_action(action):
@@ -1610,7 +1618,12 @@ def _open_lifecycle_private_projection(value, *, memory):
     expected_path = _action_path(
         action["owner_home"], action["instance_id"],
         action["project_id"], action["action_id"])
-    _validate_action(action, expected_path)
+    projection_security = (
+        (memory.vault.crypto, action["instance_id"])
+        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter)
+        else None)
+    _validate_action(
+        action, expected_path, action_security=projection_security)
     completion = payload["completion"]
     if value["operation"] == "complete":
         try:
@@ -2540,7 +2553,7 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None,
         "cancelled": "cancelled",
     }[reason]
     candidate["action_hash"] = _action_hash(candidate)
-    _validate_action(candidate, path)
+    _validate_action(candidate, path, action_security=security)
     written_controls = _write_recovered_action(
         path, candidate, security, control_token)
     _clear_active_pointer(
@@ -3134,12 +3147,17 @@ def _transition_project_generation_terminal(
                     "waits for the exact host operation to close. The current "
                     "plan remains authoritative and new mutation is denied."),
             }
+        terminal_action = dict(executor)
+        terminal_action["status"] = (
+            "superseded" if relation == "supersede-generation"
+            else "cancelled")
         private_projection = {
-            "schema_version": 1,
+            "schema_version": 2,
             "operation": "executor-terminal",
             "relation": relation,
             "action_id": executor["action_id"],
             "preterminal_action_sha256": executor["action_hash"],
+            "terminal_action_sha256": _action_hash(terminal_action),
             "source_state_sha256": state.state_sha256,
             "executor_quiescence": evidence,
         }
@@ -4456,7 +4474,8 @@ def _ensure_recovered_action_projection(
     if candidate["intent"] in {"execute", "repair"} \
             and candidate.get("generation_id") is not None:
         try:
-            loom_executor_guard.initialize(directory, candidate)
+            loom_executor_guard.initialize(
+                directory, candidate, security=security)
         except loom_executor_guard.GuardError as exc:
             raise OrchestratorError(
                 "EXECUTOR_GUARD_UNAVAILABLE",
@@ -10807,7 +10826,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         if prepared.intent in {"execute", "repair"} \
                 and action.get("generation_id") is not None:
             try:
-                loom_executor_guard.initialize(path.parent, action)
+                loom_executor_guard.initialize(
+                    path.parent, action, security=action_security)
             except loom_executor_guard.GuardError as exc:
                 raise OrchestratorError(
                     "EXECUTOR_GUARD_UNAVAILABLE",
@@ -10994,12 +11014,23 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     if action["intent"] in {"execute", "repair"} \
             and action.get("generation_id") is not None:
         try:
-            guard = loom_executor_guard.read(path.parent, action)
+            guard = loom_executor_guard.read(
+                path.parent, action, security=action_security)
+        except loom_executor_guard.GuardMissing as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_UPGRADE_REQUIRED",
+                "this pre-guard executor remains authoritative; completion "
+                "cannot be certified by the upgraded runtime. Continue the "
+                "exact action under its original compatible host/runtime; "
+                "Loom will not infer prior process death",
+                status="action-required") from exc
         except loom_executor_guard.GuardError as exc:
             raise OrchestratorError(
                 "EXECUTOR_GUARD_INVALID",
                 "executor completion guard is invalid or unavailable") from exc
-        if guard["freeze"] is not None:
+        if guard["freeze"] is not None \
+                and guard["freeze"]["reason_code"] not in {
+                    "action-completion", "action-timeout"}:
             raise OrchestratorError(
                 "EXECUTION_FROZEN",
                 "executor completion is unavailable while exact authority "
@@ -11007,6 +11038,19 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
                 status="action-required")
     instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
     if instant > loom_runtime._parse_time(action["expires_at"]):
+        if action["intent"] in {"execute", "repair"} \
+                and action.get("generation_id") is not None:
+            action, evidence, _frozen = _seal_trusted_executor_quiescence(
+                path, action, action_security,
+                owner_home=owner_home or action["owner_home"],
+                install_root=install_root or action["install_root"],
+                reason_code="action-timeout", terminal_state="timed-out")
+            if evidence is None:
+                raise OrchestratorError(
+                    "EXECUTOR_QUIESCENCE_REQUIRED",
+                    "executor timeout is frozen safely while Loom waits for "
+                    "the exact admitted host operation to close",
+                    status="action-required")
         controller, opened = _reopen(action)
         controller.interrupt(opened, code="orchestration-timeout", now=instant)
         if action["intent"] == "plan" and action["pack_seed"]["created_pack"]:
@@ -11248,6 +11292,19 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
         def seal_repair_completion(memory_adapter):
             return _seal_v3_repair_completion(
                 action, path, memory_adapter)
+    if action["intent"] in {"execute", "repair"} \
+            and action.get("generation_id") is not None:
+        action, evidence, _frozen = _seal_trusted_executor_quiescence(
+            path, action, action_security,
+            owner_home=owner_home or action["owner_home"],
+            install_root=install_root or action["install_root"],
+            reason_code="action-completion", terminal_state="completed")
+        if evidence is None:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "executor completion is frozen safely while Loom waits for "
+                "the exact admitted host operation to close",
+                status="action-required")
     controller = _controller(
         action, usage=usage, seal_plan_author=seal_plan_author,
         seal_execution_completion=seal_execution_completion,
@@ -11260,6 +11317,19 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     except loom_session.SessionInterrupted as exc:
         action["attempts"] += 1
         if action["attempts"] >= action["max_attempts"]:
+            if action["intent"] in {"execute", "repair"} \
+                    and action.get("generation_id") is not None:
+                action, evidence, _frozen = _seal_trusted_executor_quiescence(
+                    path, action, action_security,
+                    owner_home=owner_home or action["owner_home"],
+                    install_root=install_root or action["install_root"],
+                    reason_code="action-completion", terminal_state="failed")
+                if evidence is None:
+                    raise OrchestratorError(
+                        "EXECUTOR_QUIESCENCE_REQUIRED",
+                        "executor failure remains pending until the exact "
+                        "admitted host operation closes",
+                        status="action-required") from exc
             action["status"] = "failed"
         _write_action(path, action, action_security)
         if action["status"] == "failed":
@@ -11331,7 +11401,8 @@ def _validate_executor_terminal_projection(
         install_root, relation, require_preterminal):
     fields = {
         "schema_version", "operation", "relation", "action_id",
-        "preterminal_action_sha256", "source_state_sha256",
+        "preterminal_action_sha256", "terminal_action_sha256",
+        "source_state_sha256",
         "executor_quiescence",
     }
     try:
@@ -11343,14 +11414,17 @@ def _validate_executor_terminal_projection(
             "LIFECYCLE_PROJECTION_INVALID",
             "executor terminal projection has no active lifecycle subject") from exc
     if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != 1 \
+            or value.get("schema_version") != 2 \
             or value.get("operation") != "executor-terminal" \
             or value.get("relation") != relation \
             or value.get("action_id") != expected_action_id \
             or value.get("source_state_sha256") != source_state.state_sha256 \
             or not isinstance(value.get("preterminal_action_sha256"), str) \
             or re.fullmatch(
-                r"[0-9a-f]{64}", value["preterminal_action_sha256"]) is None:
+                r"[0-9a-f]{64}", value["preterminal_action_sha256"]) is None \
+            or not isinstance(value.get("terminal_action_sha256"), str) \
+            or re.fullmatch(
+                r"[0-9a-f]{64}", value["terminal_action_sha256"]) is None:
         raise OrchestratorError(
             "LIFECYCLE_PROJECTION_INVALID",
             "executor terminal projection does not match lifecycle authority")
@@ -11362,17 +11436,29 @@ def _validate_executor_terminal_projection(
     if action["project_id"] != source_state.project_id \
             or action.get("generation_id") != source_state.generation_id \
             or action["intent"] not in {"execute", "repair"} \
-            or action["status"] not in {"pending", expected_terminal} \
-            or require_preterminal \
-            and action["action_hash"] != value["preterminal_action_sha256"]:
+            or action["status"] not in {"pending", expected_terminal}:
         raise OrchestratorError(
             "LIFECYCLE_PROJECTION_INVALID",
             "executor terminal action does not match its sealed projection")
+    if require_preterminal:
+        action_matches = action["status"] == "pending" \
+            and action["action_hash"] == value["preterminal_action_sha256"]
+    elif action["status"] == "pending":
+        action_matches = \
+            action["action_hash"] == value["preterminal_action_sha256"]
+    else:
+        action_matches = \
+            action["action_hash"] == value["terminal_action_sha256"]
+    if not action_matches:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal action digest is outside the sealed derivation")
     evidence = value["executor_quiescence"]
     try:
         loom_executor_guard.validate_evidence(
             directory, action, evidence,
-            project_world_sha256=source_state.expected_world_sha256)
+            project_world_sha256=source_state.expected_world_sha256,
+            security=security)
     except loom_executor_guard.GuardError as exc:
         raise OrchestratorError(
             "LIFECYCLE_PROJECTION_INVALID",
@@ -11414,24 +11500,56 @@ def _executor_lifecycle_state(action, directory, *, owner_home, install_root):
 
 
 def _seal_trusted_executor_quiescence(
-        path, action, security, *, owner_home, install_root, reason_code):
+        path, action, security, *, owner_home, install_root, reason_code,
+        terminal_state="cancelled"):
     directory = Path(path).parent
+    existing = (
+        action.get("host_result", {}).get("executor_quiescence")
+        if isinstance(action.get("host_result"), dict) else None)
+    if isinstance(existing, dict) \
+            and existing.get("terminal_state") == terminal_state:
+        try:
+            loom_executor_guard.validate_evidence(
+                directory, action, existing,
+                project_world_sha256=existing.get("project_world_sha256"),
+                security=security)
+            frozen = loom_executor_guard.read(
+                directory, action, security=security)
+        except loom_executor_guard.GuardMissing as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_UPGRADE_REQUIRED",
+                "sealed executor evidence lost its trusted host-operation ledger",
+                status="action-required") from exc
+        except loom_executor_guard.GuardError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_INVALID",
+                "sealed executor evidence no longer matches its trusted guard") from exc
+        return action, existing, frozen
     state, _ledger = _executor_lifecycle_state(
         action, directory, owner_home=owner_home,
         install_root=install_root)
     try:
         frozen = loom_executor_guard.freeze(
-            directory, action, reason_code=reason_code)
+            directory, action, reason_code=reason_code,
+            security=security)
         evidence = loom_executor_guard.seal_quiescence(
             directory, action,
             project_world_sha256=state.expected_world_sha256,
-            terminal_state="cancelled")
+            terminal_state=terminal_state, security=security)
     except loom_executor_guard.GuardPending:
         return action, None, frozen
+    except loom_executor_guard.GuardMissing as exc:
+        raise OrchestratorError(
+            "EXECUTOR_GUARD_UPGRADE_REQUIRED",
+            "this pre-guard executor remains authoritative but has no trusted "
+            "host-operation ledger; Loom will not synthesize quiescence. "
+            "Finish the exact action under its original compatible host/runtime; this "
+            "upgraded runtime cannot infer prior process death",
+            status="action-required") from exc
     except loom_executor_guard.GuardError as exc:
         raise OrchestratorError(
             "EXECUTOR_GUARD_INVALID",
-            "executor cancellation guard is invalid or unsafe") from exc
+            "executor retirement guard is invalid or unsafe") from exc
     action["host_result"] = {
         **(action.get("host_result") or {}),
         "executor_quiescence": evidence,

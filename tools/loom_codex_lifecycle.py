@@ -79,7 +79,7 @@ def _active_action(home, install_root, cwd):
     if pointer is None:
         return None
     action_path = directory / f"{pointer['action_id']}.json"
-    _path, action, _security = loom_orchestrator._read_action(
+    _path, action, security = loom_orchestrator._read_action(
         action_path, owner_home=home, install_root=install_root)
     if action["status"] not in {"initializing", "pending"}:
         return None
@@ -88,7 +88,7 @@ def _active_action(home, install_root, cwd):
         cwd.relative_to(target)
     except ValueError:
         return None
-    return action
+    return action, security
 
 
 def _work_order_touches(action):
@@ -181,29 +181,32 @@ def _lifecycle_control_tool(name):
     return _lifecycle_control_operation(name) is not None
 
 
-def _guard_is_frozen(action):
+def _guard_is_frozen(action, security):
     directory = _guard_directory(action)
     try:
         with loom_reliability.exclusive_file_lock(
                 loom_orchestrator._orchestration_lock(directory)):
-            return loom_executor_guard.read(
-                directory, action)["freeze"] is not None
+            freeze = loom_executor_guard.read(
+                directory, action, security=security)["freeze"]
+            return None if freeze is None else freeze["reason_code"]
     except loom_reliability.ReliabilityError as exc:
         raise LifecycleError("executor guard lock is unavailable") from exc
 
 
-def _begin_guarded_operation(action, event, *, operation_kind):
+def _begin_guarded_operation(
+        action, event, *, operation_kind, security):
     directory = _guard_directory(action)
     try:
         with loom_reliability.exclusive_file_lock(
                 loom_orchestrator._orchestration_lock(directory)):
             return loom_executor_guard.begin_operation(
-                directory, action, event, operation_kind=operation_kind)
+                directory, action, event, operation_kind=operation_kind,
+                security=security)
     except loom_reliability.ReliabilityError as exc:
         raise LifecycleError("executor guard lock is unavailable") from exc
 
 
-def _observe_guarded_post(action, event):
+def _observe_guarded_post(action, event, *, security):
     if not _guarded_executor(action):
         return
     directory = _guard_directory(action)
@@ -217,7 +220,8 @@ def _observe_guarded_post(action, event):
             loom_executor_guard.observe_post(
                 directory, action, event,
                 lifecycle_control=_lifecycle_control_tool(name),
-                nonmutating=name in READ_ONLY_TOOLS)
+                nonmutating=name in READ_ONLY_TOOLS,
+                security=security)
     except loom_reliability.ReliabilityError as exc:
         raise LifecycleError("executor guard lock is unavailable") from exc
 
@@ -346,9 +350,16 @@ def _denied(action, reason, rejection_code, *, home, install_root):
 
 
 def handle(event, *, home, install_root):
-    action = _active_action(home, install_root, event["cwd"])
-    if action is None:
+    active = _active_action(home, install_root, event["cwd"])
+    if active is None:
         return 0, None
+    # Direct unit adapters may provide a plaintext disposable action.  The
+    # production resolver always returns the authenticated action and vault
+    # security together.
+    if isinstance(active, tuple):
+        action, guard_security = active
+    else:
+        action, guard_security = active, None
     name = event["hook_event_name"]
     if name == "PreToolUse" and event.get("tool_name") in STRUCTURED_WRITE_TOOLS:
         target, patterns = _work_order_touches(action)
@@ -377,7 +388,8 @@ def handle(event, *, home, install_root):
         if _guarded_executor(action):
             try:
                 _begin_guarded_operation(
-                    action, event, operation_kind="structured-write")
+                    action, event, operation_kind="structured-write",
+                    security=guard_security)
             except loom_executor_guard.GuardFrozen:
                 _record(home, event, action, outcome="blocked-execution-frozen")
                 return _denied(
@@ -402,14 +414,15 @@ def handle(event, *, home, install_root):
         operation = _lifecycle_control_operation(event.get("tool_name"))
         if _guarded_executor(action) and operation == "complete":
             try:
-                frozen = _guard_is_frozen(action)
+                frozen = _guard_is_frozen(action, guard_security)
             except loom_executor_guard.GuardError:
                 _record(home, event, action, outcome="blocked-guard-invalid")
                 return _denied(
                     action, _denial_reason("EXECUTOR_GUARD_UNPROVEN", []),
                     "EXECUTOR_GUARD_UNPROVEN", home=home,
                     install_root=install_root)
-            if frozen:
+            if frozen is not None and frozen not in {
+                    "action-completion", "action-timeout"}:
                 _record(home, event, action, outcome="blocked-execution-frozen")
                 return _denied(
                     action, _denial_reason("EXECUTION_FROZEN", []),
@@ -433,7 +446,8 @@ def handle(event, *, home, install_root):
             "TOOL_EFFECT_UNPROVEN", home=home,
             install_root=install_root)
     if name == "PostToolUse":
-        _observe_guarded_post(action, event)
+        _observe_guarded_post(
+            action, event, security=guard_security)
     _record(home, event, action, outcome="observed")
     if name in {"PreCompact", "PostCompact", "SubagentStart"}:
         return 0, _context(action, name)

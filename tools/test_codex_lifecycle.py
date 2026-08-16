@@ -401,6 +401,18 @@ class CodexLifecycleTests(unittest.TestCase):
                 **complete_event, "tool_use_id": "cancel-retry",
                 "tool_name": "mcp__loom__cancel"}))
 
+    def test_timeout_freeze_allows_exact_completion_retry_after_post_closure(self):
+        """The hook preserves the only safe operation that can finish retirement."""
+        directory = self._guarded_execution()
+        loom_executor_guard.freeze(
+            directory, self.action, reason_code="action-timeout")
+        complete_event = self.event(
+            session_id="host-session-1", turn_id="host-turn-timeout",
+            tool_use_id="complete-timeout", tool_name="mcp__loom__complete",
+            tool_input={})
+
+        self.assertEqual((0, None), self.handle(complete_event))
+
     def test_compaction_context_is_bounded_and_not_new_authority(self):
         code, output = self.handle(self.event(name="PreCompact"))
         self.assertEqual(0, code)

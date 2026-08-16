@@ -30,6 +30,10 @@ class GuardPending(GuardError):
     pass
 
 
+class GuardMissing(GuardError):
+    pass
+
+
 class GuardFrozen(GuardError):
     pass
 
@@ -65,19 +69,29 @@ def _action_identity(action):
             or not isinstance(owner_home, str) \
             or not Path(owner_home).is_absolute():
         raise GuardError("executor guard action identity is invalid")
+    try:
+        owner_authority = loom_reliability._absolute(
+            owner_home, "executor guard owner", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise GuardError("executor guard owner authority is unsafe") from exc
     return {
         "action_id": action_id,
         "project_id": project_id,
         "generation_id": generation_id,
         "action_operation_id": operation_id,
-        "owner_home": str(Path(owner_home).resolve()),
+        "owner_home": str(owner_authority),
     }
 
 
 def _guard_root(directory, action, *, create):
     identity = _action_identity(action)
-    owner = Path(identity["owner_home"])
-    directory = Path(directory).resolve()
+    try:
+        owner = loom_reliability._absolute(
+            identity["owner_home"], "executor guard owner", must_exist=True)
+        directory = loom_reliability._absolute(
+            directory, "executor guard directory", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise GuardError("executor guard root is unsafe") from exc
     try:
         relative = directory.relative_to(owner)
     except ValueError as exc:
@@ -110,6 +124,79 @@ def _guard_root(directory, action, *, create):
     except (OSError, loom_reliability.ReliabilityError,
             loom_windows_acl.WindowsAclError) as exc:
         raise GuardError("executor guard storage is unsafe") from exc
+
+
+def _parent_identity(root):
+    try:
+        observed = loom_reliability.observe_root_identity(root)
+    except loom_reliability.ReliabilityError as exc:
+        raise GuardError("executor guard parent identity is unsafe") from exc
+    return {
+        key: observed[key] for key in (
+            "platform", "path_sha256", "kind", "device", "inode")
+    }
+
+
+def _validate_parent_identity(root, expected):
+    if not isinstance(expected, dict) or set(expected) != {
+            "platform", "path_sha256", "kind", "device", "inode"} \
+            or expected.get("kind") != "directory" \
+            or not isinstance(expected.get("platform"), str) \
+            or HEX64.fullmatch(str(expected.get("path_sha256", ""))) is None \
+            or any(type(expected.get(key)) is not int
+                   for key in ("device", "inode")):
+        raise GuardError("executor guard parent identity is invalid")
+    if _parent_identity(root) != expected:
+        raise GuardError("executor guard parent identity changed")
+
+
+def _validate_leaf(path):
+    try:
+        if loom_reliability._is_redirect(path):
+            raise GuardError("executor guard leaf is redirected")
+        info = Path(path).lstat()
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1:
+            raise GuardError("executor guard leaf is not a single-link regular file")
+        if os.name == "posix" and stat.S_IMODE(info.st_mode) != 0o600:
+            raise GuardError("executor guard leaf permissions are not private")
+        if os.name == "nt":
+            loom_windows_acl.verify_private_directory(Path(path).parent)
+    except GuardError:
+        raise
+    except (OSError, loom_reliability.ReliabilityError,
+            loom_windows_acl.WindowsAclError) as exc:
+        raise GuardError("executor guard leaf is unsafe") from exc
+    try:
+        return loom_reliability.observe_root_identity(path)
+    except loom_reliability.ReliabilityError as exc:
+        raise GuardError("executor guard leaf identity is unsafe") from exc
+
+
+def _guard_body(value):
+    return {
+        key: item for key, item in value.items()
+        if key not in {"guard_sha256", "guard_authentication"}
+    }
+
+
+def _authentication(security, action_id, guard_sha256):
+    if security is None:
+        return None
+    try:
+        crypto, owner_vault_id = security
+        owner_vault_id = str(uuid.UUID(str(owner_vault_id)))
+        tag = crypto.blind_index(
+            "executor-guard-v2",
+            f"{owner_vault_id}:{action_id}:{guard_sha256}")
+    except (TypeError, ValueError, AttributeError, RuntimeError) as exc:
+        raise GuardError("executor guard authentication is unavailable") from exc
+    if HEX64.fullmatch(str(tag)) is None:
+        raise GuardError("executor guard authentication is invalid")
+    return {
+        "mode": "owner-vault-blind-index-v1",
+        "owner_vault_id": owner_vault_id,
+        "tag": tag,
+    }
 
 
 def guard_path(directory, action):
@@ -169,19 +256,17 @@ def _validate_operation(value):
         raise GuardError("open process operation carries terminal evidence")
 
 
-def _validate(value, action):
+def _validate(value, action, *, security=None, root=None):
     identity = _action_identity(action)
     fields = {
         "schema_version", "action_id", "project_id", "generation_id",
         "action_operation_id", "coverage_state", "host_session_sha256",
-        "coverage_failure", "operations", "freeze", "guard_sha256",
+        "coverage_failure", "operations", "freeze", "storage_parent_identity",
+        "guard_sha256", "guard_authentication",
     }
-    unsigned = {
-        key: item for key, item in value.items()
-        if key != "guard_sha256"
-    } if isinstance(value, dict) else {}
+    unsigned = _guard_body(value) if isinstance(value, dict) else {}
     if not isinstance(value, dict) or set(value) != fields \
-            or value.get("schema_version") != 1 \
+            or value.get("schema_version") != 2 \
             or any(value.get(key) != identity[key] for key in (
                 "action_id", "project_id", "generation_id",
                 "action_operation_id")) \
@@ -195,6 +280,12 @@ def _validate(value, action):
             or len(value["operations"]) > MAX_OPERATIONS \
             or value.get("guard_sha256") != _hash(unsigned):
         raise GuardError("executor guard is invalid")
+    expected_authentication = _authentication(
+        security, identity["action_id"], value["guard_sha256"])
+    if value.get("guard_authentication") != expected_authentication:
+        raise GuardError("executor guard authentication does not match owner authority")
+    if root is not None:
+        _validate_parent_identity(root, value.get("storage_parent_identity"))
     seen = set()
     for operation in value["operations"]:
         _validate_operation(operation)
@@ -215,27 +306,44 @@ def _validate(value, action):
     return value
 
 
-def _write(path, value, action):
+def _write(path, value, action, *, security=None):
     candidate = dict(value)
-    candidate["guard_sha256"] = _hash({
-        key: item for key, item in candidate.items()
-        if key != "guard_sha256"})
-    _validate(candidate, action)
+    root = Path(path).parent
+    try:
+        parent_before = loom_reliability.observe_root_identity(root)
+        _validate_parent_identity(root, candidate.get("storage_parent_identity"))
+        if os.path.lexists(path):
+            _validate_leaf(path)
+    except GuardError:
+        raise
+    except loom_reliability.ReliabilityError as exc:
+        raise GuardError("executor guard parent identity is unsafe") from exc
+    candidate["guard_sha256"] = _hash(_guard_body(candidate))
+    candidate["guard_authentication"] = _authentication(
+        security, candidate["action_id"], candidate["guard_sha256"])
+    _validate(candidate, action, security=security, root=root)
     try:
         loom_reliability.atomic_write_json(path, candidate)
+        if os.name == "posix":
+            os.chmod(path, 0o600)
+        loom_reliability._validate_directory_object_continuity(
+            root, parent_before)
+        _validate_leaf(path)
     except loom_reliability.ReliabilityError as exc:
+        raise GuardError("executor guard could not be persisted") from exc
+    except OSError as exc:
         raise GuardError("executor guard could not be persisted") from exc
     return json.loads(json.dumps(candidate))
 
 
-def initialize(directory, action):
+def initialize(directory, action, *, security=None):
     identity = _action_identity(action)
     root = _guard_root(directory, action, create=True)
     path = root / (identity["action_id"] + ".json")
     if os.path.lexists(path):
-        return read(directory, action)
+        return read(directory, action, security=security)
     value = {
-        "schema_version": 1,
+        "schema_version": 2,
         "action_id": identity["action_id"],
         "project_id": identity["project_id"],
         "generation_id": identity["generation_id"],
@@ -245,49 +353,66 @@ def initialize(directory, action):
         "coverage_failure": False,
         "operations": [],
         "freeze": None,
+        "storage_parent_identity": _parent_identity(root),
         "guard_sha256": "",
+        "guard_authentication": None,
     }
-    return _write(path, value, action)
+    return _write(path, value, action, security=security)
 
 
-def read(directory, action):
+def read(directory, action, *, security=None):
     path = guard_path(directory, action)
+    if not os.path.lexists(path):
+        raise GuardMissing("executor guard is unavailable")
     try:
-        if path.is_symlink() or not path.is_file() \
-                or path.stat().st_size > MAX_GUARD_BYTES:
+        before = _validate_leaf(path)
+        if path.stat().st_size > MAX_GUARD_BYTES:
             raise GuardError("executor guard is unavailable or unsafe")
         value = json.loads(path.read_text(encoding="utf-8"))
+        loom_reliability.validate_root_identity(path, before)
     except GuardError:
         raise
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            loom_reliability.ReliabilityError) as exc:
         raise GuardError("executor guard is unreadable") from exc
-    return _validate(value, action)
+    return _validate(
+        value, action, security=security, root=path.parent)
 
 
 def observe_post(
         directory, action, event, *, lifecycle_control=False,
-        nonmutating=False, supervisor_receipt=None):
-    value = read(directory, action)
+        nonmutating=False, supervisor_receipt=None, security=None):
+    value = read(directory, action, security=security)
     observed = _event_identity(event)
     if value["coverage_state"] == "awaiting-host":
-        if not lifecycle_control or value["freeze"] is not None:
+        if lifecycle_control and value["freeze"] is None:
+            value["coverage_state"] = "active"
+            value["host_session_sha256"] = observed["host_session_sha256"]
+            return _write(
+                guard_path(directory, action), value, action,
+                security=security)
+        if lifecycle_control or nonmutating:
+            return value
+        else:
             value["coverage_failure"] = True
-            return _write(guard_path(directory, action), value, action)
-        value["coverage_state"] = "active"
-        value["host_session_sha256"] = observed["host_session_sha256"]
-        return _write(guard_path(directory, action), value, action)
-    if observed["host_session_sha256"] != value["host_session_sha256"]:
-        value["coverage_failure"] = True
-        return _write(guard_path(directory, action), value, action)
+            return _write(
+                guard_path(directory, action), value, action,
+                security=security)
     operation = next((
         item for item in value["operations"]
         if item["operation_id"] == observed["operation_id"]), None)
     if operation is None:
-        if not lifecycle_control and not nonmutating:
-            value["coverage_failure"] = True
-        return _write(guard_path(directory, action), value, action)
+        if lifecycle_control or nonmutating:
+            return value
+        value["coverage_failure"] = True
+        return _write(
+            guard_path(directory, action), value, action,
+            security=security)
+    if observed["host_session_sha256"] != value["host_session_sha256"]:
+        raise GuardError("host operation completion changed its session identity")
     if operation["state"] != "open" \
             or operation["tool_name"] != observed["tool_name"] \
+            or operation["host_turn_sha256"] != observed["host_turn_sha256"] \
             or operation["input_sha256"] != observed["input_sha256"]:
         raise GuardError("host operation completion does not match its preflight")
     if operation["kind"] == "supervised-process":
@@ -296,13 +421,15 @@ def observe_post(
     elif supervisor_receipt is not None:
         raise GuardError("structured host operation carries process evidence")
     operation["state"] = "closed"
-    return _write(guard_path(directory, action), value, action)
+    return _write(
+        guard_path(directory, action), value, action, security=security)
 
 
-def begin_operation(directory, action, event, *, operation_kind):
+def begin_operation(
+        directory, action, event, *, operation_kind, security=None):
     if operation_kind not in KINDS:
         raise GuardError("host operation class is unsupported")
-    value = read(directory, action)
+    value = read(directory, action, security=security)
     observed = _event_identity(event)
     if value["freeze"] is not None:
         raise GuardFrozen("executor mutation is frozen")
@@ -329,16 +456,14 @@ def begin_operation(directory, action, event, *, operation_kind):
     if len(value["operations"]) >= MAX_OPERATIONS:
         raise GuardPending("host operation ledger reached its bound")
     value["operations"].append(candidate)
-    return _write(guard_path(directory, action), value, action)
+    return _write(
+        guard_path(directory, action), value, action, security=security)
 
 
-def freeze(directory, action, *, reason_code):
+def freeze(directory, action, *, reason_code, security=None):
     if not isinstance(reason_code, str) or SAFE_REASON.fullmatch(reason_code) is None:
         raise GuardError("executor freeze reason is invalid")
-    try:
-        value = read(directory, action)
-    except GuardError:
-        value = initialize(directory, action)
+    value = read(directory, action, security=security)
     if value["freeze"] is None:
         freeze_value = {
             "reason_code": reason_code,
@@ -346,7 +471,9 @@ def freeze(directory, action, *, reason_code):
         }
         freeze_value["freeze_sha256"] = _hash(freeze_value)
         value["freeze"] = freeze_value
-        return _write(guard_path(directory, action), value, action)
+        return _write(
+            guard_path(directory, action), value, action,
+            security=security)
     if value["freeze"]["reason_code"] != reason_code:
         raise GuardError("executor is frozen for another exact operation")
     return value
@@ -371,8 +498,12 @@ def _evidence(value, action, *, project_world_sha256, terminal_state):
             or HEX64.fullmatch(project_world_sha256) is None \
             or terminal_state not in {"cancelled", "completed", "failed", "timed-out"}:
         raise GuardError("executor quiescence subject is invalid")
+    never_admitted = value["coverage_state"] == "awaiting-host" \
+        and not value["operations"] \
+        and value["host_session_sha256"] is None
+    verified_terminal = value["coverage_state"] == "active"
     if value["freeze"] is None \
-            or value["coverage_state"] != "active" \
+            or not (never_admitted or verified_terminal) \
             or value["coverage_failure"]:
         raise GuardPending("executor host coverage is not closed")
     open_count = sum(
@@ -384,7 +515,9 @@ def _evidence(value, action, *, project_world_sha256, terminal_state):
             _safe_supervisor_receipt(operation["supervisor_receipt"])
     body = {
         "schema_version": 1,
-        "case": "verified-host-terminal",
+        "case": (
+            "host-never-admitted" if never_admitted
+            else "verified-host-terminal"),
         "action_id": value["action_id"],
         "project_id": value["project_id"],
         "generation_id": value["generation_id"],
@@ -406,19 +539,21 @@ def _evidence(value, action, *, project_world_sha256, terminal_state):
 
 
 def seal_quiescence(
-        directory, action, *, project_world_sha256, terminal_state):
+        directory, action, *, project_world_sha256, terminal_state,
+        security=None):
     return _evidence(
-        read(directory, action), action,
+        read(directory, action, security=security), action,
         project_world_sha256=project_world_sha256,
         terminal_state=terminal_state)
 
 
 def validate_evidence(
-        directory, action, evidence, *, project_world_sha256):
+        directory, action, evidence, *, project_world_sha256,
+        security=None):
     if not isinstance(evidence, dict):
         raise GuardError("executor quiescence evidence is invalid")
     expected = _evidence(
-        read(directory, action), action,
+        read(directory, action, security=security), action,
         project_world_sha256=project_world_sha256,
         terminal_state=evidence.get("terminal_state"))
     if evidence != expected:
