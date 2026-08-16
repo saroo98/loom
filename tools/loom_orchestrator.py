@@ -963,6 +963,21 @@ def _validate_legacy_plan_contract_v4(contract, *, action, prepared):
     return contract
 
 
+def _is_canonical_pre_ux104_planning_control(control):
+    """Accept only the one historical writer output proven by repository history."""
+    return isinstance(control, dict) \
+        and control.get("schema_version") == 1 \
+        and control.get("primary_operation") == "plan" \
+        and control.get("relation") == "new" \
+        and control.get("prohibitions") == [] \
+        and control.get("explicitness") == "defaulted" \
+        and control.get("evidence") == ["safe-new-default"] \
+        and control.get("blocked") is False \
+        and control.get("block_reason") is None \
+        and control.get("control_sha256") == \
+        "7aaf553efc41778311b4743cb6a1eb0f0f7c424afddca14c95c1a0a15ed0589a"
+
+
 def _validate_action(value, path, *, allow_pre_ux104_reprepare=False):
     if type(allow_pre_ux104_reprepare) is not bool:
         raise OrchestratorError(
@@ -1364,7 +1379,9 @@ def _validate_action(value, path, *, allow_pre_ux104_reprepare=False):
         raise OrchestratorError("ACTION_PATH_MISMATCH", "session journal is not project-scoped")
     if missing_planning_disposition \
             and value["status"] not in TERMINAL_ACTION_STATUSES:
-        if not allow_pre_ux104_reprepare:
+        if not allow_pre_ux104_reprepare \
+                or not _is_canonical_pre_ux104_planning_control(
+                    value["request_control"]):
             raise OrchestratorError(
                 "ACTION_REPREPARE_REQUIRED",
                 "an open pre-UX-104 planning action has no sealed disposition; invoke /loom "
@@ -1429,10 +1446,8 @@ def _is_pre_ux104_reprepare_action(action):
     return action.get("schema_version") == ACTION_SCHEMA_VERSION \
         and action.get("intent") == "plan" \
         and action.get("status") not in TERMINAL_ACTION_STATUSES \
-        and isinstance(action.get("request_control"), dict) \
-        and not any(
-            isinstance(item, str) and item.startswith("planning-")
-            for item in action["request_control"].get("evidence", []))
+        and _is_canonical_pre_ux104_planning_control(
+            action.get("request_control"))
 
 
 def _write_action(path, value, security=None):
@@ -2099,7 +2114,162 @@ def _manifest_if_proven(path, expected, *, allow_subset=False):
     return None
 
 
-def _recover_plan_action(path, action, security, *, now, requested_reason=None):
+def _preflight_plan_action_recovery(path, action, *, requested_reason=None):
+    """Prove the complete recovery surface without mutating session or artifacts."""
+    transaction_path = _plan_author_transaction_path(action)
+    if _path_present(transaction_path):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "planning recovery found an unfinished plan-author transaction; all "
+            "state was preserved")
+    target = Path(action["explicit_target"] or action["cwd"])
+    pack = target / "plans"
+    project_stage = _project_stage_path(action)
+    legacy_stage = _stage_path(path)
+    legacy_tombstone = target / f".loom-recovery-{action['action_id']}"
+    expected = action["pack_seed"].get("manifest")
+    recovery_root = Path(path).parent.parent / RECOVERY_DIRECTORY / action["action_id"]
+    try:
+        owner_root = loom_reliability._absolute(
+            action["owner_home"], "recovery owner root", must_exist=True)
+        recovery_root = loom_reliability._absolute(
+            recovery_root, "recovery destination")
+        target_root = loom_reliability._absolute(
+            target, "recovery project", must_exist=True)
+        project_state_root = loom_reliability._absolute(
+            recovery_root.parent.parent, "recovery project state", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED", f"recovery location is unsafe: {exc}") from exc
+    if not recovery_root.is_relative_to(owner_root) \
+            or recovery_root == target_root or recovery_root.is_relative_to(target_root) \
+            or not recovery_root.is_relative_to(project_state_root) \
+            or recovery_root.relative_to(project_state_root).parts != (
+                RECOVERY_DIRECTORY, action["action_id"]):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED", "recovery destination is not owner-scoped")
+    quarantine = recovery_root / "plans"
+    revision_record = (action.get("host_result") or {}).get("plan_revision")
+    immutable_revision_stage = (
+        isinstance(revision_record, dict)
+        and revision_record.get("schema_version") == 2)
+    owner_candidate_stage = _uses_owner_candidate_stage(action)
+    if immutable_revision_stage and not _v3_revision_source_is_current(
+            action, target):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "the active revision source changed; the stage and active generation "
+            "were preserved")
+    candidates = [
+        ("plans", pack, False)
+        if not immutable_revision_stage and not owner_candidate_stage
+        and _path_present(pack) else None,
+        ("install-stage", project_stage, True)
+        if _path_present(project_stage) else None,
+        ("owner-stage", legacy_stage, True)
+        if _path_present(legacy_stage) else None,
+        ("legacy-tombstone", legacy_tombstone, True)
+        if _path_present(legacy_tombstone) else None,
+    ]
+    candidates = [item for item in candidates if item is not None]
+    quarantine_present = _path_present(quarantine)
+    quarantine_proof = (
+        _manifest_if_proven(quarantine, expected) if quarantine_present else None)
+    if quarantine_present and quarantine_proof is None:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "the existing recovery quarantine cannot be proven exact; it was preserved")
+    if quarantine_present and candidates \
+            and not (len(candidates) == 1
+                     and candidates[0][0] == "legacy-tombstone"):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "both a recovery source and its quarantine exist; every artifact was preserved")
+    if len(candidates) > 1:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "multiple recovery sources exist; every source was preserved for inspection")
+    source_proof = None
+    if candidates:
+        source_path, source, allow_subset = candidates[0]
+        source_proof = _manifest_if_proven(
+            source, expected, allow_subset=allow_subset)
+        if source_proof is None and requested_reason != "cancelled":
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED",
+                f"{source_path} cannot be proven from the exact v2 seed; it was preserved")
+
+    def artifact_state(item_path, proof=None):
+        if not _path_present(item_path):
+            return {"present": False}
+        if proof is None:
+            try:
+                identity = loom_reliability.observe_root_identity(item_path)
+            except loom_reliability.ReliabilityError as exc:
+                raise OrchestratorError(
+                    "RECOVERY_DECISION_REQUIRED",
+                    f"recovery artifact identity is unsafe: {exc}") from exc
+            return {"present": True, "identity": identity, "manifest": None}
+        return {
+            "present": True,
+            "identity": proof["identity"],
+            "manifest": proof["manifest"],
+        }
+
+    pointer_path = _active_pointer_path(Path(path).parent)
+    try:
+        action_path = Path(path)
+        action_identity = loom_reliability.observe_root_identity(action_path)
+        pointer_present = _path_present(pointer_path)
+        pointer_identity = (
+            loom_reliability.observe_root_identity(pointer_path)
+            if pointer_present else None)
+        action_bytes = action_path.read_bytes()
+        pointer_bytes = pointer_path.read_bytes() if pointer_present else None
+        loom_reliability.validate_root_identity(action_path, action_identity)
+        if pointer_identity is not None:
+            loom_reliability.validate_root_identity(pointer_path, pointer_identity)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            f"recovery control bytes cannot be observed safely: {exc}") from exc
+    source_states = {}
+    for label, item_path in {
+            "plans": pack,
+            "install-stage": project_stage,
+            "owner-stage": legacy_stage,
+            "legacy-tombstone": legacy_tombstone,
+            "quarantine": quarantine,
+            }.items():
+        proof = None
+        if quarantine_present and label == "quarantine":
+            proof = quarantine_proof
+        elif candidates and label == candidates[0][0]:
+            proof = source_proof
+        source_states[label] = artifact_state(item_path, proof)
+    return {
+        "action_sha256": hashlib.sha256(action_bytes).hexdigest(),
+        "action_identity": action_identity,
+        "pointer_sha256": (
+            hashlib.sha256(pointer_bytes).hexdigest()
+            if pointer_bytes is not None else None),
+        "pointer_identity": pointer_identity,
+        "transaction_present": False,
+        "requested_reason": requested_reason,
+        "artifacts": source_states,
+    }
+
+
+def _recover_plan_action(path, action, security, *, now, requested_reason=None,
+                         preflight=None):
+    if preflight is not None:
+        current_preflight = _preflight_plan_action_recovery(
+            path, action, requested_reason=requested_reason)
+        if current_preflight != preflight:
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "planning recovery inputs changed after preflight; every artifact "
+                "was preserved")
     target = Path(action["explicit_target"] or action["cwd"])
     pack = target / "plans"
     project_stage = _project_stage_path(action)
@@ -2672,7 +2842,6 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             raise OrchestratorError(
                 "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
     path, action, security = candidates[0]
-    _reconcile_plan_authoring(action)
     if _is_pre_ux104_reprepare_action(action):
         if incoming_intent is None \
                 or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
@@ -2683,11 +2852,15 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                 "the open pre-UX-104 planning action cannot resume under current "
                 "semantics; submit a fresh planning request or cancel it",
                 status="action-required")
+        preflight = _preflight_plan_action_recovery(
+            path, action, requested_reason="superseded")
         controller, opened = _reopen(action)
         controller.interrupt(opened, code="planning-reprepared", now=now)
         receipt = _recover_plan_action(
-            path, action, security, now=now, requested_reason="superseded")
+            path, action, security, now=now, requested_reason="superseded",
+            preflight=preflight)
         return receipt, None, False
+    _reconcile_plan_authoring(action)
     if incoming_intent is None \
             or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
         return None, None, False

@@ -191,12 +191,75 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                     for item in control["evidence"]))
                 self.assertNotIn("explicit-supersession", control["evidence"])
 
+    def test_auxiliary_or_unknown_assistance_is_non_authorizing(self):
+        """Break caught: an unproved assistance request inherits planning authority."""
+        requests = (
+            "Can you explain what replacing the plan would do?",
+            "Would you compare the current plan with another architecture?",
+            "Could you show what a different plan might contain?",
+            "Could this be simpler?",
+            "What about a different architecture?",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertFalse(decision["blocked"], decision)
+                self.assertIn(decision["intent"], {"review", "status", "why"})
+                self.assertFalse(control["blocked"], control)
+                self.assertIn(control["primary_operation"], {"review", "status"})
+                self.assertEqual("read-only", control["relation"])
+                self.assertFalse(any(
+                    item.startswith("planning-") for item in control["evidence"]))
+
+    def test_arbitrary_quoted_or_reported_speaker_cannot_mint_plan_authority(self):
+        """Break caught: speaker names or quote punctuation leak reported authority."""
+        requests = (
+            'Morgan wrote, "Create a new plan." Explain the implications.',
+            "Morgan wrote, “Create a new plan.” Explain the implications.",
+            "A build log says: create a replacement plan. Summarize it.",
+            "The note contains `Create a replacement plan.` Please summarize it.",
+            'Morgan wrote, "Create a new plan. Explain the implications.',
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertFalse(control["blocked"], control)
+                self.assertIn(control["primary_operation"], {"review", "status"})
+                self.assertEqual("read-only", control["relation"])
+                self.assertFalse(any(
+                    item.startswith("planning-") for item in control["evidence"]))
+
+    def test_product_approach_constraint_does_not_negate_direct_feature_plan(self):
+        """Break caught: a product noun is mistaken for lifecycle-plan authority."""
+        control = loom_runtime.request_control(
+            "Keep the migration approach unchanged and add CSV export.",
+            state={"generation_phase": "reviewable"})
+        read_only = loom_runtime.request_control(
+            "Keep the current reviewed plan unchanged; explain CSV export options.",
+            state={"generation_phase": "reviewable"})
+
+        self.assertFalse(control["blocked"], control)
+        self.assertEqual("plan", control["primary_operation"])
+        self.assertEqual("supersede-generation", control["relation"])
+        self.assertIn("planning-candidate-successor", control["evidence"])
+        self.assertFalse(read_only["blocked"], read_only)
+        self.assertEqual("read-only", read_only["relation"])
+
     def test_true_plan_materialization_contradiction_requests_clarification(self):
         """Break caught: contradictory authority silently creates a candidate."""
         requests = (
             "Create a new plan now. Do not create, revise, or replace the current plan.",
             "Create a new plan, but do not create or replace the current plan.",
             "Please create a new plan and do not create a new plan.",
+            "Create a new plan, but do not replace the plan.",
+            "Create a new plan. Don't change the plan.",
         )
 
         for request in requests:

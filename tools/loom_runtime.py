@@ -483,13 +483,14 @@ def _route(text, intent, match=None, *, code=None, **kwargs):
 
 _BUILD_REQUEST_RE = re.compile(
     r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
-    r"add|generate|plan|fix|update|change|modify|refactor|migrate|upgrade|replace|remove)\b")
+    r"add|generate|plan|draft|outline|prepare|use|fix|update|change|modify|refactor|migrate|"
+    r"upgrade|replace|remove)\b")
 _BUILD_CONTROL_RE = re.compile(
     r"^(?:please\s+)?(?:build|implement)\s+(?:the\s+)?(?:next|remaining|rest)\b")
 _QUESTION_BUILD_RE = re.compile(
     r"^(?:please\s+)?(?:can|could|would)\s+you\s+"
-    r"(?:build|create|make|implement|develop|write|design|add|fix|update|change|"
-    r"modify|refactor|migrate|upgrade|replace|remove)\b")
+    r"(?:build|create|make|implement|develop|write|design|add|draft|outline|prepare|use|fix|"
+    r"update|change|modify|refactor|migrate|upgrade|replace|remove)\b")
 _ARTIFACT_NOUN_RE = re.compile(
     r"\b(?:dashboard|page|screen|tool|app|application|service|system|pipeline|"
     r"log|report|support|feature|workflow|integration|library|utility|module|"
@@ -550,8 +551,8 @@ _EMBEDDED_MEMORY_FORGET_RE = re.compile(
     r"(?:forget\b|stop remembering\b)")
 _POSITIVE_SOFTWARE_CLAUSE_RE = re.compile(
     r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
-    r"add|generate|plan|fix|update|change|modify|refactor|migrate|upgrade|replace|"
-    r"remove|correct\s+(?!(?:what you learned|my preference|that preference|"
+    r"add|generate|plan|draft|outline|prepare|use|fix|update|change|modify|refactor|migrate|"
+    r"upgrade|replace|remove|correct\s+(?!(?:what you learned|my preference|that preference|"
     r"the preference)\b))\b")
 _PLAN_DELIVERABLE_RE = re.compile(
     r"\b(?:produce|create|draft|write|generate|prepare|present|return|give\s+me)\s+"
@@ -761,7 +762,7 @@ def _classify_control_clause(clause):
             r"(?:loom\s+)?(?:plan|planning pack|lifecycle)\b", body):
         intent = "repair"
     elif _BUILD_CONTROL_RE.search(body) or re.match(
-            r"^(?:continue|keep going|resume|pick up|carry on|build the next|"
+            r"^(?:please\s+)?(?:continue|keep going|resume|pick up|carry on|build the next|"
             r"next part)\b", body):
         intent = "continue"
     elif re.match(r"^(?:undo|take back|reverse (?:the )?last)\b", body):
@@ -776,6 +777,16 @@ def _classify_control_clause(clause):
             and not re.match(
                 r"^(?:please\s+)?audit\s+(?:trails?|logs?)\b", body):
         intent = "review"
+    elif re.match(
+            r"^(?:(?:without\s+(?:modifying|changing|writing|touching)\s+"
+            r"(?:any\s+)?files?|read[- ]only)\s*,?\s*)"
+            r"(?:please\s+)?(?:verify|review|inspect|audit|explain|compare|show|"
+            r"summarize)\b", body):
+        intent = "review"
+    elif re.match(
+            r"^(?:please\s+)?quarantine\b[^.!?;]{0,160}\b(?:loom\s+)?"
+            r"(?:plan\s+store|plan\s+state|generation)\b", body):
+        intent = "repair"
     elif re.match(r"^(?:close this|finish the project|we are done|project is over)\b", body):
         intent = "close"
     elif _is_build_request(body) or _POSITIVE_SOFTWARE_CLAUSE_RE.search(body):
@@ -1171,44 +1182,47 @@ def _resolve_intent_from_text(request, state=None):
     return _synchronize_block_reason(decision, category="intent")
 
 
-_SEMANTIC_QUOTED_SPAN_RE = re.compile(
-    r"`[^`\r\n]*`|\"[^\"\r\n]*\"|(?<!\w)'[^'\r\n]+'(?!\w)")
-_SEMANTIC_CLAUSE_BOUNDARY_RE = re.compile(
-    r"(?:\r?\n+|[.!?;]+|\bthen\b|"
-    r"\b(?:and|but)\b(?=\s+(?:also\s+)?(?:please\s+)?"
-    r"(?:do\s+not|don't|never|keep|leave)\b))", re.I)
-_SEMANTIC_HYPOTHETICAL_RE = re.compile(
-    r"^(?:what\s+if\b|"
-    r"what\s+(?:would|could|might)\b[^\r\n]{0,200}\bif\b|"
-    r"(?:can|could|would|might)\b(?!\s+you\b)[^\r\n]{0,160}"
-    r"\b(?:be|happen|work)\b|"
-    r"if\b[^\r\n]{0,240}\b(?:would|could|might)\b|"
-    r"suppose\b|supposing\b|imagine\b|hypothetically\b|"
-    r"in\s+a\s+hypothetical\b)", re.I)
-_SEMANTIC_REPORTED_RE = re.compile(
-    r"^(?:(?:the\s+)?(?:reviewer|agent|assistant|developer|team|owner|user|"
-    r"incident\s+report|report)|they|he|she|someone)\b[^\r\n]{0,120}"
-    r"\b(?:say|says|said|write|writes|wrote|report(?:s|ed)?|"
-    r"request(?:s|ed)?|suggest(?:s|ed)?|recommend(?:s|ed)?|"
-    r"ask(?:s|ed)?|tell|tells|told|note(?:s|d)?|claim(?:s|ed)?)\b", re.I)
-_SEMANTIC_OBSERVATION_RE = re.compile(
-    r"^(?:please\s+)?(?:explain|discuss|summarize|describe|compare|show|"
-    r"tell\s+me|review|inspect|audit)\b", re.I)
-_SEMANTIC_PLAN_NEGATION_RE = re.compile(
+_QUOTE_PAIRS = MappingProxyType({
+    '"': '"', "'": "'", "`": "`", "“": "”", "‘": "’",
+})
+_DIRECT_PLAN_DELIVERABLE_RE = re.compile(
+    r"^(?:now\s+)?(?:please\s+)?(?:"
+    r"(?:give\s+me|return|present|produce|create|draft|write|generate|prepare|"
+    r"outline)\b[^\r\n]{0,180}\b(?:plan|approach|steps?|work\s+needed)\b|"
+    r"what\s+(?:would|could|should)\b[^\r\n]{0,160}\bplan\b"
+    r"[^\r\n]{0,80}\b(?:look|work|contain|include)\b)")
+_DIRECT_CONTEXT_RE = re.compile(
+    r"^(?:for|before|after|in|within)\b[^,\r\n]{0,240},\s*(?P<body>.+)$")
+_DIRECT_ACTION_DECLARATION_RE = re.compile(
+    r"^(?:this|that)\s+is\s+(?:a|an)\s+(?:new|fresh)\s+"
+    r"(?:standalone\s+)?(?:feature|action|work|task|plan)\b")
+_DIRECT_TASK_CONSTRAINT_RE = re.compile(r"^(?:please\s+)?prefer\b")
+_DIRECT_NONMATERIALIZING_RE = re.compile(
     r"^(?:please\s+)?(?:"
-    r"(?:do\s+not|don't|never)\b[^\r\n]{0,200}"
-    r"\b(?:plan|approach|direction)\b|"
-    r"keep\b[^\r\n]{0,120}\b(?:plan|approach|direction)\b"
-    r"[^\r\n]{0,80}\bunchanged\b|"
-    r"leave\b[^\r\n]{0,120}\b(?:plan|approach|direction)\b"
-    r"[^\r\n]{0,80}\b(?:alone|unchanged)\b)", re.I)
-_SEMANTIC_NO_EFFECT_RE = re.compile(
-    r"^(?:please\s+)?(?:make\s+no\s+(?:changes|modifications)|"
-    r"do\s+not\s+act\b|take\s+no\s+action\b|read[- ]only\b|"
-    r"(?:do\s+not|don't|never)\s+"
-    r"(?:change|modify|write|apply|create|delete)\s+"
-    r"(?:anything|any\s+files?|the\s+(?:project|repository|current\s+state))\b)",
-    re.I)
+    r"what|why|how|when|where|who|"
+    r"can|could|would|should|might|may|is|are|do|does|did|will|"
+    r"explain|discuss|summarize|describe|compare|show|tell\s+me|"
+    r"review|inspect|audit|verify)\b")
+_DIRECT_CONDITIONAL_QUERY_RE = re.compile(
+    r"(?:^|[.!?;]\s*)if\b[^?\r\n]{1,240}\?")
+_NEGATED_DIRECT_SEGMENT_RE = re.compile(
+    r"(?:^|,\s*|\b(?:and|but|then)\b\s*)"
+    r"(?:please\s+)?(?:"
+    r"(?:i|we)\s+(?:do\s+not|don't|never)\s+want\s+you\s+to|"
+    r"(?:do\s+not|don't|never)(?:\s+want(?:\s+you)?\s+to)?)\s+"
+    r"(?P<body>[^.!?;\r\n]{1,240})")
+_NEGATED_PLAN_AUTHORITY_RE = re.compile(
+    r"^(?:plan\b|"
+    r"(?:(?:create|draft|write|generate|prepare|present|produce|revise|replace|"
+    r"supersede|change|modify)(?:\s*,\s*(?:(?:or|and)\s+)?|"
+    r"\s+(?:(?:or|and)\s+)?)){1,4}"
+    r"(?:(?:a|an|any|another|new|fresh|replacement|superseding|updated|this|"
+    r"the|current|existing|approved|reviewed|exact)\s+){0,6}plan\b)")
+_PRESERVE_LIFECYCLE_PLAN_RE = re.compile(
+    r"^(?:please\s+)?(?:keep|leave)\b[^.!?;\r\n]{0,160}"
+    r"\b(?:(?:this|the)\s+)?(?:current|existing|approved|reviewed|exact)"
+    r"(?:\s+(?:current|existing|approved|reviewed|exact)){0,3}\s+plan\b"
+    r"[^.!?;\r\n]{0,80}\b(?:alone|unchanged)\b")
 
 
 @dataclass(frozen=True)
@@ -1231,73 +1245,157 @@ class _SemanticOperation:
             raise RuntimeError("semantic operation is invalid")
 
 
-def _mask_semantic_quoted_spans(request):
-    """Remove quoted authority while preserving a quoted sentence boundary."""
-    def replace_span(match):
-        span = match.group(0)
-        interior = span[1:-1].rstrip()
-        terminator = interior[-1] if interior and interior[-1] in ".!?;" else ""
-        return f" quoted material{terminator} "
+def _mask_quoted_authority(request):
+    """Remove quoted bytes structurally; ambiguous quotation grants no authority."""
+    output = []
+    closer = None
+    quote_count = 0
+    for index, char in enumerate(request):
+        previous = request[index - 1] if index else ""
+        following = request[index + 1] if index + 1 < len(request) else ""
+        if closer is None:
+            if char not in _QUOTE_PAIRS:
+                output.append(char)
+                continue
+            if char == "'" and previous.isalnum() and following.isalnum():
+                output.append(char)
+                continue
+            if not following or following.isspace():
+                output.append(char)
+                continue
+            quote_count += 1
+            if quote_count > 32:
+                return " ".join("".join(output).split()), False
+            closer = _QUOTE_PAIRS[char]
+            output.append(" quoted material ")
+            continue
+        if char != closer:
+            continue
+        if char == "'" and following.isalnum():
+            continue
+        closer = None
+        output.append(" . ")
+    return " ".join("".join(output).split()), closer is None
 
-    return _SEMANTIC_QUOTED_SPAN_RE.sub(replace_span, request)
+
+def _hard_request_clauses(request):
+    return tuple(
+        " ".join(item.split())
+        for item in re.split(r"(?:\r?\n+|[.!?;]+)", request.casefold())
+        if item.strip())
+
+
+def _direct_plan_clause(clause):
+    """Prove one direct planning speech act from the repository's anchored grammar."""
+    variants = [clause]
+    context = _DIRECT_CONTEXT_RE.match(clause)
+    if context is not None:
+        variants.append(context.group("body").strip())
+    for candidate in variants:
+        role = _classify_control_clause(candidate)
+        if role is not None and role["intent"] == "plan" and not role["negated"]:
+            return True
+        if _DIRECT_PLAN_DELIVERABLE_RE.match(candidate) is not None \
+                or _DIRECT_ACTION_DECLARATION_RE.match(candidate) is not None \
+                or _DIRECT_TASK_CONSTRAINT_RE.match(candidate) is not None:
+            return True
+    return False
+
+
+def _direct_control_roles(request):
+    """Return normalized positive controls and plan-authority prohibitions."""
+    positives = set()
+    negatives = set()
+    plan_prohibited = False
+    overflow = False
+    for clause in _hard_request_clauses(request):
+        negative_matches = list(_NEGATED_DIRECT_SEGMENT_RE.finditer(clause))
+        clause_plan_prohibited = (
+            _PRESERVE_LIFECYCLE_PLAN_RE.match(clause) is not None)
+        for match in negative_matches:
+            body = match.group("body")
+            if _NEGATED_PLAN_AUTHORITY_RE.match(body) is not None:
+                clause_plan_prohibited = True
+        plan_prohibited = plan_prohibited or clause_plan_prohibited
+        leading_plan_prohibition = clause_plan_prohibited and bool(
+            negative_matches and negative_matches[0].start() == 0
+            or _PRESERVE_LIFECYCLE_PLAN_RE.match(clause) is not None)
+        split_clauses, clause_overflow = _split_control_clauses(clause)
+        overflow = overflow or clause_overflow
+        for _separator, split_clause in split_clauses:
+            role = _classify_control_clause(split_clause)
+            if role is None:
+                continue
+            if role["negated"]:
+                negatives.add(
+                    role["control"] if role["intent"] == "plan"
+                    else role["intent"])
+                continue
+            normalized = (
+                "plan-materialization"
+                if role["intent"] == "plan" else role["intent"])
+            if normalized != "plan-materialization" or not leading_plan_prohibition:
+                positives.add(normalized)
+        if not leading_plan_prohibition and _direct_plan_clause(clause):
+            positives.add("plan-materialization")
+    return positives, negatives, plan_prohibited, overflow
+
+
+def _has_direct_nonmaterializing_request(request):
+    return _DIRECT_CONDITIONAL_QUERY_RE.search(request.casefold()) is not None or any(
+        _NEGATED_DIRECT_SEGMENT_RE.match(clause) is None
+        and _DIRECT_NONMATERIALIZING_RE.match(clause) is not None
+        for clause in _hard_request_clauses(request))
+
+
+def _non_authorizing_operation(decision, *, quote_ambiguous=False):
+    read_only_intent = (
+        decision["intent"]
+        if not decision["blocked"] and decision["intent"] in {
+            "review", "status", "why"}
+        else "status")
+    decision = _decision(
+        read_only_intent, code=f"ROUTE_{read_only_intent.upper()}",
+        confidence=1.0,
+        evidence=((
+            "quotation-ambiguous" if quote_ambiguous
+            else "semantic-nonmaterializing"),))
+    return _SemanticOperation(
+        decision=MappingProxyType(_synchronize_block_reason(
+            decision, category="intent")),
+        control_text="review current Loom state",
+        plan_materialization="none",
+        semantic_scope="nonmaterializing")
 
 
 def _semantic_operation(request, state=None):
-    """Resolve speech-act scope before lifecycle words can acquire authority."""
+    """Materialize only a provable direct control outside quoted content."""
     if not isinstance(request, str) or not request.strip():
         raise RuntimeError("request must be non-empty natural language")
     semantic_request = _semantic_request(request)
     if not semantic_request.strip():
         raise RuntimeError("request must contain natural language after /loom")
-    masked = _mask_semantic_quoted_spans(semantic_request)
-    clauses = [
-        " ".join(item.split())
-        for item in _SEMANTIC_CLAUSE_BOUNDARY_RE.split(masked)
-        if item.strip()
-    ]
-    request_plan_negated = any(
-        _SEMANTIC_PLAN_NEGATION_RE.match(clause) is not None
-        for clause in clauses)
-    direct = []
-    resolution_clauses = []
-    nonmaterializing = []
-    plan_negated = False
-    nonmaterializing_discourse = False
-    read_only_review = False
-    for clause in clauses:
-        hypothetical = _SEMANTIC_HYPOTHETICAL_RE.match(clause) is not None
-        reported = _SEMANTIC_REPORTED_RE.match(clause) is not None
-        observation = _SEMANTIC_OBSERVATION_RE.match(clause) is not None \
-            and _PLAN_DELIVERABLE_RE.search(clause) is None \
-            and (nonmaterializing_discourse or request_plan_negated or re.search(
-                    r"\b(?:loom|quote|report|hypothetical)\b|"
-                    r"\b(?:current|existing|approved|reviewed|replacement)\s+"
-                    r"(?:loom\s+)?(?:plan|generation|lifecycle)\b|"
-                    r"\b(?:whether|that)\b[^\r\n]{0,120}\bwould\b",
-                    clause, re.I) is not None)
-        negated_plan = _SEMANTIC_PLAN_NEGATION_RE.match(clause) is not None
-        no_effect = _SEMANTIC_NO_EFFECT_RE.match(clause) is not None
-        if hypothetical or reported or observation or negated_plan or no_effect:
-            nonmaterializing.append(clause)
-            plan_negated = plan_negated or negated_plan
-            nonmaterializing_discourse = nonmaterializing_discourse \
-                or hypothetical or reported or observation
-            read_only_review = read_only_review or observation
-            if no_effect and not (
-                    hypothetical or reported or observation or negated_plan):
-                resolution_clauses.append(clause)
-        else:
-            direct.append(clause)
-            resolution_clauses.append(clause)
-    direct_text = ". ".join(resolution_clauses).strip() if direct else ""
-    positive_plan = False
-    direct_decision = None
-    if direct_text:
-        direct_decision = _resolve_intent_from_text(direct_text, state)
-        positive_plan = (
-            direct_decision["intent"] == "plan"
-            and not direct_decision["blocked"])
-    if positive_plan and plan_negated:
+    masked, quotes_balanced = _mask_quoted_authority(semantic_request)
+    if not quotes_balanced:
+        return _non_authorizing_operation(
+            _resolve_intent_from_text(masked or "review current state", state),
+            quote_ambiguous=True)
+    decision = _resolve_intent_from_text(masked, state)
+    positives, negatives, plan_prohibited, overflow = _direct_control_roles(masked)
+    if decision["blocked"]:
+        if decision["code"] == "INTENT_NEGATED" \
+                and _has_direct_nonmaterializing_request(masked):
+            return _non_authorizing_operation(decision)
+        return _SemanticOperation(
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="inline-clarification",
+            semantic_scope="contradictory")
+    if overflow:
+        return _SemanticOperation(
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="none", semantic_scope="contradictory")
+    positive_plan = "plan-materialization" in positives
+    if positive_plan and plan_prohibited:
         decision = _decision(
             "status", blocked=True, code="INTENT_AMBIGUOUS", needs_owner=True,
             confidence=0.0, evidence=("materialization-contradiction",),
@@ -1310,26 +1408,45 @@ def _semantic_operation(request, state=None):
             control_text="clarify lifecycle request",
             plan_materialization="inline-clarification",
             semantic_scope="contradictory")
-    if not direct_text and nonmaterializing:
-        read_only_intent = "review" if read_only_review else "status"
+    if positive_plan and decision["intent"] != "plan":
+        expected = {
+            "resume": "continue", "execute": "continue", "repair": "repair",
+            "cancel": "cancel", "close": "close", "undo": "undo",
+            "remember": "remember", "forget": "forget",
+        }.get(decision["intent"])
+        if expected is None or expected not in positives:
+            decision = _decision(
+                "plan", code="ROUTE_PLAN", confidence=1.0,
+                evidence=("role:plan-materialization",))
+    nonplanning_controls = positives - {"plan-materialization"}
+    if decision["intent"] == "plan" and not positive_plan \
+            and len(nonplanning_controls) == 1:
+        normalized = next(iter(nonplanning_controls))
+        resolved_intent = {
+            "continue": "execute",
+        }.get(normalized, normalized)
         decision = _decision(
-            read_only_intent, code=f"ROUTE_{read_only_intent.upper()}",
-            confidence=1.0,
-            evidence=("semantic-nonmaterializing",))
-        return _SemanticOperation(
-            decision=MappingProxyType(_synchronize_block_reason(
-                decision, category="intent")),
-            control_text="review current Loom state",
-            plan_materialization="none",
-            semantic_scope="nonmaterializing")
-    decision = direct_decision or _resolve_intent_from_text(masked, state)
+            resolved_intent, code=f"ROUTE_{resolved_intent.upper()}",
+            confidence=1.0, evidence=(f"role:{normalized}",))
+    if decision["intent"] == "plan" and not positive_plan:
+        return _non_authorizing_operation(decision)
+    if not positives and (plan_prohibited or not negatives \
+            or negatives <= {"implementation"}):
+        return _non_authorizing_operation(decision)
+    mutating_intent = {
+        "resume": "continue", "execute": "continue", "repair": "repair",
+        "cancel": "cancel", "close": "close", "undo": "undo",
+        "remember": "remember", "forget": "forget",
+    }.get(decision["intent"])
+    if mutating_intent is not None and mutating_intent not in positives:
+        return _non_authorizing_operation(decision)
     materialization = (
         "persistent"
-        if decision["intent"] == "plan" and not decision["blocked"]
+        if positive_plan and not decision["blocked"]
         else "none")
     return _SemanticOperation(
         decision=MappingProxyType(decision),
-        control_text=direct_text or masked,
+        control_text=masked,
         plan_materialization=materialization,
         semantic_scope="direct")
 
@@ -1510,16 +1627,22 @@ def request_control(request, state=None, *, host_control=None):
             r"(?:create|draft|generate|prepare|present|produce|write)\b"
             r"[^.!?;\r\n]{0,96}\breplacement\s+(?:action|plan)\b",
             text))
-        explicit_supersession = bool(re.search(
-            r"\b(?:explicitly\s+)?(?:supersede|superseding|replace|replacing)\b"
-            r"[^.!?;\r\n]{0,120}\b(?:plan\s+)?generation\b|"
-            r"\b(?:fresh|new|updated)?\s*replacement\s+(?:action|plan)\b",
-            text)) and not negated_supersession
-        explicit_new = explicit_supersession or bool(re.search(
-            r"\b(?:new|fresh)\s+standalone\b|"
-            r"\b(?:new|fresh)\s+(?:standalone\s+)?(?:feature|action|work|task|plan)\b|"
-            r"\bstandalone\s+(?:feature|action|work|task)\b|"
-            r"\bnot\s+(?:a\s+)?(?:repair|continuation)\b", text))
+        explicit_supersession = (
+            operation.plan_materialization == "persistent"
+            and bool(re.search(
+                r"\b(?:explicitly\s+)?(?:supersede|superseding|replace|replacing)\b"
+                r"[^.!?;\r\n]{0,120}\b(?:plan\s+)?generation\b|"
+                r"\b(?:fresh|new|updated)?\s*replacement\s+(?:action|plan)\b",
+                text))
+            and not negated_supersession)
+        explicit_new = explicit_supersession or (
+            operation.plan_materialization == "persistent"
+            and bool(re.search(
+                r"\b(?:new|fresh)\s+standalone\b|"
+                r"\b(?:new|fresh)\s+(?:standalone\s+)?"
+                r"(?:feature|action|work|task|plan)\b|"
+                r"\bstandalone\s+(?:feature|action|work|task)\b|"
+                r"\bnot\s+(?:a\s+)?(?:repair|continuation)\b", text)))
         relation_text = re.sub(
             r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
             r"(?:any\s+)?generated\s+files?\b",
@@ -1622,7 +1745,7 @@ def request_control(request, state=None, *, host_control=None):
     prohibitions = sorted(set(prohibitions))
     if host_control is None and primary == "plan" and not decision["blocked"] \
             and operation.plan_materialization == "persistent" \
-            and not negated_supersession:
+            and relation != "revise-exact" and not negated_supersession:
         disposition = loom_owner_intent.resolve_planning_disposition(
             primary_operation=primary,
             generation_phase=state.get("generation_phase"),
@@ -1695,6 +1818,58 @@ def validate_request_control(value):
     if not isinstance(claimed, str) or re.fullmatch(r"[0-9a-f]{64}", claimed) is None \
             or claimed != _sha(_canonical_json(unsigned)):
         raise RuntimeError("request control digest does not match")
+    relation_operations = {
+        "new": {"plan"},
+        "revise-exact": {"plan"},
+        "start-exact": {"execute"},
+        "continue-active": {"execute"},
+        "repair-active": {"recover"},
+        "read-only": {"review", "status"},
+        "cancel-generation": {"cancel"},
+        "supersede-generation": {"plan"},
+        "quarantine-generation": {"recover"},
+        "unclear": {"plan", "status", "recover", "unknown"},
+    }
+    operation = value["primary_operation"]
+    relation = value["relation"]
+    explicitness = value["explicitness"]
+    evidence_set = set(evidence)
+    planning_tokens = [
+        item for item in evidence if item.startswith("planning-")]
+    planning_relations = {
+        "planning-direct": "new",
+        "planning-candidate-successor": "supersede-generation",
+        "planning-current-world-replan": "supersede-generation",
+        "planning-inline-recovery": "unclear",
+    }
+    host_bound = evidence == ["host-bound-control"] \
+        and explicitness == "host-bound"
+    explicit_evidence = {
+        "explicit-quarantine", "explicit-start-exact", "explicit-revise-exact",
+        "explicit-supersession", "explicit-new", "explicit-repair",
+        "explicit-continuation", "explicit-cancel",
+    }
+    cross_field_invalid = (
+        operation not in relation_operations[relation]
+        or (explicitness == "host-bound" or "host-bound-control" in evidence_set)
+        and not host_bound
+        or explicitness == "defaulted" and "safe-new-default" not in evidence_set
+        or "safe-new-default" in evidence_set and explicitness != "defaulted"
+        or explicitness == "explicit" and not (evidence_set & explicit_evidence)
+        or explicitness != "explicit" and bool(evidence_set & explicit_evidence)
+        or len(planning_tokens) > 1
+        or bool(planning_tokens) and (
+            operation != "plan"
+            or planning_tokens[0] not in planning_relations
+            or planning_relations[planning_tokens[0]] != relation)
+        or "semantic-nonmaterializing" in evidence_set
+        and relation != "read-only"
+        or "semantic-clarification" in evidence_set
+        and not (relation == "unclear" and value["blocked"])
+        or "read-only-control" in evidence_set and relation != "read-only"
+    )
+    if cross_field_invalid:
+        raise RuntimeError("request control cross-field bindings are invalid")
     return value
 
 

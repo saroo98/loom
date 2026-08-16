@@ -4018,6 +4018,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         before_action = old_path.read_bytes()
         pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
         before_pointer = pointer_path.read_bytes()
+        journal_path = Path(old_action["journal_path"])
+        before_journal = journal_path.read_bytes()
 
         with self.assertRaises(
                 loom_orchestrator.OrchestratorError) as blocked:
@@ -4029,8 +4031,131 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("RECOVERY_DECISION_REQUIRED", blocked.exception.code)
         self.assertEqual(before_action, old_path.read_bytes())
         self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_journal, journal_path.read_bytes())
         self.assertEqual("owner bytes\n", (stage / "unsealed.txt").read_text(
             encoding="utf-8"))
+
+    def test_pre_ux104_reprepare_preflights_quarantine_before_interrupting(self):
+        """Break caught: an invalid quarantine mutates the session before refusal."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        quarantine = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY /
+            old_action["action_id"] / "plans")
+        _write(quarantine / "foreign.txt", "not the sealed seed\n")
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        journal_path = Path(old_action["journal_path"])
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        before_journal = journal_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_DECISION_REQUIRED", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_journal, journal_path.read_bytes())
+        self.assertEqual(
+            "not the sealed seed\n",
+            (quarantine / "foreign.txt").read_text(encoding="utf-8"))
+
+    def test_pre_ux104_reprepare_revalidates_stage_identity_after_interrupt(self):
+        """Break caught: byte-identical stage replacement escapes recovery preflight."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        stage = loom_orchestrator._action_pack_root(old_action)
+        swapped = stage.with_name(stage.name + "-original")
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_interrupt = loom_session.SessionController.interrupt
+
+        def interrupt_then_replace(controller, opened, *, code, now=None):
+            result = original_interrupt(
+                controller, opened, code=code, now=now)
+            stage.rename(swapped)
+            shutil.copytree(swapped, stage)
+            return result
+
+        with mock.patch.object(
+                loom_session.SessionController, "interrupt",
+                new=interrupt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertTrue(stage.is_dir())
+        self.assertTrue(swapped.is_dir())
+
+    def test_pre_ux104_reprepare_revalidates_action_identity_after_interrupt(self):
+        """Break caught: byte-identical action replacement escapes preflight."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        swapped = old_path.with_name(old_path.stem + "-original.json")
+        before_action = old_path.read_bytes()
+        original_interrupt = loom_session.SessionController.interrupt
+
+        def interrupt_then_replace(controller, opened, *, code, now=None):
+            result = original_interrupt(
+                controller, opened, code=code, now=now)
+            old_path.rename(swapped)
+            shutil.copy2(swapped, old_path)
+            return result
+
+        with mock.patch.object(
+                loom_session.SessionController, "interrupt",
+                new=interrupt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_action, swapped.read_bytes())
+
+    def test_pre_ux104_reprepare_revalidates_pointer_identity_after_interrupt(self):
+        """Break caught: byte-identical pointer replacement escapes preflight."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = pointer_path.with_name(pointer_path.name + ".original")
+        before_pointer = pointer_path.read_bytes()
+        original_interrupt = loom_session.SessionController.interrupt
+
+        def interrupt_then_replace(controller, opened, *, code, now=None):
+            result = original_interrupt(
+                controller, opened, code=code, now=now)
+            pointer_path.rename(swapped)
+            shutil.copy2(swapped, pointer_path)
+            return result
+
+        with mock.patch.object(
+                loom_session.SessionController, "interrupt",
+                new=interrupt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_pointer, swapped.read_bytes())
 
     def test_pre_ux104_reprepare_rejects_other_action_corruption(self):
         """Break caught: recovery-only compatibility bypasses normal validation."""
@@ -4051,6 +4176,39 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         self.assertEqual("ACTION_CORRUPT", blocked.exception.code)
         self.assertEqual(before, old_path.read_bytes())
+
+    def test_pre_ux104_reprepare_rejects_cross_field_control_without_interrupting(self):
+        """Break caught: a rehashed impossible legacy control reaches recovery writes."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        action = json.loads(old_path.read_text(encoding="utf-8"))
+        action["request_control"]["explicitness"] = "explicit"
+        unsigned = {
+            key: item for key, item in action["request_control"].items()
+            if key != "control_sha256"
+        }
+        action["request_control"]["control_sha256"] = \
+            loom_orchestrator.loom_runtime._sha(
+                loom_orchestrator.loom_runtime._canonical_json(unsigned))
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        old_path.write_text(json.dumps(action), encoding="utf-8")
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        journal_path = Path(old_action["journal_path"])
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        before_journal = journal_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("ACTION_CORRUPT", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_journal, journal_path.read_bytes())
 
     def test_pre_ux104_reprepare_preserves_multiple_pointerless_actions(self):
         """Break caught: compatibility recovery guesses between two actions."""

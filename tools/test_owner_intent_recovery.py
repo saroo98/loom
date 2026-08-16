@@ -320,6 +320,40 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
 
         self.assertEqual(fixture, loom_runtime.validate_request_control(fixture))
 
+    def test_request_control_rejects_rehashed_cross_field_inconsistency(self):
+        """Break caught: a valid digest launders an impossible control combination."""
+        base = {
+            "schema_version": 1,
+            "primary_operation": "plan",
+            "relation": "new",
+            "prohibitions": [],
+            "explicitness": "defaulted",
+            "evidence": ["safe-new-default"],
+            "blocked": False,
+            "block_reason": None,
+        }
+        cases = (
+            {"primary_operation": "review"},
+            {"relation": "read-only"},
+            {
+                "explicitness": "explicit",
+                "evidence": ["safe-new-default"],
+            },
+            {
+                "explicitness": "defaulted",
+                "evidence": ["explicit-new"],
+            },
+        )
+
+        for changes in cases:
+            with self.subTest(changes=changes):
+                value = {**base, **changes}
+                value["control_sha256"] = loom_runtime._sha(
+                    loom_runtime._canonical_json(value))
+                with self.assertRaisesRegex(
+                        loom_runtime.RuntimeError, "cross-field"):
+                    loom_runtime.validate_request_control(value)
+
     def test_semantic_outcome_evidence_is_canonical_unique_and_catalog_bounded(self):
         """Break caught: forged catalog identities survive sealed evidence parsing."""
         valid = "semantic-outcome-v1.accounting.0"
