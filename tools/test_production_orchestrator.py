@@ -4102,6 +4102,44 @@ class ProductionOrchestratorTests(unittest.TestCase):
                         result["action_path"], owner_home=self.home,
                         install_root=self.installed)
 
+    def test_true_plan_authority_contradiction_returns_inline_provisional_without_mutation(self):
+        """Break caught: useful clarification stages or mutates plan authority."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        index_path = self.repo / "plans" / loom_plan_store.INDEX_NAME
+        before_index = index_path.read_bytes()
+        before_generation = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        action_directory = next(self.home.glob(
+            "instances/*/runtime/projects/*/orchestrations"))
+        before_actions = {
+            path.name: path.read_bytes()
+            for path in action_directory.glob("*.json")
+        }
+        request = (
+            "Create a new plan now. Do not create, revise, or replace the current "
+            "plan.")
+
+        result = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertIn("Understood outcome:", result["user_message"])
+        self.assertEqual(1, result["user_message"].count("?"))
+        self.assertNotIn("action_path", result)
+        self.assertEqual(before_index, index_path.read_bytes())
+        self.assertEqual(
+            before_generation,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+        self.assertEqual(
+            before_actions,
+            {path.name: path.read_bytes()
+             for path in action_directory.glob("*.json")})
+        self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
+
     def test_changed_active_world_stages_non_authoritative_current_world_candidate(self):
         """Break caught: stale active authority blocks safe candidate planning."""
         plan_action, planned = self.complete_machine_authored_plan()
@@ -4410,6 +4448,188 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("RECOVERY_RACE", blocked.exception.code)
         self.assertEqual(before_pointer, pointer_path.read_bytes())
         self.assertEqual(before_pointer, swapped.read_bytes())
+
+    def test_pre_ux104_reprepare_cas_rejects_action_replacement_before_source_move(self):
+        """Break caught: action replacement after second preflight is overwritten."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        stage = loom_orchestrator._action_pack_root(old_action)
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = old_path.with_name(old_path.stem + "-post-preflight.json")
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_prepare = loom_orchestrator._prepare_recovery_root
+        injected = False
+
+        def prepare_then_replace(owner_root, recovery_root):
+            nonlocal injected
+            result = original_prepare(owner_root, recovery_root)
+            if not injected:
+                injected = True
+                old_path.rename(swapped)
+                shutil.copy2(swapped, old_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_prepare_recovery_root",
+                side_effect=prepare_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_action, swapped.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertTrue(stage.is_dir())
+
+    def test_pre_ux104_reprepare_cas_rejects_pointer_replacement_before_source_move(self):
+        """Break caught: pointer replacement after second preflight is cleared."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        stage = loom_orchestrator._action_pack_root(old_action)
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = pointer_path.with_name(pointer_path.name + ".post-preflight")
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_prepare = loom_orchestrator._prepare_recovery_root
+        injected = False
+
+        def prepare_then_replace(owner_root, recovery_root):
+            nonlocal injected
+            result = original_prepare(owner_root, recovery_root)
+            if not injected:
+                injected = True
+                pointer_path.rename(swapped)
+                shutil.copy2(swapped, pointer_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_prepare_recovery_root",
+                side_effect=prepare_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_pointer, swapped.read_bytes())
+        self.assertTrue(stage.is_dir())
+
+    def test_pre_ux104_reprepare_cas_rejects_action_replacement_before_terminal_write(self):
+        """Break caught: a late action swap is overwritten after artifact recovery."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = old_path.with_name(old_path.stem + "-before-write.json")
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_receipt = loom_orchestrator._recovery_receipt
+        injected = False
+
+        def receipt_then_replace(*args, **kwargs):
+            nonlocal injected
+            result = original_receipt(*args, **kwargs)
+            if not injected:
+                injected = True
+                old_path.rename(swapped)
+                shutil.copy2(swapped, old_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_recovery_receipt",
+                side_effect=receipt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_action, swapped.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+
+    def test_pre_ux104_reprepare_cas_rejects_pointer_replacement_before_clear(self):
+        """Break caught: a late pointer swap is removed after terminal action write."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = pointer_path.with_name(pointer_path.name + ".before-clear")
+        before_pointer = pointer_path.read_bytes()
+        original_write = loom_orchestrator._write_action
+        injected = False
+
+        def write_then_replace(path, value, security=None):
+            nonlocal injected
+            result = original_write(path, value, security)
+            if not injected:
+                injected = True
+                pointer_path.rename(swapped)
+                shutil.copy2(swapped, pointer_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action",
+                side_effect=write_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_pointer, swapped.read_bytes())
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_reprepare_cas_rechecks_pointer_immediately_before_unlink(self):
+        """Break caught: pointer replacement during clear escapes the first guard."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = pointer_path.with_name(pointer_path.name + ".during-clear")
+        before_pointer = pointer_path.read_bytes()
+        original_read = loom_orchestrator._read_active_pointer
+        injected = False
+
+        def read_then_replace(directory):
+            nonlocal injected
+            result = original_read(directory)
+            if not injected and result is not None:
+                current = json.loads(old_path.read_text(encoding="utf-8"))
+                if current["status"] == "superseded":
+                    injected = True
+                    pointer_path.rename(swapped)
+                    shutil.copy2(swapped, pointer_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_read_active_pointer",
+                side_effect=read_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_pointer, swapped.read_bytes())
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
 
     def test_pre_ux104_reprepare_rejects_other_action_corruption(self):
         """Break caught: recovery-only compatibility bypasses normal validation."""

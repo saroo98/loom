@@ -45,6 +45,7 @@ USEFUL_PLANNING_RECOVERY_MARKER = "useful-planning-recovery"
 NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS = frozenset({
     "inline-plan-project-writes-prohibited",
     "inline-plan-lifecycle-authority-untrusted",
+    "inline-plan-authority-unclear",
 })
 
 if os.name == "nt":

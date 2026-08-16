@@ -1765,7 +1765,13 @@ def _generation_status_projection_requested(request):
         request, re.I) is None
 
 
-def _clear_active_pointer(directory, action_id):
+def _clear_active_pointer(
+        directory, action_id, *, expected_controls=None, action_path=None):
+    if expected_controls is not None:
+        if action_path is None or Path(action_path).parent != Path(directory):
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery pointer guard is not action-scoped")
+        _require_recovery_controls(action_path, expected_controls)
     path = _active_pointer_path(directory)
     pointer = _read_active_pointer(directory)
     if pointer is None:
@@ -1773,6 +1779,8 @@ def _clear_active_pointer(directory, action_id):
     if pointer["action_id"] != action_id:
         raise OrchestratorError(
             "ACTION_POINTER_CONFLICT", "another action owns the active pointer")
+    if expected_controls is not None:
+        _require_recovery_controls(action_path, expected_controls)
     path.unlink()
     try:
         loom_reliability._sync_parent(path)
@@ -2130,6 +2138,87 @@ def _manifest_if_proven(path, expected, *, allow_subset=False):
     return None
 
 
+_RECOVERY_CONTROL_FIELDS = (
+    "action_sha256", "action_identity", "pointer_sha256", "pointer_identity",
+)
+
+
+def _observe_recovery_controls(path, *, failure_code="RECOVERY_RACE"):
+    """Capture exact action/pointer bytes and pathname identities as one CAS token."""
+    action_path = Path(path)
+    pointer_path = _active_pointer_path(action_path.parent)
+    try:
+        action_identity = loom_reliability.observe_root_identity(action_path)
+        pointer_present = _path_present(pointer_path)
+        pointer_identity = (
+            loom_reliability.observe_root_identity(pointer_path)
+            if pointer_present else None)
+        action_bytes = action_path.read_bytes()
+        pointer_bytes = pointer_path.read_bytes() if pointer_present else None
+        loom_reliability.validate_root_identity(action_path, action_identity)
+        if pointer_identity is not None:
+            loom_reliability.validate_root_identity(pointer_path, pointer_identity)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            failure_code,
+            f"recovery control bytes cannot be observed safely: {exc}") from exc
+    return {
+        "action_sha256": hashlib.sha256(action_bytes).hexdigest(),
+        "action_identity": action_identity,
+        "pointer_sha256": (
+            hashlib.sha256(pointer_bytes).hexdigest()
+            if pointer_bytes is not None else None),
+        "pointer_identity": pointer_identity,
+    }
+
+
+def _recovery_control_token(snapshot):
+    if not isinstance(snapshot, dict) \
+            or any(field not in snapshot for field in _RECOVERY_CONTROL_FIELDS):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "planning recovery control token is incomplete")
+    return {field: snapshot[field] for field in _RECOVERY_CONTROL_FIELDS}
+
+
+def _require_recovery_controls(path, expected, *, action=True, pointer=True):
+    """Fail before the next mutation unless the exact captured controls remain."""
+    observed = _observe_recovery_controls(path)
+    expected = _recovery_control_token(expected)
+    fields = []
+    if action:
+        fields.extend(("action_sha256", "action_identity"))
+    if pointer:
+        fields.extend(("pointer_sha256", "pointer_identity"))
+    if any(observed[field] != expected[field] for field in fields):
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "planning recovery action or pointer changed after preflight; every "
+            "remaining artifact was preserved")
+    return observed
+
+
+def _write_recovered_action(path, candidate, security, expected_controls):
+    """Condition the terminal action write on exact preflight control bytes."""
+    _require_recovery_controls(path, expected_controls)
+    _write_action(path, candidate, security)
+    observed = _require_recovery_controls(
+        path, expected_controls, action=False, pointer=True)
+    try:
+        _path, persisted, _persisted_security = _read_action(
+            path, owner_home=candidate["owner_home"],
+            install_root=candidate["install_root"])
+    except OrchestratorError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "the recovered action could not be revalidated after its terminal write") \
+            from exc
+    if persisted != candidate:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "the recovered action changed during its terminal write")
+    return observed
+
+
 def _preflight_plan_action_recovery(path, action, *, requested_reason=None):
     """Prove the complete recovery surface without mutating session or artifacts."""
     transaction_path = _plan_author_transaction_path(action)
@@ -2232,23 +2321,8 @@ def _preflight_plan_action_recovery(path, action, *, requested_reason=None):
             "manifest": proof["manifest"],
         }
 
-    pointer_path = _active_pointer_path(Path(path).parent)
-    try:
-        action_path = Path(path)
-        action_identity = loom_reliability.observe_root_identity(action_path)
-        pointer_present = _path_present(pointer_path)
-        pointer_identity = (
-            loom_reliability.observe_root_identity(pointer_path)
-            if pointer_present else None)
-        action_bytes = action_path.read_bytes()
-        pointer_bytes = pointer_path.read_bytes() if pointer_present else None
-        loom_reliability.validate_root_identity(action_path, action_identity)
-        if pointer_identity is not None:
-            loom_reliability.validate_root_identity(pointer_path, pointer_identity)
-    except (OSError, loom_reliability.ReliabilityError) as exc:
-        raise OrchestratorError(
-            "RECOVERY_DECISION_REQUIRED",
-            f"recovery control bytes cannot be observed safely: {exc}") from exc
+    controls = _observe_recovery_controls(
+        path, failure_code="RECOVERY_DECISION_REQUIRED")
     source_states = {}
     for label, item_path in {
             "plans": pack,
@@ -2264,12 +2338,7 @@ def _preflight_plan_action_recovery(path, action, *, requested_reason=None):
             proof = source_proof
         source_states[label] = artifact_state(item_path, proof)
     return {
-        "action_sha256": hashlib.sha256(action_bytes).hexdigest(),
-        "action_identity": action_identity,
-        "pointer_sha256": (
-            hashlib.sha256(pointer_bytes).hexdigest()
-            if pointer_bytes is not None else None),
-        "pointer_identity": pointer_identity,
+        **controls,
         "transaction_present": False,
         "requested_reason": requested_reason,
         "artifacts": source_states,
@@ -2286,6 +2355,9 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None,
                 "RECOVERY_RACE",
                 "planning recovery inputs changed after preflight; every artifact "
                 "was preserved")
+        control_token = _recovery_control_token(preflight)
+    else:
+        control_token = _observe_recovery_controls(path)
     target = Path(action["explicit_target"] or action["cwd"])
     pack = target / "plans"
     project_stage = _project_stage_path(action)
@@ -2353,6 +2425,7 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None,
                 "the legacy recovery tombstone cannot be proven from the sealed seed")
         _prepare_recovery_root(owner_root, recovery_root)
         auxiliary = recovery_root / "legacy-tombstone"
+        _require_recovery_controls(path, control_token)
         auxiliary_state = _atomic_quarantine_tree(
                 present[0][1], auxiliary,
                 expected_source_identity=tombstone_proof["identity"])
@@ -2397,6 +2470,7 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None,
                     f"{source_path} cannot be proven from the exact v2 seed; it was preserved")
         else:
             _prepare_recovery_root(owner_root, recovery_root)
+            _require_recovery_controls(path, control_token)
             moved = _atomic_quarantine_tree(
                 source, quarantine,
                 expected_source_identity=source_proof["identity"])
@@ -2467,8 +2541,11 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None,
     }[reason]
     candidate["action_hash"] = _action_hash(candidate)
     _validate_action(candidate, path)
-    _write_action(path, candidate, security)
-    _clear_active_pointer(Path(path).parent, candidate["action_id"])
+    written_controls = _write_recovered_action(
+        path, candidate, security, control_token)
+    _clear_active_pointer(
+        Path(path).parent, candidate["action_id"],
+        expected_controls=written_controls, action_path=path)
     return receipt
 
 
@@ -10038,6 +10115,7 @@ _INLINE_RECOVERY_EVIDENCE_BY_ROUTE_CODE = {
 _INLINE_RECOVERY_REASON_BY_EVIDENCE = {
     "inline-plan-project-writes-prohibited": "PROJECT_WRITES_PROHIBITED",
     "inline-plan-lifecycle-authority-untrusted": "LIFECYCLE_AUTHORITY_UNTRUSTED",
+    "inline-plan-authority-unclear": "AUTHORITY_UNCLEAR",
 }
 
 
@@ -10048,7 +10126,7 @@ def _rebind_useful_planning_prepared(
     allowed_codes = _USEFUL_PLANNING_REBIND_CODES.get(planning_mode, frozenset())
     sealed_override = (
         planning_mode == "inline-recovery"
-        and route_code == "ROUTE_PLAN"
+        and route_code in {"ROUTE_PLAN", "PLAN_EXECUTION_CONTRADICTION"}
         and recovery_evidence in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS)
     if route_code not in allowed_codes and not sealed_override:
         raise OrchestratorError(
@@ -10109,6 +10187,9 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
         "LIFECYCLE_AUTHORITY_UNTRUSTED": (
             "The existing lifecycle authority cannot be trusted, so no plan identity "
             "was created and no project plan bytes were changed."),
+        "AUTHORITY_UNCLEAR": (
+            "The request both preserves and changes plan authority, so this result "
+            "is provisional and cannot be started or treated as project authority."),
     }
     next_actions = {
         "PROJECT_WRITES_PROHIBITED": (
@@ -10116,6 +10197,9 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
             "persistent plan."),
         "LIFECYCLE_AUTHORITY_UNTRUSTED": (
             "Quarantine or repair the lifecycle store, then ask Loom for a fresh plan."),
+        "AUTHORITY_UNCLEAR": (
+            "Should Loom create a new reviewed plan while keeping the current plan "
+            "unchanged until that review?"),
     }
     if reason_code not in constraints:
         raise OrchestratorError(
@@ -10318,7 +10402,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             and route_code in _USEFUL_PLANNING_REBIND_CODES.get(
                 planning_mode, frozenset()))
         sealed_inline_override = (
-            planning_mode == "inline-recovery" and route_code == "ROUTE_PLAN")
+            planning_mode == "inline-recovery"
+            and route_code in {"ROUTE_PLAN", "PLAN_EXECUTION_CONTRADICTION"})
         if recovery_rebind or sealed_inline_override:
             recovery_evidence = None
             if planning_mode == "inline-recovery":
@@ -10328,6 +10413,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                     recovery_evidence = "inline-plan-lifecycle-authority-untrusted"
                 elif "mutation" in request_control["prohibitions"]:
                     recovery_evidence = "inline-plan-project-writes-prohibited"
+                elif "semantic-clarification" in request_control["evidence"]:
+                    recovery_evidence = "inline-plan-authority-unclear"
             prepared = _rebind_useful_planning_prepared(
                 prepared, planning_mode, recovery_evidence=recovery_evidence)
             opened = loom_session.OpenSession(
@@ -10455,22 +10542,6 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "reversible_action_ids": [],
             "user_message": _inline_recovery_message(
                 reason_code, prepared=prepared, domain_contract=domain_contract),
-        }
-        return controller.run(
-            request, invocation_id=invocation_id, cwd=cwd,
-            explicit_target=target, now=now, continue_open=True,
-            prepared=prepared, selected_context=context_capsule).to_dict()
-    if planning_mode == "inline-recovery" \
-            and prepared.route_contract["code"] \
-            == "PLAN_EXECUTION_CONTRADICTION":
-        controller.handlers["plan"] = lambda _context: {
-            "status": "blocked",
-            "code": "plan_execution_contradiction",
-            "success": False,
-            "metrics": {},
-            "evidence_ids": [],
-            "reversible_action_ids": [],
-            "user_message": prepared.route_contract["recommendation"],
         }
         return controller.run(
             request, invocation_id=invocation_id, cwd=cwd,

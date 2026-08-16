@@ -23,6 +23,7 @@ class SessionRuntimeTests(unittest.TestCase):
     RECOVERY_EVIDENCE_IDS = {
         "inline-plan-project-writes-prohibited",
         "inline-plan-lifecycle-authority-untrusted",
+        "inline-plan-authority-unclear",
     }
 
     def setUp(self):

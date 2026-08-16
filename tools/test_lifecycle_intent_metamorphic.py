@@ -6,6 +6,42 @@ import loom_runtime
 
 
 class LifecycleIntentMetamorphicTests(unittest.TestCase):
+    def test_ordinary_owner_requests_use_state_derived_planning_without_magic_verbs(self):
+        """Break caught: ordinary owner outcomes require a planner verb allowlist."""
+        requests = (
+            "I need a local inventory tracker.",
+            "I want a local inventory tracker.",
+            "We need CSV export for the reports.",
+            "Help me build a local inventory tracker.",
+            "How about adding CSV export?",
+        )
+        states = (
+            ({"generation_phase": "absent"}, "new", "planning-direct"),
+            (
+                {"generation_phase": "reviewable"},
+                "supersede-generation",
+                "planning-candidate-successor",
+            ),
+            (
+                {"generation_phase": "terminal-completed"},
+                "new",
+                "planning-direct",
+            ),
+        )
+
+        for request in requests:
+            for state, relation, planning_evidence in states:
+                with self.subTest(request=request, phase=state["generation_phase"]):
+                    decision = loom_runtime.resolve_intent(request, state)
+                    control = loom_runtime.request_control(request, state=state)
+
+                    self.assertFalse(decision["blocked"], decision)
+                    self.assertEqual("plan", decision["intent"])
+                    self.assertFalse(control["blocked"], control)
+                    self.assertEqual("plan", control["primary_operation"])
+                    self.assertEqual(relation, control["relation"])
+                    self.assertIn(planning_evidence, control["evidence"])
+
     def test_semantic_planning_requests_do_not_depend_on_lifecycle_keywords(self):
         """Break caught: ordinary owner planning language is mistaken for review."""
         requests = (
@@ -149,6 +185,11 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 "hypothetical-conditional",
             ),
             (
+                "Suppose we used a different architecture. What would the plan "
+                "look like?",
+                "hypothetical-cross-sentence",
+            ),
+            (
                 "Could a replacement plan be created later? Keep the current plan "
                 "unchanged.",
                 "hypothetical-passive",
@@ -171,6 +212,11 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
             (
                 "Do not revise, replace, or create a new plan. Show the current plan.",
                 "negative",
+            ),
+            (
+                "Don’t supersede anything; prepare a different plan for discussion "
+                "only.",
+                "negative-discussion-only",
             ),
         )
 
@@ -252,6 +298,50 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
         self.assertFalse(read_only["blocked"], read_only)
         self.assertEqual("read-only", read_only["relation"])
 
+    def test_product_plan_nouns_do_not_become_lifecycle_authority_controls(self):
+        """Break caught: plan parser/template nouns consume lifecycle negation."""
+        requests = (
+            "Do not change the plan parser; create an audit dashboard.",
+            "Do not modify the project plan template; add export support.",
+            "Don’t change the plan parser, but create an audit dashboard.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("supersede-generation", control["relation"])
+                self.assertIn(
+                    "planning-candidate-successor", control["evidence"])
+
+    def test_preserve_current_plus_positive_plan_change_requires_one_clarification(self):
+        """Break caught: a conflicting current-plan instruction becomes read-only."""
+        requests = (
+            "Keep the current plan unchanged, but replace its architecture now.",
+            "Keep the current plan unchanged; replace its architecture now.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "reviewable"})
+
+                self.assertFalse(decision["blocked"], decision)
+                self.assertEqual("plan", decision["intent"])
+                self.assertEqual(
+                    "PLAN_EXECUTION_CONTRADICTION", decision["code"])
+                self.assertTrue(decision["needs_owner"], decision)
+                self.assertEqual(1, decision["recommendation"].count("?"))
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-clarification", control["evidence"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
+
     def test_true_plan_materialization_contradiction_requests_clarification(self):
         """Break caught: contradictory authority silently creates a candidate."""
         requests = (
@@ -268,12 +358,16 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 control = loom_runtime.request_control(
                     request, state={"generation_phase": "reviewable"})
 
-                self.assertTrue(decision["blocked"], decision)
-                self.assertEqual("INTENT_AMBIGUOUS", decision["code"])
-                self.assertTrue(control["blocked"], control)
+                self.assertFalse(decision["blocked"], decision)
+                self.assertEqual("plan", decision["intent"])
+                self.assertEqual(
+                    "PLAN_EXECUTION_CONTRADICTION", decision["code"])
+                self.assertTrue(decision["needs_owner"], decision)
+                self.assertEqual(1, decision["recommendation"].count("?"))
+                self.assertFalse(control["blocked"], control)
                 self.assertEqual("unclear", control["relation"])
-                self.assertFalse(any(
-                    item.startswith("planning-") for item in control["evidence"]))
+                self.assertIn("semantic-clarification", control["evidence"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
 
     def test_direct_planning_survives_inert_context_and_implementation_negation(self):
         """Break caught: semantic scoping suppresses a separate direct plan command."""

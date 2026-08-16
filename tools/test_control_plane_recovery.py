@@ -645,13 +645,13 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         original = loom_orchestrator._clear_active_pointer
         failed = False
 
-        def interrupted(directory, action_id):
+        def interrupted(directory, action_id, **kwargs):
             nonlocal failed
             action = self.action(first)
             if not failed and action["status"] in {"superseded", "abandoned", "expired"}:
                 failed = True
                 raise OSError("pointer clear interruption")
-            return original(directory, action_id)
+            return original(directory, action_id, **kwargs)
 
         with mock.patch.object(
                 loom_orchestrator, "_clear_active_pointer", side_effect=interrupted):
