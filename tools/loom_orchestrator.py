@@ -106,6 +106,11 @@ MAX_ORCHESTRATION_ACTIONS = 256
 MAX_ORCHESTRATION_DIRECTORY_ENTRIES = 512
 ACTIVE_POINTER_FILE = "active-action.json"
 RECOVERY_DIRECTORY = "planning-recovery"
+RECOVERY_CONTROL_TRANSITION = "control-transition"
+RECOVERY_CONTROL_RECEIPT = "receipt.json"
+RECOVERY_CONTROL_TARGET_ACTION = "target-action.json"
+RECOVERY_CONTROL_ORIGINAL_ACTION = "original-action.json"
+RECOVERY_CONTROL_ACTIVE_POINTER = "active-pointer.json"
 MAX_RECOVERY_FILES = 8
 MAX_RECOVERY_FILE_BYTES = 256 * 1024
 MAX_RECOVERY_TOTAL_BYTES = MAX_RECOVERY_FILES * MAX_RECOVERY_FILE_BYTES
@@ -1413,10 +1418,9 @@ def _validate_action(
     return value
 
 
-def _read_action(path, *, owner_home=None, install_root=None,
-                 allow_pre_ux104_reprepare=False):
-    path = (_validate_action_path_authority(path, owner_home)
-            if owner_home is not None else _absolute(path, "action"))
+def _decode_action_document(path, *, owner_home=None, install_root=None):
+    """Authenticate one bounded action document without granting its pathname authority."""
+    path = _absolute(path, "action document")
     try:
         loom_memory._reject_link_ancestors(path, "orchestration action")
     except loom_memory.MemoryError as exc:
@@ -1459,6 +1463,15 @@ def _read_action(path, *, owner_home=None, install_root=None,
             raise OrchestratorError(
                 "ACTION_RUNTIME_MISMATCH", "action does not belong to this home and runtime")
         security = (crypto, opened.identity()["owner_vault_id"])
+    return value, security
+
+
+def _read_action(path, *, owner_home=None, install_root=None,
+                 allow_pre_ux104_reprepare=False):
+    path = (_validate_action_path_authority(path, owner_home)
+            if owner_home is not None else _absolute(path, "action"))
+    value, security = _decode_action_document(
+        path, owner_home=owner_home, install_root=install_root)
     return path, _validate_action(
         value, path,
         allow_pre_ux104_reprepare=allow_pre_ux104_reprepare,
@@ -1474,7 +1487,8 @@ def _is_pre_ux104_reprepare_action(action):
             action.get("request_control"))
 
 
-def _write_action(path, value, security=None):
+def _action_storage_document(value, security=None):
+    """Return exact private on-disk action bytes without publishing them."""
     value = dict(value)
     value["action_hash"] = _action_hash(value)
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
@@ -1482,14 +1496,22 @@ def _write_action(path, value, security=None):
     if len(raw) > MAX_ACTION_BYTES:
         raise OrchestratorError("ACTION_CAPACITY", "action exceeds its plaintext bound")
     if security is None:
-        loom_session._atomic_json(path, value)
+        stored = value
     else:
         crypto, owner_vault_id = security
         aad = f"action:{owner_vault_id}:{value['action_id']}".encode()
-        envelope = {"schema_version": 1, "kind": "loom-encrypted-action-v1",
-                    "action_id": value["action_id"], "owner_vault_id": owner_vault_id,
-                    "ciphertext": crypto.seal(raw, aad).decode("ascii")}
-        loom_session._atomic_json(path, envelope)
+        stored = {"schema_version": 1, "kind": "loom-encrypted-action-v1",
+                  "action_id": value["action_id"], "owner_vault_id": owner_vault_id,
+                  "ciphertext": crypto.seal(raw, aad).decode("ascii")}
+    encoded = loom_session._canonical_json(stored) + b"\n"
+    if len(encoded) > MAX_ENCRYPTED_ACTION_BYTES:
+        raise OrchestratorError("ACTION_CAPACITY", "stored action exceeds its byte bound")
+    return value, stored, encoded
+
+
+def _write_action(path, value, security=None):
+    value, stored, _encoded = _action_storage_document(value, security)
+    loom_session._atomic_json(path, stored)
     return value
 
 
@@ -2210,26 +2232,344 @@ def _require_recovery_controls(path, expected, *, action=True, pointer=True):
     return observed
 
 
-def _write_recovered_action(path, candidate, security, expected_controls):
-    """Condition the terminal action write on exact preflight control bytes."""
-    _require_recovery_controls(path, expected_controls)
-    _write_action(path, candidate, security)
-    observed = _require_recovery_controls(
-        path, expected_controls, action=False, pointer=True)
+_RECOVERY_CONTROL_RECEIPT_FIELDS = {
+    "schema_version", "action_id", "project_id",
+    "source_action_sha256", "source_action_identity",
+    "source_pointer_sha256", "source_pointer_identity",
+    "target_action_sha256", "target_action_identity", "target_action_hash",
+    "receipt_hash",
+}
+
+
+def _write_private_file_exclusive(path, payload):
+    """Create one bounded private transition object without replacing bytes."""
+    path = Path(path)
+    if not isinstance(payload, bytes) or not payload \
+            or len(payload) > MAX_ENCRYPTED_ACTION_BYTES:
+        raise OrchestratorError(
+            "RECOVERY_CAPACITY", "recovery control object exceeds its byte bound")
+    descriptor = None
     try:
-        _path, persisted, _persisted_security = _read_action(
-            path, owner_home=candidate["owner_home"],
-            install_root=candidate["install_root"])
+        loom_reliability._absolute(
+            path.parent, "recovery control parent", must_exist=True)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("recovery control write made no progress")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        loom_reliability._sync_parent(path)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            f"recovery control object could not be created safely: {exc}") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _recovery_control_receipt(expected_controls, candidate, target_path):
+    target_identity = loom_reliability.observe_root_identity(target_path)
+    target_bytes = target_path.read_bytes()
+    body = {
+        "schema_version": 1,
+        "action_id": candidate["action_id"],
+        "project_id": candidate["project_id"],
+        "source_action_sha256": expected_controls["action_sha256"],
+        "source_action_identity": expected_controls["action_identity"],
+        "source_pointer_sha256": expected_controls["pointer_sha256"],
+        "source_pointer_identity": expected_controls["pointer_identity"],
+        "target_action_sha256": hashlib.sha256(target_bytes).hexdigest(),
+        "target_action_identity": target_identity,
+        "target_action_hash": candidate["action_hash"],
+    }
+    return {**body, "receipt_hash": _hash(body)}
+
+
+def _load_recovery_control_receipt(transition, *, expected_project_id=None):
+    path = Path(transition) / RECOVERY_CONTROL_RECEIPT
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+            raise ValueError("receipt is not a bounded regular file")
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery control receipt is invalid: {exc}") from exc
+    body = dict(value) if isinstance(value, dict) else {}
+    claimed = body.pop("receipt_hash", None)
+    try:
+        uuid.UUID(str(value.get("action_id")))
+        loom_reliability._validate_root_identity_token(
+            value.get("source_action_identity"))
+        loom_reliability._validate_root_identity_token(
+            value.get("target_action_identity"))
+        if value.get("source_pointer_identity") is not None:
+            loom_reliability._validate_root_identity_token(
+                value["source_pointer_identity"])
+    except (ValueError, TypeError, AttributeError,
+            loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery control receipt identities are invalid") from exc
+    if not isinstance(value, dict) or set(value) != _RECOVERY_CONTROL_RECEIPT_FIELDS \
+            or value.get("schema_version") != 1 \
+            or str(uuid.UUID(value["action_id"])) != value["action_id"] \
+            or re.fullmatch(r"p-[0-9a-f]{32}", str(value.get("project_id", ""))) is None \
+            or expected_project_id is not None \
+            and value["project_id"] != expected_project_id \
+            or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(field, ""))) is None
+                   for field in (
+                       "source_action_sha256", "target_action_sha256",
+                       "target_action_hash")) \
+            or (value["source_pointer_sha256"] is None) \
+            != (value["source_pointer_identity"] is None) \
+            or value["source_pointer_sha256"] is not None \
+            and re.fullmatch(
+                r"[0-9a-f]{64}", value["source_pointer_sha256"]) is None \
+            or claimed != _hash(body):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery control receipt is not self-consistent")
+    return value
+
+
+def _recovery_control_file_state(path, expected_sha256, expected_identity):
+    path = Path(path)
+    if not os.path.lexists(path):
+        return "absent"
+    try:
+        if path.is_symlink() or not path.is_file() \
+                or path.stat().st_size > MAX_ENCRYPTED_ACTION_BYTES:
+            return "unexpected"
+        observed = loom_reliability.observe_root_identity(path)
+        payload = path.read_bytes()
+        loom_reliability.validate_root_identity(path, observed)
+    except (OSError, loom_reliability.ReliabilityError):
+        return "unexpected"
+    return (
+        "expected"
+        if observed == expected_identity
+        and hashlib.sha256(payload).hexdigest() == expected_sha256
+        else "unexpected")
+
+
+def _atomic_recovery_control_move(source, destination, *, expected_identity,
+                                  source_role, destination_role):
+    try:
+        outcome = loom_reliability.atomic_rename_noreplace(
+            source, destination, expected_source_identity=expected_identity,
+            source_role=source_role, destination_role=destination_role)
+        return outcome.state
+    except loom_reliability.AtomicRenameReconciliationRequired as exc:
+        if exc.state["namespace_state"] == "committed":
+            return exc.state
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "recovery control move became ambiguous; all observable bytes were preserved") \
+            from exc
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "recovery control bytes changed in the final no-replace commit window") \
+            from exc
+
+
+def _validate_recovery_target_action(target_path, action_path, receipt,
+                                     *, owner_home, install_root):
+    try:
+        value, security = _decode_action_document(
+            target_path, owner_home=owner_home, install_root=install_root)
+        value = _validate_action(
+            value, action_path, action_security=security)
     except OrchestratorError as exc:
         raise OrchestratorError(
-            "RECOVERY_RACE",
-            "the recovered action could not be revalidated after its terminal write") \
-            from exc
-    if persisted != candidate:
+            "RECOVERY_RACE", "staged terminal action is not authentic") from exc
+    if value["action_id"] != receipt["action_id"] \
+            or value["project_id"] != receipt["project_id"] \
+            or value["action_hash"] != receipt["target_action_hash"] \
+            or value["status"] not in TERMINAL_ACTION_STATUSES:
         raise OrchestratorError(
-            "RECOVERY_RACE",
-            "the recovered action changed during its terminal write")
-    return observed
+            "RECOVERY_RACE", "staged terminal action disagrees with its receipt")
+    return value
+
+
+def _reconcile_recovered_action_transition(
+        transition, action_path, *, owner_home, install_root,
+        expected_project_id=None):
+    """Roll one published compatibility transition forward without replacement."""
+    transition = Path(transition)
+    action_path = Path(action_path)
+    receipt = _load_recovery_control_receipt(
+        transition, expected_project_id=expected_project_id)
+    if action_path.name != f"{receipt['action_id']}.json":
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery transition does not name its action path")
+    allowed = {
+        RECOVERY_CONTROL_RECEIPT, RECOVERY_CONTROL_TARGET_ACTION,
+        RECOVERY_CONTROL_ORIGINAL_ACTION, RECOVERY_CONTROL_ACTIVE_POINTER,
+    }
+    try:
+        entries = list(os.scandir(transition))
+    except OSError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery transition cannot be inspected: {exc}") from exc
+    if len(entries) > len(allowed) or any(
+            entry.name not in allowed or entry.is_symlink()
+            or not entry.is_file(follow_symlinks=False) for entry in entries):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery transition contains an unexpected object")
+    target_path = transition / RECOVERY_CONTROL_TARGET_ACTION
+    original_path = transition / RECOVERY_CONTROL_ORIGINAL_ACTION
+    pointer_backup = transition / RECOVERY_CONTROL_ACTIVE_POINTER
+
+    action_state = _recovery_control_file_state(
+        action_path, receipt["source_action_sha256"],
+        receipt["source_action_identity"])
+    target_at_action = _recovery_control_file_state(
+        action_path, receipt["target_action_sha256"],
+        receipt["target_action_identity"])
+    original_state = _recovery_control_file_state(
+        original_path, receipt["source_action_sha256"],
+        receipt["source_action_identity"])
+    target_state = _recovery_control_file_state(
+        target_path, receipt["target_action_sha256"],
+        receipt["target_action_identity"])
+    if original_state == "unexpected" or target_state == "unexpected" \
+            or action_state == target_at_action == "unexpected":
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery action namespace contains unexpected bytes")
+    if action_state == "expected" and original_state == "absent" \
+            and target_state == "expected":
+        _atomic_recovery_control_move(
+            action_path, original_path,
+            expected_identity=receipt["source_action_identity"],
+            source_role="legacy_action", destination_role="original_action")
+        action_state = "absent"
+        target_at_action = "absent"
+        original_state = "expected"
+    if action_state == "absent" and target_at_action == "absent" \
+            and original_state == "expected" and target_state == "expected":
+        _validate_recovery_target_action(
+            target_path, action_path, receipt,
+            owner_home=owner_home, install_root=install_root)
+        _atomic_recovery_control_move(
+            target_path, action_path,
+            expected_identity=receipt["target_action_identity"],
+            source_role="target_action", destination_role="terminal_action")
+        target_at_action = "expected"
+        target_state = "absent"
+    if not (target_at_action == "expected" and original_state == "expected"
+            and target_state == "absent"):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery action transition is partial or ambiguous")
+    _validate_recovery_target_action(
+        action_path, action_path, receipt,
+        owner_home=owner_home, install_root=install_root)
+
+    pointer_path = _active_pointer_path(action_path.parent)
+    if receipt["source_pointer_sha256"] is not None:
+        pointer_backup_state = _recovery_control_file_state(
+            pointer_backup, receipt["source_pointer_sha256"],
+            receipt["source_pointer_identity"])
+        pointer_state = _recovery_control_file_state(
+            pointer_path, receipt["source_pointer_sha256"],
+            receipt["source_pointer_identity"])
+        if pointer_backup_state == "unexpected" \
+                or pointer_state == "unexpected" and pointer_backup_state == "absent":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery pointer namespace contains unexpected bytes")
+        if pointer_backup_state == "absent" and pointer_state == "expected":
+            _atomic_recovery_control_move(
+                pointer_path, pointer_backup,
+                expected_identity=receipt["source_pointer_identity"],
+                source_role="active_pointer", destination_role="retired_pointer")
+            pointer_backup_state = "expected"
+        if pointer_backup_state != "expected":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery pointer transition is partial or ambiguous")
+    return receipt
+
+
+def _stage_recovered_action_transition(
+        path, candidate, security, expected_controls):
+    """Publish a recoverable target, then retire old controls with no-replace moves."""
+    path = Path(path)
+    expected_controls = _recovery_control_token(expected_controls)
+    _require_recovery_controls(path, expected_controls)
+    recovery_root = path.parent.parent / RECOVERY_DIRECTORY / candidate["action_id"]
+    try:
+        owner_root = loom_reliability._absolute(
+            candidate["owner_home"], "recovery owner root", must_exist=True)
+        _prepare_recovery_root(owner_root, recovery_root)
+        transition = recovery_root / RECOVERY_CONTROL_TRANSITION
+        if os.path.lexists(transition):
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery control transition already exists")
+        stage = loom_reliability.reserve_private_stage_leaf(
+            recovery_root, [f".control-transition-{uuid.uuid4().hex}"])
+        candidate, _stored, target_bytes = _action_storage_document(
+            candidate, security)
+        target_path = stage / RECOVERY_CONTROL_TARGET_ACTION
+        _write_private_file_exclusive(target_path, target_bytes)
+        receipt = _recovery_control_receipt(
+            expected_controls, candidate, target_path)
+        _write_private_file_exclusive(
+            stage / RECOVERY_CONTROL_RECEIPT,
+            loom_session._canonical_json(receipt) + b"\n")
+        stage_identity = loom_reliability.observe_root_identity(stage)
+        _require_recovery_controls(path, expected_controls)
+        _atomic_recovery_control_move(
+            stage, transition, expected_identity=stage_identity,
+            source_role="control_stage", destination_role="control_transition")
+    except OrchestratorError:
+        raise
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery control transition could not be staged: {exc}") \
+            from exc
+    return _reconcile_recovered_action_transition(
+        transition, path, owner_home=candidate["owner_home"],
+        install_root=candidate["install_root"],
+        expected_project_id=candidate["project_id"])
+
+
+def _reconcile_legacy_control_transitions(
+        directory, *, owner_home, install_root, expected_project_id):
+    """Finish bounded crash-interrupted pre-UX control transitions under lock."""
+    base = Path(directory).parent / RECOVERY_DIRECTORY
+    if not os.path.lexists(base):
+        return []
+    try:
+        if base.is_symlink() or not base.is_dir():
+            raise ValueError("recovery root is not a directory")
+        entries = list(os.scandir(base))
+    except (OSError, ValueError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery control root is unsafe: {exc}") from exc
+    if len(entries) > MAX_ORCHESTRATION_ACTIONS:
+        raise OrchestratorError(
+            "RECOVERY_CAPACITY", "recovery control scan exceeds its hard bound")
+    receipts = []
+    for entry in sorted(entries, key=lambda item: item.name):
+        if re.fullmatch(r"[0-9a-f-]{36}", entry.name) is None:
+            continue
+        transition = Path(entry.path) / RECOVERY_CONTROL_TRANSITION
+        if not os.path.lexists(transition):
+            continue
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False) \
+                or transition.is_symlink() or not transition.is_dir():
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery control transition path is unsafe")
+        action_path = Path(directory) / f"{entry.name}.json"
+        receipts.append(_reconcile_recovered_action_transition(
+            transition, action_path, owner_home=owner_home,
+            install_root=install_root,
+            expected_project_id=expected_project_id))
+    return receipts
 
 
 def _preflight_plan_action_recovery(path, action, *, requested_reason=None):
@@ -2554,11 +2894,8 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None,
     }[reason]
     candidate["action_hash"] = _action_hash(candidate)
     _validate_action(candidate, path, action_security=security)
-    written_controls = _write_recovered_action(
+    _stage_recovered_action_transition(
         path, candidate, security, control_token)
-    _clear_active_pointer(
-        Path(path).parent, candidate["action_id"],
-        expected_controls=written_controls, action_path=path)
     return receipt
 
 
@@ -8926,6 +9263,9 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                 target=target, directory=directory, memory=memory,
                 project_id=project.project_id, owner_home=home,
                 install_root=install_root)
+            _reconcile_legacy_control_transitions(
+                directory, owner_home=home, install_root=install_root,
+                expected_project_id=project.project_id)
             if quarantine_requested:
                 command_identity = (
                     transport_invocation_id or str(uuid.uuid4()))
@@ -8990,20 +9330,30 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                         directory=directory, request=request, owner_home=home,
                         install_root=install_root, now=instant)
             else:
-                candidate_planning = (
-                    incoming_intent == "plan"
+                planning_mode = (
+                    _extract_planning_mode(lifecycle_control)
+                    if incoming_intent == "plan"
                     and revision_context is None
                     and lifecycle_control is not None
-                    and _extract_planning_mode(lifecycle_control) in {
-                        "candidate-successor", "current-world-replan"})
-                recovery, reused_action, preserve_active_pointer = \
-                    _reconcile_active_action(
-                        owner_home=home, install_root=install_root,
-                        instance_id=instance_id, project_id=project.project_id,
-                        now=instant, incoming_intent=incoming_intent,
-                        request=request, cwd=cwd, target=target, memory=memory,
-                        transport_invocation_id=transport_invocation_id,
-                        candidate_planning=candidate_planning)
+                    else None)
+                candidate_planning = planning_mode in {
+                    "candidate-successor", "current-world-replan"}
+                if planning_mode == "inline-recovery":
+                    # Inline assistance creates no action and cannot consume or
+                    # replace the exact active-action pointer it is discussing.
+                    recovery = None
+                    reused_action = None
+                    preserve_active_pointer = True
+                else:
+                    recovery, reused_action, preserve_active_pointer = \
+                        _reconcile_active_action(
+                            owner_home=home, install_root=install_root,
+                            instance_id=instance_id,
+                            project_id=project.project_id,
+                            now=instant, incoming_intent=incoming_intent,
+                            request=request, cwd=cwd, target=target, memory=memory,
+                            transport_invocation_id=transport_invocation_id,
+                            candidate_planning=candidate_planning)
                 if reused_action is not None:
                     result = _pending_action_result(reused_action)
                 else:
@@ -10135,6 +10485,7 @@ _INLINE_RECOVERY_REASON_BY_EVIDENCE = {
     "inline-plan-project-writes-prohibited": "PROJECT_WRITES_PROHIBITED",
     "inline-plan-lifecycle-authority-untrusted": "LIFECYCLE_AUTHORITY_UNTRUSTED",
     "inline-plan-authority-unclear": "AUTHORITY_UNCLEAR",
+    "inline-plan-owner-assistance": "ASSISTANCE_ONLY",
 }
 
 
@@ -10209,6 +10560,9 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
         "AUTHORITY_UNCLEAR": (
             "The request both preserves and changes plan authority, so this result "
             "is provisional and cannot be started or treated as project authority."),
+        "ASSISTANCE_ONLY": (
+            "The request did not use Loom's closed direct planning command, so this "
+            "result is useful assistance only and created no plan authority."),
     }
     next_actions = {
         "PROJECT_WRITES_PROHIBITED": (
@@ -10219,6 +10573,9 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
         "AUTHORITY_UNCLEAR": (
             "Should Loom create a new reviewed plan while keeping the current plan "
             "unchanged until that review?"),
+        "ASSISTANCE_ONLY": (
+            "Use a top-level `Plan ...` or `Create a plan ...` command when this "
+            "assistance should become a persistent reviewed plan."),
     }
     if reason_code not in constraints:
         raise OrchestratorError(
@@ -10237,23 +10594,22 @@ def _inline_recovery_message(reason_code, *, prepared, domain_contract):
         raise OrchestratorError(
             "DOMAIN_CONTRACT_INVALID", "inline planning semantics are unavailable")
     try:
-        semantic_outcome = loom_runtime.semantic_outcome_from_evidence(
-            prepared.route_contract["evidence"], domains)
+        semantic_outcome = loom_runtime.validate_semantic_outcome_evidence(
+            prepared.route_contract["evidence"], domains, required=True)
     except loom_runtime.RuntimeError as exc:
         raise OrchestratorError(
             "REQUEST_CONTROL_INVALID",
             f"sealed semantic outcome is invalid: {exc}") from exc
     return (
         "NON-AUTHORITATIVE PLAN\n"
-        f"Understood outcome: Prepare a {prepared.route_contract['tier']}-tier "
-        f"non-authoritative plan focused on {semantic_outcome} for the sealed "
-        f"{scope} scope in the resolved {inspection['state']} project boundary.\n"
+        f"Understood outcome: {semantic_outcome['label']} within the sealed {scope} "
+        f"scope and resolved {inspection['state']} project boundary.\n"
+        f"Requirement capsule: {semantic_outcome['label']} "
+        f"[domain={semantic_outcome['domain']}; evidence={semantic_outcome['token']}]\n"
         "Proposed sequence:\n"
-        f"1. Use the sealed project inspection and {coverage} {scope} domain coverage "
-        "to bound current facts.\n"
-        f"2. Define constraints and {consequence}-consequence acceptance evidence for "
-        f"the sealed {semantic_outcome} focus.\n"
-        f"3. Order the {scope} work into bounded reviewed steps before any execution.\n"
+        f"1. Bound facts with the sealed inspection and {coverage} domain coverage.\n"
+        f"2. Define {consequence}-consequence acceptance evidence.\n"
+        f"3. Order the {scope} work into reviewed steps before execution.\n"
         f"Known constraints or uncertainty: {constraints[reason_code]}\n"
         f"Reason code: {reason_code}\n"
         f"Safe next action: {next_actions[reason_code]}")
@@ -10434,6 +10790,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                     recovery_evidence = "inline-plan-project-writes-prohibited"
                 elif "semantic-clarification" in request_control["evidence"]:
                     recovery_evidence = "inline-plan-authority-unclear"
+                elif "semantic-assistance" in request_control["evidence"]:
+                    recovery_evidence = "inline-plan-owner-assistance"
             prepared = _rebind_useful_planning_prepared(
                 prepared, planning_mode, recovery_evidence=recovery_evidence)
             opened = loom_session.OpenSession(
@@ -10551,7 +10909,7 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 "REQUEST_CONTROL_INVALID", "inline planning recovery class is unsupported")
     if inline_recovery_reason is not None:
         reason_code = inline_recovery_reason
-        evidence_id = "inline-plan-" + reason_code.casefold().replace("_", "-")
+        evidence_id = recovery_evidence[0]
         controller.handlers["plan"] = lambda _context: {
             "status": "completed",
             "code": "non-authoritative-plan",

@@ -46,6 +46,7 @@ NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS = frozenset({
     "inline-plan-project-writes-prohibited",
     "inline-plan-lifecycle-authority-untrusted",
     "inline-plan-authority-unclear",
+    "inline-plan-owner-assistance",
 })
 
 if os.name == "nt":

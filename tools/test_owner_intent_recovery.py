@@ -19,6 +19,8 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
     PLANNING_REQUEST = (
         "Draft an approach for a minor warehouse barcode label adjustment. "
         "This is for review, not implementation.")
+    PERSISTENT_PLANNING_REQUEST = (
+        "Plan a minor warehouse barcode label adjustment for review only.")
 
     def test_planning_disposition_has_one_pure_closed_call_surface(self):
         """Break caught: raw wording or an effectful dependency enters disposition."""
@@ -194,7 +196,7 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
         for state, expected in cases:
             with self.subTest(mode=expected):
                 control = loom_runtime.request_control(
-                    self.PLANNING_REQUEST, state=state)
+                    self.PERSISTENT_PLANNING_REQUEST, state=state)
                 self.assertEqual(
                     expected,
                     loom_orchestrator._extract_planning_mode(control))
@@ -202,7 +204,8 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
     def test_orchestrator_rejects_missing_duplicate_unknown_or_incompatible_mode(self):
         """Break caught: malformed sealed mode evidence reaches an ordinary plan action."""
         base = loom_runtime.request_control(
-            self.PLANNING_REQUEST, state={"generation_phase": "reviewable"})
+            self.PERSISTENT_PLANNING_REQUEST,
+            state={"generation_phase": "reviewable"})
         cases = (
             [],
             ["planning-candidate-successor", "planning-candidate-successor"],
@@ -275,11 +278,11 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
             "Plan without modifying generated files and with no project writes.",
         )
         allowed = (
-            "Plan a tool that does not modify files.",
-            "Plan read-only evidence handling.",
-            "Plan this change without modifying generated files.",
-            "Do not ask questions, modify files directly.",
-            "Do not merely describe the fix, modify files and test it.",
+            ("Plan a tool that does not modify files.", False),
+            ("Plan read-only evidence handling.", False),
+            ("Plan this change without modifying generated files.", False),
+            ("Do not ask questions, modify files directly.", True),
+            ("Do not merely describe the fix, modify files and test it.", True),
         )
 
         for request in prohibited:
@@ -297,11 +300,15 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
                     report, "request-control-v1.schema.json", control,
                     "request-control-v1.schema.json")
                 self.assertEqual([], report.errors)
-        for request in allowed:
+        for request, inline_assistance in allowed:
             with self.subTest(allowed=request):
                 control = loom_runtime.request_control(
                     request, state={"generation_phase": "absent"})
-                self.assertNotIn("planning-inline-recovery", control["evidence"])
+                self.assertEqual(
+                    inline_assistance,
+                    "planning-inline-recovery" in control["evidence"])
+                if inline_assistance:
+                    self.assertIn("semantic-assistance", control["evidence"])
 
     def test_historical_request_control_v1_without_project_write_fact_stays_valid(self):
         """Break caught: extending the closed prohibition set invalidates v1 evidence."""
@@ -502,23 +509,22 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
     def test_planning_intent_has_no_execution_route_in_each_lifecycle_state(self):
         """Break caught: lifecycle state misclassifies ordinary planning language."""
         states = (
-            ("absent", {"generation_phase": "absent"}, "new", False,
+            ("absent", {"generation_phase": "absent"}, "unclear", False,
              "ROUTE_PLAN"),
             ("reviewable", {"generation_phase": "reviewable"},
-             "supersede-generation", False,
-             "ROUTE_PLAN"),
+             "unclear", False, "ROUTE_PLAN"),
             ("active", {"generation_phase": "active"},
-             "supersede-generation", False, "ROUTE_PLAN"),
-            ("terminal", {"generation_phase": "terminal-completed"}, "new", False,
-             "ROUTE_PLAN"),
+             "unclear", False, "ROUTE_PLAN"),
+            ("terminal", {"generation_phase": "terminal-completed"},
+             "unclear", False, "ROUTE_PLAN"),
             ("stale", {
                 "generation_phase": "reviewable",
                 "state_error": "STALE_LIFECYCLE",
-            }, "supersede-generation", True, "PLAN_DECISION_STALE"),
+            }, "unclear", False, "ROUTE_PLAN"),
             ("corrupt", {
                 "generation_phase": "reviewable",
                 "state_error": "CORRUPT_LIFECYCLE",
-            }, "unclear", True, "CORRUPT_LIFECYCLE"),
+            }, "unclear", False, "ROUTE_PLAN"),
         )
 
         for name, state, relation, blocked, code in states:
@@ -533,6 +539,7 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
                 self.assertEqual("plan", result["intent"])
                 self.assertEqual(blocked, result["blocked"])
                 self.assertEqual(code, result["code"])
+                self.assertIn("semantic-assistance", control["evidence"])
                 if blocked:
                     self.assertTrue(result["needs_owner"])
                     self.assertTrue(result["recommendation"].strip())

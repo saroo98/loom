@@ -6,31 +6,29 @@ import loom_runtime
 
 
 class LifecycleIntentMetamorphicTests(unittest.TestCase):
-    def test_ordinary_owner_requests_use_state_derived_planning_without_magic_verbs(self):
-        """Break caught: ordinary owner outcomes require a planner verb allowlist."""
+    def test_unanchored_owner_language_is_inline_assistance_not_plan_authority(self):
+        """Break caught: ordinary or hypothetical wording creates plan authority."""
         requests = (
             "I need a local inventory tracker.",
             "I want a local inventory tracker.",
             "We need CSV export for the reports.",
             "Help me build a local inventory tracker.",
             "How about adding CSV export?",
+            "Suppose we used a different architecture. What would the plan look like?",
+            "Don’t supersede anything; prepare a different plan for discussion only.",
+            "Do not change the plan parser; create an audit dashboard.",
+            "Do not modify the project plan template; add export support.",
+            "Could you show what a different plan might contain?",
         )
         states = (
-            ({"generation_phase": "absent"}, "new", "planning-direct"),
-            (
-                {"generation_phase": "reviewable"},
-                "supersede-generation",
-                "planning-candidate-successor",
-            ),
-            (
-                {"generation_phase": "terminal-completed"},
-                "new",
-                "planning-direct",
-            ),
+            {"generation_phase": "absent"},
+            {"generation_phase": "reviewable"},
+            {"generation_phase": "active"},
+            {"generation_phase": "terminal-completed"},
         )
 
         for request in requests:
-            for state, relation, planning_evidence in states:
+            for state in states:
                 with self.subTest(request=request, phase=state["generation_phase"]):
                     decision = loom_runtime.resolve_intent(request, state)
                     control = loom_runtime.request_control(request, state=state)
@@ -39,8 +37,103 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                     self.assertEqual("plan", decision["intent"])
                     self.assertFalse(control["blocked"], control)
                     self.assertEqual("plan", control["primary_operation"])
-                    self.assertEqual(relation, control["relation"])
-                    self.assertIn(planning_evidence, control["evidence"])
+                    self.assertEqual("unclear", control["relation"])
+                    self.assertIn("semantic-assistance", control["evidence"])
+                    self.assertIn("planning-inline-recovery", control["evidence"])
+                    self.assertFalse(any(
+                        item in {"planning-direct", "planning-candidate-successor",
+                                 "planning-current-world-replan"}
+                        for item in control["evidence"]))
+
+    def test_only_top_level_anchored_plan_commands_may_persist(self):
+        """Break caught: nested, reported, or merely positive prose grants authority."""
+        persistent = (
+            "Plan a local inventory tracker.",
+            "Please plan CSV export for the reports.",
+            "Create a plan for a local inventory tracker.",
+            "Create a plan to add export support.",
+            "Create the new plan now; do not implement it.",
+            "Don't discuss alternatives; plan a local inventory tracker.",
+        )
+        nonauthoritative = (
+            'Morgan wrote, "Plan a local inventory tracker." Explain the implications.',
+            "Morgan asked us to plan a local inventory tracker.",
+            "If we planned a local inventory tracker, what would change?",
+            "How about planning a local inventory tracker?",
+            "Create a local inventory tracker.",
+            "Create a plan parser for the dashboard.",
+            "Create a plan template editor.",
+            "Do not plan a local inventory tracker.",
+        )
+
+        for request in persistent:
+            with self.subTest(kind="persistent", request=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "absent"})
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual("new", control["relation"])
+                self.assertIn("planning-direct", control["evidence"])
+                self.assertNotIn("planning-inline-recovery", control["evidence"])
+
+        for request in nonauthoritative:
+            with self.subTest(kind="inline", request=request):
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "absent"})
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
+                self.assertNotIn("planning-direct", control["evidence"])
+
+    def test_host_bound_exact_controls_do_not_depend_on_free_text_authority(self):
+        """Break caught: the inline default consumes typed lifecycle authority."""
+        controls = (
+            ("execute", "start-exact"),
+            ("plan", "revise-exact"),
+            ("cancel", "cancel-generation"),
+        )
+        for primary, relation in controls:
+            with self.subTest(primary=primary, relation=relation):
+                control = loom_runtime.request_control(
+                    "untrusted display wording",
+                    state={"generation_phase": "reviewable"},
+                    host_control={
+                        "primary_operation": primary,
+                        "relation": relation,
+                    },
+                )
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual(primary, control["primary_operation"])
+                self.assertEqual(relation, control["relation"])
+                self.assertEqual(["host-bound-control"], control["evidence"])
+
+    def test_ordinary_owner_requests_receive_inline_help_without_minting_authority(self):
+        """Ordinary outcomes stay useful without inheriting durable plan authority."""
+        requests = (
+            "I need a local inventory tracker.",
+            "I want a local inventory tracker.",
+            "We need CSV export for the reports.",
+            "Help me build a local inventory tracker.",
+            "How about adding CSV export?",
+        )
+        states = (
+            {"generation_phase": "absent"},
+            {"generation_phase": "reviewable"},
+            {"generation_phase": "terminal-completed"},
+        )
+
+        for request in requests:
+            for state in states:
+                with self.subTest(request=request, phase=state["generation_phase"]):
+                    decision = loom_runtime.resolve_intent(request, state)
+                    control = loom_runtime.request_control(request, state=state)
+
+                    self.assertFalse(decision["blocked"], decision)
+                    self.assertEqual("plan", decision["intent"])
+                    self.assertFalse(control["blocked"], control)
+                    self.assertEqual("plan", control["primary_operation"])
+                    self.assertEqual("unclear", control["relation"])
+                    self.assertIn("semantic-assistance", control["evidence"])
+                    self.assertIn("planning-inline-recovery", control["evidence"])
 
     def test_semantic_planning_requests_do_not_depend_on_lifecycle_keywords(self):
         """Break caught: ordinary owner planning language is mistaken for review."""
@@ -103,7 +196,8 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 self.assertEqual(0, decision["routine_question_count"])
                 self.assertEqual(1, decision["recommendation"].count("?"))
                 self.assertEqual("plan", control["primary_operation"])
-                self.assertEqual("new", control["relation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-clarification", control["evidence"])
                 self.assertIn("implementation", control["prohibitions"])
 
     def test_plan_only_equivalents_ignore_descriptive_build_verbs(self):
@@ -137,7 +231,7 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
     def test_reviewable_explicit_replacement_plan_is_a_supersession(self):
         """Break caught: explicit replacement authority degrades to an unclear relation."""
         control = loom_runtime.request_control(
-            "Create and present a fresh replacement plan reviewed against the "
+            "Create a fresh replacement plan reviewed against the "
             "current world, explicitly superseding the stale unstarted plan "
             "generation. Do not implement.",
             state={"generation_phase": "reviewable"},
@@ -226,15 +320,22 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 control = loom_runtime.request_control(
                     request, state={"generation_phase": "reviewable"})
 
+                if semantic_scope == "reported":
+                    self.assertFalse(decision["blocked"], decision)
+                    self.assertEqual("review", decision["intent"])
+                    self.assertFalse(control["blocked"], control)
+                    self.assertEqual("review", control["primary_operation"])
+                    self.assertEqual("read-only", control["relation"])
+                    self.assertIn("semantic-nonmaterializing", control["evidence"])
+                    self.assertNotIn("explicit-supersession", control["evidence"])
+                    continue
                 self.assertFalse(decision["blocked"], decision)
-                self.assertIn(decision["intent"], {"review", "status", "why"})
+                self.assertEqual("plan", decision["intent"])
                 self.assertFalse(control["blocked"], control)
-                self.assertIn(
-                    control["primary_operation"], {"review", "status"})
-                self.assertEqual("read-only", control["relation"])
-                self.assertFalse(any(
-                    item.startswith("planning-")
-                    for item in control["evidence"]))
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-assistance", control["evidence"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
                 self.assertNotIn("explicit-supersession", control["evidence"])
 
     def test_auxiliary_or_unknown_assistance_is_non_authorizing(self):
@@ -254,12 +355,12 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                     request, state={"generation_phase": "reviewable"})
 
                 self.assertFalse(decision["blocked"], decision)
-                self.assertIn(decision["intent"], {"review", "status", "why"})
+                self.assertEqual("plan", decision["intent"])
                 self.assertFalse(control["blocked"], control)
-                self.assertIn(control["primary_operation"], {"review", "status"})
-                self.assertEqual("read-only", control["relation"])
-                self.assertFalse(any(
-                    item.startswith("planning-") for item in control["evidence"]))
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-assistance", control["evidence"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
 
     def test_arbitrary_quoted_or_reported_speaker_cannot_mint_plan_authority(self):
         """Break caught: speaker names or quote punctuation leak reported authority."""
@@ -277,10 +378,10 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                     request, state={"generation_phase": "reviewable"})
 
                 self.assertFalse(control["blocked"], control)
-                self.assertIn(control["primary_operation"], {"review", "status"})
-                self.assertEqual("read-only", control["relation"])
-                self.assertFalse(any(
-                    item.startswith("planning-") for item in control["evidence"]))
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-assistance", control["evidence"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
 
     def test_product_approach_constraint_does_not_negate_direct_feature_plan(self):
         """Break caught: a product noun is mistaken for lifecycle-plan authority."""
@@ -293,10 +394,11 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
 
         self.assertFalse(control["blocked"], control)
         self.assertEqual("plan", control["primary_operation"])
-        self.assertEqual("supersede-generation", control["relation"])
-        self.assertIn("planning-candidate-successor", control["evidence"])
+        self.assertEqual("unclear", control["relation"])
+        self.assertIn("semantic-assistance", control["evidence"])
+        self.assertIn("planning-inline-recovery", control["evidence"])
         self.assertFalse(read_only["blocked"], read_only)
-        self.assertEqual("read-only", read_only["relation"])
+        self.assertEqual("unclear", read_only["relation"])
 
     def test_product_plan_nouns_do_not_become_lifecycle_authority_controls(self):
         """Break caught: plan parser/template nouns consume lifecycle negation."""
@@ -313,12 +415,12 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
 
                 self.assertFalse(control["blocked"], control)
                 self.assertEqual("plan", control["primary_operation"])
-                self.assertEqual("supersede-generation", control["relation"])
-                self.assertIn(
-                    "planning-candidate-successor", control["evidence"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-assistance", control["evidence"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
 
-    def test_preserve_current_plus_positive_plan_change_requires_one_clarification(self):
-        """Break caught: a conflicting current-plan instruction becomes read-only."""
+    def test_preserve_current_plus_unanchored_change_remains_inline(self):
+        """An unanchored change cannot become authority through a conflict."""
         requests = (
             "Keep the current plan unchanged, but replace its architecture now.",
             "Keep the current plan unchanged; replace its architecture now.",
@@ -332,14 +434,11 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
 
                 self.assertFalse(decision["blocked"], decision)
                 self.assertEqual("plan", decision["intent"])
-                self.assertEqual(
-                    "PLAN_EXECUTION_CONTRADICTION", decision["code"])
-                self.assertTrue(decision["needs_owner"], decision)
-                self.assertEqual(1, decision["recommendation"].count("?"))
+                self.assertEqual("ROUTE_PLAN", decision["code"])
                 self.assertFalse(control["blocked"], control)
                 self.assertEqual("plan", control["primary_operation"])
                 self.assertEqual("unclear", control["relation"])
-                self.assertIn("semantic-clarification", control["evidence"])
+                self.assertIn("semantic-assistance", control["evidence"])
                 self.assertIn("planning-inline-recovery", control["evidence"])
 
     def test_true_plan_materialization_contradiction_requests_clarification(self):
@@ -369,26 +468,28 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 self.assertIn("semantic-clarification", control["evidence"])
                 self.assertIn("planning-inline-recovery", control["evidence"])
 
-    def test_direct_planning_survives_inert_context_and_implementation_negation(self):
-        """Break caught: semantic scoping suppresses a separate direct plan command."""
-        requests = (
-            "Use a different architecture for this project now.",
-            (
-                'The reviewer wrote "Create a replacement plan." Now make that the '
-                "new direction for this project."),
-            "Plan a local tracker; do not implement it.",
+    def test_only_the_separate_anchored_command_survives_inert_context(self):
+        """Context and reported wording cannot substitute for a direct command."""
+        cases = (
+            ("Use a different architecture for this project now.", False),
+            ('The reviewer wrote "Create a replacement plan." Now make that the '
+             "new direction for this project.", False),
+            ("Plan a local tracker; do not implement it.", True),
         )
 
-        for request in requests:
+        for request, persistent in cases:
             with self.subTest(request=request):
                 control = loom_runtime.request_control(
                     request, state={"generation_phase": "reviewable"})
-
                 self.assertFalse(control["blocked"], control)
                 self.assertEqual("plan", control["primary_operation"])
-                self.assertEqual("supersede-generation", control["relation"])
-                self.assertTrue(any(
-                    item.startswith("planning-") for item in control["evidence"]))
+                self.assertEqual(
+                    "supersede-generation" if persistent else "unclear",
+                    control["relation"])
+                self.assertIn(
+                    "planning-candidate-successor" if persistent
+                    else "planning-inline-recovery",
+                    control["evidence"])
 
     def test_real_plan_and_implementation_contradiction_stays_provisional(self):
         """Break caught: a contradiction blocks planning or authorizes execution."""
@@ -428,7 +529,7 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
 
         self.assertFalse(control["blocked"])
         self.assertEqual("plan", control["primary_operation"])
-        self.assertEqual("new", control["relation"])
+        self.assertEqual("unclear", control["relation"])
         self.assertIn("repair", control["prohibitions"])
         self.assertIn("continuation", control["prohibitions"])
         self.assertNotIn("standalone feature", json.dumps(control))
@@ -438,8 +539,8 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
             "request-control-v1.schema.json")
         self.assertEqual([], report.errors)
 
-    def test_active_unqualified_change_defaults_to_a_candidate_plan(self):
-        """Break caught: an ordinary planning request dead-ends on active history."""
+    def test_active_unqualified_change_returns_inline_assistance(self):
+        """An active generation cannot turn unanchored prose into a successor."""
         control = loom_runtime.request_control(
             "Add export support.",
             state={"generation_phase": "active"},
@@ -447,18 +548,20 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
 
         self.assertFalse(control["blocked"], control)
         self.assertEqual("plan", control["primary_operation"])
-        self.assertEqual("supersede-generation", control["relation"])
+        self.assertEqual("unclear", control["relation"])
+        self.assertIn("semantic-assistance", control["evidence"])
         self.assertIsNone(control["block_reason"])
 
-    def test_active_explicit_new_work_becomes_an_explicit_supersession(self):
-        """Break caught: explicit new work has no legal active-state relation."""
+    def test_active_unanchored_new_work_does_not_become_supersession(self):
+        """New-work nouns alone cannot create successor authority."""
         control = loom_runtime.request_control(
             "This is a new standalone feature action, not a repair or continuation.",
             state={"generation_phase": "active"},
         )
 
         self.assertFalse(control["blocked"])
-        self.assertEqual("supersede-generation", control["relation"])
+        self.assertEqual("unclear", control["relation"])
+        self.assertIn("semantic-assistance", control["evidence"])
 
     def test_lifecycle_policy_never_silently_rewrites_drift_to_repair(self):
         def route(intent):
@@ -481,14 +584,22 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 "state_error": "STALE_LIFECYCLE",
             }, loom_runtime.request_control(
                 "Continue the active work.",
-                state={"generation_phase": "active"}))
+                state={"generation_phase": "active"},
+                host_control={
+                    "primary_operation": "execute",
+                    "relation": "continue-active",
+                }))
         active_repair = loom_runtime._apply_lifecycle_request_policy(
             route("repair"), {
                 "generation_phase": "active",
                 "state_error": "STALE_LIFECYCLE",
             }, loom_runtime.request_control(
                 "Repair the drifted active plan.",
-                state={"generation_phase": "active"}))
+                state={"generation_phase": "active"},
+                host_control={
+                    "primary_operation": "recover",
+                    "relation": "repair-active",
+                }))
 
         self.assertEqual("plan", terminal_new["intent"])
         self.assertFalse(terminal_new["blocked"])
@@ -589,24 +700,24 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 self.assertEqual("read-only", control["relation"])
                 self.assertIn("mutation", control["prohibitions"])
 
-    def test_new_standalone_relation_survives_domain_specific_nouns(self):
-        """A noun between 'standalone' and 'work' cannot erase explicit new authority."""
-        requests = (
-            "Create fresh standalone backup work; do not continue the old action.",
-            "Plan new standalone schema migration work, not a repair.",
-            "Prepare a fresh standalone accessibility task, not a continuation.",
+    def test_domain_nouns_do_not_expand_the_direct_plan_grammar(self):
+        """Only the anchored plan command, not standalone nouns, grants authority."""
+        cases = (
+            ("Create fresh standalone backup work; do not continue the old action.", False),
+            ("Plan new standalone schema migration work, not a repair.", True),
+            ("Prepare a fresh standalone accessibility task, not a continuation.", False),
         )
 
-        for request in requests:
+        for request, persistent in cases:
             with self.subTest(request=request):
                 control = loom_runtime.request_control(
                     request,
                     state={"generation_phase": "terminal-completed"})
                 self.assertFalse(control["blocked"], control)
-                self.assertEqual("new", control["relation"])
+                self.assertEqual("new" if persistent else "unclear", control["relation"])
 
-    def test_exact_revision_and_execution_prohibition_are_compatible_controls(self):
-        """Reviewing a revised plan does not authorize its implementation."""
+    def test_free_text_revision_is_inline_until_host_bound(self):
+        """Revision wording plus a prohibition cannot mint exact-plan identity."""
         requests = (
             "Revise this exact reviewed plan; do not implement.",
             "Do not implement. Please revise the approved plan exactly.",
@@ -619,39 +730,38 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                     request, state={"generation_phase": "reviewable"})
                 self.assertFalse(control["blocked"], control)
                 self.assertEqual("plan", control["primary_operation"])
-                self.assertEqual("revise-exact", control["relation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("planning-inline-recovery", control["evidence"])
                 self.assertIn("implementation", control["prohibitions"])
 
-    def test_free_text_exact_controls_require_the_host_bound_plan_reference(self):
-        """Natural wording proposes a relation but cannot invent exact-plan identity."""
+    def test_free_text_exact_control_words_remain_non_authoritative(self):
+        """Only the typed host control can carry exact-plan identity."""
         cases = (
             ("Start this exact approved plan.", "reviewable", "execute"),
             ("Please begin the reviewed exact plan.", "reviewable", "execute"),
             ("Revise the approved plan exactly.", "reviewable", "plan"),
         )
-        for request, phase, operation in cases:
+        for request, phase, _operation in cases:
             with self.subTest(request=request):
                 control = loom_runtime.request_control(
                     request, state={"generation_phase": phase})
-                route = loom_runtime.resolve_intent(request)
-                result = loom_runtime._apply_lifecycle_request_policy(
-                    route, {"generation_phase": phase}, control)
-                self.assertEqual(operation, control["primary_operation"])
-                self.assertTrue(result["blocked"], result)
-                self.assertEqual("EXACT_PLAN_REFERENCE_REQUIRED", result["code"])
+                self.assertFalse(control["blocked"], control)
+                self.assertEqual("plan", control["primary_operation"])
+                self.assertEqual("unclear", control["relation"])
+                self.assertIn("semantic-assistance", control["evidence"])
 
     def test_materially_different_owner_requests_keep_one_closed_lifecycle_relation(self):
         """Project nouns and clause order cannot silently change lifecycle authority."""
         cases = (
             (
-                "After prior completion, plan fresh standalone backup and restore work; "
+                "Plan fresh standalone backup and restore work after prior completion; "
                 "do not continue the old action.",
                 "terminal-completed", "plan", "new", (),
             ),
             (
                 "This does not repair prior work. Create a new standalone database "
                 "schema evolution task.",
-                "terminal-completed", "plan", "new", ("repair",),
+                "terminal-completed", "plan", "unclear", ("repair",),
             ),
             (
                 "Please continue the currently active plan.",
