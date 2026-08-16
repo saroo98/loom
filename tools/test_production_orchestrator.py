@@ -4474,6 +4474,105 @@ class ProductionOrchestratorTests(unittest.TestCase):
             predecessor_manifest,
             loom_reliability.exact_tree_manifest(predecessor.generation_root))
 
+    def test_terminal_successor_allows_status_with_unrelated_pending_pointer(self):
+        """Break caught: immutable history conflicts with later pending work."""
+        self.complete_machine_authored_plan()
+        request = "Outline a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        action_path = Path(candidate["action_path"])
+        _path, completed, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        envelope_path = loom_lifecycle_transition._successor_envelope_path(
+            action_path.parent / "lifecycle-transitions",
+            completed["lifecycle_transition"]["command_id"])
+        completed_action_bytes = action_path.read_bytes()
+        envelope_bytes = envelope_path.read_bytes()
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+
+        follow_up = loom_orchestrator.invoke(
+            request="Plan a separate accounting documentation improvement.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        pointer = loom_orchestrator._read_active_pointer(action_path.parent)
+        self.assertEqual(follow_up["action_id"], pointer["action_id"])
+        self.assertNotEqual(completed["action_id"], pointer["action_id"])
+
+        status = loom_orchestrator.invoke(
+            request="Status", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", status["status"])
+        self.assertEqual(
+            follow_up["action_id"],
+            loom_orchestrator._read_active_pointer(
+                action_path.parent)["action_id"])
+        self.assertEqual(completed_action_bytes, action_path.read_bytes())
+        self.assertEqual(envelope_bytes, envelope_path.read_bytes())
+        self.assertEqual(
+            active.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertFalse(os.path.lexists(
+            loom_orchestrator._stage_path(action_path)))
+
+    def test_multiple_terminal_successors_remain_independently_verifiable(self):
+        """Break caught: old completion is compared with the newest generation."""
+        self.complete_machine_authored_plan()
+        terminal_actions = []
+        terminal_envelopes = []
+        for request in (
+                "Outline a new accounting accessibility plan.",
+                "Plan a separate accounting documentation improvement."):
+            candidate = loom_orchestrator.invoke(
+                request=request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
+            _author_medium_action(candidate, request=request)
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+            action_path = Path(candidate["action_path"])
+            _path, completed, _security = loom_orchestrator._read_action(
+                action_path, owner_home=self.home, install_root=self.installed)
+            envelope_path = loom_lifecycle_transition._successor_envelope_path(
+                action_path.parent / "lifecycle-transitions",
+                completed["lifecycle_transition"]["command_id"])
+            terminal_actions.append((action_path, action_path.read_bytes()))
+            terminal_envelopes.append((
+                envelope_path, envelope_path.read_bytes()))
+
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+
+        status = loom_orchestrator.invoke(
+            request="Status", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", status["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(
+            terminal_actions[-1][0].parent))
+        for action_path, expected_bytes in terminal_actions:
+            self.assertEqual(expected_bytes, action_path.read_bytes())
+            self.assertFalse(os.path.lexists(
+                loom_orchestrator._stage_path(action_path)))
+        for envelope_path, expected_bytes in terminal_envelopes:
+            self.assertEqual(expected_bytes, envelope_path.read_bytes())
+        self.assertEqual(
+            active.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+
     def test_terminal_successor_scan_rejects_corrupted_completed_evidence(self):
         """Break caught: a naked terminal marker bypasses candidate verification."""
         self.complete_machine_authored_plan()

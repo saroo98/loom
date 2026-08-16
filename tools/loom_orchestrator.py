@@ -5507,10 +5507,36 @@ def _successor_action_base_sha256(action):
     return _hash(body)
 
 
+def _successor_completion_manifest_matches(prepared_manifest, final_manifest):
+    """Bind the authenticated final tree to its sealed pre-completion tree."""
+    if prepared_manifest == final_manifest:
+        return True
+    prepared_metadata = {
+        key: value for key, value in prepared_manifest.items()
+        if key not in {"entries", "root_sha256"}}
+    final_metadata = {
+        key: value for key, value in final_manifest.items()
+        if key not in {"entries", "root_sha256"}}
+    if prepared_metadata != final_metadata:
+        return False
+    prepared_entries = {
+        entry["path"]: entry for entry in prepared_manifest["entries"]}
+    final_entries = {
+        entry["path"]: entry for entry in final_manifest["entries"]}
+    if set(prepared_entries) != set(final_entries):
+        return False
+    changed = {
+        path for path in prepared_entries
+        if prepared_entries[path] != final_entries[path]}
+    return changed == {"proofline/completion-report.json"} \
+        and prepared_entries["proofline/completion-report.json"]["kind"] == "file" \
+        and final_entries["proofline/completion-report.json"]["kind"] == "file"
+
+
 def _verify_completed_successor_projection(
         action, action_path, prepared, receipt, *, cleanup_owner_stage,
         recover_exact_pointer):
-    """Verify the exact completed target and, while pending, its sealed stage."""
+    """Verify one sealed completed target without consulting later authority."""
     directory = Path(action_path).parent
     _path, completed, _security = _read_action(
         action_path, owner_home=action["owner_home"],
@@ -5520,19 +5546,6 @@ def _verify_completed_successor_projection(
     author = (
         completed.get("host_result", {}).get("plan_author")
         if isinstance(completed.get("host_result"), dict) else None)
-    try:
-        resolved = loom_plan_store.resolve(
-            Path(completed["explicit_target"] or completed["cwd"]))
-        final_manifest = loom_reliability.exact_tree_manifest(
-            resolved.generation_root)
-        loom_reliability.validate_exact_tree_manifest(final_manifest)
-    except (
-            loom_plan_store.PlanStoreError,
-            loom_reliability.ReliabilityError) as exc:
-        raise OrchestratorError(
-            "LIFECYCLE_PROJECTION_INVALID",
-            "completed successor plan projection is not independently verifiable") \
-            from exc
     if completed["action_id"] != projection["action_id"] \
             or completed["project_id"] != projection["project_id"] \
             or completed.get("generation_id") != projection["generation_id"] \
@@ -5553,19 +5566,24 @@ def _verify_completed_successor_projection(
             or result.get("status") != "completed" \
             or result.get("code") != "plan-complete" \
             or not isinstance(author, dict) \
-            or author.get("manifest") != final_manifest:
+            or author.get("action_id") != projection["action_id"] \
+            or author.get("completed_at") != projection["completion_instant"] \
+            or not _successor_completion_manifest_matches(
+                prepared["stage_manifest"], author.get("manifest")):
         raise OrchestratorError(
             "LIFECYCLE_PROJECTION_INVALID",
             "completed successor action/session evidence does not match")
     pointer = _read_active_pointer(directory)
     if pointer is not None:
-        if not recover_exact_pointer \
-                or pointer["action_id"] != completed["action_id"] \
+        exact_pointer = pointer["action_id"] == completed["action_id"] \
+            and pointer["project_id"] == completed["project_id"]
+        if exact_pointer and recover_exact_pointer:
+            _clear_active_pointer(directory, completed["action_id"])
+        elif exact_pointer or recover_exact_pointer \
                 or pointer["project_id"] != completed["project_id"]:
             raise OrchestratorError(
                 "ACTION_POINTER_CONFLICT",
                 "completed successor conflicts with an active action pointer")
-        _clear_active_pointer(directory, completed["action_id"])
     owner_stage = _stage_path(action_path)
     if not os.path.lexists(owner_stage):
         return
