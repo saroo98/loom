@@ -613,8 +613,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         self.repo = self.root / "target"
-        loom_fault_harness.clone_git_fixture(
-            self.repo_fixture, self.repo, self.home / "git-home")
+        self._copy_filesystem_fixture(self.repo)
         self.request = "Plan a financial double-entry accounting change to src/app.py"
         self.request_sequence = 0
 
@@ -624,6 +623,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
         else:
             os.environ["LOOM_TEST_ALLOW_LEGACY_BACKEND"] = self.prior_legacy_test_backend
         self.temp.cleanup()
+
+    @classmethod
+    def _copy_filesystem_fixture(cls, destination):
+        shutil.copytree(
+            cls.repo_fixture, destination,
+            ignore=shutil.ignore_patterns(".git"))
+
+    def _enable_git_fixture(self):
+        loom_fault_harness.initialize_git_fixture(
+            self.repo, self.home / "git-home")
 
     def cli(self, *args):
         values = list(map(str, args))
@@ -935,6 +944,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotIn("migration-release", active)
 
     def test_explicit_no_file_modification_returns_sealed_inline_plan(self):
+        self._enable_git_fixture()
         request = (
             "Produce a reviewable plan for adding a short 'Development notes' section "
             "to README.md in this disposable project. Do not implement the plan, modify "
@@ -6026,6 +6036,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_action_cancel_retry_converges_after_evidence_action_write_crash(self):
         """Break caught: guard freeze commits but a lost action write strands retirement."""
+        self._enable_git_fixture()
         plan_action, planned = self.complete_machine_authored_plan()
         started = loom_orchestrator.start(
             plan_action["action_path"],
@@ -7039,9 +7050,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                     (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
                         loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
                     self.repo = self.root / f"target-{ordinal}"
-                    loom_fault_harness.clone_git_fixture(
-                        self.repo_fixture, self.repo,
-                        self.home / "git-home")
+                    self._copy_filesystem_fixture(self.repo)
                 self.complete_machine_authored_plan()
                 request = "Plan a new accounting accessibility plan."
                 candidate = loom_orchestrator.invoke(
@@ -7761,6 +7770,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertFalse((self.repo / ".loom-history").exists())
 
     def test_machine_authoring_seals_semantic_unknown_domain_evidence(self):
+        self._enable_git_fixture()
         authority_text = (
             "Every glossary definition must cite AUTHORITY.md and retain the "
             "canonical term spelling.\n")
@@ -9065,6 +9075,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertFalse((pending_pack / ".loom-small-lifecycle.json").exists())
 
     def test_named_opaque_domain_survives_known_cli_routing(self):
+        self._enable_git_fixture()
         _write(
             self.repo / "AUTHORITY.md",
             "# QuantaLex authority\n\n"

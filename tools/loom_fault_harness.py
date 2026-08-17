@@ -109,16 +109,13 @@ def clone_git_fixture(source, destination, home):
     home.mkdir(parents=True, exist_ok=True)
     _run_fixture_git([
         "-c", "maintenance.auto=false", "-c", "gc.auto=0",
-        "clone", "--quiet", "--no-local", str(source), str(destination),
+        "clone", "--quiet", "--no-local",
+        "--config", "user.email=test@example.invalid",
+        "--config", "user.name=test",
+        "--config", "maintenance.auto=false",
+        "--config", "gc.auto=0",
+        str(source), str(destination),
     ], home=home)
-    for key, value in (
-            ("user.email", "test@example.invalid"),
-            ("user.name", "test"),
-            ("maintenance.auto", "false"),
-            ("gc.auto", "0")):
-        _run_fixture_git(
-            ["-C", str(destination), "config", "--local", key, value],
-            home=home)
     return destination
 
 

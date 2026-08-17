@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_fault_harness
 
@@ -30,16 +31,30 @@ class CrashRecoveryTests(unittest.TestCase):
             maintenance_lock.write_text("transient", encoding="utf-8")
 
             destination = root / "destination"
-            loom_fault_harness.clone_git_fixture(
-                source, destination, root / "clone-home")
+            real_run = loom_fault_harness._run_fixture_git
+            commands = []
+
+            def observed_run(arguments, **kwargs):
+                commands.append(tuple(arguments))
+                return real_run(arguments, **kwargs)
+
+            with mock.patch.object(
+                    loom_fault_harness, "_run_fixture_git",
+                    side_effect=observed_run):
+                loom_fault_harness.clone_git_fixture(
+                    source, destination, root / "clone-home")
 
             self.assertEqual(
                 "VALUE = 1\n",
                 (destination / "src" / "app.py").read_text(encoding="utf-8"))
             self.assertFalse(
                 (destination / ".git" / "objects" / "maintenance.lock").exists())
+            self.assertEqual(1, len(commands))
             for key, expected in (
-                    ("maintenance.auto", "false"), ("gc.auto", "0")):
+                    ("user.email", "test@example.invalid"),
+                    ("user.name", "test"),
+                    ("maintenance.auto", "false"),
+                    ("gc.auto", "0")):
                 observed = subprocess.run(
                     ["git", "-C", str(destination), "config", "--local",
                      "--get", key],
