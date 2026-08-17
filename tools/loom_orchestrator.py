@@ -6423,24 +6423,34 @@ def _successor_reservation_ownership(
     return {**body, "ownership_sha256": _hash(body)}
 
 
+def _validate_successor_reservation_ownership(path, ownership):
+    """Return the exact root identity only for the unchanged sealed tree."""
+    fields = {
+        "schema_version", "root_identity", "manifest", "entries",
+        "created_paths", "ownership_sha256",
+    }
+    if not isinstance(ownership, dict) or set(ownership) != fields \
+            or ownership.get("schema_version") != 1 \
+            or ownership["ownership_sha256"] != _hash({
+                key: value for key, value in ownership.items()
+                if key != "ownership_sha256"
+            }):
+        raise loom_reliability.ReliabilityError(
+            "successor cleanup ownership is invalid")
+    observed = _successor_reservation_ownership(
+        path, ownership["root_identity"], manifest=ownership["manifest"],
+        created_paths=ownership["created_paths"])
+    if observed != ownership:
+        raise loom_reliability.ReliabilityError(
+            "successor reservation ownership changed before cleanup")
+    return observed["root_identity"]
+
+
 def _remove_owned_successor_reservation(path, ownership):
     """Remove only one exact empty reservation; preserve every nonempty tree."""
     path = Path(path)
     try:
-        fields = {
-            "schema_version", "root_identity", "manifest", "entries",
-            "created_paths", "ownership_sha256",
-        }
-        if not isinstance(ownership, dict) or set(ownership) != fields \
-                or ownership.get("schema_version") != 1 \
-                or ownership["ownership_sha256"] != _hash({
-                    key: value for key, value in ownership.items()
-                    if key != "ownership_sha256"
-                }):
-            raise loom_reliability.ReliabilityError(
-                "successor cleanup ownership is invalid")
-        loom_reliability._validate_directory_object_continuity(
-            path, ownership["root_identity"])
+        _validate_successor_reservation_ownership(path, ownership)
         path.rmdir()
         loom_reliability._sync_parent(path)
     except (OSError, loom_reliability.ReliabilityError) as exc:
@@ -6474,7 +6484,7 @@ def _successor_reservation_quarantine(action_path, action):
 
 
 def _quarantine_failed_successor_reservation(
-        path, root_identity, *, quarantine=None, owner_root=None,
+        path, ownership, *, quarantine=None, owner_root=None,
         cause=None):
     """Atomically detach one exact reservation without deleting its contents."""
     if quarantine is None or owner_root is None:
@@ -6483,11 +6493,15 @@ def _quarantine_failed_successor_reservation(
             "the non-authoritative successor reservation was preserved; the "
             "prior plan remains current and owner recovery is required") from cause
     try:
+        root_identity = _validate_successor_reservation_ownership(
+            path, ownership)
         quarantine = Path(quarantine)
         _prepare_recovery_root(owner_root, quarantine.parent)
         moved = _atomic_quarantine_tree(
             path, quarantine, expected_source_identity=root_identity)
-    except OrchestratorError as quarantine_error:
+    except (
+            OrchestratorError,
+            loom_reliability.ReliabilityError) as quarantine_error:
         raise OrchestratorError(
             "SUCCESSOR_INSTALL_AMBIGUOUS",
             "the non-authoritative successor reservation was preserved; the "
@@ -6512,7 +6526,7 @@ def _release_failed_successor_reservation(
         return
     except OrchestratorError as cleanup_error:
         _quarantine_failed_successor_reservation(
-            path, ownership.get("root_identity"), quarantine=quarantine,
+            path, ownership, quarantine=quarantine,
             owner_root=owner_root, cause=cleanup_error)
 
 
@@ -6622,7 +6636,7 @@ def _copy_successor_install_stage(
                         created_paths=created_paths)
             except loom_reliability.ReliabilityError as cleanup_exc:
                 _quarantine_failed_successor_reservation(
-                    reserved, reservation_identity,
+                    reserved, cleanup_ownership,
                     quarantine=reservation_quarantine,
                     owner_root=owner_root, cause=cleanup_exc)
             _release_failed_successor_reservation(

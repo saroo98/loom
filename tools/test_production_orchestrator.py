@@ -4147,6 +4147,53 @@ class ProductionOrchestratorTests(unittest.TestCase):
                     "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
                 self.assertTrue(destination.exists())
 
+    def test_successor_quarantine_revalidates_manifest_after_root_identity_aba(self):
+        source = self.root / "aba-owner-stage"
+        source.mkdir()
+        (source / "plan.md").write_text(
+            "reviewed candidate\n", encoding="utf-8")
+        destination = self.root / "aba-reserved-successor"
+        copied = loom_orchestrator._copy_successor_install_stage(
+            source, destination,
+            expected_source_identity=loom_reliability.observe_root_identity(
+                source))
+
+        shutil.rmtree(destination)
+        destination.mkdir()
+        (destination / "owner-recovery-required.txt").write_text(
+            "unowned replacement\n", encoding="utf-8")
+        collision = {
+            **copied["cleanup_ownership"],
+            "root_identity": loom_reliability.observe_root_identity(destination),
+        }
+        collision["ownership_sha256"] = loom_orchestrator._hash({
+            key: value for key, value in collision.items()
+            if key != "ownership_sha256"
+        })
+        owner_root = self.root / "owner-root"
+        owner_root.mkdir()
+        quarantine = owner_root / "project-state" / \
+            loom_orchestrator.RECOVERY_DIRECTORY / "action" / "reservation"
+
+        def prepare_recovery_root(_owner_root, recovery_root):
+            Path(recovery_root).mkdir(parents=True)
+            return Path(recovery_root)
+
+        with mock.patch.object(
+                loom_orchestrator, "_prepare_recovery_root",
+                side_effect=prepare_recovery_root), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._release_failed_successor_reservation(
+                destination, collision, quarantine=quarantine,
+                owner_root=owner_root)
+
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertEqual(
+            "unowned replacement\n",
+            destination.joinpath("owner-recovery-required.txt").read_text(
+                encoding="utf-8"))
+        self.assertFalse(os.path.lexists(quarantine))
+
     def test_failed_copy_preserves_source_identical_unjournaled_entries(self):
         for ordinal, mutation in enumerate(("file", "directory")):
             with self.subTest(mutation=mutation):
