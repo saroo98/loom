@@ -5210,6 +5210,181 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 case["old_path"].parent)["action_id"])
         self.assertFalse(case["stage_path"].exists())
 
+    def test_pre_ux104_pending_successor_without_receipt_rebinds_on_retry(self):
+        """Break caught: a pointerless pending successor is returned as usable."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+
+        with mock.patch.object(
+                loom_orchestrator, "_publish_recovery_bound_active_pointer",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected after pending action write")):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_TEST_INTERRUPT", interrupted.exception.code)
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        receipt_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT)
+        stage_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_POINTER)
+        self.assertFalse(pointer_path.exists())
+        self.assertFalse(receipt_path.exists())
+        self.assertFalse(stage_path.exists())
+        pending = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in old_path.parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(path.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual(1, len(pending))
+        successor_id = pending[0]["action_id"]
+
+        resumed = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(successor_id, resumed["action_id"])
+        self.assertEqual(
+            successor_id,
+            loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
+        self.assertTrue(receipt_path.is_file())
+        self.assertFalse(stage_path.exists())
+
+    def test_pre_ux104_pending_successor_binding_tamper_blocks(self):
+        """Break caught: a rehashed pending action can redirect its source binding."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+
+        with mock.patch.object(
+                loom_orchestrator, "_publish_recovery_bound_active_pointer",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected after pending action write")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        successor_paths = [
+            path for path in old_path.parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(path.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual(1, len(successor_paths))
+        successor_path = successor_paths[0]
+        successor = json.loads(successor_path.read_text(encoding="utf-8"))
+        binding = successor["host_result"]["successor_pointer_binding"]
+        binding["source_recovery_receipt_hash"] = "0" * 64
+        binding["binding_sha256"] = loom_orchestrator._hash({
+            key: value for key, value in binding.items()
+            if key != "binding_sha256"})
+        successor["action_hash"] = loom_orchestrator._action_hash(successor)
+        successor_path.write_text(json.dumps(successor), encoding="utf-8")
+        before = successor_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertIn(blocked.exception.code, {"ACTION_CORRUPT", "RECOVERY_RACE"})
+        self.assertEqual(before, successor_path.read_bytes())
+        self.assertFalse((
+            old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        self.assertFalse((
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT
+        ).exists())
+
+    def test_pre_ux104_successor_is_not_pending_before_binding_persists(self):
+        """A pre-binding interruption cannot expose a resumable successor."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+
+        with mock.patch.object(
+                loom_orchestrator, "_bind_recovery_bound_successor",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected before successor binding persistence")):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_TEST_INTERRUPT", interrupted.exception.code)
+        self.assertFalse((
+            old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+        successors = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in old_path.parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(path.read_text(encoding="utf-8"))["action_id"]
+            != old_path.stem
+        ]
+        self.assertEqual(1, len(successors))
+        self.assertEqual("initializing", successors[0]["status"])
+        self.assertIsNone(successors[0]["host_result"])
+
+    def test_pre_ux104_pending_successor_source_receipt_mismatch_blocks(self):
+        """Break caught: a changed terminal receipt can authorize publication."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+
+        with mock.patch.object(
+                loom_orchestrator, "_publish_recovery_bound_active_pointer",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected after pending action write")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        source = json.loads(old_path.read_text(encoding="utf-8"))
+        source["recovery_receipt"]["recovered_at"] = "2026-08-17T00:00:00Z"
+        receipt_body = dict(source["recovery_receipt"])
+        receipt_body.pop("receipt_hash")
+        source["recovery_receipt"]["receipt_hash"] = \
+            loom_orchestrator._hash(receipt_body)
+        source["action_hash"] = loom_orchestrator._action_hash(source)
+        old_path.write_text(json.dumps(source), encoding="utf-8")
+        before_source = old_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_source, old_path.read_bytes())
+        self.assertFalse((
+            old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        self.assertFalse((
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT
+        ).exists())
+
     def test_pre_ux104_successor_pointer_tampered_receipt_blocks(self):
         """Break caught: a rehashed successor receipt can redirect publication."""
         case = self._interrupt_successor_pointer_before_publication()
@@ -5266,6 +5441,28 @@ class ProductionOrchestratorTests(unittest.TestCase):
             loom_orchestrator._read_active_pointer(
                 case["old_path"].parent)["action_id"])
         self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_published_successor_receipt_allows_authentic_action_evolution(self):
+        """Publication evidence cannot freeze later authenticated action progress."""
+        case = self._interrupt_successor_pointer_before_publication()
+        first_resume = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        successor_path = case["successor_path"]
+        successor = json.loads(successor_path.read_text(encoding="utf-8"))
+        successor["attempts"] += 1
+        successor["action_hash"] = loom_orchestrator._action_hash(successor)
+        successor_path.write_text(json.dumps(successor), encoding="utf-8")
+
+        resumed = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(first_resume["action_id"], resumed["action_id"])
+        self.assertEqual(
+            resumed["action_id"],
+            loom_orchestrator._read_active_pointer(
+                case["old_path"].parent)["action_id"])
 
     def test_pre_ux104_reprepare_rejects_other_action_corruption(self):
         """Break caught: recovery-only compatibility bypasses normal validation."""

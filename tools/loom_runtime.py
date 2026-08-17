@@ -1619,7 +1619,9 @@ _SEMANTIC_CAPABILITY_CATALOG = MappingProxyType({
 })
 
 _SEMANTIC_POLARITY_BOUNDARY_RE = re.compile(
-    r"[.!?;\r\n]+|\b(?:and|but|or|then)\b")
+    # Additive/alternative coordinators inherit one leading polarity. A hard
+    # boundary or adversative/sequential clause starts an independent scope.
+    r"[.!?;\r\n]+|\b(?:but|then)\b")
 _SEMANTIC_NEGATION_OPERATOR_RE = re.compile(
     r"\b(?:no|never|without)\b|\b(?:do|does|did)\s+not\b|\bnot\b")
 

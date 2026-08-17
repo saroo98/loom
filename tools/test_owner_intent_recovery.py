@@ -453,6 +453,51 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
                 token = loom_runtime.semantic_outcome_evidence(request, domains)
                 self.assertTrue(token.startswith("semantic-outcome-v1."), token)
 
+    def test_semantic_capability_projection_preserves_shared_coordination_negation(self):
+        """Break caught: and/or resets a shared structural negation scope."""
+        domains = {"active_task_domains": ["unclassified"]}
+        requests = (
+            "No PDF reports or CSV export.",
+            "Without email notifications or password reset and account recovery.",
+            "Never add print support or accessible search and keyboard navigation.",
+            "Do not add cloud sync or backups and restore.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                token = loom_runtime.semantic_outcome_evidence(request, domains)
+                self.assertTrue(token.startswith("semantic-outcome-v1."), token)
+
+    def test_semantic_capability_projection_resets_negation_at_independent_boundary(self):
+        """A hard or adversative boundary permits a later positive capability."""
+        domains = {"active_task_domains": ["unclassified"]}
+        cases = (
+            (
+                "Do not add PDF reports. Add CSV export.",
+                "tabular-data-export",
+            ),
+            (
+                "Do not add email notifications, but add password reset and "
+                "account recovery.",
+                "credential-account-recovery",
+            ),
+            (
+                "Never add print support; improve accessible search and keyboard "
+                "navigation.",
+                "accessible-search-navigation",
+            ),
+            (
+                "Do not add cloud sync. Add backups and restore.",
+                "backup-restore-recovery",
+            ),
+        )
+
+        for request, capability in cases:
+            with self.subTest(request=request):
+                token = loom_runtime.semantic_outcome_evidence(request, domains)
+                self.assertEqual(
+                    f"semantic-outcome-v2.unclassified.{capability}", token)
+
     def test_semantic_capability_projection_rejects_mixed_polarity(self):
         """Break caught: positive and negative evidence mint positive authority."""
         token = loom_runtime.semantic_outcome_evidence(
