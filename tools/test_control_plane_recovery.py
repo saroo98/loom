@@ -620,26 +620,44 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
         self.assertEqual("superseded", resumed["prior_recovery"]["reason"])
 
-    def test_recovery_resumes_after_detachment_before_action_receipt_write(self):
+    def test_recovery_resumes_after_control_transition_publish(self):
         first = self.invoke()
-        original = loom_orchestrator._write_action
+        original = loom_orchestrator._atomic_recovery_control_move
+        injected = False
 
-        def interrupted(path, value, security=None):
-            if value["action_id"] == first["action_id"] \
-                    and value["status"] == "superseded":
+        def interrupted(source, destination, **kwargs):
+            nonlocal injected
+            result = original(source, destination, **kwargs)
+            if not injected \
+                    and kwargs.get("source_role") == "control_stage" \
+                    and kwargs.get("destination_role") == "control_transition":
+                injected = True
                 raise OSError("seeded receipt interruption")
-            return original(path, value, security)
+            return result
 
         with mock.patch.object(
-                loom_orchestrator, "_write_action", side_effect=interrupted):
+                loom_orchestrator, "_atomic_recovery_control_move",
+                side_effect=interrupted):
             with self.assertRaisesRegex(OSError, "seeded receipt interruption"):
                 self.supersede()
+        self.assertTrue(injected)
         self.assertFalse((self.repo / "plans").exists())
 
         resumed = self.supersede()
 
         self.assertEqual("superseded", resumed["prior_recovery"]["reason"])
         self.assertTrue(resumed["prior_recovery"]["changes_made"])
+        successor = self.action(resumed)
+        binding = successor["host_result"][
+            loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY]
+        self.assertEqual(first["action_id"], binding["source_action_id"])
+        self.assertEqual(
+            resumed["prior_recovery"]["receipt_hash"],
+            binding["source_recovery_receipt_hash"])
+        self.assertEqual(
+            successor["action_id"],
+            loom_orchestrator._read_active_pointer(
+                Path(resumed["action_path"]).parent)["action_id"])
 
     def test_recovery_resumes_when_successor_pointer_publication_is_interrupted(self):
         """A pre-publication interruption retains one receipt-bound successor."""
@@ -752,13 +770,17 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         pointer["pointer_hash"] = loom_orchestrator._pointer_hash(pointer)
         pointer_path.write_text(
             json.dumps(pointer, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        action_before = action_path.read_bytes()
+        pointer_before = pointer_path.read_bytes()
         current_pack = _owned_pack(second)
         before = loom_reliability.deterministic_manifest(current_pack)
 
-        with self.assertRaisesRegex(
-                loom_orchestrator.OrchestratorError, "recovery receipt v3 digest"):
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
             self.invoke()
 
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(action_before, action_path.read_bytes())
+        self.assertEqual(pointer_before, pointer_path.read_bytes())
         self.assertEqual(before, loom_reliability.deterministic_manifest(current_pack))
         self.assertEqual("pending", self.action(second)["status"])
 

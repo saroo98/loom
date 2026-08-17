@@ -349,10 +349,18 @@ class ControlPlaneRecoveryRaceTests(unittest.TestCase):
         pack = self.action_pack(action_path)
         before = self.exact_tree(pack)
 
+        original = loom_reliability.atomic_rename_noreplace
+
+        def cross_volume_quarantine(source, destination, **kwargs):
+            if kwargs.get("source_role") == "recovery_source" \
+                    and kwargs.get("destination_role") == "quarantine_destination":
+                raise loom_reliability.ReliabilityError(
+                    "atomic no-replace paths are on different filesystems")
+            return original(source, destination, **kwargs)
+
         with mock.patch.object(
-                loom_reliability, "_native_atomic_rename_noreplace",
-                side_effect=loom_reliability.ReliabilityError(
-                    "atomic no-replace paths are on different filesystems")):
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=cross_volume_quarantine):
             cancelled = loom_orchestrator.cancel(action_path)
 
         receipt = cancelled["recovery_receipt"]

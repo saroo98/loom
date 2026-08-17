@@ -2949,7 +2949,7 @@ def _resume_recovery_bound_active_pointer(
 
 def _reconcile_legacy_control_transitions(
         directory, *, owner_home, install_root, expected_project_id):
-    """Finish bounded crash-interrupted pre-UX control transitions under lock."""
+    """Finish bounded transitions and return unconsumed successor recoveries."""
     base = Path(directory).parent / RECOVERY_DIRECTORY
     if not os.path.lexists(base):
         return []
@@ -2975,10 +2975,21 @@ def _reconcile_legacy_control_transitions(
             raise OrchestratorError(
                 "RECOVERY_RACE", "recovery control transition path is unsafe")
         action_path = Path(directory) / f"{entry.name}.json"
-        receipts.append(_reconcile_recovered_action_transition(
+        _reconcile_recovered_action_transition(
             transition, action_path, owner_home=owner_home,
             install_root=install_root,
-            expected_project_id=expected_project_id))
+            expected_project_id=expected_project_id)
+        if os.path.lexists(
+                transition / RECOVERY_CONTROL_SUCCESSOR_RECEIPT):
+            continue
+        _path, terminal_action, _security = _read_action(
+            action_path, owner_home=owner_home, install_root=install_root)
+        recovery_receipt = _validate_recovery_receipt(
+            terminal_action.get("recovery_receipt"), action=terminal_action)
+        if recovery_receipt is not None \
+                and recovery_receipt["reason"] in {
+                    "interrupted-initialization", "expired", "superseded"}:
+            receipts.append(recovery_receipt)
     return receipts
 
 
@@ -9733,7 +9744,7 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                 target=target, directory=directory, memory=memory,
                 project_id=project.project_id, owner_home=home,
                 install_root=install_root)
-            _reconcile_legacy_control_transitions(
+            pending_legacy_recoveries = _reconcile_legacy_control_transitions(
                 directory, owner_home=home, install_root=install_root,
                 expected_project_id=project.project_id)
             if quarantine_requested:
@@ -9824,6 +9835,15 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             request=request, cwd=cwd, target=target, memory=memory,
                             transport_invocation_id=transport_invocation_id,
                             candidate_planning=candidate_planning)
+                    if incoming_intent == "plan" and pending_legacy_recoveries:
+                        if len(pending_legacy_recoveries) != 1 \
+                                or recovery is not None \
+                                or reused_action is not None \
+                                or preserve_active_pointer:
+                            raise OrchestratorError(
+                                "RECOVERY_RACE",
+                                "an unconsumed recovery cannot be bound to one successor")
+                        recovery = pending_legacy_recoveries[0]
                 if reused_action is not None:
                     result = _pending_action_result(reused_action)
                 else:
@@ -11393,10 +11413,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "user_message": _inline_recovery_message(
                 reason_code, prepared=prepared, domain_contract=domain_contract),
         }
-        return controller.run(
+        result = controller.run(
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared, selected_context=context_capsule).to_dict()
+        result["resolved_terminal_block"] = loom_runtime._thaw(
+            opened.resolved_terminal_block)
+        result["session_environment"] = opened.environment()
+        return result
     expires_at = _stamp(
         loom_runtime._parse_time(created_at) + dt.timedelta(seconds=timeout_seconds))
     action_id = invocation_id

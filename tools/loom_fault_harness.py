@@ -262,6 +262,19 @@ def _install_invoke_faults(payload):
         return result
     loom_orchestrator._atomic_quarantine_tree = quarantine
 
+    original_recovery_move = loom_orchestrator._atomic_recovery_control_move
+    def recovery_move(*args, **kwargs):
+        result = original_recovery_move(*args, **kwargs)
+        destination_role = kwargs.get("destination_role")
+        if boundary == "after-recovery-action-write" \
+                and destination_role == "terminal_action":
+            os._exit(crash_code)
+        if boundary == "after-pointer-clear" \
+                and destination_role == "retired_pointer":
+            os._exit(crash_code)
+        return result
+    loom_orchestrator._atomic_recovery_control_move = recovery_move
+
     original_clear_pointer = loom_orchestrator._clear_active_pointer
     def clear_pointer(*args, **kwargs):
         result = original_clear_pointer(*args, **kwargs)

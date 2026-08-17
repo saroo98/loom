@@ -622,6 +622,12 @@ _STATUS_CONTROL_RE = re.compile(
     r"(?:show|report|display|give\s+me)\s+(?:(?:the|my)\s+)?"
     r"(?:token\s+usage|performance\s+report|cost\s+report))"
     + _STATUS_REASON_SUFFIX + r"(?:,\s*please)?" + _CONTROL_END)
+_PROFILE_QUERY_RE = re.compile(
+    r"\bshow (?:me )?what you remember about me\b|"
+    r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
+    r"\bshow (?:me )?what you learned from this project\b|"
+    r"\binspect what (?:loom|you) learned\b|\bwhat did (?:loom|you) learn\b|"
+    r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b")
 _NEGATED_EXECUTION_CONTROL_RE = re.compile(
     r"^(?:build|implement|execute|start|apply)(?:\s+(?:it|this|that|"
     r"(?:the\s+)?(?:plan|work|project|changes?)|"
@@ -1161,13 +1167,7 @@ def _resolve_intent_from_text(request, state=None):
             recommendation="Keep remembered state unchanged; state what should be retained.")
     build_request = (
         _is_build_request(task_text) or _has_positive_software_clause(task_text))
-    profile_query = bool(re.search(
-        r"\bshow (?:me )?what you remember about me\b|"
-        r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
-        r"\bshow (?:me )?what you learned from this project\b|"
-        r"\binspect what (?:loom|you) learned\b|\bwhat did (?:loom|you) learn\b|"
-        r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b",
-        text))
+    profile_query = bool(_PROFILE_QUERY_RE.search(text))
     direct_forget = bool(_MEMORY_FORGET_RE.fullmatch(text))
     embedded_forget = bool(_EMBEDDED_MEMORY_FORGET_RE.search(text))
     direct_remember = bool(_MEMORY_REMEMBER_RE.fullmatch(text))
@@ -1516,6 +1516,8 @@ def _semantic_operation(request, state=None):
             _DIRECT_READ_ONLY_CONTROL_RE.match(clause) is not None
             or _STATUS_CONTROL_RE.fullmatch(clause) is not None
             or _STATUS_QUERY_RE.fullmatch(clause) is not None
+            or decision["intent"] == "status"
+            and _PROFILE_QUERY_RE.search(clause) is not None
             for clause in clauses):
         return _SemanticOperation(
             decision=MappingProxyType(decision), control_text=masked,
