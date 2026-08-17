@@ -84,6 +84,235 @@ class OwnerVaultTests(unittest.TestCase):
             "preference_key": None, "preference_value": None,
         }
 
+    def executor_guard_head(self, *, project_id="p-" + "7" * 32,
+                            action_id="00000000-0000-4000-8000-00000000e701",
+                            sequence=1, previous_head_sha256=None,
+                            coverage_state="awaiting-host", operations=None,
+                            freeze=None):
+        owner_vault_id = self.vault.identity()["owner_vault_id"]
+        value = {
+            "schema_version": 3,
+            "kind": "loom-executor-guard-head-v1",
+            "owner_vault_id": owner_vault_id,
+            "action_id": action_id,
+            "project_id": project_id,
+            "generation_id": "generation-1",
+            "action_operation_id": "8" * 64,
+            "sequence": sequence,
+            "previous_head_sha256": previous_head_sha256,
+            "coverage_state": coverage_state,
+            "host_session_sha256": None,
+            "coverage_failure": False,
+            "operations": list(operations or []),
+            "freeze": freeze,
+            "storage_parent_identity": {
+                "platform": "test", "path_sha256": "9" * 64,
+                "kind": "directory", "device": 1, "inode": 2,
+            },
+        }
+        value["guard_sha256"] = hashlib.sha256(json.dumps(
+            value, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True).encode("utf-8")).hexdigest()
+        value["guard_authentication"] = {
+            "mode": "owner-vault-blind-index-v1",
+            "owner_vault_id": owner_vault_id,
+            "tag": self.crypto.blind_index(
+                "executor-guard-head-v1",
+                ":".join((
+                    owner_vault_id, project_id, action_id, str(sequence),
+                    previous_head_sha256 or "absent", value["guard_sha256"]))),
+        }
+        return value
+
+    def test_executor_guard_head_cas_is_monotonic_and_lost_response_idempotent(self):
+        """Break caught: no canonical monotonic guard authority exists in the vault."""
+        first = self.executor_guard_head()
+
+        stored = self.vault.advance_executor_guard_head(
+            first["project_id"], expected_predecessor_sha256=None,
+            candidate=first)
+        repeated = self.vault.advance_executor_guard_head(
+            first["project_id"], expected_predecessor_sha256=None,
+            candidate=first)
+
+        self.assertFalse(stored["idempotent"])
+        self.assertTrue(repeated["idempotent"])
+        self.assertEqual(first, self.vault.read_executor_guard_head(first["project_id"]))
+
+        second = self.executor_guard_head(
+            sequence=2, previous_head_sha256=first["guard_sha256"],
+            coverage_state="active")
+        second["host_session_sha256"] = "a" * 64
+        unsigned = {key: item for key, item in second.items()
+                    if key not in {"guard_sha256", "guard_authentication"}}
+        second["guard_sha256"] = hashlib.sha256(json.dumps(
+            unsigned, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True).encode("utf-8")).hexdigest()
+        second["guard_authentication"]["tag"] = self.crypto.blind_index(
+            "executor-guard-head-v1",
+            ":".join((
+                second["owner_vault_id"], second["project_id"],
+                second["action_id"], "2", first["guard_sha256"],
+                second["guard_sha256"])))
+        self.vault.advance_executor_guard_head(
+            second["project_id"],
+            expected_predecessor_sha256=first["guard_sha256"],
+            candidate=second)
+        self.assertEqual(second, self.vault.read_executor_guard_head(second["project_id"]))
+
+        stale = self.executor_guard_head(
+            sequence=2, previous_head_sha256=first["guard_sha256"])
+        with self.assertRaisesRegex(loom_vault.VaultError, "predecessor"):
+            self.vault.advance_executor_guard_head(
+                stale["project_id"],
+                expected_predecessor_sha256=first["guard_sha256"],
+                candidate=stale)
+        self.assertEqual(second, self.vault.read_executor_guard_head(second["project_id"]))
+
+    def test_executor_guard_head_rejects_generic_put_and_survives_generic_eviction(self):
+        """Break caught: generic entity paths can forge, replay, or evict guard authority."""
+        head = self.executor_guard_head()
+        self.vault.advance_executor_guard_head(
+            head["project_id"], expected_predecessor_sha256=None,
+            candidate=head)
+
+        with self.assertRaisesRegex(loom_vault.VaultError, "reserved"):
+            self.vault.put_entity(
+                loom_vault.EXECUTOR_GUARD_HEAD_ENTITY_TYPE,
+                head["project_id"], head, source_sequence=999)
+        with mock.patch.object(loom_vault, "MAX_STATE_ENTITIES", 3):
+            for index in range(5):
+                self.vault.put_entity("ordinary", f"item-{index}", {"index": index})
+
+        self.assertEqual(head, self.vault.read_executor_guard_head(head["project_id"]))
+
+        reopened = loom_vault.OwnerVault.open(
+            self.path, crypto=self.crypto, allow_test_crypto=True)
+        self.assertEqual(3, reopened.identity()["schema_version"])
+        self.assertEqual(head, reopened.read_executor_guard_head(head["project_id"]))
+
+        second = self.executor_guard_head(
+            project_id="p-" + "8" * 32,
+            action_id="00000000-0000-4000-8000-00000000e702")
+        with mock.patch.object(loom_vault, "MAX_STATE_ENTITIES", 1), \
+                self.assertRaisesRegex(loom_vault.VaultError, "bound"):
+            self.vault.advance_executor_guard_head(
+                second["project_id"], expected_predecessor_sha256=None,
+                candidate=second)
+        self.assertEqual(head, self.vault.read_executor_guard_head(head["project_id"]))
+        self.assertIsNone(self.vault.read_executor_guard_head(second["project_id"]))
+
+    def test_authenticated_merged_event_cannot_regress_executor_guard_head(self):
+        """Break caught: a signed higher-rank generic event can launder a stale head."""
+        head = self.executor_guard_head()
+        self.vault.advance_executor_guard_head(
+            head["project_id"], expected_predecessor_sha256=None,
+            candidate=head)
+        source_path = self.home / "checkpoints" / "guard-event-source.sqlite3"
+        self.vault.online_backup(source_path)
+        source = loom_vault.OwnerVault.open(
+            source_path, crypto=self.crypto, allow_test_crypto=True)
+
+        def sign_reserved_event(connection):
+            body = {
+                "entity_type": loom_vault.EXECUTOR_GUARD_HEAD_ENTITY_TYPE,
+                "entity_id": head["project_id"],
+                "value": {**head, "sequence": 999},
+            }
+            source._next_event(
+                connection, kind="state-entity-upsert", payload=body,
+                scope="vault", domain_tag=None, project_tag=None)
+
+        source.run_transaction(sign_reserved_event)
+        events = source.export_events()
+        before_generation = self.vault.identity()["generation"]
+
+        with self.assertRaisesRegex(loom_vault.VaultError, "reserved"):
+            self.vault.merge_events(events)
+
+        self.assertEqual(before_generation, self.vault.identity()["generation"])
+        self.assertEqual(head, self.vault.read_executor_guard_head(head["project_id"]))
+
+    def test_executor_guard_head_two_vault_cas_has_one_winner(self):
+        """Break caught: two writers can both advance from one predecessor."""
+        other = loom_vault.OwnerVault.open(
+            self.path, crypto=self.crypto, allow_test_crypto=True)
+        first = self.executor_guard_head()
+        self.vault.advance_executor_guard_head(
+            first["project_id"], expected_predecessor_sha256=None,
+            candidate=first)
+        candidate_a = self.executor_guard_head(
+            action_id=first["action_id"], sequence=2,
+            previous_head_sha256=first["guard_sha256"])
+        candidate_b = json.loads(json.dumps(candidate_a))
+        candidate_b["coverage_failure"] = True
+        unsigned = {key: item for key, item in candidate_b.items()
+                    if key not in {"guard_sha256", "guard_authentication"}}
+        candidate_b["guard_sha256"] = hashlib.sha256(json.dumps(
+            unsigned, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True).encode("utf-8")).hexdigest()
+        candidate_b["guard_authentication"]["tag"] = self.crypto.blind_index(
+            "executor-guard-head-v1",
+            ":".join((candidate_b["owner_vault_id"], candidate_b["project_id"],
+                       candidate_b["action_id"], "2", first["guard_sha256"],
+                       candidate_b["guard_sha256"])))
+        barrier = threading.Barrier(2)
+        outcomes = []
+
+        def advance(vault, candidate):
+            barrier.wait()
+            try:
+                vault.advance_executor_guard_head(
+                    candidate["project_id"],
+                    expected_predecessor_sha256=first["guard_sha256"],
+                    candidate=candidate)
+                outcomes.append("stored")
+            except loom_vault.VaultError:
+                outcomes.append("blocked")
+
+        threads = [
+            threading.Thread(target=advance, args=(self.vault, candidate_a)),
+            threading.Thread(target=advance, args=(other, candidate_b)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        self.assertEqual(["blocked", "stored"], sorted(outcomes))
+        self.assertIn(
+            self.vault.read_executor_guard_head(first["project_id"]),
+            (candidate_a, candidate_b))
+
+    def test_executor_guard_head_transaction_failure_preserves_head_and_generation(self):
+        """Break caught: failed head persistence can advance either authority surface."""
+        first = self.executor_guard_head()
+        self.vault.advance_executor_guard_head(
+            first["project_id"], expected_predecessor_sha256=None,
+            candidate=first)
+        second = self.executor_guard_head(
+            sequence=2, previous_head_sha256=first["guard_sha256"])
+        before_generation = self.vault.identity()["generation"]
+        real_read = self.vault._read_executor_guard_head_connection
+        reads = 0
+
+        def fail_reread(connection, project_id):
+            nonlocal reads
+            reads += 1
+            if reads == 2:
+                raise sqlite3.OperationalError("injected guard reread failure")
+            return real_read(connection, project_id)
+
+        with mock.patch.object(
+                self.vault, "_read_executor_guard_head_connection",
+                side_effect=fail_reread), \
+                self.assertRaises(loom_vault.VaultError):
+            self.vault.advance_executor_guard_head(
+                second["project_id"],
+                expected_predecessor_sha256=first["guard_sha256"],
+                candidate=second)
+        self.assertEqual(before_generation, self.vault.identity()["generation"])
+        self.assertEqual(first, self.vault.read_executor_guard_head(first["project_id"]))
+
     def generation_archive(self, *, project_id, generation_id="generation-1",
                            terminal_phase="terminal-completed"):
         root = self.home / f"archive-{generation_id}"

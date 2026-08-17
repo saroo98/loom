@@ -4,7 +4,9 @@ import io
 import hashlib
 import json
 import os
+import sys
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -13,6 +15,8 @@ from unittest import mock
 import loom_codex_lifecycle
 import loom_executor_guard
 import loom_reliability
+import loom_vault
+from test_loom_vault_v11 import TestCrypto
 
 
 class CodexLifecycleTests(unittest.TestCase):
@@ -426,6 +430,105 @@ class CodexLifecycleTests(unittest.TestCase):
                 self.event(name="Stop"), home=self.root / ".loom",
                 install_root=self.root)
         self.assertEqual((0, None), (code, output))
+
+    def test_active_action_consumes_real_owner_vault_tuple_contract(self):
+        """Break caught: `_active_action` indexes open_owner_vault's real tuple as a dict."""
+        home = self.root / "tuple-owner"
+        home.mkdir()
+        crypto = TestCrypto()
+        vault_path = home / "vault" / "owner.sqlite3"
+        vault_path.parent.mkdir()
+        vault = loom_vault.OwnerVault.create(
+            vault_path, crypto=crypto, allow_test_crypto=True)
+        instance_id = vault.identity()["owner_vault_id"]
+        directory = home / "orchestrations"
+        directory.mkdir()
+        action = {
+            **self.action,
+            "status": "pending",
+            "owner_home": str(home),
+            "instance_id": instance_id,
+            "generation_id": "generation-" + "2" * 32,
+            "operation_id": "3" * 64,
+            "explicit_target": str(self.root),
+        }
+
+        class KeyStore:
+            def get(self, key_slot):
+                self.key_slot = key_slot
+                return bytes(range(128))
+
+        with mock.patch.object(
+                loom_codex_lifecycle.loom_orchestrator, "_vault_helper",
+                return_value=Path(sys.executable)), \
+                mock.patch.object(
+                    loom_codex_lifecycle.loom_owner, "NativeKeyStore",
+                    return_value=KeyStore()), \
+                mock.patch.object(
+                    loom_codex_lifecycle.loom_runtime, "resolve_project",
+                    return_value=types.SimpleNamespace(
+                        project_id=action["project_id"])), \
+                mock.patch.object(
+                    loom_codex_lifecycle.loom_orchestrator,
+                    "_orchestration_directory", return_value=directory), \
+                mock.patch.object(
+                    loom_codex_lifecycle.loom_orchestrator,
+                    "_read_active_pointer",
+                    return_value={"action_id": action["action_id"]}), \
+                mock.patch.object(
+                    loom_codex_lifecycle.loom_orchestrator, "_read_action",
+                    return_value=(directory / "action.json", action, None)):
+            observed, security = loom_codex_lifecycle._active_action(
+                home, self.root, self.root)
+
+        self.assertEqual(action, observed)
+        self.assertIsInstance(security, loom_executor_guard.GuardSecurity)
+        self.assertEqual(instance_id, security.owner_vault_id)
+        self.assertIs(security.vault.crypto, security.crypto)
+        self.assertEqual((security.crypto, instance_id), tuple(security))
+
+    def test_post_recovers_missing_projection_from_canonical_vault_head(self):
+        """Break caught: Post returns early when only the repairable JSON projection is absent."""
+        owner = self.root / "owner"
+        if os.name == "nt":
+            import loom_windows_acl
+            loom_windows_acl.create_private_directory(owner)
+        else:
+            owner.mkdir(mode=0o700)
+        self.action.update({
+            "owner_home": str(owner),
+            "instance_id": "10000000-0000-4000-8000-000000000001",
+            "generation_id": "generation-" + "2" * 32,
+            "operation_id": "3" * 64,
+            "intent": "execute",
+            "work_order": "work-orders/WO-001-feature.md",
+        })
+        directory = loom_reliability.ensure_private_directory(owner, [
+            "instances", self.action["instance_id"], "runtime", "projects",
+            self.action["project_id"], "orchestrations",
+        ])
+        crypto = TestCrypto()
+        vault = loom_vault.OwnerVault.create(
+            owner / "canonical.sqlite3",
+            crypto=crypto, allow_test_crypto=True)
+        security = loom_executor_guard.GuardSecurity(
+            vault, crypto, vault.identity()["owner_vault_id"])
+        loom_executor_guard.initialize(
+            directory, self.action, security=security)
+        loom_executor_guard.guard_path(directory, self.action).unlink()
+        event = self.event(
+            name="PostToolUse", session_id="host-session-canonical",
+            turn_id="host-turn-canonical", tool_use_id="start-canonical",
+            tool_name="mcp__loom__start", tool_input={})
+
+        loom_codex_lifecycle._observe_guarded_post(
+            self.action, event, security=security)
+
+        recovered = loom_executor_guard.read(
+            directory, self.action, security=security)
+        self.assertEqual("active", recovered["coverage_state"])
+        self.assertTrue(
+            loom_executor_guard.guard_path(directory, self.action).is_file())
 
     def test_strict_event_rejects_duplicate_fields(self):
         raw = (b'{"hook_event_name":"Stop","hook_event_name":"Stop",'

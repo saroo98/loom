@@ -66,8 +66,8 @@ def _active_action(home, install_root, cwd):
     helper = loom_orchestrator._vault_helper(install_root)
     if helper is None or not loom_owner.owner_vault_path(home).is_file():
         return None
-    opened = loom_owner.open_owner_vault(home, helper)
-    instance_id = opened["vault"].identity()["owner_vault_id"]
+    opened, crypto = loom_owner.open_owner_vault(home, helper)
+    instance_id = opened.identity()["owner_vault_id"]
     try:
         project = loom_runtime.resolve_project(
             instance_id, explicit_target=cwd, cwd=cwd)
@@ -88,6 +88,9 @@ def _active_action(home, install_root, cwd):
         cwd.relative_to(target)
     except ValueError:
         return None
+    if not isinstance(security, loom_executor_guard.GuardSecurity):
+        security = loom_executor_guard.GuardSecurity(
+            opened, crypto, instance_id)
     return action, security
 
 
@@ -188,7 +191,8 @@ def _guard_is_frozen(action, security):
                 loom_orchestrator._orchestration_lock(directory)):
             freeze = loom_executor_guard.read(
                 directory, action, security=security)["freeze"]
-            return None if freeze is None else freeze["reason_code"]
+            return None if freeze is None else freeze.get(
+                "operation_class", freeze["reason_code"])
     except loom_reliability.ReliabilityError as exc:
         raise LifecycleError("executor guard lock is unavailable") from exc
 
@@ -210,9 +214,6 @@ def _observe_guarded_post(action, event, *, security):
     if not _guarded_executor(action):
         return
     directory = _guard_directory(action)
-    path = loom_executor_guard.guard_path(directory, action)
-    if not path.exists():
-        return
     name = event.get("tool_name")
     try:
         with loom_reliability.exclusive_file_lock(

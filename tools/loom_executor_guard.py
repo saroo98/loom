@@ -11,6 +11,7 @@ from pathlib import Path
 
 import loom_operation_supervisor
 import loom_reliability
+import loom_vault
 import loom_windows_acl
 
 
@@ -36,6 +37,27 @@ class GuardMissing(GuardError):
 
 class GuardFrozen(GuardError):
     pass
+
+
+class GuardSecurity:
+    """Carry canonical vault authority while preserving action-crypto tuple use."""
+
+    def __init__(self, vault, crypto, owner_vault_id):
+        try:
+            canonical_owner = str(uuid.UUID(str(owner_vault_id)))
+            if vault.identity()["owner_vault_id"] != canonical_owner \
+                    or vault.crypto is not crypto:
+                raise ValueError("vault authority mismatch")
+        except (KeyError, TypeError, ValueError, AttributeError,
+                loom_vault.VaultError) as exc:
+            raise GuardError("executor guard vault authority is invalid") from exc
+        self.vault = vault
+        self.crypto = crypto
+        self.owner_vault_id = canonical_owner
+
+    def __iter__(self):
+        yield self.crypto
+        yield self.owner_vault_id
 
 
 def _canonical(value):
@@ -294,10 +316,19 @@ def _validate(value, action, *, security=None, root=None):
         seen.add(operation["operation_id"])
     freeze_value = value["freeze"]
     if freeze_value is not None:
-        if not isinstance(freeze_value, dict) or set(freeze_value) != {
-                "reason_code", "operation_count", "freeze_sha256"} \
+        legacy_fields = {"reason_code", "operation_count", "freeze_sha256"}
+        exact_fields = {
+            "operation_class", "reason_code", "subject_sha256",
+            "operation_count", "freeze_sha256"}
+        if not isinstance(freeze_value, dict) \
+                or frozenset(freeze_value) not in {
+                    frozenset(legacy_fields), frozenset(exact_fields)} \
                 or not isinstance(freeze_value.get("reason_code"), str) \
                 or SAFE_REASON.fullmatch(freeze_value["reason_code"]) is None \
+                or ("operation_class" in freeze_value and (
+                    not isinstance(freeze_value["operation_class"], str)
+                    or SAFE_REASON.fullmatch(freeze_value["operation_class"]) is None
+                    or HEX64.fullmatch(str(freeze_value.get("subject_sha256", ""))) is None)) \
                 or freeze_value.get("operation_count") != len(value["operations"]) \
                 or freeze_value.get("freeze_sha256") != _hash({
                     key: item for key, item in freeze_value.items()
@@ -306,7 +337,189 @@ def _validate(value, action, *, security=None, root=None):
     return value
 
 
+def _canonical_security(security):
+    return security if isinstance(security, GuardSecurity) else None
+
+
+def _canonical_authentication(security, value, guard_sha256):
+    previous = value.get("previous_head_sha256")
+    return {
+        "mode": "owner-vault-blind-index-v1",
+        "owner_vault_id": security.owner_vault_id,
+        "tag": security.crypto.blind_index(
+            loom_vault.EXECUTOR_GUARD_HEAD_ENTITY_TYPE,
+            ":".join((
+                security.owner_vault_id, value["project_id"], value["action_id"],
+                str(value["sequence"]), previous or "absent", guard_sha256))),
+    }
+
+
+def _finalize_canonical(value, security):
+    candidate = json.loads(json.dumps(value))
+    candidate.pop("guard_sha256", None)
+    candidate.pop("guard_authentication", None)
+    candidate["guard_sha256"] = _hash(candidate)
+    candidate["guard_authentication"] = _canonical_authentication(
+        security, candidate, candidate["guard_sha256"])
+    return candidate
+
+
+def _validate_canonical(value, action, *, security, root):
+    identity = _action_identity(action)
+    try:
+        checked = loom_vault._validate_executor_guard_head(
+            value, crypto=security.crypto,
+            owner_vault_id=security.owner_vault_id,
+            expected_project_id=identity["project_id"])
+    except loom_vault.VaultError as exc:
+        raise GuardError("canonical executor guard head is invalid") from exc
+    if any(checked.get(field) != identity[field] for field in (
+            "action_id", "project_id", "generation_id", "action_operation_id")):
+        raise GuardError("canonical executor guard belongs to another action")
+    _validate_parent_identity(root, checked.get("storage_parent_identity"))
+    for operation in checked["operations"]:
+        _validate_operation(operation)
+    return checked
+
+
+def _read_projection(path, action, *, security, root):
+    try:
+        before = _validate_leaf(path)
+        if path.stat().st_size > MAX_GUARD_BYTES:
+            raise GuardError("executor guard projection exceeds its bound")
+        value = json.loads(path.read_text(encoding="utf-8"))
+        loom_reliability.validate_root_identity(path, before)
+    except GuardError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            loom_reliability.ReliabilityError) as exc:
+        raise GuardError("executor guard projection is unreadable") from exc
+    return _validate_canonical(
+        value, action, security=security, root=root)
+
+
+def _write_projection(path, value, action, *, security):
+    root = Path(path).parent
+    candidate = _validate_canonical(
+        value, action, security=security, root=root)
+    try:
+        parent_before = loom_reliability.observe_root_identity(root)
+        _validate_parent_identity(root, candidate["storage_parent_identity"])
+        if os.path.lexists(path):
+            _validate_leaf(path)
+        loom_reliability.atomic_write_json(path, candidate)
+        if os.name == "posix":
+            os.chmod(path, 0o600)
+        loom_reliability._validate_directory_object_continuity(root, parent_before)
+        _validate_leaf(path)
+        observed = _read_projection(
+            path, action, security=security, root=root)
+    except GuardError:
+        raise
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise GuardError("executor guard projection could not be persisted") from exc
+    if observed != candidate:
+        raise GuardError("executor guard projection durable reread does not match")
+    return observed
+
+
+def _canonical_head(security, project_id):
+    try:
+        return security.vault.read_executor_guard_head(project_id)
+    except loom_vault.VaultError as exc:
+        raise GuardError("canonical executor guard head is unavailable") from exc
+
+
+def _require_quiescent_predecessor(head):
+    freeze_value = head.get("freeze")
+    if freeze_value is None or head.get("coverage_failure") \
+            or any(operation.get("state") != "closed"
+                   for operation in head.get("operations", [])):
+        raise GuardError(
+            "canonical executor guard predecessor is not exactly quiescent")
+
+
+def _publish_canonical_projection(path, stored, action, security):
+    observed = _write_projection(
+        path, stored, action, security=security)
+    current = _canonical_head(security, stored["project_id"])
+    if current == stored:
+        return observed
+    if current is not None \
+            and current.get("action_id") == stored["action_id"] \
+            and current.get("sequence", 0) > stored["sequence"]:
+        current = _validate_canonical(
+            current, action, security=security, root=Path(path).parent)
+        return _write_projection(
+            path, current, action, security=security)
+    raise GuardError("executor guard projection lost its canonical head before return")
+
+
+def _read_canonical(directory, action, security):
+    identity = _action_identity(action)
+    root = _guard_root(directory, action, create=False)
+    head = _canonical_head(security, identity["project_id"])
+    path = root / (identity["action_id"] + ".json")
+    if head is None:
+        raise GuardMissing(
+            "executor guard upgrade is required; no canonical vault head exists")
+    if not root.exists():
+        raise GuardError("canonical executor guard parent is unavailable")
+    if head.get("action_id") != identity["action_id"]:
+        if action.get("status") in {
+                "completed", "failed", "expired", "cancelled", "superseded"} \
+                and os.path.lexists(path):
+            # A terminal action's authenticated projection is historical evidence,
+            # never live mutation authority.  The current per-project vault head
+            # may therefore belong to its successor without erasing auditability.
+            return _read_projection(
+                path, action, security=security, root=root)
+        raise GuardError("canonical executor guard belongs to another action")
+    head = _validate_canonical(
+        head, action, security=security, root=root)
+    if not os.path.lexists(path):
+        return _write_projection(
+            path, head, action, security=security)
+    projection = _read_projection(
+        path, action, security=security, root=root)
+    if projection == head:
+        return head
+    if projection["sequence"] < head["sequence"]:
+        return _write_projection(
+            path, head, action, security=security)
+    raise GuardError("executor guard projection is ahead, unrelated, or replayed")
+
+
+def _commit_canonical(path, value, action, security):
+    root = Path(path).parent
+    current = _canonical_head(security, value["project_id"])
+    if current is None:
+        raise GuardMissing("canonical executor guard head is unavailable")
+    current = _validate_canonical(
+        current, action, security=security, root=root)
+    if value.get("sequence") != current["sequence"] \
+            or value.get("guard_sha256") != current["guard_sha256"] \
+            or value.get("guard_authentication") != current["guard_authentication"]:
+        raise GuardError("executor guard update is based on stale authority")
+    candidate = json.loads(json.dumps(value))
+    candidate["sequence"] = current["sequence"] + 1
+    candidate["previous_head_sha256"] = current["guard_sha256"]
+    candidate = _finalize_canonical(candidate, security)
+    try:
+        stored = security.vault.advance_executor_guard_head(
+            candidate["project_id"],
+            expected_predecessor_sha256=current["guard_sha256"],
+            candidate=candidate)["head"]
+    except loom_vault.VaultError as exc:
+        raise GuardError("executor guard canonical CAS failed") from exc
+    return _publish_canonical_projection(
+        path, stored, action, security)
+
+
 def _write(path, value, action, *, security=None):
+    canonical = _canonical_security(security)
+    if canonical is not None:
+        return _commit_canonical(path, value, action, canonical)
     candidate = dict(value)
     root = Path(path).parent
     try:
@@ -340,6 +553,50 @@ def initialize(directory, action, *, security=None):
     identity = _action_identity(action)
     root = _guard_root(directory, action, create=True)
     path = root / (identity["action_id"] + ".json")
+    canonical = _canonical_security(security)
+    if canonical is not None:
+        current = _canonical_head(canonical, identity["project_id"])
+        if current is None and os.path.lexists(path):
+            _validate_leaf(path)
+            raise GuardMissing(
+                "executor guard upgrade is required; existing projection has no "
+                "canonical vault head")
+        if current is not None \
+                and all(current.get(field) == identity[field] for field in (
+                    "action_id", "project_id", "generation_id",
+                    "action_operation_id")):
+            return _read_canonical(directory, action, canonical)
+        if current is not None:
+            _require_quiescent_predecessor(current)
+        value = {
+            "schema_version": 3,
+            "kind": "loom-executor-guard-head-v1",
+            "owner_vault_id": canonical.owner_vault_id,
+            "action_id": identity["action_id"],
+            "project_id": identity["project_id"],
+            "generation_id": identity["generation_id"],
+            "action_operation_id": identity["action_operation_id"],
+            "sequence": 1 if current is None else current["sequence"] + 1,
+            "previous_head_sha256": (
+                None if current is None else current["guard_sha256"]),
+            "coverage_state": "awaiting-host",
+            "host_session_sha256": None,
+            "coverage_failure": False,
+            "operations": [],
+            "freeze": None,
+            "storage_parent_identity": _parent_identity(root),
+        }
+        value = _finalize_canonical(value, canonical)
+        try:
+            stored = canonical.vault.advance_executor_guard_head(
+                identity["project_id"],
+                expected_predecessor_sha256=(
+                    None if current is None else current["guard_sha256"]),
+                candidate=value)["head"]
+        except loom_vault.VaultError as exc:
+            raise GuardError("executor guard initialization CAS failed") from exc
+        return _publish_canonical_projection(
+            path, stored, action, canonical)
     if os.path.lexists(path):
         return read(directory, action, security=security)
     value = {
@@ -361,6 +618,9 @@ def initialize(directory, action, *, security=None):
 
 
 def read(directory, action, *, security=None):
+    canonical = _canonical_security(security)
+    if canonical is not None:
+        return _read_canonical(directory, action, canonical)
     path = guard_path(directory, action)
     if not os.path.lexists(path):
         raise GuardMissing("executor guard is unavailable")
@@ -460,13 +720,30 @@ def begin_operation(
         guard_path(directory, action), value, action, security=security)
 
 
-def freeze(directory, action, *, reason_code, security=None):
+def freeze(
+        directory, action, *, reason_code, operation_class=None,
+        subject_sha256=None, security=None):
     if not isinstance(reason_code, str) or SAFE_REASON.fullmatch(reason_code) is None:
         raise GuardError("executor freeze reason is invalid")
+    canonical = _canonical_security(security)
+    if operation_class is None and canonical is None:
+        operation_class = reason_code
+    if subject_sha256 is None and canonical is None:
+        subject_sha256 = _hash({
+            "operation_class": operation_class,
+            "action_identity": _action_identity(action),
+        })
+    if not isinstance(operation_class, str) \
+            or SAFE_REASON.fullmatch(operation_class) is None \
+            or not isinstance(subject_sha256, str) \
+            or HEX64.fullmatch(subject_sha256) is None:
+        raise GuardError("executor freeze operation identity is invalid")
     value = read(directory, action, security=security)
     if value["freeze"] is None:
         freeze_value = {
+            "operation_class": operation_class,
             "reason_code": reason_code,
+            "subject_sha256": subject_sha256,
             "operation_count": len(value["operations"]),
         }
         freeze_value["freeze_sha256"] = _hash(freeze_value)
@@ -474,8 +751,15 @@ def freeze(directory, action, *, reason_code, security=None):
         return _write(
             guard_path(directory, action), value, action,
             security=security)
-    if value["freeze"]["reason_code"] != reason_code:
-        raise GuardError("executor is frozen for another exact operation")
+    expected = {
+        "operation_class": operation_class,
+        "reason_code": reason_code,
+        "subject_sha256": subject_sha256,
+    }
+    if any(value["freeze"].get(key) != item for key, item in expected.items()):
+        raise GuardError(
+            "executor is frozen for another exact terminal operation; retry the "
+            f"sealed {value['freeze'].get('operation_class', 'legacy')} operation")
     return value
 
 
@@ -525,6 +809,9 @@ def _evidence(value, action, *, project_world_sha256, terminal_state):
         "host_session_sha256": value["host_session_sha256"],
         "guard_sha256": value["guard_sha256"],
         "freeze_sha256": value["freeze"]["freeze_sha256"],
+        "freeze_operation_class": value["freeze"].get("operation_class"),
+        "freeze_reason_code": value["freeze"]["reason_code"],
+        "freeze_subject_sha256": value["freeze"].get("subject_sha256"),
         "operation_count": len(value["operations"]),
         "open_operation_count": open_count,
         "supervisor_receipt_sha256s": [

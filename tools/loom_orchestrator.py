@@ -1470,7 +1470,8 @@ def _decode_action_document(path, *, owner_home=None, install_root=None):
                 or Path(install_root).resolve() != Path(value.get("install_root", "")).resolve():
             raise OrchestratorError(
                 "ACTION_RUNTIME_MISMATCH", "action does not belong to this home and runtime")
-        security = (crypto, opened.identity()["owner_vault_id"])
+        security = loom_executor_guard.GuardSecurity(
+            opened, crypto, opened.identity()["owner_vault_id"])
     return value, security
 
 
@@ -3787,12 +3788,22 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         # Prove the active v3 generation has one bounded repair scope before
         # retiring the stale execution attempt.  The lifecycle ledger remains
         # authoritative and is changed only by the subsequent repair command.
-        _observe_v3_repair_scope(
+        repair_scope = _observe_v3_repair_scope(
             action, path, memory, require_action_world=False)
+        repair_context_sha256 = _hash({
+            "schema_version": 1,
+            "relation": "repair-active",
+            "request_sha256": hashlib.sha256(
+                request.encode("utf-8")).hexdigest(),
+            "source_state_sha256": repair_scope["state"].state_sha256,
+            "affected_scope_sha256": repair_scope["affected_scope_sha256"],
+        })
         action, evidence, _frozen = _seal_trusted_executor_quiescence(
             path, action, security, owner_home=owner_home,
             install_root=install_root,
-            reason_code="authority-retirement")
+            operation_class="repair-supersede",
+            reason_code="repair-supersede",
+            operation_context_sha256=repair_context_sha256)
         if evidence is None:
             raise OrchestratorError(
                 "EXECUTOR_QUIESCENCE_REQUIRED",
@@ -3874,6 +3885,15 @@ def _transition_project_generation_terminal(
     if relation not in {"cancel-generation", "supersede-generation"}:
         raise OrchestratorError(
             "REQUEST_CONTROL_INVALID", "generation terminal relation is invalid")
+    if relation == "supersede-generation" and (
+            not isinstance(successor_generation_id, str)
+            or loom_lifecycle_kernel.SAFE_ID.fullmatch(
+                successor_generation_id) is None) \
+            or relation == "cancel-generation" \
+            and successor_generation_id is not None:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            "generation terminal successor identity is invalid")
     witness_store = _lifecycle_witness_store(memory, directory, project_id)
     try:
         resolved, semantics, ledger, _witness, state = \
@@ -3901,10 +3921,24 @@ def _transition_project_generation_terminal(
         path, executor, security = _read_action(
             executor_path, owner_home=owner_home,
             install_root=install_root)
+        supersession_context_sha256 = (
+            _hash({
+                "schema_version": 1,
+                "relation": relation,
+                "command_id": command_id,
+                "source_state_sha256": state.state_sha256,
+                "successor_generation_id": successor_generation_id,
+            }) if relation == "supersede-generation" else None)
         executor, evidence, frozen = _seal_trusted_executor_quiescence(
             path, executor, security, owner_home=owner_home,
             install_root=install_root,
-            reason_code="authority-retirement")
+            operation_class=(
+                "generation-cancel" if relation == "cancel-generation"
+                else "generation-supersede"),
+            reason_code=(
+                "generation-cancel" if relation == "cancel-generation"
+                else "generation-supersede"),
+            operation_context_sha256=supersession_context_sha256)
         if evidence is None:
             return {
                 "status": "action-required",
@@ -5201,7 +5235,8 @@ def _ensure_recovered_action_projection(
             "LIFECYCLE_PROJECTION_INVALID",
             "recovered action does not belong to the transition namespace")
     security = (
-        (memory.vault.crypto, candidate["instance_id"])
+        loom_executor_guard.GuardSecurity(
+            memory.vault, memory.vault.crypto, candidate["instance_id"])
         if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     if _path_present(path):
         _path, existing, _existing_security = _read_action(
@@ -11059,7 +11094,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        preserve_active_pointer=False,
                        pointer_recovery_receipt=None,
                        completed_plan_replay_stale=False):
-    action_security = ((memory.vault.crypto, instance_id)
+    action_security = (loom_executor_guard.GuardSecurity(
+        memory.vault, memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = transport_invocation_id or str(uuid.uuid4())
     controller = loom_session.SessionController(
@@ -11827,6 +11863,7 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
         raise OrchestratorError(
             "ACTION_TERMINAL", f"action is already {action['status']}",
             status=action["status"])
+    frozen_operation = None
     if action["intent"] in {"execute", "repair"} \
             and action.get("generation_id") is not None:
         try:
@@ -11844,8 +11881,11 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             raise OrchestratorError(
                 "EXECUTOR_GUARD_INVALID",
                 "executor completion guard is invalid or unavailable") from exc
-        if guard["freeze"] is not None \
-                and guard["freeze"]["reason_code"] not in {
+        if guard["freeze"] is not None:
+            frozen_operation = guard["freeze"].get(
+                "operation_class", guard["freeze"]["reason_code"])
+        if frozen_operation is not None \
+                and frozen_operation not in {
                     "action-completion", "action-timeout"}:
             raise OrchestratorError(
                 "EXECUTION_FROZEN",
@@ -11853,13 +11893,16 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
                 "retirement is waiting for host-operation closure",
                 status="action-required")
     instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
-    if instant > loom_runtime._parse_time(action["expires_at"]):
+    if frozen_operation == "action-timeout" or (
+            frozen_operation != "action-completion"
+            and instant > loom_runtime._parse_time(action["expires_at"])):
         if action["intent"] in {"execute", "repair"} \
                 and action.get("generation_id") is not None:
             action, evidence, _frozen = _seal_trusted_executor_quiescence(
                 path, action, action_security,
                 owner_home=owner_home or action["owner_home"],
                 install_root=install_root or action["install_root"],
+                operation_class="action-timeout",
                 reason_code="action-timeout", terminal_state="timed-out")
             if evidence is None:
                 raise OrchestratorError(
@@ -12114,6 +12157,7 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             path, action, action_security,
             owner_home=owner_home or action["owner_home"],
             install_root=install_root or action["install_root"],
+            operation_class="action-completion",
             reason_code="action-completion", terminal_state="completed")
         if evidence is None:
             raise OrchestratorError(
@@ -12139,6 +12183,7 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
                     path, action, action_security,
                     owner_home=owner_home or action["owner_home"],
                     install_root=install_root or action["install_root"],
+                    operation_class="action-completion",
                     reason_code="action-completion", terminal_state="failed")
                 if evidence is None:
                     raise OrchestratorError(
@@ -12315,15 +12360,50 @@ def _executor_lifecycle_state(action, directory, *, owner_home, install_root):
     return state, ledger
 
 
+def _executor_terminal_subject(
+        action, operation_class, *, operation_context_sha256=None):
+    if operation_class not in {
+            "action-completion", "action-timeout", "action-cancel",
+            "generation-cancel", "generation-supersede", "repair-supersede"}:
+        raise OrchestratorError(
+            "EXECUTOR_TERMINAL_OPERATION_INVALID",
+            "executor terminal operation is unsupported")
+    context_required = operation_class in {
+        "generation-supersede", "repair-supersede"}
+    if context_required != (isinstance(operation_context_sha256, str)
+                            and re.fullmatch(
+                                r"[0-9a-f]{64}", operation_context_sha256)
+                            is not None):
+        raise OrchestratorError(
+            "EXECUTOR_TERMINAL_OPERATION_INVALID",
+            "executor terminal operation context is invalid")
+    return _hash({
+        "schema_version": 1,
+        "operation_class": operation_class,
+        "operation_context_sha256": operation_context_sha256,
+        "action_id": action["action_id"],
+        "project_id": action["project_id"],
+        "generation_id": action.get("generation_id"),
+        "action_operation_id": action["operation_id"],
+    })
+
+
 def _seal_trusted_executor_quiescence(
-        path, action, security, *, owner_home, install_root, reason_code,
+        path, action, security, *, owner_home, install_root, operation_class,
+        reason_code, operation_context_sha256=None,
         terminal_state="cancelled"):
     directory = Path(path).parent
+    subject_sha256 = _executor_terminal_subject(
+        action, operation_class,
+        operation_context_sha256=operation_context_sha256)
     existing = (
         action.get("host_result", {}).get("executor_quiescence")
         if isinstance(action.get("host_result"), dict) else None)
     if isinstance(existing, dict) \
-            and existing.get("terminal_state") == terminal_state:
+            and existing.get("terminal_state") == terminal_state \
+            and existing.get("freeze_operation_class") == operation_class \
+            and existing.get("freeze_reason_code") == reason_code \
+            and existing.get("freeze_subject_sha256") == subject_sha256:
         try:
             loom_executor_guard.validate_evidence(
                 directory, action, existing,
@@ -12347,6 +12427,8 @@ def _seal_trusted_executor_quiescence(
     try:
         frozen = loom_executor_guard.freeze(
             directory, action, reason_code=reason_code,
+            operation_class=operation_class,
+            subject_sha256=subject_sha256,
             security=security)
         evidence = loom_executor_guard.seal_quiescence(
             directory, action,
@@ -12363,6 +12445,10 @@ def _seal_trusted_executor_quiescence(
             "upgraded runtime cannot infer prior process death",
             status="action-required") from exc
     except loom_executor_guard.GuardError as exc:
+        if "another exact terminal operation" in str(exc):
+            raise OrchestratorError(
+                "EXECUTOR_TERMINAL_OPERATION_CONFLICT",
+                str(exc), status="action-required") from exc
         raise OrchestratorError(
             "EXECUTOR_GUARD_INVALID",
             "executor retirement guard is invalid or unsafe") from exc
@@ -12394,7 +12480,8 @@ def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=N
             path, action, action_security,
             owner_home=owner_home or action["owner_home"],
             install_root=install_root or action["install_root"],
-            reason_code="authority-retirement")
+            operation_class="action-cancel",
+            reason_code="action-cancel")
         if evidence is None:
             return {
                 "status": "action-required",

@@ -3088,7 +3088,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             still_active["action_id"],
             loom_orchestrator._read_active_pointer(path.parent)["action_id"])
         self.assertEqual(
-            "authority-retirement",
+            "repair-supersede",
             loom_executor_guard.read(path.parent, still_active)[
                 "freeze"]["reason_code"])
 
@@ -3444,7 +3444,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             action["action_id"],
             loom_orchestrator._read_active_pointer(path.parent)["action_id"])
         self.assertEqual(
-            "authority-retirement",
+            "generation-cancel",
             loom_executor_guard.read(
                 path.parent, action)["freeze"]["reason_code"])
 
@@ -3764,7 +3764,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 owner_home=self.home, install_root=self.installed)
             self.assertEqual("pending", active["status"])
             self.assertEqual(
-                "authority-retirement",
+                "generation-cancel",
                 loom_executor_guard.read(directory, active)[
                     "freeze"]["reason_code"])
 
@@ -5956,11 +5956,114 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("cancelled", action["status"])
         self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
         self.assertEqual(
-            "authority-retirement",
+            "action-cancel",
             loom_executor_guard.read(path.parent, action)["freeze"]["reason_code"])
         self.assertEqual(
             "host-never-admitted",
             action["host_result"]["executor_quiescence"]["case"])
+
+    def test_action_cancel_retry_converges_after_evidence_action_write_crash(self):
+        """Break caught: guard freeze commits but a lost action write strands retirement."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path = Path(started["action_path"])
+        original_write = loom_orchestrator._write_action
+        injected = False
+
+        def fail_evidence_write(action_path, value, security=None):
+            nonlocal injected
+            evidence = (value.get("host_result") or {}).get(
+                "executor_quiescence")
+            if not injected and isinstance(evidence, dict):
+                injected = True
+                raise loom_orchestrator.OrchestratorError(
+                    "INJECTED_ACTION_WRITE", "injected after guard evidence")
+            return original_write(action_path, value, security)
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action",
+                side_effect=fail_evidence_write), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as crashed:
+            loom_orchestrator.cancel(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("INJECTED_ACTION_WRITE", crashed.exception.code)
+        _path, pending, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", pending["status"])
+        self.assertEqual(
+            pending["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "action-cancel",
+            loom_executor_guard.read(path.parent, pending)["freeze"][
+                "operation_class"])
+
+        cancelled = loom_orchestrator.cancel(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+
+    def test_terminal_subject_binds_exact_supersession_context(self):
+        """Different successor commands cannot reuse one executor freeze."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        _path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        first = loom_orchestrator._executor_terminal_subject(
+            action, "generation-supersede",
+            operation_context_sha256="a" * 64)
+        second = loom_orchestrator._executor_terminal_subject(
+            action, "generation-supersede",
+            operation_context_sha256="b" * 64)
+
+        self.assertNotEqual(first, second)
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator._executor_terminal_subject(
+                action, "generation-supersede")
+
+    def test_recovered_v3_action_uses_canonical_guard_security(self):
+        """Lifecycle recovery cannot silently create a legacy v2 guard projection."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        crypto = TestCrypto()
+
+        class FakeVault:
+            def __init__(self):
+                self.crypto = crypto
+
+            def identity(self):
+                return {"owner_vault_id": action["instance_id"]}
+
+        memory = object.__new__(
+            loom_orchestrator.loom_vault_adapter.VaultMemoryAdapter)
+        memory.vault = FakeVault()
+
+        with mock.patch.object(
+                loom_executor_guard, "initialize") as initialize:
+            loom_orchestrator._ensure_recovered_action_projection(
+                action, directory=path.parent, memory=memory,
+                work_order=action["work_order"],
+                receipt=action["lifecycle_transition"])
+
+        security = initialize.call_args.kwargs["security"]
+        self.assertIsInstance(security, loom_executor_guard.GuardSecurity)
 
     def test_pre_guard_executor_upgrade_preserves_authority_without_synthesizing_proof(self):
         """A pending legacy executor gets an explicit safe upgrade path, not fake proof."""
@@ -6040,6 +6143,23 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(
             "action-completion",
             loom_executor_guard.read(path.parent, pending)["freeze"]["reason_code"])
+        loom_executor_guard.observe_post(
+            path.parent, pending,
+            {**write_event, "hook_event_name": "PostToolUse"})
+
+        completed = loom_orchestrator.complete(
+            path, now="2035-01-01T00:00:00Z",
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("execute-complete", completed["code"])
+        _path, terminal, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", terminal["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        self.assertEqual(
+            "action-completion",
+            terminal["host_result"]["executor_quiescence"][
+                "freeze_operation_class"])
 
     def test_executor_timeout_waits_for_open_operation_then_retires(self):
         """Timeout cannot clear authority until the exact admitted write closes."""
@@ -6069,6 +6189,17 @@ class ProductionOrchestratorTests(unittest.TestCase):
         _path, pending, _security = loom_orchestrator._read_action(
             path, owner_home=self.home, install_root=self.installed)
         self.assertEqual("pending", pending["status"])
+        self.assertEqual(
+            pending["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as conflict:
+            loom_orchestrator.cancel(
+                path, now=expired, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            "EXECUTOR_TERMINAL_OPERATION_CONFLICT", conflict.exception.code)
+        self.assertIn("action-timeout", conflict.exception.message)
         self.assertEqual(
             pending["action_id"],
             loom_orchestrator._read_active_pointer(path.parent)["action_id"])
@@ -6420,7 +6551,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         }
         executor = loom_orchestrator._write_action(path, executor, security)
 
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility change."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -8805,6 +8936,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotIn(self.request.encode("utf-8"), raw)
 
         class FakeVault:
+            def __init__(self):
+                self.crypto = crypto
+
             def identity(self):
                 return {"owner_vault_id": owner}
 
