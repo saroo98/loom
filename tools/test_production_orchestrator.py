@@ -6632,6 +6632,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
         _author_medium_action(candidate, request=request)
+        candidate_manifest = loom_reliability.exact_tree_manifest(
+            loom_orchestrator._stage_path(Path(candidate["action_path"])))
+        candidate_modes = {
+            entry["path"]: entry["mode"]
+            for entry in candidate_manifest["entries"]
+            if entry["kind"] == "file"
+        }
 
         completed = loom_orchestrator.complete(
             candidate["action_path"], owner_home=self.home,
@@ -6641,6 +6648,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
         active = loom_plan_store.resolve(self.repo)
         active_manifest = loom_reliability.exact_tree_manifest(
             active.generation_root)
+        active_modes = {
+            entry["path"]: entry["mode"]
+            for entry in active_manifest["entries"]
+            if entry["kind"] == "file"
+        }
+        self.assertEqual(
+            candidate_modes,
+            {path: active_modes[path] for path in candidate_modes})
         predecessor_manifest = loom_reliability.exact_tree_manifest(
             predecessor.generation_root)
         follow_up = loom_orchestrator.invoke(

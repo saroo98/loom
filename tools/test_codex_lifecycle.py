@@ -435,7 +435,10 @@ class CodexLifecycleTests(unittest.TestCase):
         """Break caught: `_active_action` indexes open_owner_vault's real tuple as a dict."""
         home = self.root / "tuple-owner"
         home.mkdir()
-        crypto = TestCrypto()
+        class TestHelperCrypto(TestCrypto):
+            production_safe = True
+
+        crypto = TestHelperCrypto()
         vault_path = home / "vault" / "owner.sqlite3"
         vault_path.parent.mkdir()
         vault = loom_vault.OwnerVault.create(
@@ -464,6 +467,9 @@ class CodexLifecycleTests(unittest.TestCase):
                 mock.patch.object(
                     loom_codex_lifecycle.loom_owner, "NativeKeyStore",
                     return_value=KeyStore()), \
+                mock.patch.object(
+                    loom_codex_lifecycle.loom_owner.loom_crypto,
+                    "HelperCrypto", return_value=crypto), \
                 mock.patch.object(
                     loom_codex_lifecycle.loom_runtime, "resolve_project",
                     return_value=types.SimpleNamespace(
