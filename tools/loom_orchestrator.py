@@ -2884,6 +2884,22 @@ def _publish_recovery_bound_active_pointer(
     pointer_value = _active_pointer_value(
         action_id=action["action_id"], project_id=action["project_id"])
     pointer_bytes = loom_session._canonical_json(pointer_value) + b"\n"
+    pointer_observed = _exact_private_file_bytes(
+        _active_pointer_path(directory), max_bytes=4 * 1024,
+        label="active successor pointer")
+    if pointer_observed is not None:
+        if pointer_observed[0] != pointer_bytes:
+            raise OrchestratorError(
+                "RECOVERY_RACE", "unexpected active pointer bytes were preserved")
+        reconciled = _reconcile_successor_pointer_publication(
+            transition, directory, control_receipt, source_action,
+            owner_home=action["owner_home"],
+            install_root=action["install_root"])
+        if reconciled is None:
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "active successor pointer lacks its publication receipt")
+        return reconciled
     publication_receipt = _successor_pointer_receipt(
         recovery_receipt, action, pointer_bytes)
     receipt_bytes = loom_session._canonical_json(publication_receipt) + b"\n"
@@ -3323,6 +3339,25 @@ def _legacy_active_actions(directory, *, owner_home, install_root,
     return candidates
 
 
+def _recovery_bound_successor_action(
+        directory, *, owner_home, install_root):
+    """Discover one exact recovery-bound successor before pointer routing."""
+    candidates = _legacy_active_actions(
+        directory, owner_home=owner_home, install_root=install_root,
+        allow_pre_ux104_reprepare=True)
+    bound = [
+        candidate for candidate in candidates
+        if isinstance(candidate[1].get("host_result"), dict)
+        and candidate[1]["host_result"].get(
+            SUCCESSOR_POINTER_BINDING_KEY) is not None
+    ]
+    if len(bound) > 1:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "multiple recovery-bound successors require inspection")
+    return bound[0] if bound else None
+
+
 _COMPLETED_PLAN_REPLAY_STALE = object()
 
 
@@ -3650,6 +3685,13 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                              candidate_planning=False):
     directory = _orchestration_directory(owner_home, instance_id, project_id)
     directory.mkdir(parents=True, exist_ok=True)
+    recovery_bound = _recovery_bound_successor_action(
+        directory, owner_home=owner_home, install_root=install_root)
+    if recovery_bound is not None:
+        recovery_path, recovery_action, _recovery_security = recovery_bound
+        _resume_recovery_bound_active_pointer(
+            directory, recovery_path, recovery_action,
+            owner_home=owner_home, install_root=install_root)
     pointer = _read_active_pointer(directory)
     if pointer is not None:
         if pointer["project_id"] != project_id:
@@ -3678,10 +3720,6 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             raise OrchestratorError(
                 "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
     path, action, security = candidates[0]
-    if pointer is None:
-        _resume_recovery_bound_active_pointer(
-            directory, path, action, owner_home=owner_home,
-            install_root=install_root)
     if _is_pre_ux104_reprepare_action(action):
         if incoming_intent is None \
                 or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
