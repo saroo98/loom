@@ -597,8 +597,9 @@ _CONTINUE_CONTROL_RE = re.compile(
     r"(?:\s+(?:part|phase|work|work\s+order|plan\s+step))?|next\s+part)"
     + _CONTROL_END)
 _UNDO_CONTROL_RE = re.compile(
-    r"^(?:please\s+)?(?:undo(?:\s+(?:the\s+)?(?:last|previous)"
-    r"(?:\s+loom)?\s+(?:change|action|operation|adjustment|decision))?|"
+    r"^(?:please\s+)?(?:undo(?:\s+(?:this|that)|"
+    r"\s+(?:the\s+)?(?:last|previous)(?:\s+loom)?\s+"
+    r"(?:change|action|operation|adjustment|decision))?|"
     r"undo\s+(?:the\s+)?(?:last|previous)\s+loom\s+plan|"
     r"take\s+back\s+(?:your|the)\s+(?:last|previous)(?:\s+loom)?\s+"
     r"(?:change|action|operation|adjustment|decision)|"
@@ -1147,6 +1148,20 @@ def _resolve_intent_from_text(request, state=None):
         loom_domain.task_language(semantic_request).casefold().split())
     clause_decision = _resolve_clause_roles(semantic_request, state)
     if clause_decision is not None:
+        high_consequence = _high_consequence_match(text)
+        if high_consequence is not None \
+                and clause_decision["intent"] not in {"remember", "forget"}:
+            clause_decision.update({
+                "blocked": True,
+                "code": "HIGH_CONSEQUENCE_UNCERTAIN",
+                "needs_owner": True,
+                "confidence": 0.0,
+                "recommendation": (
+                    "Keep the change staged only; confirm scope, verification, "
+                    "and rollback before any irreversible action."),
+                "evidence": [
+                    "high-consequence", _request_span(text, high_consequence)],
+            })
         return _synchronize_block_reason(clause_decision, category="intent")
     safety_preference = _SAFETY_PREFERENCE_RE.search(text)
     negated_forget = re.search(

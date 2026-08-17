@@ -3940,16 +3940,46 @@ def _transition_project_generation_terminal(
                 "source_state_sha256": state.state_sha256,
                 "successor_generation_id": successor_generation_id,
             }) if relation == "supersede-generation" else None)
-        executor, evidence, frozen = _seal_trusted_executor_quiescence(
-            path, executor, security, owner_home=owner_home,
-            install_root=install_root,
-            operation_class=(
-                "generation-cancel" if relation == "cancel-generation"
-                else "generation-supersede"),
-            reason_code=(
-                "generation-cancel" if relation == "cancel-generation"
-                else "generation-supersede"),
-            operation_context_sha256=supersession_context_sha256)
+        executor_preterminal = executor["status"] == "pending"
+        if executor_preterminal:
+            executor, evidence, frozen = _seal_trusted_executor_quiescence(
+                path, executor, security, owner_home=owner_home,
+                install_root=install_root,
+                operation_class=(
+                    "generation-cancel" if relation == "cancel-generation"
+                    else "generation-supersede"),
+                reason_code=(
+                    "generation-cancel" if relation == "cancel-generation"
+                    else "generation-supersede"),
+                operation_context_sha256=supersession_context_sha256)
+        elif executor["status"] == "cancelled" \
+                and relation == "cancel-generation":
+            evidence = (
+                executor.get("host_result", {}).get("executor_quiescence")
+                if isinstance(executor.get("host_result"), dict) else None)
+            try:
+                loom_executor_guard.validate_evidence(
+                    Path(directory), executor, evidence,
+                    project_world_sha256=state.expected_world_sha256,
+                    security=security)
+                frozen = loom_executor_guard.read(
+                    Path(directory), executor, security=security)
+            except (loom_executor_guard.GuardError,
+                    loom_executor_guard.GuardMissing) as exc:
+                raise OrchestratorError(
+                    "EXECUTOR_GUARD_INVALID",
+                    "the cancelled executor has no exact trusted quiescence evidence") \
+                    from exc
+            if evidence.get("terminal_state") != "cancelled" \
+                    or evidence.get("freeze_operation_class") != "action-cancel":
+                raise OrchestratorError(
+                    "EXECUTOR_GUARD_INVALID",
+                    "the cancelled executor quiescence evidence has the wrong terminal identity")
+        else:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "the active lifecycle executor is outside a resumable terminal state",
+                status="action-required")
         if evidence is None:
             return {
                 "status": "action-required",
@@ -3986,7 +4016,7 @@ def _transition_project_generation_terminal(
             private_projection, source_state=state, source_ledger=ledger,
             directory=directory, owner_home=owner_home,
             install_root=install_root, relation=relation,
-            require_preterminal=True)
+            require_preterminal=executor_preterminal)
 
     def project_terminal(_source_state, _decision, target_ledger):
         current = loom_plan_store.resolve(target)
@@ -3998,7 +4028,8 @@ def _transition_project_generation_terminal(
                 private_projection, source_state=_source_state,
                 source_ledger=ledger, directory=directory,
                 owner_home=owner_home, install_root=install_root,
-                relation=relation, require_preterminal=True)
+                relation=relation,
+                require_preterminal=executor_preterminal)
         pointer = _read_active_pointer(directory)
         pointer_projection = None
         pending_successor = False
@@ -9836,14 +9867,33 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             transport_invocation_id=transport_invocation_id,
                             candidate_planning=candidate_planning)
                     if incoming_intent == "plan" and pending_legacy_recoveries:
-                        if len(pending_legacy_recoveries) != 1 \
+                        reused_binding = None
+                        if reused_action is not None:
+                            reused_binding = _validate_successor_pointer_binding(
+                                (reused_action.get("host_result") or {}).get(
+                                    SUCCESSOR_POINTER_BINDING_KEY),
+                                action=reused_action)
+                        exact_reused_successor = (
+                            len(pending_legacy_recoveries) == 1
+                            and recovery is None
+                            and reused_action is not None
+                            and not preserve_active_pointer
+                            and reused_binding is not None
+                            and reused_binding["source_action_id"]
+                            == pending_legacy_recoveries[0]["action_id"]
+                            and reused_binding["source_recovery_receipt_hash"]
+                            == pending_legacy_recoveries[0]["receipt_hash"])
+                        if exact_reused_successor:
+                            pending_legacy_recoveries = []
+                        elif len(pending_legacy_recoveries) != 1 \
                                 or recovery is not None \
                                 or reused_action is not None \
                                 or preserve_active_pointer:
                             raise OrchestratorError(
                                 "RECOVERY_RACE",
                                 "an unconsumed recovery cannot be bound to one successor")
-                        recovery = pending_legacy_recoveries[0]
+                        else:
+                            recovery = pending_legacy_recoveries[0]
                 if reused_action is not None:
                     result = _pending_action_result(reused_action)
                 else:

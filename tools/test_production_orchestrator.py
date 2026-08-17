@@ -912,9 +912,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_installed_phase_8_request_uses_deep_target_route(self):
         request = (
-            "Phase 8 and 9 and 10 research is done and it's in the folders. "
-            "Read all of them, omit what is wrong, make a Loom plan for all three "
-            "phases separately and then start Phase 8's plan implementation."
+            "Plan three separate Loom implementation phases from the completed Phase 8, "
+            "9, and 10 research folders. Cover outcomes and requirements, architecture "
+            "boundaries, and verification evidence. Do not implement."
         )
         opened = self.cli(
             "invoke", "--request", request, "--cwd", self.repo,
@@ -922,7 +922,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--timeout-seconds", "300")
         self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
         action = json.loads(opened.stdout)
-        self.assertEqual("L", action["tier"])
+        self.assertEqual("M", action["tier"])
         self.assertEqual(["llm-agent"], action["domains"])
         self.assertEqual(
             loom_orchestrator.PLAN_CONTRACT_SCHEMA_VERSION,
@@ -2597,11 +2597,18 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
         action_path = Path(started["action_path"])
-        _sealed_path, sealed_action, _sealed_security = \
+        _sealed_path, sealed_action, sealed_security = \
             loom_orchestrator._read_action(
                 action_path, owner_home=self.home,
                 install_root=self.installed)
         directory = action_path.parent
+        loom_executor_guard.observe_post(
+            directory, sealed_action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "real-hook-session", "turn_id": "start-turn",
+                "tool_use_id": "start-hook", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True, security=sealed_security)
         resolved = loom_plan_store.resolve(self.repo)
         control_paths = [
             self.repo / "src" / "app.py",
@@ -2618,16 +2625,19 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 for path in control_paths
             }
 
-        def hook(path):
+        def hook(path, tool_use_id, *, event_name="PreToolUse"):
             event = {
-                "hook_event_name": "PreToolUse",
+                "hook_event_name": event_name,
                 "cwd": str(self.repo),
+                "session_id": "real-hook-session",
+                "turn_id": "real-hook-turn",
+                "tool_use_id": tool_use_id,
                 "tool_name": "Write",
                 "tool_input": {"file_path": path},
             }
             with mock.patch.object(
                     loom_codex_lifecycle, "_active_action",
-                    return_value=sealed_action), \
+                    return_value=(sealed_action, sealed_security)), \
                     mock.patch.object(loom_codex_lifecycle, "_record"):
                 return loom_codex_lifecycle.handle(
                     event, home=self.home, install_root=self.installed)
@@ -2645,9 +2655,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "repair or refactor loophole": "repairs/shortcut.py",
             "executor replanning": "plans/plan-semantics.json",
         }
-        for label, path in denied_attempts.items():
+        for ordinal, (label, path) in enumerate(denied_attempts.items()):
             with self.subTest(label=label):
-                code, output = hook(path)
+                code, output = hook(path, f"denied-{ordinal}")
                 self.assertEqual(0, code)
                 self.assertEqual(
                     "deny", output["hookSpecificOutput"]["permissionDecision"])
@@ -2663,10 +2673,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("execute-not-ready", premature["code"])
         self.assertEqual(baseline, snapshot())
 
-        allowed_code, allowed_output = hook("src/app.py")
+        allowed_code, allowed_output = hook("src/app.py", "allowed-write")
         self.assertEqual(0, allowed_code)
         self.assertIsNone(allowed_output)
         _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        post_code, post_output = hook(
+            "src/app.py", "allowed-write", event_name="PostToolUse")
+        self.assertEqual(0, post_code)
+        self.assertIsNone(post_output)
         after_allowed = snapshot()
         self.assertNotEqual(baseline[str(self.repo / "src" / "app.py")],
                             after_allowed[str(self.repo / "src" / "app.py")])
@@ -4232,7 +4246,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         replacement = loom_orchestrator.invoke(
             request=(
-                "Create and present a fresh replacement plan reviewed against the "
+                "Plan and present a fresh replacement reviewed against the "
                 "current world, explicitly superseding the stale unstarted plan "
                 "generation. Do not implement."),
             cwd=self.repo, home=self.home, install_root=self.installed)
@@ -4269,22 +4283,23 @@ class ProductionOrchestratorTests(unittest.TestCase):
         before_generation = loom_reliability.exact_tree_manifest(
             predecessor.generation_root)
         requests = (
-            "Explain what a replacement plan would look like without creating one. "
-            "Keep the current plan unchanged.",
-            'The reviewer wrote "Create a fresh replacement plan." Explain whether '
-            "that would be safe; do not act on the quote.",
-            "The incident report says the owner requested a fresh replacement plan. "
-            "Summarize the report only; make no changes.",
-            "Do not revise, replace, or create a new plan. Show the current plan.",
+            ("Explain what a replacement plan would look like without creating one. "
+             "Keep the current plan unchanged.", "completed"),
+            ('The reviewer wrote "Create a fresh replacement plan." Explain whether '
+             "that would be safe; do not act on the quote.", "completed"),
+            ("The incident report says the owner requested a fresh replacement plan. "
+             "Summarize the report only; make no changes.", "action-required"),
+            ("Do not revise, replace, or create a new plan. Show the current plan.",
+             "completed"),
         )
 
-        for request in requests:
+        for request, expected_status in requests:
             with self.subTest(request=request):
                 result = loom_orchestrator.invoke(
                     request=request, cwd=self.repo, home=self.home,
                     install_root=self.installed)
 
-                self.assertIn(result["status"], {"completed", "action-required"})
+                self.assertEqual(expected_status, result["status"])
                 self.assertEqual(before_index, index_path.read_bytes())
                 current = loom_plan_store.resolve(self.repo)
                 self.assertEqual(predecessor.generation_id, current.generation_id)
@@ -4301,15 +4316,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
                         path, owner_home=self.home, install_root=self.installed)
                     if action["request"] == request:
                         matching.append(action)
-                self.assertEqual(1, len(matching))
-                self.assertNotEqual("plan", matching[0]["intent"])
-                self.assertIn(
-                    matching[0]["request_control"]["primary_operation"],
-                    {"review", "status"})
-                self.assertEqual(
-                    "read-only", matching[0]["request_control"]["relation"])
+                if expected_status == "completed":
+                    self.assertEqual("non-authoritative-plan", result["code"])
+                    self.assertNotIn("action_path", result)
+                    self.assertEqual([], matching)
+                else:
+                    self.assertEqual(1, len(matching))
+                    self.assertEqual(
+                        "read-only", matching[0]["request_control"]["relation"])
                 self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
-                if result["status"] == "action-required":
+                if expected_status == "action-required":
                     loom_orchestrator.cancel(
                         result["action_path"], owner_home=self.home,
                         install_root=self.installed)
@@ -5828,10 +5844,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
 
-        self.assertEqual("action-required", result["status"])
-        self.assertEqual("review", result["intent"])
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertNotIn("action_path", result)
         self.assertFalse(result["owner_message"]["changes_made"])
-        self.assertIsNone(result["work_order"])
         after = loom_plan_store.resolve(self.repo)
         self.assertEqual(before.generation_id, after.generation_id)
         self.assertEqual(before_manifest, loom_reliability.exact_tree_manifest(
@@ -5849,8 +5865,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 path, owner_home=self.home, install_root=self.installed)
             if action["request"] == request:
                 matching.append(action)
-        self.assertEqual(1, len(matching))
-        self.assertEqual("read-only", matching[0]["request_control"]["relation"])
+        self.assertEqual([], matching)
 
     def test_existing_reviewable_pack_activates_only_after_candidate_review(self):
         """A reviewed candidate supersedes only its exact still-current predecessor."""
@@ -5858,7 +5873,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         predecessor = loom_plan_store.resolve(self.repo)
         predecessor_manifest = loom_reliability.exact_tree_manifest(
             predecessor.generation_root)
-        candidate_request = "Outline a small accounting accessibility enhancement."
+        candidate_request = "Plan a small accounting accessibility enhancement."
 
         candidate = loom_orchestrator.invoke(
             request=candidate_request,
@@ -5902,7 +5917,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a small accounting accessibility enhancement."
+        request = "Plan a small accounting accessibility enhancement."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -6476,10 +6491,19 @@ class ProductionOrchestratorTests(unittest.TestCase):
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
         self.assertEqual("cancelled", cancelled["status"])
+        cancelled_action_bytes = started_path.read_bytes()
+        _cancelled_path, cancelled_action, _cancelled_security = \
+            loom_orchestrator._read_action(
+                started_path, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            "action-cancel",
+            cancelled_action["host_result"]["executor_quiescence"]
+            ["freeze_operation_class"])
         self.assertIsNone(loom_orchestrator._read_active_pointer(
             Path(started["action_path"]).parent))
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -6502,6 +6526,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             request="Cancel the current Loom plan generation.",
             cwd=self.repo, home=self.home, install_root=self.installed)
         self.assertEqual("generation-cancelled", retired["code"])
+        self.assertEqual(cancelled_action_bytes, started_path.read_bytes())
         completed = loom_orchestrator.complete(
             candidate["action_path"], owner_home=self.home,
             install_root=self.installed)
@@ -6602,7 +6627,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         """Break caught: terminal successor recovery re-enters deleted owner stage."""
         self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -6637,7 +6662,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_terminal_successor_allows_status_with_unrelated_pending_pointer(self):
         """Break caught: immutable history conflicts with later pending work."""
         self.complete_machine_authored_plan()
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -6690,7 +6715,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         terminal_actions = []
         terminal_envelopes = []
         for request in (
-                "Outline a new accounting accessibility plan.",
+                "Plan a new accounting accessibility plan.",
                 "Plan a separate accounting documentation improvement."):
             candidate = loom_orchestrator.invoke(
                 request=request, cwd=self.repo, home=self.home,
@@ -6736,7 +6761,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_terminal_successor_scan_rejects_corrupted_completed_evidence(self):
         """Break caught: a naked terminal marker bypasses candidate verification."""
         self.complete_machine_authored_plan()
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -6778,7 +6803,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         """Break caught: recovery maps an absent owner stage onto active authority."""
         self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -6851,7 +6876,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         """Break caught: a crash before pointer clear dead-ends committed authority."""
         self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -6956,7 +6981,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                         self.repo_fixture, self.repo,
                         self.home / "git-home")
                 self.complete_machine_authored_plan()
-                request = "Outline a new accounting accessibility plan."
+                request = "Plan a new accounting accessibility plan."
                 candidate = loom_orchestrator.invoke(
                     request=request, cwd=self.repo, home=self.home,
                     install_root=self.installed)
@@ -7018,7 +7043,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_precommit_failure_preserves_reservation_and_same_action_retries(self):
         self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -7080,7 +7105,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_precommit_ambiguous_reservation_is_preserved_for_owner_recovery(self):
         self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -7116,7 +7141,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_preindex_abandonment_preserves_candidate_for_exact_retry(self):
         self.complete_machine_authored_plan()
         predecessor = loom_plan_store.resolve(self.repo)
-        request = "Outline a new accounting accessibility plan."
+        request = "Plan a new accounting accessibility plan."
         candidate = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -8959,7 +8984,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_unknown_domain_is_promoted_out_of_the_small_lifecycle(self):
         opened = self.cli(
             "invoke", "--request",
-            "Develop a museum conservation protocol for water-damaged manuscripts",
+            "Plan a museum conservation protocol for water-damaged manuscripts",
             "--cwd", self.repo, "--home", self.home,
             "--install-root", self.installed)
 
@@ -9152,8 +9177,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_research_plan_owner_message_uses_domain_consequence_and_plain_action(self):
         action = loom_orchestrator.invoke(
             request=(
-                "Create a research and writing plan for a cited comparison of "
-                "embedded databases, including source checks and review checkpoints. "
+                "Plan a cited research comparison of embedded databases, including "
+                "source checks and validation checkpoints. "
                 "Do not build software."),
             cwd=self.repo, home=self.home, install_root=self.installed)
 
@@ -9197,25 +9222,25 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_whole_domain_deliverables_receive_domain_aware_tiers(self):
         cases = (
-            ("Build a cross-platform command-line developer tool with config discovery, "
+            ("Plan a cross-platform command-line developer tool with config discovery, "
              "plugin loading, shell completion, package installers, and compatibility tests.",
              "cli", "L"),
-            ("Build an offline-first Android and iOS field inspection app with camera, GPS, "
+            ("Plan an offline-first Android and iOS field inspection app with camera, GPS, "
              "sync conflict resolution, accessibility, and signed store releases.",
              "android", "L"),
-            ("Build a streaming ETL and machine-learning pipeline with schema evolution, "
+            ("Plan a streaming ETL and machine-learning pipeline with schema evolution, "
              "backfills, data quality, drift monitoring, reproducible training, and rollback.",
              "data-etl", "L"),
-            ("Build desktop bookkeeping software with double-entry correctness, currency "
+            ("Plan desktop bookkeeping software with double-entry correctness, currency "
              "precision, tax rules, reconciliation, immutable audit trails, period close, "
              "migrations, and signed releases.", "accounting", "L"),
-            ("Design and validate firmware for a battery-powered sensor node with bootloader "
+            ("Plan firmware design and validation for a battery-powered sensor node with bootloader "
              "rollback, secure updates, power-loss recovery, hardware-in-loop tests, and "
              "manufacturing calibration.", "firmware-hardware", "L"),
-            ("Produce a publishable research study with three methods, statistical analysis, "
+            ("Plan a publishable research study with three methods, statistical analysis, "
              "source provenance, reproducible notebooks, limitations, and publication package.",
              "research", "L"),
-            ("Build a real-time 3D room configurator with renderer, spatial UX, asset pipeline, "
+            ("Plan a real-time 3D room configurator with renderer, spatial UX, asset pipeline, "
              "materials, collision, autosave, and a device performance matrix.",
              "realtime-3d", "L"),
         )
@@ -9305,8 +9330,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_multi_phase_program_requires_every_milestone_and_atom_assignment(self):
         request = (
-            "Phase 8, Phase 9, and Phase 10 research is complete. Make three plans "
-            "and then implement Phase 8 in the Loom agent runtime.")
+            "Plan three implementation phases from the completed Phase 8, Phase 9, "
+            "and Phase 10 research. Cover outcomes and requirements, architecture "
+            "boundaries, and verification evidence. Do not implement.")
         opened = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -9723,7 +9749,7 @@ planning_obligations: [{obligations}]
 
     def test_composite_host_outcome_requires_domain_bound_stack_observations(self):
         opened = loom_orchestrator.invoke(
-            request="Build an ETL and machine-learning pipeline",
+            request="Plan an ETL and machine-learning pipeline",
             cwd=self.repo, home=self.home, install_root=self.installed)
         action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
         self.assertEqual({"data-etl", "ml"}, set(action["domains"]))
