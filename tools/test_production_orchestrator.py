@@ -4471,6 +4471,55 @@ class ProductionOrchestratorTests(unittest.TestCase):
         path.write_text(json.dumps(action), encoding="utf-8")
         return opened, path, action
 
+    def _interrupt_successor_pointer_before_publication(self):
+        """Build one exact receipt-bound successor with no published pointer."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def interrupt(source, destination, **kwargs):
+            nonlocal injected
+            if not injected \
+                    and kwargs.get("source_role") == "successor_pointer_stage" \
+                    and kwargs.get("destination_role") == "active_successor_pointer":
+                injected = True
+                raise loom_reliability.ReliabilityError(
+                    "injected before successor pointer publication")
+            return original_atomic(source, destination, **kwargs)
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace", side_effect=interrupt):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        receipt_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT)
+        stage_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_POINTER)
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        successor_path = old_path.parent / f"{receipt['successor_action_id']}.json"
+        return {
+            "opened": opened,
+            "old_path": old_path,
+            "old_action": old_action,
+            "request": request,
+            "pointer_path": old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE,
+            "receipt_path": receipt_path,
+            "stage_path": stage_path,
+            "receipt": receipt,
+            "successor_path": successor_path,
+        }
+
     def test_fresh_plan_reprepares_pointer_backed_pre_ux104_action(self):
         """Break caught: ACTION_REPREPARE_REQUIRED instructs an endless retry."""
         opened, old_path, old_action = \
@@ -5137,6 +5186,86 @@ class ProductionOrchestratorTests(unittest.TestCase):
             loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
         self.assertEqual(
             "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_successor_pointer_prepublication_retry_converges(self):
+        """Break caught: pre-publication failure abandons the exact successor."""
+        case = self._interrupt_successor_pointer_before_publication()
+
+        self.assertFalse(case["pointer_path"].exists())
+        self.assertTrue(case["receipt_path"].is_file())
+        self.assertTrue(case["stage_path"].is_file())
+        self.assertEqual(
+            "superseded",
+            json.loads(case["old_path"].read_text(encoding="utf-8"))["status"])
+        self.assertTrue(case["successor_path"].is_file())
+
+        resumed = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(case["receipt"]["successor_action_id"], resumed["action_id"])
+        self.assertEqual(
+            resumed["action_id"],
+            loom_orchestrator._read_active_pointer(
+                case["old_path"].parent)["action_id"])
+        self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_successor_pointer_tampered_receipt_blocks(self):
+        """Break caught: a rehashed successor receipt can redirect publication."""
+        case = self._interrupt_successor_pointer_before_publication()
+        receipt = dict(case["receipt"])
+        receipt["pointer_sha256"] = "0" * 64
+        receipt["receipt_hash"] = loom_orchestrator._hash({
+            key: value for key, value in receipt.items() if key != "receipt_hash"})
+        case["receipt_path"].write_text(json.dumps(receipt), encoding="utf-8")
+        before_receipt = case["receipt_path"].read_bytes()
+        before_stage = case["stage_path"].read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_receipt, case["receipt_path"].read_bytes())
+        self.assertEqual(before_stage, case["stage_path"].read_bytes())
+        self.assertFalse(case["pointer_path"].exists())
+
+    def test_pre_ux104_successor_pointer_action_mismatch_blocks(self):
+        """Break caught: a different authentic action inherits a stale receipt."""
+        case = self._interrupt_successor_pointer_before_publication()
+        successor = json.loads(case["successor_path"].read_text(encoding="utf-8"))
+        successor["attempts"] += 1
+        successor["action_hash"] = loom_orchestrator._action_hash(successor)
+        case["successor_path"].write_text(json.dumps(successor), encoding="utf-8")
+        before_action = case["successor_path"].read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, case["successor_path"].read_bytes())
+        self.assertFalse(case["pointer_path"].exists())
+
+    def test_pre_ux104_successor_pointer_receipt_recreates_missing_stage(self):
+        """Break caught: a committed receipt cannot reconstruct its pointer stage."""
+        case = self._interrupt_successor_pointer_before_publication()
+        case["stage_path"].unlink()
+
+        resumed = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(case["receipt"]["successor_action_id"], resumed["action_id"])
+        self.assertEqual(
+            resumed["action_id"],
+            loom_orchestrator._read_active_pointer(
+                case["old_path"].parent)["action_id"])
+        self.assertFalse(case["stage_path"].exists())
 
     def test_pre_ux104_reprepare_rejects_other_action_corruption(self):
         """Break caught: recovery-only compatibility bypasses normal validation."""

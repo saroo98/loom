@@ -1005,13 +1005,23 @@ def _resolve_clause_roles(request, state):
     negative_intents = {item["intent"] for item in negatives}
     positive_controls = {(item["intent"], item["control"]) for item in positives}
     negative_controls = {(item["intent"], item["control"]) for item in negatives}
+    # `close` and `cancel` are distinct owner-facing controls but grant the
+    # same cancellation power.  Polarity must be compared after authority
+    # normalization or an alias can authorize exactly what its sibling denied.
+    def authority_control(item):
+        if item["intent"] in {"cancel", "close"}:
+            return ("cancel", "cancel-generation")
+        return (item["intent"], item["control"])
+    positive_authorities = {authority_control(item) for item in positives}
+    negative_authorities = {authority_control(item) for item in negatives}
     # A list of prohibitions joined with "or" narrows authority; it does not
     # offer alternative positive outcomes. Only positive alternatives are
     # ambiguous here. Positive-versus-negative conflicts are handled below.
     has_or = any(
         item["separator"] == "or" and not item["negated"]
         for item in classified[1:])
-    conflicting_polarity = bool(positive_controls & negative_controls)
+    conflicting_polarity = bool(
+        positive_authorities & negative_authorities)
     planning_requested = ("plan", "planning") in positive_controls
     implementation_requested = ("plan", "implementation") in positive_controls
     implementation_prohibited = ("plan", "implementation") in negative_controls
@@ -1608,19 +1618,43 @@ _SEMANTIC_CAPABILITY_CATALOG = MappingProxyType({
     }),
 })
 
+_SEMANTIC_POLARITY_BOUNDARY_RE = re.compile(
+    r"[.!?;\r\n]+|\b(?:and|but|or|then)\b")
+_SEMANTIC_NEGATION_OPERATOR_RE = re.compile(
+    r"\b(?:no|never|without)\b|\b(?:do|does|did)\s+not\b|\bnot\b")
+
+
+def _semantic_concept_polarities(task_text):
+    """Return closed concept atoms separated by structural polarity scope."""
+    positive = set()
+    negative = set()
+    for concept, pattern in _SEMANTIC_CONCEPT_PATTERNS.items():
+        for match in pattern.finditer(task_text):
+            prefix = task_text[:match.start()]
+            boundaries = list(_SEMANTIC_POLARITY_BOUNDARY_RE.finditer(prefix))
+            clause_start = boundaries[-1].end() if boundaries else 0
+            clause_prefix = task_text[clause_start:match.start()]
+            target = (
+                negative if _SEMANTIC_NEGATION_OPERATOR_RE.search(clause_prefix)
+                else positive)
+            target.add(concept)
+    return frozenset(positive), frozenset(negative)
+
 
 def _semantic_capability(request):
     """Return one proved closed capability, or None for absent/ambiguous scope."""
-    task_text = loom_domain.task_language(request)
+    # Polarity must be resolved before task-language redaction removes explicit
+    # exclusion clauses.  Only closed catalog atoms leave this transient text.
+    task_text = _semantic_request(request).casefold()
     task_text, quotes_balanced = _mask_quoted_authority(task_text)
     if not quotes_balanced:
         return None
-    concepts = frozenset(
-        concept for concept, pattern in _SEMANTIC_CONCEPT_PATTERNS.items()
-        if pattern.search(task_text))
+    positive_concepts, negative_concepts = \
+        _semantic_concept_polarities(task_text)
     matches = [
         capability for capability, value in _SEMANTIC_CAPABILITY_CATALOG.items()
-        if value["concepts"].issubset(concepts)
+        if value["concepts"].issubset(positive_concepts)
+        and value["concepts"].isdisjoint(negative_concepts)
     ]
     return matches[0] if len(matches) == 1 else None
 
@@ -1634,7 +1668,7 @@ def semantic_outcome_evidence(request, domains_result):
             or any(not isinstance(domain, str) or not ID_RE.fullmatch(domain)
                    for domain in domains):
         raise RuntimeError("semantic outcome domain scope is invalid")
-    capability = _semantic_capability(request)
+    capability = _semantic_capability(request) if len(domains) == 1 else None
     if capability is not None:
         domain = sorted(domains)[0]
         token = f"{SEMANTIC_CAPABILITY_EVIDENCE_PREFIX}{domain}.{capability}"

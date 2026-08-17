@@ -438,6 +438,48 @@ class OwnerIntentRecoveryTests(unittest.TestCase):
 
         self.assertEqual(len(cases), len(set(observed)))
 
+    def test_semantic_capability_projection_rejects_negated_required_concepts(self):
+        """Break caught: excluded behavior is sealed as a positive capability."""
+        domains = {"active_task_domains": ["unclassified"]}
+        requests = (
+            "Add password reset without account recovery.",
+            "Improve accessible search without keyboard navigation.",
+            "Add backups without restore.",
+            "No CSV export.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                token = loom_runtime.semantic_outcome_evidence(request, domains)
+                self.assertTrue(token.startswith("semantic-outcome-v1."), token)
+
+    def test_semantic_capability_projection_rejects_mixed_polarity(self):
+        """Break caught: positive and negative evidence mint positive authority."""
+        token = loom_runtime.semantic_outcome_evidence(
+            "Add CSV export, but do not add CSV export to private reports.",
+            {"active_task_domains": ["unclassified"]},
+        )
+
+        self.assertTrue(token.startswith("semantic-outcome-v1."), token)
+
+    def test_semantic_capability_projection_rejects_multiple_capabilities(self):
+        """Break caught: one capsule hides an ambiguous multi-capability request."""
+        token = loom_runtime.semantic_outcome_evidence(
+            "Add CSV export plus password reset and account recovery.",
+            {"active_task_domains": ["unclassified"]},
+        )
+
+        self.assertTrue(token.startswith("semantic-outcome-v1."), token)
+
+    def test_semantic_capability_projection_rejects_multiple_domains(self):
+        """Break caught: sorted domain order arbitrarily grants a v2 capability."""
+        token = loom_runtime.semantic_outcome_evidence(
+            "Add CSV export for the reports.",
+            {"active_task_domains": ["accounting", "healthcare"]},
+        )
+
+        self.assertTrue(token.startswith("semantic-outcome-v1."), token)
+
     def test_semantic_outcome_v2_is_closed_privacy_safe_and_noninvertible(self):
         """Break caught: a capability capsule can carry open request vocabulary."""
         valid = (

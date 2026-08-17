@@ -1,6 +1,7 @@
 """Crash and abandonment regressions for the project-scoped orchestration authority."""
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -640,26 +641,81 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         self.assertEqual("superseded", resumed["prior_recovery"]["reason"])
         self.assertTrue(resumed["prior_recovery"]["changes_made"])
 
-    def test_recovery_resumes_when_pointer_clear_is_interrupted(self):
+    def test_recovery_resumes_when_successor_pointer_publication_is_interrupted(self):
+        """A pre-publication interruption retains one receipt-bound successor."""
         first = self.invoke()
-        original = loom_orchestrator._clear_active_pointer
-        failed = False
+        first_path = Path(first["action_path"])
+        pointer_path = first_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        transition = (
+            first_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / first["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        stage_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_POINTER)
+        receipt_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT)
+        original = loom_reliability.atomic_rename_noreplace
+        injected = False
 
-        def interrupted(directory, action_id, **kwargs):
-            nonlocal failed
-            action = self.action(first)
-            if not failed and action["status"] in {"superseded", "abandoned", "expired"}:
-                failed = True
-                raise OSError("pointer clear interruption")
-            return original(directory, action_id, **kwargs)
+        def interrupt_before_publication(source, destination, **kwargs):
+            nonlocal injected
+            if not injected \
+                    and kwargs.get("source_role") == "successor_pointer_stage" \
+                    and kwargs.get("destination_role") == "active_successor_pointer":
+                injected = True
+                raise loom_reliability.ReliabilityError(
+                    "successor pointer publication interruption")
+            return original(source, destination, **kwargs)
 
         with mock.patch.object(
-                loom_orchestrator, "_clear_active_pointer", side_effect=interrupted):
-            with self.assertRaisesRegex(OSError, "pointer clear interruption"):
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=interrupt_before_publication):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
                 self.supersede()
 
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", interrupted.exception.code)
+        retired = self.action(first)
+        self.assertIn(retired["status"], loom_orchestrator.TERMINAL_ACTION_STATUSES)
+        self.assertFalse(pointer_path.exists())
+        self.assertTrue(stage_path.is_file())
+        self.assertTrue(receipt_path.is_file())
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        self.assertEqual(first["action_id"], receipt["source_action_id"])
+        self.assertEqual(
+            retired["recovery_receipt"]["receipt_hash"],
+            receipt["source_recovery_receipt_hash"])
+        self.assertEqual(
+            hashlib.sha256(stage_path.read_bytes()).hexdigest(),
+            receipt["pointer_sha256"])
+        pending = [
+            action for action in first_path.parent.glob("*.json")
+            if action.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(action.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual(1, len(pending))
+        successor_id = json.loads(pending[0].read_text(encoding="utf-8"))["action_id"]
+        self.assertEqual(successor_id, receipt["successor_action_id"])
+
         resumed = self.supersede()
-        self.assertNotEqual(first["action_id"], resumed["action_id"])
+
+        self.assertEqual(successor_id, resumed["action_id"])
+        self.assertEqual(
+            successor_id,
+            loom_orchestrator._read_active_pointer(first_path.parent)["action_id"])
+        self.assertIn(
+            self.action(first)["status"], loom_orchestrator.TERMINAL_ACTION_STATUSES)
+        self.assertFalse(stage_path.exists())
+        remaining = [
+            action for action in first_path.parent.glob("*.json")
+            if action.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(action.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual([successor_id], [
+            json.loads(action.read_text(encoding="utf-8"))["action_id"]
+            for action in remaining])
 
     def test_quarantine_receipt_is_bounded_authenticated_and_restorable(self):
         first = self.invoke()

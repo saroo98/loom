@@ -56,6 +56,27 @@ class LifecycleIntentMetamorphicTests(unittest.TestCase):
                 self.assertFalse(control["blocked"], control)
                 self.assertNotIn("semantic-assistance", control["evidence"])
 
+    def test_cancel_and_close_share_one_lifecycle_authority_polarity(self):
+        """Break caught: alias wording bypasses a negated cancellation control."""
+        requests = (
+            "Do not cancel the current Loom action. Close this project.",
+            "Do not close this project. Cancel the current Loom action.",
+            "Don't cancel the current Loom action; close this project.",
+            "Never close this project; please cancel the current Loom action.",
+        )
+
+        for request in requests:
+            with self.subTest(request=request):
+                decision = loom_runtime.resolve_intent(request)
+                control = loom_runtime.request_control(
+                    request, state={"generation_phase": "active"})
+
+                self.assertTrue(decision["blocked"], decision)
+                self.assertTrue(control["blocked"], control)
+                self.assertNotEqual("cancel-generation", control["relation"])
+                self.assertIn(
+                    control["block_reason"], {"INTENT_AMBIGUOUS", "INTENT_NEGATED"})
+
     def test_unanchored_owner_language_is_inline_assistance_not_plan_authority(self):
         """Break caught: ordinary or hypothetical wording creates plan authority."""
         requests = (

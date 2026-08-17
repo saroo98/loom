@@ -11350,14 +11350,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                     "a planning pack already exists; use resume or repair instead of mutating it")
             directory = path.parent
             action = _write_action(path, action, action_security)
-            if not preserve_active_pointer:
+            recovery_bound_publication = (
+                not preserve_active_pointer
+                and pointer_recovery_receipt is not None)
+            if not preserve_active_pointer and not recovery_bound_publication:
                 if pointer_recovery_receipt is None:
                     _write_active_pointer(
                         directory, action_id=action_id,
                         project_id=prepared.project_id)
-                else:
-                    _publish_recovery_bound_active_pointer(
-                        directory, path, action, pointer_recovery_receipt)
             action["initial_pack_hash"] = _pack_hash(pack)
             action["pack_seed"] = {
                 **action["pack_seed"],
@@ -11366,17 +11366,19 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             action["plan_contract"] = _make_plan_contract(action, prepared)
             action["status"] = "pending"
             action = _write_action(path, action, action_security)
+            if recovery_bound_publication:
+                _publish_recovery_bound_active_pointer(
+                    directory, path, action, pointer_recovery_receipt)
             return _pending_action_result(action)
         directory = path.parent
         action = _write_action(path, action, action_security)
-        if not preserve_active_pointer:
+        recovery_bound_publication = (
+            not preserve_active_pointer and pointer_recovery_receipt is not None)
+        if not preserve_active_pointer and not recovery_bound_publication:
             if pointer_recovery_receipt is None:
                 _write_active_pointer(
                     directory, action_id=action_id,
                     project_id=prepared.project_id)
-            else:
-                _publish_recovery_bound_active_pointer(
-                    directory, path, action, pointer_recovery_receipt)
         stage, manifest, stage_identity = _seed_stage(path, action, prepared)
         action["pack_seed"] = {**action["pack_seed"], "state": "prepared",
                                "manifest": manifest}
@@ -11385,6 +11387,9 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         action["plan_contract"] = _make_plan_contract(action, prepared)
         action["status"] = "pending"
         action = _write_action(path, action, action_security)
+        if recovery_bound_publication:
+            _publish_recovery_bound_active_pointer(
+                directory, path, action, pointer_recovery_receipt)
     elif prepared.intent == "execute":
         pack = target / "plans"
         work_order_id, work_order_path = _prepare_execution_pack(
