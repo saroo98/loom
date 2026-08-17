@@ -5448,6 +5448,60 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertFalse(case["receipt_path"].exists())
         self.assertFalse(case["stage_path"].exists())
 
+    def test_pre_ux104_bound_successor_requires_sole_nonterminal_action(self):
+        """Break caught: bound recovery hides a second unbound pending action."""
+        case = self._interrupt_pending_successor_before_receipt()
+        unbound = json.loads(json.dumps(case["successor"]))
+        unbound["action_id"] = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+        host_result = dict(unbound["host_result"])
+        host_result.pop(loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY)
+        unbound["host_result"] = host_result
+        planning_mode = loom_orchestrator._extract_planning_mode(
+            unbound["request_control"])
+        unbound["owner_message"] = loom_orchestrator.loom_message.build(
+            state="progress",
+            consequence=loom_orchestrator._action_consequence(
+                unbound, use_domain_contract=True),
+            verification="pending", freshness="current",
+            changes_made=True, undo_status="unavailable",
+            summary=loom_orchestrator._planning_seed_summary(
+                unbound["tier"], planning_mode),
+            next_action=(
+                "Have the agent finish the plan, then review it before any "
+                "project work starts."),
+            receipt_id="action-" + unbound["action_id"])
+        unbound["action_hash"] = loom_orchestrator._action_hash(unbound)
+        unbound_path = case["old_path"].parent / f"{unbound['action_id']}.json"
+        unbound_path.write_text(json.dumps(unbound), encoding="utf-8")
+        loom_orchestrator._read_action(
+            unbound_path, owner_home=self.home,
+            install_root=self.installed)
+        before_successor = case["successor_path"].read_bytes()
+        before_unbound = unbound_path.read_bytes()
+        before_actions = {
+            path.name for path in case["old_path"].parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+        }
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertFalse(case["pointer_path"].exists())
+        self.assertEqual(before_successor, case["successor_path"].read_bytes())
+        self.assertEqual(before_unbound, unbound_path.read_bytes())
+        self.assertEqual(
+            before_actions,
+            {
+                path.name for path in case["old_path"].parent.glob("*.json")
+                if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            })
+        self.assertFalse(case["receipt_path"].exists())
+        self.assertFalse(case["stage_path"].exists())
+
     def test_pre_ux104_pending_successor_binding_tamper_blocks(self):
         """Break caught: a rehashed pending action can redirect its source binding."""
         opened, old_path, _old_action = \

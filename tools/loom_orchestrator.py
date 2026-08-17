@@ -3351,10 +3351,10 @@ def _recovery_bound_successor_action(
         and candidate[1]["host_result"].get(
             SUCCESSOR_POINTER_BINDING_KEY) is not None
     ]
-    if len(bound) > 1:
+    if bound and len(candidates) != 1:
         raise OrchestratorError(
             "RECOVERY_RACE",
-            "multiple recovery-bound successors require inspection")
+            "a recovery-bound successor is not the sole nonterminal action")
     return bound[0] if bound else None
 
 
