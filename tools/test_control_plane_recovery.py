@@ -305,7 +305,9 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         _write(
             self.repo / "plans" / "owner-notes.md",
             f"owner-authored plan {private_marker}\n")
-        project_before = loom_reliability.exact_tree_manifest(self.repo)
+        # Git metadata is outside project authority and may be refreshed by a
+        # read-only survey. Bind the stable product tree separately from plans.
+        source_before = loom_reliability.exact_tree_manifest(self.repo / "src")
         plans_before = loom_reliability.exact_tree_manifest(self.repo / "plans")
         safe_next_action = (
             "Quarantine or repair the lifecycle store, then ask Loom for a fresh plan.")
@@ -333,7 +335,8 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         self.assertNotIn("result_path", result)
         self.assertIsNone(
             result["terminal_authority"]["implementation_authorized"])
-        self.assertEqual(project_before, loom_reliability.exact_tree_manifest(self.repo))
+        self.assertEqual(
+            source_before, loom_reliability.exact_tree_manifest(self.repo / "src"))
         self.assertEqual(
             plans_before, loom_reliability.exact_tree_manifest(self.repo / "plans"))
         self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
@@ -357,7 +360,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
             self.repo / "plans" / "owner-notes.md",
             f"owner-authored plan {private_marker}\n")
         self.request = "Plan a tiny Python command-line greeting tool."
-        project_before = loom_reliability.exact_tree_manifest(self.repo)
+        source_before = loom_reliability.exact_tree_manifest(self.repo / "src")
         observed_prepared = []
         original_capsule = loom_orchestrator._tier_s_host_capsule
         original_run = loom_session.SessionController.run
@@ -397,7 +400,8 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
             "useful-planning-recovery",
             "inline-plan-lifecycle-authority-untrusted",
         ], evidence[-2:])
-        self.assertEqual(project_before, loom_reliability.exact_tree_manifest(self.repo))
+        self.assertEqual(
+            source_before, loom_reliability.exact_tree_manifest(self.repo / "src"))
         self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
 
     def test_forged_inline_recovery_handler_cannot_seal_owner_authority(self):
@@ -406,7 +410,7 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         _write(
             self.repo / "plans" / "owner-notes.md",
             f"owner-authored plan {private_marker}\n")
-        project_before = loom_reliability.exact_tree_manifest(self.repo)
+        source_before = loom_reliability.exact_tree_manifest(self.repo / "src")
         original_run = loom_session.SessionController.run
 
         def run_with_forged_handler(controller, request, **kwargs):
@@ -428,7 +432,8 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
         self.assertIsInstance(raised.exception.__cause__, loom_session.SessionBlocked)
         self.assertEqual("HANDLER_RESULT_INVALID", raised.exception.__cause__.code)
-        self.assertEqual(project_before, loom_reliability.exact_tree_manifest(self.repo))
+        self.assertEqual(
+            source_before, loom_reliability.exact_tree_manifest(self.repo / "src"))
         journals = list((self.home / "instances").glob(
             "*/runtime/projects/*/session-journal.json"))
         self.assertEqual(1, len(journals))
