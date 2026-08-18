@@ -129,6 +129,7 @@ class NativeBuildEnvironmentTests(unittest.TestCase):
         self.assertEqual(
             str(v11_test_support.RUST_COMPILER_STACK_BYTES),
             call["environment"]["RUST_MIN_STACK"])
+        self.assertNotIn("CARGO_BUILD_JOBS", call["environment"])
         self.assertEqual([
             "cargo", "build", "--quiet", "--locked", "--release",
             "--manifest-path", str(crate / "Cargo.toml")], call["command"])

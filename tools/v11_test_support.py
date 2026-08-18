@@ -336,7 +336,6 @@ def _compile_vault_helper(root, crate, target, environment=None):
         **_native_build_environment(environment),
         "CARGO_TARGET_DIR": str(target),
     }
-    environment.setdefault("CARGO_BUILD_JOBS", "1")
     environment["RUST_MIN_STACK"] = str(RUST_COMPILER_STACK_BYTES)
     if os.name == "nt":
         environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
