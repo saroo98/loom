@@ -108,6 +108,7 @@ class TestRunnerTests(unittest.TestCase):
             loom_suite_harness.validate_diagnostic_policy(unknown)
 
     def test_progress_checkpoint_is_closed_and_non_authorizing(self):
+        outer_progress_factory = loom_suite_harness.ProgressCheckpoint
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "test_progress.py").write_text(
@@ -193,7 +194,7 @@ class TestRunnerTests(unittest.TestCase):
             value = loom_suite_harness.load_progress_checkpoint(checkpoint)
         self.assertIs(
             loom_suite_harness.ProgressCheckpoint,
-            loom_test._StartDurableProgressCheckpoint.__base__)
+            outer_progress_factory)
         self.assertTrue(report["successful"])
         self.assertEqual(2, report["tests_run"])
         self.assertEqual(4, value["checkpoint_sequence"])
