@@ -29,9 +29,9 @@ import loom_reliability
 import loom_update
 import v11_test_support
 from v11_test_support import (
-    RUSTC_IDENTITY_TIMEOUT_SECONDS, _build_environment_identity,
-    _host_platform, _msvc_environment_from_roots, _native_build_environment,
-    _rustc_identity, VAULT_HELPER_BUILD_TIMEOUT_SECONDS,
+    _build_environment_identity, _host_platform, _msvc_environment_from_roots,
+    _native_build_environment, _rustc_identity,
+    VAULT_HELPER_BUILD_TIMEOUT_SECONDS,
     build_vault_helper, package_evidence, package_source_commit,
 )
 
@@ -446,20 +446,50 @@ class BootstrapIntegrationTests(unittest.TestCase):
             self.assertIn("blocked safely", result["systemMessage"])
             self.assertIn("No unowned route was changed", result["systemMessage"])
 
-    def test_rustc_identity_probe_is_bounded_and_cached_per_process(self):
-        _rustc_identity.cache_clear()
-        try:
-            completed = mock.Mock(stdout="rustc 1.97.1\nhost: fixture\n")
-            with mock.patch("v11_test_support.subprocess.run",
-                            return_value=completed) as run:
-                first = _rustc_identity()
-                second = _rustc_identity()
-            self.assertEqual(first, second)
-            run.assert_called_once()
-            self.assertEqual(RUSTC_IDENTITY_TIMEOUT_SECONDS,
-                             run.call_args.kwargs["timeout"])
-        finally:
-            _rustc_identity.cache_clear()
+    def test_native_helper_cache_uses_pinned_toolchain_without_runtime_probe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            crate = root / "vault-helper"
+            (crate / "src").mkdir(parents=True)
+            (crate / "Cargo.toml").write_text(
+                "[package]\nname='fixture'\nversion='0.1.0'\n",
+                encoding="utf-8")
+            (crate / "Cargo.lock").write_text("fixture-lock\n", encoding="utf-8")
+            (crate / "src" / "main.rs").write_text(
+                "fn main() {}\n", encoding="utf-8")
+            toolchain = root / "rust-toolchain.toml"
+            toolchain.write_text(
+                "[toolchain]\nchannel='1.97.1'\n", encoding="utf-8")
+            cache = root / "cache"
+            builds = []
+
+            def compile_fixture(_root, _crate, target, environment=None):
+                builds.append(Path(target))
+                binary = Path(target) / "release" / (
+                    "loom-vault.exe" if os.name == "nt" else "loom-vault")
+                binary.parent.mkdir(parents=True)
+                binary.write_bytes(b"native-helper-fixture")
+                return binary
+
+            with mock.patch.dict(
+                    os.environ, {"LOOM_TEST_CACHE_ROOT": str(cache)}), \
+                    mock.patch(
+                        "v11_test_support._rustc_identity",
+                        side_effect=AssertionError(
+                            "pinned toolchain identity must not spawn rustc")), \
+                    mock.patch(
+                        "v11_test_support._native_build_environment",
+                        return_value={}), \
+                    mock.patch(
+                        "v11_test_support._compile_vault_helper",
+                        side_effect=compile_fixture):
+                first = build_vault_helper(root)
+                toolchain.write_text(
+                    "[toolchain]\nchannel='1.97.2'\n", encoding="utf-8")
+                second = build_vault_helper(root)
+
+            self.assertNotEqual(first, second)
+            self.assertEqual(2, len(builds))
 
     def test_receipt_proven_direct_install_bootstraps_without_signed_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
