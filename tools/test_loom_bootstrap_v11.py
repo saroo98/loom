@@ -221,14 +221,27 @@ class BootstrapIntegrationTests(unittest.TestCase):
         shutil.copyfile(cls.helper, helper)
         if os.name != "nt":
             os.chmod(helper, 0o755)
+        cls.direct_installed = Path(cls.direct_fixture.name) / "installed"
+        installed = loom_install.install(
+            cls.direct_public, cls.direct_installed)
+        cls.direct_install_check = {
+            key: installed[key]
+            for key in ("status", "install_id", "files_verified", "receipt_hash")
+        }
 
     @classmethod
     def tearDownClass(cls):
-        cls.direct_fixture.cleanup()
+        try:
+            if loom_install.check(cls.direct_installed) \
+                    != cls.direct_install_check:
+                raise AssertionError(
+                    "the shared direct-install fixture changed during the test class")
+        finally:
+            cls.direct_fixture.cleanup()
 
     def _install_direct_fixture(self, root):
         target = Path(root) / "direct-install"
-        loom_install.install(self.direct_public, target)
+        shutil.copytree(self.direct_installed, target)
         return target
 
     def test_signed_update_uses_the_exact_active_owner_schema(self):
@@ -451,7 +464,11 @@ class BootstrapIntegrationTests(unittest.TestCase):
     def test_receipt_proven_direct_install_bootstraps_without_signed_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            direct = self._install_direct_fixture(root)
+            with mock.patch.object(
+                    loom_install, "install",
+                    wraps=loom_install.install) as repeated_install:
+                direct = self._install_direct_fixture(root)
+            repeated_install.assert_not_called()
             home = root / "home" / ".loom"
 
             result = subprocess.run([
