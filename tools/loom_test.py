@@ -5,6 +5,7 @@ import argparse
 import json
 import math
 import os
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -326,7 +327,34 @@ def run_modules(modules, *, start_dir=None, max_seconds=None, verbosity=1):
 # the single implementation used by both the legacy CLI and isolated workers.
 TimingResult = loom_suite_harness.TimingResult
 run_modules = loom_suite_harness.run_modules
-_execute_suite = loom_suite_harness.execute_suite
+_HARNESS_EXECUTE_SUITE = loom_suite_harness.execute_suite
+_PROGRESS_FACTORY_LOCK = threading.RLock()
+
+
+class _StartDurableProgressCheckpoint(loom_suite_harness.ProgressCheckpoint):
+    """Persist one exact in-flight frontier without a second write per test."""
+
+    def completed(self, test):
+        # The next started() commit durably includes this completion and the
+        # new in-flight test in one checkpoint. finalize() commits the final
+        # completion. A timeout therefore retains the exact started frontier
+        # without paying for two fsync/replace cycles per test.
+        self.state["completed_test_count"] += 1
+        self.state["last_completed_test"] = self._safe_test_id(test)
+
+
+def _execute_suite(*args, progress_path=None, **kwargs):
+    if progress_path is None:
+        return _HARNESS_EXECUTE_SUITE(
+            *args, progress_path=None, **kwargs)
+    with _PROGRESS_FACTORY_LOCK:
+        original = loom_suite_harness.ProgressCheckpoint
+        loom_suite_harness.ProgressCheckpoint = _StartDurableProgressCheckpoint
+        try:
+            return _HARNESS_EXECUTE_SUITE(
+                *args, progress_path=progress_path, **kwargs)
+        finally:
+            loom_suite_harness.ProgressCheckpoint = original
 
 
 _FULL_REPORT_FIELDS = frozenset({
