@@ -9726,7 +9726,8 @@ def _rebind_status_prepared(prepared, subject_action):
 def invoke(*, request, cwd, home, install_root, explicit_target=None,
            timeout_seconds=900, now=None, transport_invocation_id=None,
            assurance=None, expected_plan_decision=None,
-           revision_context=None, bound_intent=None):
+           revision_context=None, bound_intent=None,
+           continuation_generation_id=None):
     if type(timeout_seconds) is not int or not 60 <= timeout_seconds <= 3600:
         raise OrchestratorError("INVALID_TIMEOUT", "timeout must be between 60 and 3600 seconds")
     if transport_invocation_id is not None:
@@ -9766,6 +9767,15 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
         raise OrchestratorError(
             "PLAN_DECISION_MISMATCH",
             "plan revision requires its bound planning intent")
+    if continuation_generation_id is not None \
+            and (not isinstance(continuation_generation_id, str)
+                 or loom_lifecycle_kernel.SAFE_ID.fullmatch(
+                     continuation_generation_id) is None
+                 or any(item is not None for item in (
+                     expected_plan_decision, revision_context, bound_intent))):
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "active-generation continuation binding is invalid")
     intent_decision = loom_runtime.resolve_intent(request)
     incoming_intent = (
         bound_intent if bound_intent is not None else
@@ -9840,6 +9850,18 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                         planning_state_override
                         if planning_state_override is not None
                         else loom_lifecycle_kernel.project(lifecycle_state)))
+            if continuation_generation_id is not None \
+                    and (incoming_intent != "execute"
+                         or lifecycle_state is None
+                         or lifecycle_state.generation_phase != "active"
+                         or lifecycle_state.generation_id !=
+                         continuation_generation_id
+                         or lifecycle_control is None
+                         or lifecycle_control["relation"] != "continue-active"):
+                raise OrchestratorError(
+                    "PLAN_DECISION_STALE",
+                    "the project changed or the active execution generation no longer "
+                    "matches the reviewed plan")
             if incoming_intent == "cancel":
                 if lifecycle_state is not None \
                         and lifecycle_control["relation"] == "cancel-generation":
@@ -10071,13 +10093,87 @@ def _decision_reference(
     }
 
 
+def _stale_start_context(
+        action_path, presentation_sha256, cwd, *, owner_home, install_root):
+    """Bind a stale start reference to its project and optional exact generation."""
+    if cwd is not None:
+        target = _absolute(cwd, "cwd")
+        return target, target, None
+    _path, action, _security = _read_action(
+        action_path, owner_home=owner_home, install_root=install_root)
+    if action["status"] != "completed" or action["intent"] != "plan" \
+            or not isinstance(action.get("result"), dict):
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "only a completed displayed plan can advance reviewed execution")
+    presentation = action["result"].get("plan_presentation")
+    try:
+        loom_plan_presentation.validate(presentation)
+    except loom_plan_presentation.PresentationError as exc:
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            f"the displayed plan binding is invalid: {exc}") from exc
+    if presentation["presentation_sha256"] != presentation_sha256 \
+            or presentation["binding"]["action_id"] != action["action_id"] \
+            or presentation["binding"]["project_id"] != action["project_id"]:
+        raise OrchestratorError(
+            "PLAN_DECISION_MISMATCH",
+            "the decision does not name the exact displayed plan")
+    expected_generation_id = (
+        presentation["binding"].get("generation_id")
+        if presentation["schema_version"] == 2
+        else _derived_generation_id(action["project_id"], action["action_id"]))
+    target = _absolute(
+        action["explicit_target"] or action["cwd"], "target")
+    return _absolute(action["cwd"], "cwd"), target, expected_generation_id
+
+
+def _resume_reviewed_frontier(
+        *, cwd, target, expected_generation_id,
+        owner_home, install_root, now):
+    """Advance only the current sealed v3 frontier after an authentic completion."""
+    result = invoke(
+        request="Continue the active work.", cwd=cwd, home=owner_home,
+        install_root=install_root, explicit_target=target, now=now,
+        continuation_generation_id=expected_generation_id)
+    if not isinstance(result, dict) or result.get("status") != "action-required" \
+            or result.get("intent") != "execute" \
+            or not isinstance(result.get("action_path"), str):
+        raise OrchestratorError(
+            "PLAN_DECISION_STALE",
+            "the displayed plan is stale and no sealed active frontier can advance")
+    _path, action, _security = _read_action(
+        result["action_path"], owner_home=owner_home,
+        install_root=install_root)
+    if action.get("request_control", {}).get("relation") != "continue-active" \
+            or expected_generation_id is not None \
+            and action.get("generation_id") != expected_generation_id \
+            or not _committed_v3_action_matches_current_frontier(action, target):
+        raise OrchestratorError(
+            "PLAN_DECISION_STALE",
+            "the current execution frontier does not match the reviewed generation")
+    return result
+
+
 def start(
         action_path=None, *, presentation_sha256=None, cwd=None,
         owner_home, install_root, now=None):
-    """Start only the exact completed plan that was displayed to the owner."""
-    reference = _decision_reference(
-        action_path, presentation_sha256, cwd,
-        owner_home=owner_home, install_root=install_root)
+    """Start or advance only the completed plan that was displayed to the owner."""
+    try:
+        reference = _decision_reference(
+            action_path, presentation_sha256, cwd,
+            owner_home=owner_home, install_root=install_root)
+    except OrchestratorError as exc:
+        if exc.code != "PLAN_DECISION_STALE":
+            raise
+        continuation_cwd, continuation_target, generation_id = \
+            _stale_start_context(
+                action_path, presentation_sha256, cwd,
+                owner_home=owner_home, install_root=install_root)
+        return _resume_reviewed_frontier(
+            cwd=continuation_cwd, target=continuation_target,
+            expected_generation_id=generation_id,
+            owner_home=owner_home, install_root=install_root, now=now)
     action_path = reference["action_path"]
     presentation_sha256 = reference["presentation_sha256"]
     path, action, _security = _read_action(
@@ -10086,13 +10182,25 @@ def start(
         raise OrchestratorError(
             "PLAN_DECISION_MISMATCH",
             "only a completed displayed plan can be started")
-    result = invoke(
-        request="Continue", cwd=action["cwd"], home=owner_home,
-        install_root=install_root, explicit_target=action["explicit_target"],
-        now=now, expected_plan_decision={
-            "action_path": str(path),
-            "presentation_sha256": presentation_sha256,
-        }, bound_intent="execute")
+    try:
+        result = invoke(
+            request="Continue", cwd=action["cwd"], home=owner_home,
+            install_root=install_root, explicit_target=action["explicit_target"],
+            now=now, expected_plan_decision={
+                "action_path": str(path),
+                "presentation_sha256": presentation_sha256,
+            }, bound_intent="execute")
+    except OrchestratorError as exc:
+        if exc.code != "PLAN_DECISION_STALE":
+            raise
+        continuation_cwd, continuation_target, generation_id = \
+            _stale_start_context(
+                str(path), presentation_sha256, None,
+                owner_home=owner_home, install_root=install_root)
+        return _resume_reviewed_frontier(
+            cwd=continuation_cwd, target=continuation_target,
+            expected_generation_id=generation_id,
+            owner_home=owner_home, install_root=install_root, now=now)
     if not isinstance(result, dict) or result.get("intent") != "execute" \
             or result.get("plan_decision", {}).get(
                 "presentation_sha256") != presentation_sha256:

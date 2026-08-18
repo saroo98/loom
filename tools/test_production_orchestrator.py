@@ -2854,18 +2854,20 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual(1, event_types.count("work-order-completed"))
         self.assertEqual(1, event_types.count("generation-completed"))
 
-    def test_completed_first_v3_work_order_starts_the_next_reviewed_entry(self):
-        """Break caught: a generation cannot continue after its first action."""
+    def test_completed_v3_work_orders_advance_through_start_surface(self):
+        """Every sealed frontier advances through either documented start reference."""
         opened = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
             install_root=self.installed)
         contract = opened["plan_contract"]
         draft = {
             "schema_version": 1,
-            "title": "Deliver two reviewed accounting steps",
-            "summary": "Change the implementation, then document the verified result.",
-            "assumptions": ["The two reviewed steps remain strictly serial."],
-            "decisions": ["Implementation must complete before documentation."],
+            "title": "Deliver three reviewed accounting steps",
+            "summary": (
+                "Change the implementation, document the result, then record its release."),
+            "assumptions": ["The three reviewed steps remain strictly serial."],
+            "decisions": [
+                "Implementation must complete before documentation and release records."],
             "current_facts": [{
                 "domain": item["domain"], "fact": item["fact"],
                 "source": "sealed project inspection and shipped accounting adapter",
@@ -2894,9 +2896,21 @@ class ProductionOrchestratorTests(unittest.TestCase):
                     "acceptance": ["README names the verified behavior."],
                     "negative_acceptance": [
                         "Documentation cannot claim unverified behavior."],
-                    "out_of_scope": ["Further implementation changes."],
+                    "out_of_scope": ["Further implementation and release changes."],
                     "escalation": ["Stop if WO-001 lacks sealed completion."],
                     "touches": ["README.md"], "depends_on": ["WO-001"],
+                    "routing": "strong-coding", "size": "S",
+                },
+                {
+                    "title": "Record the verified accounting release",
+                    "outcome": "CHANGELOG records only the verified behavior.",
+                    "tasks": ["Update CHANGELOG.md after documentation is complete."],
+                    "acceptance": ["CHANGELOG names the verified behavior."],
+                    "negative_acceptance": [
+                        "The release note cannot claim unverified behavior."],
+                    "out_of_scope": ["Further implementation or documentation changes."],
+                    "escalation": ["Stop if WO-002 lacks sealed completion."],
+                    "touches": ["CHANGELOG.md"], "depends_on": ["WO-002"],
                     "routing": "strong-coding", "size": "S",
                 },
             ],
@@ -2933,8 +2947,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         self.assertEqual("execute-complete", first_completion["code"])
 
-        continued = loom_orchestrator.invoke(
-            request="Continue the active work.", cwd=self.repo, home=self.home,
+        continued = loom_orchestrator.start(
+            cwd=self.repo, owner_home=self.home,
             install_root=self.installed)
 
         self.assertEqual("action-required", continued["status"])
@@ -2970,8 +2984,42 @@ class ProductionOrchestratorTests(unittest.TestCase):
             Path(second_contract["evidence_capture"]["pack_path"]), self.repo,
             "WO-002", medium="python-unittest",
             command=[sys.executable, "-c", "print('documentation verified')"])
-        terminal = loom_orchestrator.complete(
+        second_completion = loom_orchestrator.complete(
             continued["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("execute-complete", second_completion["code"])
+
+        final = loom_orchestrator.start(
+            opened["action_path"],
+            presentation_sha256=planned["plan_presentation"][
+                "presentation_sha256"],
+            owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("WO-003", final["work_order"])
+        _final_path, final_action, _final_security = loom_orchestrator._read_action(
+            final["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual(generation_id, final_action["generation_id"])
+        self.assertEqual(
+            "continue-active", final_action["request_control"]["relation"])
+
+        final_contract = final["execution_completion_contract"]
+        final_work_order = self.repo.joinpath(
+            *PurePosixPath(final_contract["work_order_path"]).parts)
+        _write(self.repo / "CHANGELOG.md", "Verified accounting behavior.\n")
+        final_text = final_work_order.read_text(encoding="utf-8")
+        final_text = final_text.replace("status: in-progress", "status: done")
+        final_text = final_text.replace("- [ ]", "- [x]")
+        final_text = final_text.replace(
+            final_contract["pending_evidence_text"],
+            "Evidence: release-note verification exited 0.")
+        final_work_order.write_text(final_text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            Path(final_contract["evidence_capture"]["pack_path"]), self.repo,
+            "WO-003", medium="python-unittest",
+            command=[sys.executable, "-c", "print('release note verified')"])
+        terminal = loom_orchestrator.complete(
+            final["action_path"], owner_home=self.home,
             install_root=self.installed)
         self.assertEqual("execute-complete", terminal["code"])
         final_ledger = json.loads(
