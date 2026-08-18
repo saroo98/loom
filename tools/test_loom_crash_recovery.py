@@ -4,6 +4,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import loom_fault_harness
 
@@ -30,21 +31,110 @@ class CrashRecoveryTests(unittest.TestCase):
             maintenance_lock.write_text("transient", encoding="utf-8")
 
             destination = root / "destination"
-            loom_fault_harness.clone_git_fixture(
-                source, destination, root / "clone-home")
+            real_run = loom_fault_harness._run_fixture_git
+            commands = []
+
+            def observed_run(arguments, **kwargs):
+                commands.append(tuple(arguments))
+                return real_run(arguments, **kwargs)
+
+            with mock.patch.object(
+                    loom_fault_harness, "_run_fixture_git",
+                    side_effect=observed_run):
+                loom_fault_harness.clone_git_fixture(
+                    source, destination, root / "clone-home")
 
             self.assertEqual(
                 "VALUE = 1\n",
                 (destination / "src" / "app.py").read_text(encoding="utf-8"))
             self.assertFalse(
                 (destination / ".git" / "objects" / "maintenance.lock").exists())
+            self.assertEqual(1, len(commands))
             for key, expected in (
-                    ("maintenance.auto", "false"), ("gc.auto", "0")):
+                    ("user.email", "test@example.invalid"),
+                    ("user.name", "test"),
+                    ("maintenance.auto", "false"),
+                    ("gc.auto", "0")):
                 observed = subprocess.run(
                     ["git", "-C", str(destination), "config", "--local",
                      "--get", key],
                     capture_output=True, text=True, check=True)
                 self.assertEqual(expected, observed.stdout.strip())
+
+    def test_disposable_runtime_shortcuts_are_exactly_scoped(self):
+        install_builder = getattr(
+            loom_fault_harness, "immutable_install_check", None)
+        git_builder = getattr(
+            loom_fault_harness, "filesystem_fixture_git", None)
+        filter_builder = getattr(
+            loom_fault_harness, "filesystem_fixture_filter_drivers", None)
+        self.assertIsNotNone(install_builder)
+        self.assertIsNotNone(git_builder)
+        self.assertIsNotNone(filter_builder)
+
+        with tempfile.TemporaryDirectory(prefix="loom-runtime-fixture-") as temporary:
+            root = Path(temporary)
+            installed = root / "installed"
+            installed.mkdir()
+            other_install = root / "other-install"
+            other_install.mkdir()
+            verified = {
+                "status": "installed",
+                "install_id": "11111111-1111-4111-8111-111111111111",
+                "files_verified": 17,
+                "receipt_hash": "a" * 64,
+            }
+            checked = []
+
+            def real_check(target):
+                checked.append(Path(target))
+                return {**verified, "status": "real"}
+
+            with self.assertRaises(loom_fault_harness.FaultError):
+                install_builder(
+                    real_check, installed,
+                    {**verified, "receipt_hash": "not-a-digest"})
+            fixture_check = install_builder(
+                real_check, installed, verified)
+            self.assertEqual(verified, fixture_check(installed))
+            self.assertEqual([], checked)
+            self.assertEqual("real", fixture_check(other_install)["status"])
+            self.assertEqual([other_install], checked)
+
+            project = root / "project"
+            project.mkdir()
+            git_calls = []
+
+            def real_git(repo, *args, **kwargs):
+                git_calls.append((Path(repo), args, kwargs))
+                return subprocess.CompletedProcess(
+                    ["git", *args], 0, "true\n", "")
+
+            fixture_git = git_builder(real_git, root)
+            filter_calls = []
+
+            def real_filters(repo, timeout=20):
+                filter_calls.append((Path(repo), timeout))
+                return ("fixture-driver",)
+
+            fixture_filters = filter_builder(real_filters, root)
+            self.assertEqual((), fixture_filters(project, timeout=7))
+            self.assertEqual([], filter_calls)
+            missing = fixture_git(
+                project, "rev-parse", "--is-inside-work-tree",
+                allowed=(0, 128))
+            self.assertEqual(128, missing.returncode)
+            self.assertEqual([], git_calls)
+
+            (project / ".git").mkdir()
+            present = fixture_git(
+                project, "rev-parse", "--is-inside-work-tree",
+                allowed=(0, 128))
+            self.assertEqual(0, present.returncode)
+            self.assertEqual(1, len(git_calls))
+            self.assertEqual(
+                ("fixture-driver",), fixture_filters(project, timeout=7))
+            self.assertEqual([(project, 7)], filter_calls)
 
 
 if __name__ == "__main__":

@@ -1,6 +1,7 @@
 """Crash and abandonment regressions for the project-scoped orchestration authority."""
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -22,6 +23,7 @@ import loom_orchestrator  # noqa: E402
 import loom_plan_store  # noqa: E402
 import loom_release  # noqa: E402
 import loom_reliability  # noqa: E402
+import loom_session  # noqa: E402
 
 
 CONCURRENCY_EVENT_TIMEOUT_SECONDS = 30
@@ -299,18 +301,146 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         self.assertIn("Owner-authored content", manifest.read_text(encoding="utf-8"))
 
     def test_preexisting_owner_plans_are_never_initialized_or_modified(self):
-        _write(self.repo / "plans" / "owner-notes.md", "owner-authored plan\n")
-        before = loom_reliability.exact_tree_manifest(self.repo / "plans")
+        private_marker = "owner-private-marker-never-project"
+        _write(
+            self.repo / "plans" / "owner-notes.md",
+            f"owner-authored plan {private_marker}\n")
+        # Git metadata is outside project authority and may be refreshed by a
+        # read-only survey. Bind the stable product tree separately from plans.
+        source_before = loom_reliability.exact_tree_manifest(self.repo / "src")
+        plans_before = loom_reliability.exact_tree_manifest(self.repo / "plans")
+        safe_next_action = (
+            "Quarantine or repair the lifecycle store, then ask Loom for a fresh plan.")
 
-        with self.assertRaisesRegex(
-                loom_orchestrator.OrchestratorError, "PLAN_PACK_EXISTS"):
-            self.invoke()
+        result = self.invoke()
 
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertEqual("plan", result["intent"])
+        self.assertFalse(result["owner_message"]["changes_made"])
+        self.assertEqual("not-applicable", result["owner_message"]["undo_status"])
+        self.assertIsNone(result["owner_message"]["result_path"])
         self.assertEqual(
-            before, loom_reliability.exact_tree_manifest(self.repo / "plans"))
+            "Follow the precise Safe next action in the non-authoritative result.",
+            result["owner_message"]["next_action"])
+        self.assertEqual(
+            1, result["user_message"].count(
+                f"Safe next action: {safe_next_action}"))
+        self.assertNotIn("say continue", json.dumps(result, sort_keys=True).casefold())
+        self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+        self.assertNotIn("action_id", result)
+        self.assertNotIn("action_path", result)
+        self.assertNotIn("generation_id", result)
+        self.assertNotIn("plan_identity", result)
+        self.assertNotIn("result_path", result)
+        self.assertIsNone(
+            result["terminal_authority"]["implementation_authorized"])
+        self.assertEqual(
+            source_before, loom_reliability.exact_tree_manifest(self.repo / "src"))
+        self.assertEqual(
+            plans_before, loom_reliability.exact_tree_manifest(self.repo / "plans"))
         self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
         self.assertFalse((self.repo / "plans" / "MANIFEST.md").exists())
         self.assertFalse((self.repo / "plans" / ".loom-small-lifecycle.json").exists())
+        self.assertFalse(
+            (self.repo / "plans" / loom_plan_store.INDEX_NAME).exists())
+        orchestration_directories = list((self.home / "instances").glob(
+            "*/runtime/projects/*/orchestrations"))
+        for directory in orchestration_directories:
+            self.assertEqual(
+                [], list(directory.glob(
+                    "????????-????-????-????-????????????.json")))
+            self.assertFalse(
+                (directory / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+
+    def test_tier_s_promotion_preserves_inline_recovery_identity(self):
+        """Break caught: Tier-S promotion truncates the sealed recovery class."""
+        private_marker = "owner-private-marker-tier-s-recovery"
+        _write(
+            self.repo / "plans" / "owner-notes.md",
+            f"owner-authored plan {private_marker}\n")
+        self.request = "Plan a tiny Python command-line greeting tool."
+        source_before = loom_reliability.exact_tree_manifest(self.repo / "src")
+        observed_prepared = []
+        original_capsule = loom_orchestrator._tier_s_host_capsule
+        original_run = loom_session.SessionController.run
+
+        def force_tier_s_overflow(contract):
+            if contract["tier"] == "S":
+                raise loom_orchestrator.OrchestratorError(
+                    "TIER_PROMOTION_REQUIRED",
+                    "complete Tier S decision context exceeds the host capsule bound")
+            return original_capsule(contract)
+
+        def capture_prepared(controller, request, **kwargs):
+            observed_prepared.append(kwargs["prepared"])
+            return original_run(controller, request, **kwargs)
+
+        with mock.patch.object(
+                loom_orchestrator, "_tier_s_host_capsule",
+                side_effect=force_tier_s_overflow), \
+                mock.patch.object(
+                    loom_session.SessionController, "run", capture_prepared):
+            try:
+                result = self.invoke()
+            except loom_session.SessionInterrupted as exc:
+                self.fail(
+                    "genuine promoted inline recovery was interrupted: "
+                    f"{exc.__cause__}")
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertEqual("M", result["tier"])
+        self.assertEqual(1, len(observed_prepared))
+        route = observed_prepared[0].route_contract
+        evidence = list(route["evidence"])
+        self.assertLessEqual(len(evidence), 16)
+        self.assertIn("tier-s-host-capsule-overflow", evidence)
+        self.assertEqual([
+            "useful-planning-recovery",
+            "inline-plan-lifecycle-authority-untrusted",
+        ], evidence[-2:])
+        self.assertEqual(
+            source_before, loom_reliability.exact_tree_manifest(self.repo / "src"))
+        self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+
+    def test_forged_inline_recovery_handler_cannot_seal_owner_authority(self):
+        """Break caught: a relabelled recovery handler can seal hidden action authority."""
+        private_marker = "owner-private-marker-forged-result"
+        _write(
+            self.repo / "plans" / "owner-notes.md",
+            f"owner-authored plan {private_marker}\n")
+        source_before = loom_reliability.exact_tree_manifest(self.repo / "src")
+        original_run = loom_session.SessionController.run
+
+        def run_with_forged_handler(controller, request, **kwargs):
+            handler = controller.handlers["plan"]
+
+            def forged(context):
+                return {
+                    **handler(context),
+                    "reversible_action_ids": ["forged-action-authority"],
+                }
+
+            controller.handlers["plan"] = forged
+            return original_run(controller, request, **kwargs)
+
+        with mock.patch.object(
+                loom_session.SessionController, "run", run_with_forged_handler), \
+                self.assertRaises(loom_session.SessionInterrupted) as raised:
+            self.invoke()
+
+        self.assertIsInstance(raised.exception.__cause__, loom_session.SessionBlocked)
+        self.assertEqual("HANDLER_RESULT_INVALID", raised.exception.__cause__.code)
+        self.assertEqual(
+            source_before, loom_reliability.exact_tree_manifest(self.repo / "src"))
+        journals = list((self.home / "instances").glob(
+            "*/runtime/projects/*/session-journal.json"))
+        self.assertEqual(1, len(journals))
+        journal = json.loads(journals[0].read_text(encoding="utf-8"))
+        self.assertNotIn(
+            "session-receipt-sealed", [event["kind"] for event in journal["events"]])
+        self.assertNotIn(private_marker, json.dumps(journal, sort_keys=True))
 
     def test_unproven_pack_is_preserved(self):
         scenarios = ["unknown", "file-link", "root-link", "special", "mismatched"]
@@ -495,47 +625,120 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
 
         self.assertEqual("superseded", resumed["prior_recovery"]["reason"])
 
-    def test_recovery_resumes_after_detachment_before_action_receipt_write(self):
+    def test_recovery_resumes_after_control_transition_publish(self):
         first = self.invoke()
-        original = loom_orchestrator._write_action
+        original = loom_orchestrator._atomic_recovery_control_move
+        injected = False
 
-        def interrupted(path, value, security=None):
-            if value["action_id"] == first["action_id"] \
-                    and value["status"] == "superseded":
+        def interrupted(source, destination, **kwargs):
+            nonlocal injected
+            result = original(source, destination, **kwargs)
+            if not injected \
+                    and kwargs.get("source_role") == "control_stage" \
+                    and kwargs.get("destination_role") == "control_transition":
+                injected = True
                 raise OSError("seeded receipt interruption")
-            return original(path, value, security)
+            return result
 
         with mock.patch.object(
-                loom_orchestrator, "_write_action", side_effect=interrupted):
+                loom_orchestrator, "_atomic_recovery_control_move",
+                side_effect=interrupted):
             with self.assertRaisesRegex(OSError, "seeded receipt interruption"):
                 self.supersede()
+        self.assertTrue(injected)
         self.assertFalse((self.repo / "plans").exists())
 
         resumed = self.supersede()
 
         self.assertEqual("superseded", resumed["prior_recovery"]["reason"])
         self.assertTrue(resumed["prior_recovery"]["changes_made"])
+        successor = self.action(resumed)
+        binding = successor["host_result"][
+            loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY]
+        self.assertEqual(first["action_id"], binding["source_action_id"])
+        self.assertEqual(
+            resumed["prior_recovery"]["receipt_hash"],
+            binding["source_recovery_receipt_hash"])
+        self.assertEqual(
+            successor["action_id"],
+            loom_orchestrator._read_active_pointer(
+                Path(resumed["action_path"]).parent)["action_id"])
 
-    def test_recovery_resumes_when_pointer_clear_is_interrupted(self):
+    def test_recovery_resumes_when_successor_pointer_publication_is_interrupted(self):
+        """A pre-publication interruption retains one receipt-bound successor."""
         first = self.invoke()
-        original = loom_orchestrator._clear_active_pointer
-        failed = False
+        first_path = Path(first["action_path"])
+        pointer_path = first_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        transition = (
+            first_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / first["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        stage_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_POINTER)
+        receipt_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT)
+        original = loom_reliability.atomic_rename_noreplace
+        injected = False
 
-        def interrupted(directory, action_id):
-            nonlocal failed
-            action = self.action(first)
-            if not failed and action["status"] in {"superseded", "abandoned", "expired"}:
-                failed = True
-                raise OSError("pointer clear interruption")
-            return original(directory, action_id)
+        def interrupt_before_publication(source, destination, **kwargs):
+            nonlocal injected
+            if not injected \
+                    and kwargs.get("source_role") == "successor_pointer_stage" \
+                    and kwargs.get("destination_role") == "active_successor_pointer":
+                injected = True
+                raise loom_reliability.ReliabilityError(
+                    "successor pointer publication interruption")
+            return original(source, destination, **kwargs)
 
         with mock.patch.object(
-                loom_orchestrator, "_clear_active_pointer", side_effect=interrupted):
-            with self.assertRaisesRegex(OSError, "pointer clear interruption"):
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=interrupt_before_publication):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
                 self.supersede()
 
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", interrupted.exception.code)
+        retired = self.action(first)
+        self.assertIn(retired["status"], loom_orchestrator.TERMINAL_ACTION_STATUSES)
+        self.assertFalse(pointer_path.exists())
+        self.assertTrue(stage_path.is_file())
+        self.assertTrue(receipt_path.is_file())
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        self.assertEqual(first["action_id"], receipt["source_action_id"])
+        self.assertEqual(
+            retired["recovery_receipt"]["receipt_hash"],
+            receipt["source_recovery_receipt_hash"])
+        self.assertEqual(
+            hashlib.sha256(stage_path.read_bytes()).hexdigest(),
+            receipt["pointer_sha256"])
+        pending = [
+            action for action in first_path.parent.glob("*.json")
+            if action.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(action.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual(1, len(pending))
+        successor_id = json.loads(pending[0].read_text(encoding="utf-8"))["action_id"]
+        self.assertEqual(successor_id, receipt["successor_action_id"])
+
         resumed = self.supersede()
-        self.assertNotEqual(first["action_id"], resumed["action_id"])
+
+        self.assertEqual(successor_id, resumed["action_id"])
+        self.assertEqual(
+            successor_id,
+            loom_orchestrator._read_active_pointer(first_path.parent)["action_id"])
+        self.assertIn(
+            self.action(first)["status"], loom_orchestrator.TERMINAL_ACTION_STATUSES)
+        self.assertFalse(stage_path.exists())
+        remaining = [
+            action for action in first_path.parent.glob("*.json")
+            if action.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(action.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual([successor_id], [
+            json.loads(action.read_text(encoding="utf-8"))["action_id"]
+            for action in remaining])
 
     def test_quarantine_receipt_is_bounded_authenticated_and_restorable(self):
         first = self.invoke()
@@ -572,13 +775,17 @@ class ControlPlaneRecoveryTests(unittest.TestCase):
         pointer["pointer_hash"] = loom_orchestrator._pointer_hash(pointer)
         pointer_path.write_text(
             json.dumps(pointer, sort_keys=True, separators=(",", ":")), encoding="utf-8")
+        action_before = action_path.read_bytes()
+        pointer_before = pointer_path.read_bytes()
         current_pack = _owned_pack(second)
         before = loom_reliability.deterministic_manifest(current_pack)
 
-        with self.assertRaisesRegex(
-                loom_orchestrator.OrchestratorError, "recovery receipt v3 digest"):
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
             self.invoke()
 
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(action_before, action_path.read_bytes())
+        self.assertEqual(pointer_before, pointer_path.read_bytes())
         self.assertEqual(before, loom_reliability.deterministic_manifest(current_pack))
         self.assertEqual("pending", self.action(second)["status"])
 

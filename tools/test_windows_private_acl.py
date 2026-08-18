@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Native acceptance tests for Loom's exact Windows private-directory DACL."""
 
+import json
 import os
 import sys
 import tempfile
@@ -343,6 +344,27 @@ class WindowsPrivateAclTests(unittest.TestCase):
 
         self.assertExactPrivateAcl(private / "actions")
         self.assertExactPrivateAcl(stage)
+
+    def test_candidate_request_and_plan_stage_are_beneath_exact_private_acls(self):
+        """Break caught: candidate request or plan bytes inherit a public DACL."""
+        private = loom_windows_acl.create_private_directory(
+            self.base / "private-candidates")
+        action_root = loom_reliability.ensure_private_directory(
+            private, ["projects", "project-123", "orchestrations"])
+        stage = loom_reliability.reserve_private_stage_leaf(
+            action_root, [".staging", "action-123", "plans"])
+        request = stage.parent / "request.json"
+        plan = stage / "MANIFEST.md"
+        request.write_text('{"request_hash":"sealed"}\n', encoding="utf-8")
+        plan.write_text("# Candidate plan\n", encoding="utf-8")
+
+        self.assertExactPrivateAcl(action_root)
+        self.assertExactPrivateAcl(stage.parent.parent)
+        self.assertExactPrivateAcl(stage.parent)
+        self.assertExactPrivateAcl(stage)
+        self.assertEqual("sealed", json.loads(
+            request.read_text(encoding="utf-8"))["request_hash"])
+        self.assertEqual("# Candidate plan\n", plan.read_text(encoding="utf-8"))
 
     def test_reliability_rejects_permissive_stage_root_without_mutation(self):
         private = self.base / "private"

@@ -154,11 +154,11 @@ def _commands(launcher, loom_home):
                        "statusMessage": "Sealing Loom request"}],
         },
         "PreToolUse": {
-            "matcher": "apply_patch|Edit|Write",
+            "matcher": ".*",
             "hooks": [{**lifecycle, "statusMessage": "Checking Loom write scope"}],
         },
         "PostToolUse": {
-            "matcher": "Bash|apply_patch|Edit|Write",
+            "matcher": ".*",
             "hooks": [{**lifecycle, "statusMessage": "Recording Loom freshness"}],
         },
         "PreCompact": {

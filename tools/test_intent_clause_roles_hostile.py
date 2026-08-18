@@ -27,14 +27,18 @@ DRIFTED_STATE = {
 
 
 class IntentClauseRolesHostileTests(unittest.TestCase):
-    def assertRoute(self, request, *, intent, blocked, code, state=None):
+    def assertRoute(
+            self, request, *, intent, blocked, code, state=None,
+            needs_owner=None):
         decision = loom_runtime.resolve_intent(request, dict(state or {}))
         repeated = loom_runtime.resolve_intent(request, dict(state or {}))
         self.assertEqual(decision, repeated, request)
         self.assertEqual(intent, decision["intent"], request)
         self.assertIs(blocked, decision["blocked"], request)
         self.assertEqual(code, decision["code"], request)
-        self.assertIs(blocked, decision["needs_owner"], request)
+        self.assertIs(
+            blocked if needs_owner is None else needs_owner,
+            decision["needs_owner"], request)
         if blocked:
             self.assertIsNotNone(decision["block_reason"], request)
         else:
@@ -42,6 +46,26 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
         for field in loom_runtime.EFFECT_COUNT_FIELDS:
             self.assertEqual(0, decision[field], f"{request}: {field}")
         return decision
+
+    def assertNonAuthorizingPlan(
+            self, request, *, code, needs_owner, evidence, state=None):
+        decision = self.assertRoute(
+            request, intent="plan", blocked=False, code=code, state=state,
+            needs_owner=needs_owner)
+        self.assertEqual(evidence, decision["evidence"], request)
+        self.assertEqual(
+            1 if needs_owner else 0,
+            decision["recommendation"].count("?"), request)
+        control = loom_runtime.request_control(request, state=dict(state or {}))
+        self.assertEqual("plan", control["primary_operation"], request)
+        self.assertEqual("unclear", control["relation"], request)
+        self.assertFalse(control["blocked"], request)
+        self.assertIn("planning-inline-recovery", control["evidence"], request)
+        self.assertIn(
+            "semantic-clarification" if needs_owner else "semantic-assistance",
+            control["evidence"], request)
+        self.assertIn("implementation", control["prohibitions"], request)
+        return decision, control
 
     def test_explanation_with_no_write_constraint_routes_to_why(self):
         self.assertRoute(
@@ -280,16 +304,26 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
             intent="status", blocked=True, code="INTENT_NEGATED")
 
     def test_implementation_request_and_implementation_prohibition_conflict(self):
-        requests = [
-            "Implement the bridge. Do not implement the bridge.",
-            "Build a CLI; do not implement it.",
-            "Create the application and do not implement it.",
+        cases = [
+            (
+                "Implement the bridge. Do not implement the bridge.",
+                "PLAN_EXECUTION_CONTRADICTION", True,
+                ["plan-execution-contradiction", "implementation-prohibited"],
+            ),
+            (
+                "Build a CLI; do not implement it.",
+                "ROUTE_PLAN", False, ["role:plan", "role:prohibition"],
+            ),
+            (
+                "Create the application and do not implement it.",
+                "ROUTE_PLAN", False, ["role:plan", "role:prohibition"],
+            ),
         ]
-        for request in requests:
+        for request, code, needs_owner, evidence in cases:
             with self.subTest(request=request):
-                self.assertRoute(
-                    request, intent="status", blocked=True,
-                    code="INTENT_AMBIGUOUS")
+                self.assertNonAuthorizingPlan(
+                    request, code=code, needs_owner=needs_owner,
+                    evidence=evidence)
 
     def test_positive_repair_clause_survives_a_separate_memory_prohibition(self):
         requests = [
@@ -309,13 +343,18 @@ class IntentClauseRolesHostileTests(unittest.TestCase):
             "Implement the bridge or repair the stale plan.",
             "Remember that I prefer concise reports and implement the bridge.",
             "Forget this preference and repair the stale plan.",
-            "Implement and do not implement the bridge.",
         ]
         for request in requests:
             with self.subTest(request=request):
                 self.assertRoute(
                     request, intent="status", blocked=True,
                     code="INTENT_AMBIGUOUS", state=DRIFTED_STATE)
+        self.assertNonAuthorizingPlan(
+            "Implement and do not implement the bridge.",
+            code="PLAN_EXECUTION_CONTRADICTION", needs_owner=True,
+            evidence=[
+                "plan-execution-contradiction", "implementation-prohibited"],
+            state=DRIFTED_STATE)
 
     def test_durable_preferences_remain_memory_operations(self):
         requests = [

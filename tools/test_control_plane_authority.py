@@ -336,7 +336,11 @@ class ControlPlaneAuthorityTests(unittest.TestCase):
         (self.project / "plans").rmdir()
 
         opened = self.invoke("Build a command-line tool")
-        self.assertEqual("action-required", opened["status"])
+        self.assertEqual("completed", opened["status"])
+        self.assertEqual("non-authoritative-plan", opened["code"])
+        self.assertNotIn("action_path", opened)
+        self.assertIsNone(
+            opened["terminal_authority"]["implementation_authorized"])
         resolution = opened["resolved_terminal_block"]
         self.assertEqual(prior_hash, resolution["prior_receipt_hash"])
         self.assertEqual("fresh-valid-invocation", resolution["resolution"])

@@ -336,7 +336,6 @@ def _compile_vault_helper(root, crate, target, environment=None):
         **_native_build_environment(environment),
         "CARGO_TARGET_DIR": str(target),
     }
-    environment.setdefault("CARGO_BUILD_JOBS", "1")
     environment["RUST_MIN_STACK"] = str(RUST_COMPILER_STACK_BYTES)
     if os.name == "nt":
         environment["RUSTFLAGS"] = (environment.get("RUSTFLAGS", "")
@@ -406,21 +405,20 @@ def _reset_private_build_target(cache_root, target, source_key):
 def build_vault_helper(root):
     root = Path(root).resolve()
     crate = root / "vault-helper"
-    source_files = [crate / "Cargo.toml", crate / "Cargo.lock", *sorted(
-        (crate / "src").rglob("*.rs"))]
+    source_files = [root / "rust-toolchain.toml", crate / "Cargo.toml",
+                    crate / "Cargo.lock", *sorted(
+                        (crate / "src").rglob("*.rs"))]
     if any(not path.is_file() for path in source_files):
         raise NativeHelperBuildError(
             "NATIVE_HELPER_SOURCE_INCOMPLETE",
             "vault-helper test source is incomplete")
-    rustc = _rustc_identity()
     build_environment = _native_build_environment()
     build_policy = (b"release-v4-stack64-windows-brepro"
                     if os.name == "nt" else b"release-v4-stack64")
     digest = hashlib.sha256(
-        rustc + b"\x00" + build_policy + b"\x00"
-        + _build_environment_identity(build_environment))
+        build_policy + b"\x00" + _build_environment_identity(build_environment))
     for path in source_files:
-        relative = path.relative_to(crate).as_posix().encode("utf-8")
+        relative = path.relative_to(root).as_posix().encode("utf-8")
         raw = path.read_bytes()
         digest.update(len(relative).to_bytes(4, "big") + relative)
         digest.update(len(raw).to_bytes(8, "big") + raw)

@@ -229,22 +229,26 @@ class SuitePlanTests(unittest.TestCase):
 
     def test_inventory_discovery_times_out_and_cleans_descendants(self):
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
+            sandbox = Path(temporary).resolve()
+            root = sandbox / "tests"
+            root.mkdir()
             (root / "test_waits.py").write_text(
                 "import time,unittest\n"
                 "time.sleep(60)\n"
                 "class Waits(unittest.TestCase):\n"
                 "    def test_loaded(self): pass\n",
                 encoding="utf-8")
+            timeout = 0.2
             started = time.monotonic()
             with self.assertRaisesRegex(
                     loom_suite_plan.SuitePlanError, "containment"):
                 loom_suite_plan.inventory(
                     root, subject=SUBJECT, environment=ENVIRONMENT,
-                    harness_sha256="4" * 64, timeout=0.2)
-            self.assertLess(time.monotonic() - started, 10)
+                    harness_sha256="4" * 64, timeout=timeout)
+            # Windows may consume both bounded five-second settlement phases.
+            self.assertLess(time.monotonic() - started, timeout + 11)
 
-            marker = root.parent / "late-discovery-descendant.txt"
+            marker = sandbox / "late-discovery-descendant.txt"
             child = (
                 "import sys,time; from pathlib import Path; "
                 "sys.stdin.buffer.read(); time.sleep(1); "

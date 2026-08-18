@@ -25,6 +25,7 @@ import loom_lifecycle
 import loom_lifecycle_kernel
 import loom_lint
 import loom_memory
+import loom_owner_intent
 import loom_plan_store
 import loom_project_inspection
 import loom_survey
@@ -449,6 +450,18 @@ def _decision(intent, *, blocked=False, code="ROUTED", recommendation="",
     return value
 
 
+def _provisional_planning_clarification(evidence):
+    """Keep contradictory plan authority non-authoritative but useful."""
+    value = _decision(
+        "plan", code="PLAN_EXECUTION_CONTRADICTION", needs_owner=True,
+        confidence=1.0, evidence=evidence,
+        recommendation=(
+            "A non-authoritative provisional plan can preserve the understood "
+            "requirements. Should Loom create a new reviewed plan while keeping "
+            "the current plan unchanged until that review?"))
+    return value
+
+
 def _request_span(text, match=None):
     """Return bounded request evidence without copying a path or secret."""
     if match is None:
@@ -471,13 +484,17 @@ def _route(text, intent, match=None, *, code=None, **kwargs):
 
 _BUILD_REQUEST_RE = re.compile(
     r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
-    r"add|generate|plan|fix|update|change|modify|refactor|migrate|upgrade|replace|remove)\b")
+    r"add|generate|plan|draft|outline|prepare|use|fix|update|change|modify|refactor|migrate|"
+    r"upgrade|replace|remove)\b")
+_CONTROL_END = r"\s*[.!?]*\s*\Z"
 _BUILD_CONTROL_RE = re.compile(
-    r"^(?:please\s+)?(?:build|implement)\s+(?:the\s+)?(?:next|remaining|rest)\b")
+    r"^(?:please\s+)?(?:build|implement)\s+(?:the\s+)?"
+    r"(?:next|remaining|rest)(?:\s+(?:part|phase|work|work\s+order|plan\s+step))?"
+    + _CONTROL_END)
 _QUESTION_BUILD_RE = re.compile(
     r"^(?:please\s+)?(?:can|could|would)\s+you\s+"
-    r"(?:build|create|make|implement|develop|write|design|add|fix|update|change|"
-    r"modify|refactor|migrate|upgrade|replace|remove)\b")
+    r"(?:build|create|make|implement|develop|write|design|add|draft|outline|prepare|use|fix|"
+    r"update|change|modify|refactor|migrate|upgrade|replace|remove)\b")
 _ARTIFACT_NOUN_RE = re.compile(
     r"\b(?:dashboard|page|screen|tool|app|application|service|system|pipeline|"
     r"log|report|support|feature|workflow|integration|library|utility|module|"
@@ -516,37 +533,120 @@ _HIGH_CONSEQUENCE_RE = re.compile(
     r"|\b(?:force[- ]push|reset\s+--hard|clean\s+-fdx|rewrite\s+(?:the\s+)?"
     r"(?:git\s+)?history|wipe\s+(?:the\s+)?(?:disk|drive|database))\b")
 _LIFECYCLE_REPAIR_RE = re.compile(
-    r"^(?:please\s+)?(?:fix|repair)\s+(?:the\s+)?"
-    r"(?:(?:stale|broken|invalid|drifted)\s+)?(?:loom\s+)?"
-    r"(?:plan|planning pack|lifecycle)\b")
+    r"^(?:please\s+)?(?:fix|repair)\s+(?:the\s+)?(?:"
+    r"(?:(?:active|current|stale|broken|invalid|drifted|failed)\s+)*"
+    r"(?:loom\s+)?(?:plan|planning\s+pack|lifecycle|generation|action)|"
+    r"(?:drift|state|failure|problem)\s+in\s+(?:the\s+)?"
+    r"(?:(?:active|current|stale|broken|invalid|drifted)\s+)*"
+    r"(?:loom\s+)?(?:plan|planning\s+pack|lifecycle|generation|action))"
+    + _CONTROL_END)
 _STATUS_QUERY_RE = re.compile(
-    r"^(?:please\s+)?(?:update\s+me\s+(?:on|about)|give\s+me\s+an?\s+update)\b")
+    r"^(?:please\s+)?(?:"
+    r"update\s+me\s+(?:on|about)\s+(?:(?:the|our)\s+)?"
+    r"(?:(?:current|active)\s+)?(?:(?:loom|project|action)\s+)?"
+    r"(?:status|progress)|"
+    r"give\s+me\s+an?\s+update(?:\s+(?:on|about)\s+(?:(?:the|our)\s+)?"
+    r"(?:(?:current|active)\s+)?(?:(?:loom|project|action)\s+)?"
+    r"(?:status|progress))?)" + _CONTROL_END)
 _MEMORY_REMEMBER_RE = re.compile(
-    r"^(?:please\s+)?(?:remember(?:\s+(?:that|this))?|be more careful|"
-    r"be less autonomous|correct\s+(?:what you learned|my preference|that preference|"
-    r"the preference)|retain\s+(?:this|that)\s+preference|"
-    r"(?:i|we)\s+prefer\b|from now on\b)")
+    r"^(?:please\s+)?(?:"
+    r"remember\s+(?:that\b.+|this(?:\s+as\s+(?:a\s+)?(?:preference|request|"
+    r"rule|decision|instruction)|\s+(?:preference|request|rule|decision|"
+    r"instruction))?)|"
+    r"be\s+(?:more\s+careful|less\s+autonomous)|"
+    r"correct\s+(?:what\s+you\s+learned|my\s+preference|that\s+preference|"
+    r"the\s+preference)\b.*|"
+    r"retain\s+(?:this|that)\s+preference\b.*|"
+    r"(?:i|we)\s+prefer\b.+|from\s+now\s+on\b.+)" + _CONTROL_END)
 _EMBEDDED_MEMORY_REMEMBER_RE = re.compile(
-    r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?(?:remember\s+(?:that|this)|"
+    r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?(?:"
+    r"remember\s+(?:that\b|this(?:\s+as\s+(?:a\s+)?(?:preference|request|"
+    r"rule|decision|instruction)|\s+(?:preference|request|rule|decision|"
+    r"instruction))?\b)|"
     r"correct\s+(?:what you learned|my preference|that preference|the preference)|"
     r"retain\s+(?:this|that)\s+preference|(?:i|we)\s+prefer\b|from now on\b)")
 _MEMORY_FORGET_RE = re.compile(
     r"^(?:please\s+)?(?:(?:permanently|completely)\s+)?"
-    r"(?:forget\b|stop remembering\b)")
+    r"(?:forget\s+(?:that\b.+|this(?:\s+(?:preference|memory|rule|request|"
+    r"instruction))?|(?:(?:the|my|our)\s+)?(?:(?:selected|obsolete|old|current)\s+)?"
+    r"(?:owner\s+)?(?:preference|memory|rule|record)\b.*)|"
+    r"stop\s+remembering\b.+)" + _CONTROL_END)
 _EMBEDDED_MEMORY_FORGET_RE = re.compile(
     r"(?:[,;.]|\bthen\b|\band\b)\s*(?:please\s+)?"
-    r"(?:forget\b|stop remembering\b)")
+    r"(?:forget\s+(?:that\b|this(?:\s+(?:preference|memory|rule|request|"
+    r"instruction))?\b|(?:(?:the|my|our)\s+)?"
+    r"(?:(?:selected|obsolete|old|current)\s+)?(?:owner\s+)?"
+    r"(?:preference|memory|rule|record)\b)|stop\s+remembering\b)")
+_CANCEL_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:cancel|abandon)(?:\s+(?:(?:the|this)\s+)?"
+    r"(?:(?:current|pending|active|reviewed)\s+)*(?:loom\s+)?"
+    r"(?:action|request|operation|plan(?:\s+generation)?|generation)"
+    r"(?:\s+[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12})?(?:\s+for\s+this\s+project)?)?"
+    + _CONTROL_END)
+_CLOSE_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:close\s+this|close\s+(?:(?:this|the)\s+)?"
+    r"(?:project|loom\s+action|current\s+plan)|finish\s+(?:this|the)\s+project|"
+    r"we\s+are\s+done|project\s+is\s+over)" + _CONTROL_END)
+_CONTINUE_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"(?:continue|keep\s+going|resume|pick\s+up|carry\s+on)"
+    r"(?:\s+(?:with\s+)?(?:the\s+)?(?:(?:current|currently\s+active|active|approved)\s+)?"
+    r"(?:loom\s+)?(?:action|plan|work|project))?|"
+    r"(?:build|implement)\s+(?:the\s+)?(?:next|remaining|rest)"
+    r"(?:\s+(?:part|phase|work|work\s+order|plan\s+step))?|next\s+part)"
+    + _CONTROL_END)
+_UNDO_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:undo(?:\s+(?:this|that)|"
+    r"\s+(?:the\s+)?(?:last|previous)(?:\s+loom)?\s+"
+    r"(?:change|action|operation|adjustment|decision))?|"
+    r"undo\s+(?:the\s+)?(?:last|previous)\s+loom\s+plan|"
+    r"take\s+back\s+(?:your|the)\s+(?:last|previous)(?:\s+loom)?\s+"
+    r"(?:change|action|operation|adjustment|decision)|"
+    r"reverse\s+(?:the\s+)?(?:last|previous)(?:\s+loom)?\s+"
+    r"(?:change|action|operation|adjustment|decision))" + _CONTROL_END)
+_STATUS_REASON_SUFFIX = (
+    r"(?:\s+and\s+(?:(?:explain|show(?:\s+me)?)\s+)?why"
+    r"(?:\s+[^.!?;,\r\n]{0,96})?)?")
+_STATUS_CONTROL_RE = re.compile(
+    r"^(?:please\s+)?(?:"
+    r"status|"
+    r"what(?:'s|\s+is)\s+the\s+(?:(?:current|active)\s+)?"
+    r"(?:(?:loom|project|action)\s+)?status|"
+    r"(?:report|show|display|give)(?:\s+me)?\s+"
+    r"(?:(?:the|a|an)\s+)?(?:(?:current|active)\s+)?"
+    r"(?:(?:(?:loom|project|action)\s+){0,2})"
+    r"(?:status|progress)(?:\s+for\s+(?:this|the)\s+project)?"
+    r"|"
+    r"show\s+me\s+where(?:\s+we\s+are)?|where\s+are\s+we|"
+    r"what\s+has\s+happened(?:\s+so\s+far)?|"
+    r"(?:show|report|display|give\s+me)\s+(?:(?:the|my)\s+)?"
+    r"(?:token\s+usage|performance\s+report|cost\s+report))"
+    + _STATUS_REASON_SUFFIX + r"(?:,\s*please)?" + _CONTROL_END)
+_PROFILE_QUERY_RE = re.compile(
+    r"\bshow (?:me )?what you remember about me\b|"
+    r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
+    r"\bshow (?:me )?what you learned from this project\b|"
+    r"\binspect what (?:loom|you) learned\b|\bwhat did (?:loom|you) learn\b|"
+    r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b")
+_NEGATED_EXECUTION_CONTROL_RE = re.compile(
+    r"^(?:build|implement|execute|start|apply)(?:\s+(?:it|this|that|"
+    r"(?:the\s+)?(?:plan|work|project|changes?)|"
+    r"(?:the\s+)?(?:next|remaining|rest)(?:\s+(?:part|phase|work|"
+    r"work\s+order|plan\s+step))?))?" + _CONTROL_END)
 _POSITIVE_SOFTWARE_CLAUSE_RE = re.compile(
     r"^(?:now\s+)?(?:please\s+)?(?:build|create|make|implement|develop|write|design|"
-    r"add|generate|plan|fix|update|change|modify|refactor|migrate|upgrade|replace|"
-    r"remove|correct\s+(?!(?:what you learned|my preference|that preference|"
+    r"add|generate|plan|draft|outline|prepare|use|fix|update|change|modify|refactor|migrate|"
+    r"upgrade|replace|remove|correct\s+(?!(?:what you learned|my preference|that preference|"
     r"the preference)\b))\b")
 _PLAN_DELIVERABLE_RE = re.compile(
-    r"\b(?:produce|create|draft|write|generate|prepare|return|give\s+me)\s+"
+    r"\b(?:produce|create|draft|write|generate|prepare|present|return|give\s+me)\s+"
     r"(?:(?:exactly|only)\s+)?"
     r"(?:(?:one|a|an|the)\s+)?"
-    r"(?:(?:reviewable|detailed|small|release-ready|implementation|coding|"
-    r"project|research|writing|research-and-writing)\s+|and\s+){0,6}plan\b")
+    r"(?:(?:complete|current-world|detailed|fresh|inline|new|owner-reviewed|"
+    r"release-ready|replacement|reviewable|revised|small|superseding|updated|"
+    r"implementation|coding|project|research|writing|research-and-writing)\s+|"
+    r"and\s+){0,6}plan\b")
 _PLAN_REPORTING_REQUIREMENT_RE = re.compile(
     r"^(?:preserve\s+(?:and\s+)?)?report\b"
     r"(?=[^.!?;]{0,200}\b(?:observable|generated|produced|refusal|timeout|"
@@ -677,6 +777,16 @@ def _split_control_clauses(request):
                 else len(normalized)
             )
             candidate = normalized[match.end():next_start].strip()
+            coordinated = " ".join(
+                (current, match.group(0).strip(), candidate)).strip()
+            coordinated_role = _classify_control_clause(coordinated)
+            if match.lastgroup in {"and", "or"} \
+                    and coordinated_role is not None \
+                    and coordinated_role["negated"]:
+                # In "do not create or modify a plan", the lifecycle object is
+                # shared by both coordinated verbs. Keep that closed negative
+                # clause intact instead of turning the second verb positive.
+                continue
             # Lists such as "frame time, draw calls, and triangle budgets" are
             # one descriptive clause. A soft separator consumes the bounded
             # control-clause budget only when its right-hand side starts a real
@@ -715,51 +825,70 @@ def _classify_control_clause(clause):
         r"^(?:please\s+)?(?:make\s+no\s+(?:changes|modifications)|"
         r"modify\s+nothing|change\s+nothing|no\s+(?:changes|modifications))\b",
         body)
+    if mutation_prohibition is None:
+        mutation_prohibition = re.match(
+            r"^(?:please\s+)?leave\s+(?:the\s+)?project\s+unchanged\b",
+            body)
     control = None
     if mutation_prohibition:
         intent = "plan"
         control = "implementation"
+    elif negated is not None and _NEGATED_EXECUTION_CONTROL_RE.fullmatch(body):
+        intent = "plan"
+        control = "implementation"
+    elif negated is not None and _is_lifecycle_plan_authority_clause(body):
+        intent = "plan"
+        control = "planning"
     elif _EXACT_REVISION_CONTROL_RE.match(body):
         intent = "plan"
         control = "planning"
     elif _EXACT_START_CONTROL_RE.match(body):
         intent = "continue"
     elif re.match(
-            r"^(?:remember\b|retain\s+(?:this|that)\s+preference\b|"
-            r"correct\s+(?:what you learned|my preference|that preference|"
-            r"the preference)\b|(?:i|we)\s+prefer\b|from now on\b|"
-            r"be (?:more careful|less autonomous)\b)", body):
+            r"^(?:please\s+)?(?:implement|execute|start|apply)\b", body):
+        intent = "plan"
+        control = "implementation"
+    elif _MEMORY_REMEMBER_RE.fullmatch(body):
         intent = "remember"
-    elif re.match(
-            r"^(?:(?:permanently|completely)\s+)?"
-            r"(?:forget\b|stop remembering\b)", body):
+    elif _MEMORY_FORGET_RE.fullmatch(body):
         intent = "forget"
-    elif re.match(
-            r"^(?:cancel|abandon)\b(?:\s+(?:the\s+)?(?:current|pending|active))?"
-            r"(?:\s+loom)?(?:\s+(?:action|request|operation|plan))?\b", body):
+    elif _CANCEL_CONTROL_RE.fullmatch(body):
         intent = "cancel"
-    elif _LIFECYCLE_REPAIR_RE.search(body) or re.match(
-            r"^(?:repair|fix)\s+(?:the\s+)?(?:stale|broken|invalid|drifted)\s+"
-            r"(?:loom\s+)?(?:plan|planning pack|lifecycle)\b", body):
+    elif _LIFECYCLE_REPAIR_RE.fullmatch(body):
         intent = "repair"
-    elif _BUILD_CONTROL_RE.search(body) or re.match(
-            r"^(?:continue|keep going|resume|pick up|carry on|build the next|"
-            r"next part)\b", body):
+    elif _CONTINUE_CONTROL_RE.fullmatch(body):
         intent = "continue"
-    elif re.match(r"^(?:undo|take back|reverse (?:the )?last)\b", body):
+    elif _UNDO_CONTROL_RE.fullmatch(body):
         intent = "undo"
-    elif re.match(
-            r"^(?:report|show|display|give)\b[^.!?;]{0,120}\bstatus\b",
-            body):
+    elif _STATUS_CONTROL_RE.fullmatch(body):
         intent = "status"
     elif re.match(r"^(?:why\b|explain\b|show (?:me )?why\b)", body):
         intent = "why"
-    elif re.match(r"^(?:please\s+)?(?:review|inspect|audit)\b", body) \
+    elif re.match(
+            r"^(?:please\s+)?(?:review|inspect|audit|discuss|summarize|"
+            r"describe|compare)\b", body) \
             and not re.match(
                 r"^(?:please\s+)?audit\s+(?:trails?|logs?)\b", body):
         intent = "review"
-    elif re.match(r"^(?:close this|finish the project|we are done|project is over)\b", body):
+    elif re.match(
+            r"^(?:(?:without\s+(?:modifying|changing|writing|touching)\s+"
+            r"(?:any\s+)?files?|read[- ]only)\s*,?\s*)"
+            r"(?:please\s+)?(?:verify|review|inspect|audit|explain|compare|show|"
+            r"summarize)\b", body):
+        intent = "review"
+    elif re.match(
+            r"^(?:please\s+)?quarantine\b[^.!?;]{0,160}\b(?:loom\s+)?"
+            r"(?:plan\s+store|plan\s+state|generation)\b", body):
+        intent = "repair"
+    elif _CLOSE_CONTROL_RE.fullmatch(body):
         intent = "close"
+    elif negated is not None \
+            and (_is_build_request(body)
+                 or _POSITIVE_SOFTWARE_CLAUSE_RE.search(body)):
+        # A negative product constraint names bytes or behavior that the
+        # requested plan must preserve. It is not a negated Loom lifecycle
+        # command unless the object is the exact lifecycle plan itself.
+        return None
     elif _is_build_request(body) or _POSITIVE_SOFTWARE_CLAUSE_RE.search(body):
         intent = "plan"
         control = (
@@ -843,31 +972,24 @@ def _resolve_clause_roles(request, state):
                 "intent": "plan", "negated": False, "control": "planning",
                 "separator": "hard", "index": len(clauses),
             })
-        planning_positions = [
-            item["index"] for item in classified
-            if not item["negated"] and item["intent"] == "plan"
-            and item["control"] == "planning"]
-        implementation_is_prohibited = any(
-            item["negated"] and item["intent"] == "plan"
-            and item["control"] == "implementation"
-            for item in classified)
-        if planning_positions and implementation_is_prohibited:
-            first_plan_control = min(planning_positions)
-            for item in classified:
-                clause = item.get("clause", "")
-                if not item["negated"] and item["intent"] == "plan" \
-                        and item["control"] == "implementation" \
-                        and item["index"] < first_plan_control \
-                        and re.match(
-                            r"^(?:please\s+)?(?:create|design|build|develop|make)\b",
-                            clause) \
-                        and not re.search(
-                            r"\b(?:implement|execute|start|apply|write the files)\b",
-                            clause):
-                    # A leading project-description verb names what the requested
-                    # plan is about. The later explicit plan-only control and
-                    # implementation prohibition define lifecycle authority.
-                    item["control"] = "planning"
+    implementation_is_prohibited = any(
+        item["negated"] and item["intent"] == "plan"
+        and item["control"] == "implementation"
+        for item in classified)
+    if implementation_is_prohibited:
+        for item in classified:
+            clause = item.get("clause", "")
+            if not item["negated"] and item["intent"] == "plan" \
+                    and item["control"] == "implementation" \
+                    and re.match(
+                        r"^(?:please\s+)?(?:create|design|build|develop|make)\b",
+                        clause) \
+                    and not re.search(
+                        r"\b(?:implement|execute|start|apply|write the files)\b",
+                        clause):
+                # A project-description verb names what the safe-default plan is
+                # about. The separate prohibition still forbids implementation.
+                item["control"] = "planning"
     if not classified:
         return None
     # A shared negation governs coordinated verbs until a hard clause boundary.
@@ -890,13 +1012,26 @@ def _resolve_clause_roles(request, state):
     negative_intents = {item["intent"] for item in negatives}
     positive_controls = {(item["intent"], item["control"]) for item in positives}
     negative_controls = {(item["intent"], item["control"]) for item in negatives}
+    # `close` and `cancel` are distinct owner-facing controls but grant the
+    # same cancellation power.  Polarity must be compared after authority
+    # normalization or an alias can authorize exactly what its sibling denied.
+    def authority_control(item):
+        if item["intent"] in {"cancel", "close"}:
+            return ("cancel", "cancel-generation")
+        return (item["intent"], item["control"])
+    positive_authorities = {authority_control(item) for item in positives}
+    negative_authorities = {authority_control(item) for item in negatives}
     # A list of prohibitions joined with "or" narrows authority; it does not
     # offer alternative positive outcomes. Only positive alternatives are
     # ambiguous here. Positive-versus-negative conflicts are handled below.
     has_or = any(
         item["separator"] == "or" and not item["negated"]
         for item in classified[1:])
-    conflicting_polarity = bool(positive_controls & negative_controls)
+    conflicting_polarity = bool(
+        positive_authorities & negative_authorities)
+    planning_requested = ("plan", "planning") in positive_controls
+    implementation_requested = ("plan", "implementation") in positive_controls
+    implementation_prohibited = ("plan", "implementation") in negative_controls
     status_with_why = positive_intents == {"status", "why"}
     multiple_positive_outcomes = len(positive_intents) > 1 and not status_with_why
     opposed_lifecycle = (
@@ -907,6 +1042,14 @@ def _resolve_clause_roles(request, state):
             "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
             confidence=0.0, evidence=("negated-lifecycle",),
             recommendation="Keep lifecycle state unchanged; state one positive next action.")
+    if implementation_requested and implementation_prohibited:
+        return _provisional_planning_clarification((
+            "plan-execution-contradiction", "implementation-prohibited"))
+    if planning_requested and implementation_requested:
+        evidence = ["plan-execution-contradiction"]
+        if implementation_prohibited:
+            evidence.append("implementation-prohibited")
+        return _provisional_planning_clarification(evidence)
     if has_or and len(classified) > 1 \
             or conflicting_polarity or multiple_positive_outcomes:
         positive_labels = sorted(
@@ -931,7 +1074,22 @@ def _resolve_clause_roles(request, state):
             "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
             confidence=0.0, evidence=("negated-control",),
             recommendation="Keep state unchanged; state the positive outcome you want Loom to pursue.")
+    if status_with_why:
+        return _decision(
+            "status", code="ROUTE_STATUS",
+            evidence=("role:status", "role:why"))
     if not negatives and not multiple_positive_outcomes and not has_or:
+        if planning_envelope and positive_intents == {"plan"} \
+                and not _top_level_plan_authority(request)[0]:
+            return _decision(
+                "plan", code="ROUTE_PLAN", evidence=("role:plan",))
+        if len(positive_intents) == 1 and "plan" not in positive_intents:
+            intent = next(iter(positive_intents))
+            if intent == "continue":
+                intent = _continue_route_intent(state)
+            return _decision(
+                intent, code=f"ROUTE_{intent.upper()}",
+                evidence=(f"role:{intent}",))
         return None
     intent = "status" if status_with_why else next(iter(positive_intents))
     if intent == "continue":
@@ -977,7 +1135,7 @@ def _high_consequence_match(text):
     return match
 
 
-def resolve_intent(request, state=None):
+def _resolve_intent_from_text(request, state=None):
     """Resolve natural language plus lifecycle state; ambiguity returns one checkpoint."""
     if not isinstance(request, str) or not request.strip():
         raise RuntimeError("request must be non-empty natural language")
@@ -990,6 +1148,20 @@ def resolve_intent(request, state=None):
         loom_domain.task_language(semantic_request).casefold().split())
     clause_decision = _resolve_clause_roles(semantic_request, state)
     if clause_decision is not None:
+        high_consequence = _high_consequence_match(text)
+        if high_consequence is not None \
+                and clause_decision["intent"] not in {"remember", "forget"}:
+            clause_decision.update({
+                "blocked": True,
+                "code": "HIGH_CONSEQUENCE_UNCERTAIN",
+                "needs_owner": True,
+                "confidence": 0.0,
+                "recommendation": (
+                    "Keep the change staged only; confirm scope, verification, "
+                    "and rollback before any irreversible action."),
+                "evidence": [
+                    "high-consequence", _request_span(text, high_consequence)],
+            })
         return _synchronize_block_reason(clause_decision, category="intent")
     safety_preference = _SAFETY_PREFERENCE_RE.search(text)
     negated_forget = re.search(
@@ -1010,16 +1182,10 @@ def resolve_intent(request, state=None):
             recommendation="Keep remembered state unchanged; state what should be retained.")
     build_request = (
         _is_build_request(task_text) or _has_positive_software_clause(task_text))
-    profile_query = bool(re.search(
-        r"\bshow (?:me )?what you remember about me\b|"
-        r"\bwhat do you remember about me\b|\bshow my remembered preferences\b|"
-        r"\bshow (?:me )?what you learned from this project\b|"
-        r"\binspect what (?:loom|you) learned\b|\bwhat did (?:loom|you) learn\b|"
-        r"\bloom health\b|\bmove my loom to this device\b|\brestore my loom\b",
-        text))
-    direct_forget = bool(_MEMORY_FORGET_RE.search(text))
+    profile_query = bool(_PROFILE_QUERY_RE.search(text))
+    direct_forget = bool(_MEMORY_FORGET_RE.fullmatch(text))
     embedded_forget = bool(_EMBEDDED_MEMORY_FORGET_RE.search(text))
-    direct_remember = bool(_MEMORY_REMEMBER_RE.search(text))
+    direct_remember = bool(_MEMORY_REMEMBER_RE.fullmatch(text))
     embedded_remember = bool(_EMBEDDED_MEMORY_REMEMBER_RE.search(text))
     explicit_forget = direct_forget and not build_request
     explicit_remember = (direct_remember and not build_request and not profile_query)
@@ -1041,17 +1207,6 @@ def resolve_intent(request, state=None):
             confidence=0.0, evidence=("multiple-requested-outcomes",),
             recommendation=(
                 "Record or forget the preference first; pursue the separate action next."))
-    lifecycle_negation = re.search(
-        r"\b(?:do not|don't|never)(?:\s+want(?:\s+you)?\s+to)?\s+"
-        r"(?:close|continue|keep going|resume|repair|fix|build|implement|review|"
-        r"inspect|forget|remember|undo)\b",
-        text)
-    if lifecycle_negation and memory_direct is None:
-        return _decision(
-            "status", blocked=True, code="INTENT_NEGATED", needs_owner=True,
-            confidence=0.0, evidence=("negated-action",),
-            recommendation=(
-                "Keep state unchanged; state the positive outcome you want Loom to pursue."))
     if memory_direct is not None:
         signals = {name: name == memory_direct for name in (
             "remember", "forget", "why", "undo", "status", "review", "repair",
@@ -1068,29 +1223,19 @@ def resolve_intent(request, state=None):
                 r"\bwhy (?:did|do|does|is|are|was|were|has|have)\b|\bexplain why\b|"
                 r"\bstatus\s+and\s+why\b",
                 task_text)),
-            "undo": bool(re.search(
-                r"\bundo\b|\btake back\b|\breverse (?:the )?last", task_text)),
-            "status": bool(re.search(
-                r"\bshow me where\b|\bwhere are we\b|\bwhat has happened\b|"
-                r"\bshow (?:me )?the progress\b|\bwhat(?:'s| is) the status\b|"
-                r"\bprogress\b|\bstatus\b|\btoken usage\b|\bperformance report\b|"
-                r"\bcost report\b", task_text)),
+            "undo": bool(_UNDO_CONTROL_RE.fullmatch(task_text)),
+            "status": bool(
+                _STATUS_CONTROL_RE.fullmatch(task_text)
+                or _STATUS_QUERY_RE.fullmatch(task_text)),
             "review": bool(re.search(
-                r"\breview\b|\binspect\b|\baudit\b", task_text)),
-            "repair": bool(re.search(
-                r"\brepair\b|\bfix (?:the )?(?:stale |broken )?plan\b|"
-                r"\bstale plan\b", task_text)),
-            "close": bool(re.search(
-                r"\bwe are done\b|\bclose this\b|\bproject is over\b|"
-                r"\bfinish the project\b", task_text)),
-            "continue": bool(re.search(
-                r"\bcontinue\b|\bkeep going\b|\bresume\b|\bpick up\b|\bcarry on\b|"
-                r"\bbuild the next\b|\bnext part\b", task_text)),
-            "cancel": bool(re.search(
-                r"^(?:please\s+)?(?:cancel|abandon)\b"
-                r"(?:\s+(?:the\s+)?(?:current|pending|active))?"
-                r"(?:\s+loom)?(?:\s+(?:action|request|operation|plan))?\b",
+                r"^(?:(?:please\s+)?(?:review|inspect|audit)|"
+                r"(?:could|would|can|will)\s+you\s+(?:please\s+)?"
+                r"(?:review|inspect|audit))\b",
                 task_text)),
+            "repair": bool(_LIFECYCLE_REPAIR_RE.fullmatch(task_text)),
+            "close": bool(_CLOSE_CONTROL_RE.fullmatch(task_text)),
+            "continue": bool(_CONTINUE_CONTROL_RE.fullmatch(task_text)),
+            "cancel": bool(_CANCEL_CONTROL_RE.fullmatch(task_text)),
         }
     if build_request:
         # Product nouns such as review, status, audit, repair, undo, and forget
@@ -1130,8 +1275,7 @@ def resolve_intent(request, state=None):
               and _ARTIFACT_NOUN_RE.search(text)):
             decision = _route(text, "plan", _ARTIFACT_NOUN_RE.search(text))
         else:
-            intent = "repair" if state.get("drift") or state.get("failed") else "plan"
-            decision = _route(text, intent, None)
+            decision = _route(text, "plan", None)
     high_consequence = _high_consequence_match(text)
     if high_consequence and memory_direct is None:
         decision.update({
@@ -1145,6 +1289,500 @@ def resolve_intent(request, state=None):
             "evidence": ["high-consequence", _request_span(text, high_consequence)],
         })
     return _synchronize_block_reason(decision, category="intent")
+
+
+_QUOTE_PAIRS = MappingProxyType({
+    '"': '"', "'": "'", "`": "`", "“": "”", "‘": "’",
+})
+# Planning authority is deliberately smaller than Loom's natural-language
+# assistance surface.  Only an unquoted, top-level imperative using one of the
+# two closed command forms below may create durable planning state.  Every
+# other supported phrase can still receive useful inline assistance, but it is
+# not authority merely because a synonym happened to match a vocabulary list.
+_DIRECT_PLAN_COMMAND_RE = re.compile(
+    r"^(?:now\s+)?(?:please\s+)?(?:"
+    r"plan\b|"
+    r"create\s+(?:(?:a|an|the|new|fresh|replacement|superseding|updated)\s+)"
+    r"{0,6}plan\b(?=$|\s*(?:[,;:]|\b(?:and|based|covering|for|named|now|"
+    r"only|reviewed|that|to|using|which|with)\b)))")
+_DIRECT_READ_ONLY_CONTROL_RE = re.compile(
+    r"^(?:(?:without\s+(?:modifying|changing|writing|touching)\s+"
+    r"(?:any\s+)?files?|read[- ]only)\s*,?\s*)?"
+    r"(?:(?:can|could|would)\s+you\s+)?(?:please\s+)?"
+    r"(?:why\b|explain\s+why\b|show\s+(?:me\s+)?why\b|"
+    r"(?:review|inspect|audit|verify)\b|"
+    r"summarize\s+(?:(?:the|this|that)\s+)?"
+    r"(?:report|source|evidence|results?)\s+only\b)")
+_DIRECT_QUARANTINE_COMMAND_RE = re.compile(
+    r"^(?:please\s+)?quarantine\b[^.!?;]{0,160}\bloom\b[^.!?;]{0,80}"
+    r"\b(?:plan\s+store|plan\s+state|generation)\b")
+_NEGATED_DIRECT_SEGMENT_RE = re.compile(
+    r"(?:^|,\s*|\b(?:and|but|then)\b\s*)"
+    r"(?:please\s+)?(?:"
+    r"(?:i|we)\s+(?:do\s+not|don't|never)\s+want\s+you\s+to|"
+    r"(?:do\s+not|don't|never)(?:\s+want(?:\s+you)?\s+to)?)\s+"
+    r"(?P<body>[^.!?;\r\n]{1,240})")
+_NEGATED_PLAN_AUTHORITY_RE = re.compile(
+    r"^(?:plan\b|"
+    r"(?:(?:create|draft|write|generate|prepare|present|produce|revise|replace|"
+    r"supersede|change|modify)(?:\s*,\s*(?:(?:or|and)\s+)?|"
+    r"\s+(?:(?:or|and)\s+)?)){1,4}"
+    r"(?:(?:a|an|any|another|new|fresh|replacement|superseding|updated|this|"
+    r"the|current|existing|approved|reviewed|exact)\s+){0,6}plan\b)"
+    r"(?:\s+(?:now|yet|again|automatically|itself))?\s*$")
+_PRESERVE_LIFECYCLE_PLAN_RE = re.compile(
+    r"^(?:please\s+)?(?:keep|leave)\b[^.!?;\r\n]{0,160}"
+    r"\b(?:(?:this|the)\s+)?(?:current|existing|approved|reviewed|exact)"
+    r"(?:\s+(?:current|existing|approved|reviewed|exact)){0,3}\s+plan\b"
+    r"\s+(?:alone|unchanged)\b(?:\s*,?\s*(?:please\s+)?(?:but|and|then)\b|\s*$)")
+
+
+def _is_lifecycle_plan_authority_clause(body):
+    """Recognize one exact lifecycle-plan object, never a product noun prefix."""
+    return _NEGATED_PLAN_AUTHORITY_RE.fullmatch(body.strip()) is not None
+
+
+@dataclass(frozen=True)
+class _SemanticOperation:
+    """One closed text-to-lifecycle projection used by every control consumer."""
+
+    decision: object
+    control_text: str
+    plan_materialization: str
+    semantic_scope: str
+
+    def __post_init__(self):
+        if not isinstance(self.decision, MappingProxyType) \
+                or not isinstance(self.control_text, str) \
+                or not self.control_text.strip() \
+                or self.plan_materialization not in {
+                    "none", "persistent", "inline-clarification"} \
+                or self.semantic_scope not in {
+                    "direct", "nonmaterializing", "contradictory",
+                    "assistance"}:
+            raise RuntimeError("semantic operation is invalid")
+
+
+def _mask_quoted_authority(request):
+    """Remove quoted bytes structurally; ambiguous quotation grants no authority."""
+    output = []
+    closer = None
+    quote_count = 0
+    for index, char in enumerate(request):
+        previous = request[index - 1] if index else ""
+        following = request[index + 1] if index + 1 < len(request) else ""
+        if closer is None:
+            if char not in _QUOTE_PAIRS:
+                output.append(char)
+                continue
+            if char == "'" and previous.isalnum() and following.isalnum():
+                output.append(char)
+                continue
+            if not following or following.isspace():
+                output.append(char)
+                continue
+            quote_count += 1
+            if quote_count > 32:
+                return " ".join("".join(output).split()), False
+            closer = _QUOTE_PAIRS[char]
+            output.append(" quoted material ")
+            continue
+        if char != closer:
+            continue
+        if char == "'" and following.isalnum():
+            continue
+        closer = None
+        output.append(" . ")
+    return " ".join("".join(output).split()), closer is None
+
+
+def _hard_request_clauses(request):
+    return tuple(
+        " ".join(item.split())
+        for item in re.split(
+            r"(?:\r?\n+|[.!?;]+)",
+            request.casefold().replace("’", "'").replace("‘", "'"))
+        if item.strip())
+
+
+def _direct_plan_clause(clause):
+    """Prove one unquoted, top-level direct planning command."""
+    return _DIRECT_PLAN_COMMAND_RE.match(clause.strip()) is not None
+
+
+def _top_level_plan_authority(request):
+    """Return the closed direct-command and exact-negation authority facts."""
+    clauses = _hard_request_clauses(request)
+    if not clauses or len(clauses) > MAX_ROUTE_CLAUSES:
+        return False, False, True
+    direct = False
+    plan_prohibited = False
+    for clause in clauses:
+        negative_matches = list(_NEGATED_DIRECT_SEGMENT_RE.finditer(clause))
+        negative_plan = any(
+            _is_lifecycle_plan_authority_clause(match.group("body"))
+            or _direct_plan_clause(match.group("body"))
+            for match in negative_matches)
+        plan_prohibited = plan_prohibited or negative_plan \
+            or _PRESERVE_LIFECYCLE_PLAN_RE.match(clause) is not None
+        if _direct_plan_clause(clause):
+            direct = True
+    return direct, plan_prohibited, False
+
+
+def _assistance_operation(*, decision=None, quotation_ambiguous=False):
+    """Return useful inline planning without creating lifecycle authority."""
+    if decision is None:
+        decision = _decision(
+            "plan", code="ROUTE_PLAN", confidence=1.0,
+            evidence=(("quotation-ambiguous" if quotation_ambiguous
+                       else "semantic-assistance"),))
+    elif decision.get("blocked") or decision.get("intent") != "plan":
+        raise RuntimeError("inline assistance requires one unblocked planning decision")
+    return _SemanticOperation(
+        decision=MappingProxyType(_synchronize_block_reason(
+            decision, category="intent")),
+        control_text="provide non-authoritative planning assistance",
+        plan_materialization="inline-clarification",
+        semantic_scope="assistance")
+
+
+_STRUCTURAL_NONPLANNING_INTENTS = frozenset({
+    "continue", "resume", "execute", "repair", "cancel", "close", "undo",
+    "remember", "forget",
+})
+
+
+def _structural_nonplanning_operation(request):
+    """Return one proved direct non-planning control, never a lexical guess."""
+    clauses, overflow = _split_control_clauses(request)
+    if overflow:
+        return None
+    roles = []
+    for _separator, clause in clauses:
+        role = _classify_control_clause(clause)
+        if role is not None:
+            roles.append(role)
+    positive = [role for role in roles if not role["negated"]]
+    if len(positive) != 1:
+        return None
+    intent = positive[0]["intent"]
+    if intent == "continue" and _EXACT_START_CONTROL_RE.search(
+            request.casefold()):
+        return None
+    return intent if intent in _STRUCTURAL_NONPLANNING_INTENTS else None
+
+
+def _semantic_operation(request, state=None):
+    """Separate broad assistance from the closed durable-plan authority grammar."""
+    if not isinstance(request, str) or not request.strip():
+        raise RuntimeError("request must be non-empty natural language")
+    semantic_request = _semantic_request(request)
+    if not semantic_request.strip():
+        raise RuntimeError("request must contain natural language after /loom")
+    masked, quotes_balanced = _mask_quoted_authority(semantic_request)
+    if not quotes_balanced:
+        return _assistance_operation(quotation_ambiguous=True)
+    decision = _resolve_intent_from_text(masked, state)
+    direct_plan, plan_prohibited, overflow = _top_level_plan_authority(masked)
+    if direct_plan and plan_prohibited:
+        provisional = _provisional_planning_clarification((
+            "plan-authority-contradiction", "current-plan-preserved"))
+        return _SemanticOperation(
+            decision=MappingProxyType(_synchronize_block_reason(
+                provisional, category="intent")),
+            control_text="clarify lifecycle request",
+            plan_materialization="inline-clarification",
+            semantic_scope="contradictory")
+    if plan_prohibited and not (
+            not decision["blocked"]
+            and decision["intent"] in {"review", "status", "why"}):
+        return _assistance_operation()
+    if decision.get("code") == "PLAN_EXECUTION_CONTRADICTION":
+        return _SemanticOperation(
+            decision=MappingProxyType(decision),
+            control_text="clarify lifecycle request",
+            plan_materialization="inline-clarification",
+            semantic_scope="contradictory")
+    if decision["blocked"]:
+        return _SemanticOperation(
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="none", semantic_scope="direct")
+    if overflow:
+        return _assistance_operation()
+    if direct_plan:
+        if decision["intent"] != "plan":
+            decision = _decision(
+                "plan", code="ROUTE_PLAN", confidence=1.0,
+                evidence=("role:direct-plan-command",))
+        return _SemanticOperation(
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="persistent", semantic_scope="direct")
+    clauses = _hard_request_clauses(masked)
+    if any(_DIRECT_QUARANTINE_COMMAND_RE.match(clause) is not None
+           for clause in clauses):
+        decision = _decision(
+            "repair", code="ROUTE_REPAIR", confidence=1.0,
+            evidence=("role:quarantine",))
+        return _SemanticOperation(
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="none", semantic_scope="direct")
+    if decision["intent"] in {"review", "status", "why"} and any(
+            _DIRECT_READ_ONLY_CONTROL_RE.match(clause) is not None
+            or _STATUS_CONTROL_RE.fullmatch(clause) is not None
+            or _STATUS_QUERY_RE.fullmatch(clause) is not None
+            or decision["intent"] == "status"
+            and _PROFILE_QUERY_RE.search(clause) is not None
+            for clause in clauses):
+        return _SemanticOperation(
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="none", semantic_scope="nonmaterializing")
+    structural_intent = _structural_nonplanning_operation(masked)
+    if structural_intent is None and decision["intent"] == "remember" \
+            and _SAFETY_PREFERENCE_RE.search(masked.casefold()):
+        structural_intent = "remember"
+    if structural_intent is not None:
+        routed_intent = "execute" if structural_intent == "continue" \
+            else structural_intent
+        if decision["intent"] != routed_intent:
+            decision = _decision(
+                routed_intent, code=f"ROUTE_{routed_intent.upper()}",
+                confidence=1.0,
+                evidence=(f"role:{structural_intent}",))
+        return _SemanticOperation(
+            decision=MappingProxyType(decision), control_text=masked,
+            plan_materialization="none", semantic_scope="direct")
+    # Free text that proves neither a direct plan command nor one closed
+    # non-planning operation remains useful but non-authorizing assistance.
+    return _assistance_operation(
+        decision=decision if decision["intent"] == "plan" else None)
+
+
+def resolve_intent(request, state=None):
+    """Resolve one closed semantic operation without granting inert text authority."""
+    return _thaw(_semantic_operation(request, state).decision)
+
+
+_PROJECT_WRITE_PROHIBITION_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
+    r"\bdo\s+not\s+"
+    r"(?:(?:implement|execute|apply)(?:\s+(?:it|this|the\s+(?:plan|changes?|work)))?"
+    r"\s*(?:,|\band\b|\bor\b)\s*)?"
+    r"(?:modify|change|write|create|touch)\s+(?:any\s+)?(?:the\s+)?"
+    r"(?:project(?:-local)?\s+)?files?\b",
+    r"\bdo\s+not\s+(?:modify|change|write|create|touch)\s+(?:the\s+)?"
+    r"project\b(?=\s*(?:[.!?;,]|$))",
+    r"\bno\s+(?:project(?:-local)?\s+)?(?:file\s+)?writes?\b",
+    r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
+    r"(?:any\s+)?files?\b",
+    r"\bleave\s+(?:the\s+)?project\s+(?:byte[- ]for[- ]byte\s+)?unchanged\b",
+))
+
+
+def _project_write_prohibited(normalized_request):
+    scoped = re.sub(
+        r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
+        r"(?:any\s+)?generated\s+files?\b",
+        " scoped-generated-file-exclusion ", normalized_request)
+    return any(pattern.search(scoped)
+               for pattern in _PROJECT_WRITE_PROHIBITION_PATTERNS)
+
+
+SEMANTIC_OUTCOME_EVIDENCE_ROOT = "semantic-outcome-"
+SEMANTIC_OUTCOME_EVIDENCE_PREFIX = "semantic-outcome-v1."
+SEMANTIC_CAPABILITY_EVIDENCE_PREFIX = "semantic-outcome-v2."
+_SEMANTIC_OUTCOME_V1_TOKEN_RE = re.compile(
+    r"semantic-outcome-v1\.([a-z0-9][a-z0-9._-]{0,63})\."
+    r"(generic|0|[1-9][0-9]*)\Z")
+_SEMANTIC_OUTCOME_V2_TOKEN_RE = re.compile(
+    r"semantic-outcome-v2\.([a-z0-9][a-z0-9._-]{0,63})\."
+    r"([a-z0-9][a-z0-9-]{0,63})\Z")
+_SEMANTIC_OUTCOME_STOP_WORDS = {
+    "a", "an", "and", "for", "of", "or", "plan", "the", "to", "with",
+    "workflow", "project", "change", "feature", "only", "do", "not",
+}
+
+# This is a closed semantic projection, not request text or an expanding phrase
+# allowlist.  Each capability is proved by a conjunction of bounded concept atoms;
+# ambiguous multi-capability text falls back to the historical bounded outcome.
+_SEMANTIC_CONCEPT_PATTERNS = MappingProxyType({
+    "accessibility": re.compile(r"\b(?:accessib(?:le|ility)|keyboard)\b"),
+    "account-credential": re.compile(r"\b(?:accounts?|credentials?|passwords?)\b"),
+    "backup-copy": re.compile(r"\b(?:back[- ]?ups?|snapshots?)\b"),
+    "data-export": re.compile(r"\bexport(?:s|ed|ing)?\b"),
+    "recovery-transition": re.compile(
+        r"\b(?:recover(?:y|ies|ed|ing)?|reset(?:s|ting)?|"
+        r"restor(?:e|es|ed|ing|ation))\b"),
+    "search-discovery": re.compile(r"\b(?:search(?:es|ed|ing)?|find(?:ing)?)\b"),
+    "tabular-data": re.compile(
+        r"\b(?:csv|tabular|comma[- ]separated(?:\s+values?)?)\b"),
+})
+_SEMANTIC_CAPABILITY_CATALOG = MappingProxyType({
+    "accessible-search-navigation": MappingProxyType({
+        "concepts": frozenset({"accessibility", "search-discovery"}),
+        "label": "accessible search and keyboard navigation behavior",
+    }),
+    "backup-restore-recovery": MappingProxyType({
+        "concepts": frozenset({"backup-copy", "recovery-transition"}),
+        "label": "backup, restore, integrity, and recovery behavior",
+    }),
+    "credential-account-recovery": MappingProxyType({
+        "concepts": frozenset({"account-credential", "recovery-transition"}),
+        "label": "credential reset and account recovery behavior",
+    }),
+    "tabular-data-export": MappingProxyType({
+        "concepts": frozenset({"data-export", "tabular-data"}),
+        "label": "tabular data export with explicit field and failure behavior",
+    }),
+})
+
+_SEMANTIC_POLARITY_BOUNDARY_RE = re.compile(
+    # Additive/alternative coordinators inherit one leading polarity. A hard
+    # boundary or adversative/sequential clause starts an independent scope.
+    r"[.!?;\r\n]+|\b(?:but|then)\b")
+_SEMANTIC_NEGATION_OPERATOR_RE = re.compile(
+    r"\b(?:no|never|without)\b|\b(?:do|does|did)\s+not\b|\bnot\b")
+
+
+def _semantic_concept_polarities(task_text):
+    """Return closed concept atoms separated by structural polarity scope."""
+    positive = set()
+    negative = set()
+    for concept, pattern in _SEMANTIC_CONCEPT_PATTERNS.items():
+        for match in pattern.finditer(task_text):
+            prefix = task_text[:match.start()]
+            boundaries = list(_SEMANTIC_POLARITY_BOUNDARY_RE.finditer(prefix))
+            clause_start = boundaries[-1].end() if boundaries else 0
+            clause_prefix = task_text[clause_start:match.start()]
+            target = (
+                negative if _SEMANTIC_NEGATION_OPERATOR_RE.search(clause_prefix)
+                else positive)
+            target.add(concept)
+    return frozenset(positive), frozenset(negative)
+
+
+def _semantic_capability(request):
+    """Return one proved closed capability, or None for absent/ambiguous scope."""
+    # Polarity must be resolved before task-language redaction removes explicit
+    # exclusion clauses.  Only closed catalog atoms leave this transient text.
+    task_text = _semantic_request(request).casefold()
+    task_text, quotes_balanced = _mask_quoted_authority(task_text)
+    if not quotes_balanced:
+        return None
+    positive_concepts, negative_concepts = \
+        _semantic_concept_polarities(task_text)
+    matches = [
+        capability for capability, value in _SEMANTIC_CAPABILITY_CATALOG.items()
+        if value["concepts"].issubset(positive_concepts)
+        and value["concepts"].isdisjoint(negative_concepts)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def semantic_outcome_evidence(request, domains_result):
+    """Project request semantics to one closed catalog identity, never prompt text."""
+    if not isinstance(domains_result, dict):
+        raise RuntimeError("semantic outcome domains are invalid")
+    domains = domains_result.get("active_task_domains") or ["unclassified"]
+    if not isinstance(domains, list) or not domains \
+            or any(not isinstance(domain, str) or not ID_RE.fullmatch(domain)
+                   for domain in domains):
+        raise RuntimeError("semantic outcome domain scope is invalid")
+    capability = _semantic_capability(request) if len(domains) == 1 else None
+    if capability is not None:
+        domain = sorted(domains)[0]
+        token = f"{SEMANTIC_CAPABILITY_EVIDENCE_PREFIX}{domain}.{capability}"
+        parse_semantic_outcome_token(token, domains)
+        return token
+
+    request_terms = set(re.findall(
+        r"[a-z0-9]+", loom_domain.task_language(request))) \
+        - _SEMANTIC_OUTCOME_STOP_WORDS
+    ranked = []
+    for domain in domains:
+        invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
+        for index, label in enumerate(invariants):
+            label_terms = set(re.findall(r"[a-z0-9]+", label.casefold())) \
+                - _SEMANTIC_OUTCOME_STOP_WORDS
+            overlap = request_terms & label_terms
+            if overlap:
+                ranked.append((
+                    -sum(len(term) for term in overlap), -len(overlap),
+                    domain, index))
+    if ranked:
+        _score, _count, domain, index = min(ranked)
+        suffix = str(index)
+    else:
+        domain, suffix = sorted(domains)[0], "generic"
+    token = f"{SEMANTIC_OUTCOME_EVIDENCE_PREFIX}{domain}.{suffix}"
+    parse_semantic_outcome_token(token, domains)
+    return token
+
+
+def parse_semantic_outcome_token(token, domains):
+    """Parse one exact closed catalog identity within sealed domain scope."""
+    if not isinstance(token, str) or len(token) > 200 \
+            or not isinstance(domains, (list, tuple)) \
+            or not domains or any(
+                not isinstance(domain, str) or not ID_RE.fullmatch(domain)
+                for domain in domains) \
+            or len(set(domains)) != len(domains):
+        raise RuntimeError("semantic outcome identity or domain scope is invalid")
+    match = _SEMANTIC_OUTCOME_V1_TOKEN_RE.fullmatch(token)
+    if match is not None:
+        domain, suffix = match.groups()
+        if domain not in domains:
+            raise RuntimeError(
+                "semantic outcome identity is outside the sealed domains")
+        if suffix == "generic":
+            return {
+                "token": token, "domain": domain, "index": None,
+                "label": f"bounded {domain} deliverable",
+            }
+        invariants = loom_domain.CATALOG.get(domain, {}).get("invariants", [])
+        index = int(suffix)
+        if not 0 <= index < len(invariants):
+            raise RuntimeError("semantic outcome catalog index is outside its bound")
+        return {
+            "token": token, "domain": domain, "index": index,
+            "label": invariants[index],
+        }
+
+    match = _SEMANTIC_OUTCOME_V2_TOKEN_RE.fullmatch(token)
+    if match is None:
+        raise RuntimeError("semantic outcome identity is noncanonical")
+    domain, capability = match.groups()
+    if domain not in domains:
+        raise RuntimeError("semantic outcome identity is outside the sealed domains")
+    projected = _SEMANTIC_CAPABILITY_CATALOG.get(capability)
+    if projected is None:
+        raise RuntimeError("semantic outcome capability is outside its closed catalog")
+    return {
+        "token": token, "domain": domain, "index": None,
+        "label": projected["label"], "capability": capability,
+    }
+
+
+def validate_semantic_outcome_evidence(evidence, domains, *, required=False):
+    """Validate an optional historical semantic token without accepting lookalikes."""
+    if not isinstance(evidence, (list, tuple)) or type(required) is not bool:
+        raise RuntimeError("semantic outcome evidence is invalid")
+    tokens = [
+        item for item in evidence
+        if isinstance(item, str)
+        and item.strip().casefold().startswith("semantic-outcome-")]
+    if not tokens:
+        if required:
+            raise RuntimeError("semantic outcome evidence is missing")
+        return None
+    if len(tokens) != 1:
+        raise RuntimeError("semantic outcome evidence is duplicated")
+    return parse_semantic_outcome_token(tokens[0], domains)
+
+
+def semantic_outcome_from_evidence(evidence, domains):
+    """Open one sealed catalog identity to its repository-owned semantic label."""
+    return validate_semantic_outcome_evidence(
+        evidence, domains, required=True)["label"]
 
 
 def request_control(request, state=None, *, host_control=None):
@@ -1172,7 +1810,8 @@ def request_control(request, state=None, *, host_control=None):
         explicitness = "host-bound"
         evidence.append("host-bound-control")
     else:
-        decision = resolve_intent(request)
+        operation = _semantic_operation(request, state)
+        decision = _thaw(operation.decision)
         intent = decision["intent"]
         primary = {
             "plan": "plan", "resume": "execute", "execute": "execute",
@@ -1180,7 +1819,13 @@ def request_control(request, state=None, *, host_control=None):
             "why": "status", "cancel": "cancel", "undo": "recover",
             "close": "cancel",
         }.get(intent, "unknown")
-        text = " ".join(_semantic_request(request).casefold().split())
+        text = " ".join(operation.control_text.casefold().split())
+        if operation.semantic_scope == "nonmaterializing":
+            evidence.append("semantic-nonmaterializing")
+        elif operation.semantic_scope == "assistance":
+            evidence.append("semantic-assistance")
+        elif operation.semantic_scope == "contradictory":
+            evidence.append("semantic-clarification")
         explicit_quarantine = bool(
             re.match(
                 r"^(?:please\s+)?quarantine\b.{0,96}\bloom\b.{0,48}"
@@ -1188,12 +1833,35 @@ def request_control(request, state=None, *, host_control=None):
             and re.search(r"\b(?:invalid|corrupt|mixed|blocking)\b", text))
         if explicit_quarantine:
             primary = "recover"
-        explicit_new = bool(re.search(
-            r"\b(?:new|fresh)\s+standalone\b|"
-            r"\b(?:new|fresh)\s+(?:standalone\s+)?(?:feature|action|work|task|plan)\b|"
-            r"\bstandalone\s+(?:feature|action|work|task)\b|"
-            r"\bnot\s+(?:a\s+)?(?:repair|continuation)\b", text))
-        if explicit_quarantine:
+        negated_supersession = bool(re.search(
+            r"\b(?:do not|don't|never)\s+(?:ever\s+)?(?:supersede|replace)\b|"
+            r"\b(?:do not|don't|never)\s+(?:ever\s+)?"
+            r"(?:create|draft|generate|prepare|present|produce|write)\b"
+            r"[^.!?;\r\n]{0,96}\breplacement\s+(?:action|plan)\b",
+            text))
+        explicit_supersession = (
+            operation.plan_materialization == "persistent"
+            and bool(re.search(
+                r"\b(?:explicitly\s+)?(?:supersede|superseding|replace|replacing)\b"
+                r"[^.!?;\r\n]{0,120}\b(?:plan\s+)?generation\b|"
+                r"\b(?:fresh|new|updated)?\s*replacement\s+(?:action|plan)\b",
+                text))
+            and not negated_supersession)
+        explicit_new = explicit_supersession or (
+            operation.plan_materialization == "persistent"
+            and bool(re.search(
+                r"\b(?:new|fresh)\s+standalone\b|"
+                r"\b(?:new|fresh)\s+(?:standalone\s+)?"
+                r"(?:feature|action|work|task|plan)\b|"
+                r"\bstandalone\s+(?:feature|action|work|task)\b|"
+                r"\bnot\s+(?:a\s+)?(?:repair|continuation)\b", text)))
+        relation_text = re.sub(
+            r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
+            r"(?:any\s+)?generated\s+files?\b",
+            " scoped-generated-file-exclusion ", text)
+        if operation.plan_materialization == "inline-clarification":
+            relation = "unclear"
+        elif explicit_quarantine:
             relation = "quarantine-generation"
             evidence.append("explicit-quarantine")
         elif _EXACT_START_CONTROL_RE.search(text):
@@ -1207,7 +1875,9 @@ def request_control(request, state=None, *, host_control=None):
                 "supersede-generation"
                 if state.get("generation_phase") in {"reviewable", "active"}
                 else "new")
-            evidence.append("explicit-new")
+            evidence.append(
+                "explicit-supersession"
+                if explicit_supersession else "explicit-new")
         elif intent == "repair" or re.search(
                 r"\b(?:repair|fix)\b.{0,80}\b(?:active|current)\b|"
                 r"\b(?:active|current)\b.{0,80}\b(?:repair|fix)\b|"
@@ -1219,9 +1889,10 @@ def request_control(request, state=None, *, host_control=None):
             relation = "continue-active"
             evidence.append("explicit-continuation")
         elif primary in {"review", "status"} or re.search(
-                r"\b(?:read-only|audit|inspect|verify only|make no changes)\b|"
+                r"^(?:please\s+)?(?:read-only|verify only)\b|"
+                r"\bmake no changes\b|"
                 r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
-                r"\bwithout\s+modifying\b", text):
+                r"\bwithout\s+modifying\b", relation_text):
             relation = "read-only"
             evidence.append("read-only-control")
         elif primary == "cancel":
@@ -1265,10 +1936,13 @@ def request_control(request, state=None, *, host_control=None):
     if re.search(r"\b(?:do not|don't|never|no)\s+(?:implement|execute|start)\b|"
                  r"\bno implementation\b", normalized):
         prohibitions.append("implementation")
-    if re.search(
+    mutation_prohibited = bool(re.search(
             r"\b(?:make no changes|do not modify|read-only|no mutation)\b|"
             r"\bwithout\s+(?:making\s+)?(?:changes|modifications)\b|"
-            r"\bwithout\s+modifying\b", normalized):
+            r"\bwithout\s+modifying\b", normalized))
+    if primary == "plan" and host_control is None:
+        mutation_prohibited = _project_write_prohibited(normalized)
+    if mutation_prohibited:
         prohibitions.append("mutation")
     if re.search(r"\bnot\s+(?:a\s+)?repair\b|\bdo not repair\b", normalized):
         prohibitions.append("repair")
@@ -1280,11 +1954,35 @@ def request_control(request, state=None, *, host_control=None):
         prohibitions.append("continuation")
     if re.search(r"\bnot\s+new\s+work\b", normalized):
         prohibitions.append("new-work")
+    prohibitions = sorted(set(prohibitions))
+    if host_control is None and primary == "plan" and not decision["blocked"] \
+            and operation.plan_materialization == "persistent" \
+            and relation != "revise-exact" and not negated_supersession:
+        disposition = loom_owner_intent.resolve_planning_disposition(
+            primary_operation=primary,
+            generation_phase=state.get("generation_phase"),
+            state_error=state.get("state_error"),
+            prohibitions=prohibitions,
+            exact_reference=relation == "revise-exact",
+        )
+        relation = disposition.relation
+        evidence.append("planning-" + disposition.mode)
+        if block_reason == "RELATION_REQUIRES_OWNER" \
+                and relation != "unclear" and not decision["blocked"]:
+            blocked = False
+            block_reason = None
+    elif host_control is None and primary == "plan" \
+            and not decision["blocked"] \
+            and operation.plan_materialization == "inline-clarification" \
+            and relation == "unclear":
+        evidence.append("planning-inline-recovery")
+        blocked = False
+        block_reason = None
     value = {
         "schema_version": 1,
         "primary_operation": primary,
         "relation": relation,
-        "prohibitions": sorted(set(prohibitions)),
+        "prohibitions": prohibitions,
         "explicitness": explicitness,
         "evidence": sorted(set(evidence))[:16],
         "blocked": blocked,
@@ -1308,7 +2006,8 @@ def validate_request_control(value):
         "repair-active", "read-only", "cancel-generation",
         "supersede-generation", "quarantine-generation", "unclear"}
     prohibition_values = {
-        "implementation", "mutation", "repair", "continuation", "new-work"}
+        "implementation", "mutation", "repair", "continuation",
+        "new-work"}
     if not isinstance(value, dict) or set(value) != fields \
             or value.get("schema_version") != 1 \
             or value.get("primary_operation") not in operations \
@@ -1338,6 +2037,67 @@ def validate_request_control(value):
     if not isinstance(claimed, str) or re.fullmatch(r"[0-9a-f]{64}", claimed) is None \
             or claimed != _sha(_canonical_json(unsigned)):
         raise RuntimeError("request control digest does not match")
+    relation_operations = {
+        "new": {"plan"},
+        "revise-exact": {"plan"},
+        "start-exact": {"execute"},
+        "continue-active": {"execute"},
+        "repair-active": {"recover"},
+        "read-only": {"review", "status"},
+        "cancel-generation": {"cancel"},
+        "supersede-generation": {"plan"},
+        "quarantine-generation": {"recover"},
+        "unclear": {"plan", "status", "recover", "unknown"},
+    }
+    operation = value["primary_operation"]
+    relation = value["relation"]
+    explicitness = value["explicitness"]
+    evidence_set = set(evidence)
+    planning_tokens = [
+        item for item in evidence if item.startswith("planning-")]
+    planning_relations = {
+        "planning-direct": "new",
+        "planning-candidate-successor": "supersede-generation",
+        "planning-current-world-replan": "supersede-generation",
+        "planning-inline-recovery": "unclear",
+    }
+    host_bound = evidence == ["host-bound-control"] \
+        and explicitness == "host-bound"
+    explicit_evidence = {
+        "explicit-quarantine", "explicit-start-exact", "explicit-revise-exact",
+        "explicit-supersession", "explicit-new", "explicit-repair",
+        "explicit-continuation", "explicit-cancel",
+    }
+    cross_field_invalid = (
+        operation not in relation_operations[relation]
+        or (explicitness == "host-bound" or "host-bound-control" in evidence_set)
+        and not host_bound
+        or explicitness == "defaulted" and "safe-new-default" not in evidence_set
+        or "safe-new-default" in evidence_set and explicitness != "defaulted"
+        or explicitness == "explicit" and not (evidence_set & explicit_evidence)
+        or explicitness != "explicit" and bool(evidence_set & explicit_evidence)
+        or len(planning_tokens) > 1
+        or bool(planning_tokens) and (
+            operation != "plan"
+            or planning_tokens[0] not in planning_relations
+            or planning_relations[planning_tokens[0]] != relation)
+        or "semantic-nonmaterializing" in evidence_set
+        and relation != "read-only"
+        or "semantic-assistance" in evidence_set
+        and not (
+            relation == "unclear"
+            and operation == "plan"
+            and "planning-inline-recovery" in evidence_set
+            and not value["blocked"])
+        or "semantic-clarification" in evidence_set
+        and not (
+            relation == "unclear"
+            and operation == "plan"
+            and "planning-inline-recovery" in evidence_set)
+        or "read-only-control" in evidence_set and relation != "read-only"
+    )
+    if cross_field_invalid:
+        raise RuntimeError("request control cross-field bindings are invalid")
     return value
 
 
@@ -1363,11 +2123,23 @@ def _apply_lifecycle_request_policy(decision, state, control):
         }
 
     if control["blocked"]:
+        if decision["blocked"]:
+            return decision
         return block(
             control["block_reason"] or "RELATION_REQUIRES_OWNER",
             "Choose one explicit lifecycle relation before Loom changes state.",
             "structured-control-blocked")
+    if relation == "unclear" \
+            and "planning-inline-recovery" in control.get("evidence", []) \
+            and ({"semantic-assistance", "semantic-clarification"}
+                 & set(control.get("evidence", []))):
+        # The result is useful prose only. It cannot create an action, stage,
+        # generation, or execution authority in any lifecycle phase.
+        return decision
     if "mutation" in control["prohibitions"] and relation != "read-only":
+        if decision["blocked"] \
+                or decision["code"] == "PLAN_EXECUTION_CONTRADICTION":
+            return decision
         return block(
             "MUTATION_PROHIBITED",
             "The request prohibits mutation; use a read-only inspection instead.",
@@ -1518,6 +2290,21 @@ def _validate_route(route, *, schema_version=SCHEMA_VERSION):
     if type(route.get("routine_question_count")) is not int \
             or route["routine_question_count"] != 0:
         raise RuntimeError("pure prepared route cannot ask a routine question")
+    if not isinstance(route.get("recommendation"), str) \
+            or len(route["recommendation"]) > 1000 \
+            or not isinstance(route.get("code"), str) or not route["code"] \
+            or not isinstance(route.get("evidence"), list) \
+            or len(route["evidence"]) > 16 \
+            or not all(isinstance(item, str) and len(item) <= 200
+                       for item in route["evidence"]):
+        raise RuntimeError("route text/evidence is invalid")
+    if route.get("code") == "PLAN_EXECUTION_CONTRADICTION" \
+            and (route.get("intent") != "plan"
+                 or route.get("blocked")
+                 or not route.get("needs_owner")
+                 or route.get("recommendation", "").count("?") != 1):
+        raise RuntimeError(
+            "provisional contradiction must remain one non-authorizing plan question")
     for field in EFFECT_COUNT_FIELDS:
         if type(route.get(field)) is not int or route[field] != 0:
             raise RuntimeError("pure prepared route cannot claim a side effect")
@@ -1529,14 +2316,6 @@ def _validate_route(route, *, schema_version=SCHEMA_VERSION):
             or not loom_project_inspection.DIGEST_RE.fullmatch(
                 route["project_inspection_digest"]):
         raise RuntimeError("route project inspection binding is invalid")
-    if not isinstance(route.get("recommendation"), str) \
-            or len(route["recommendation"]) > 1000 \
-            or not isinstance(route.get("code"), str) or not route["code"] \
-            or not isinstance(route.get("evidence"), list) \
-            or len(route["evidence"]) > 16 \
-            or not all(isinstance(item, str) and len(item) <= 200
-                       for item in route["evidence"]):
-        raise RuntimeError("route text/evidence is invalid")
     if route["blocked"] and (not route["needs_owner"]
                               or not route["recommendation"].strip()):
         raise RuntimeError("blocked route requires one owner recommendation")
@@ -1639,6 +2418,8 @@ class PreparedInvocation:
             data.get("route_contract"), schema_version=data["schema_version"])
         if data["route_contract"]["intent"] != data["intent"]:
             raise RuntimeError("prepared intent/route mismatch")
+        validate_semantic_outcome_evidence(
+            data["route_contract"]["evidence"], domains, required=False)
         try:
             loom_project_inspection.validate(data.get("project_inspection"))
         except loom_project_inspection.InspectionError as exc:
@@ -1682,7 +2463,8 @@ class PreparedInvocation:
         return cls(**data)
 
 
-def promote_prepared_tier(prepared, tier, *, evidence):
+def promote_prepared_tier(
+        prepared, tier, *, evidence, preserve_evidence_suffix=()):
     """Return the same immutable preparation with a higher, evidenced tier.
 
     This is used only for a mechanical host-contract bound discovered after the
@@ -1697,11 +2479,50 @@ def promote_prepared_tier(prepared, tier, *, evidence):
         raise RuntimeError("tier promotion must select a strictly higher supported tier")
     if not isinstance(evidence, str) or not ID_RE.fullmatch(evidence):
         raise RuntimeError("tier promotion evidence must be a safe identifier")
+    if type(preserve_evidence_suffix) is not tuple:
+        raise RuntimeError("tier promotion evidence suffix must be an exact tuple")
     route = _thaw(prepared.route_contract)
     route["tier"] = tier
-    route["evidence"] = list(dict.fromkeys([
-        *route["evidence"][:15], evidence,
-    ]))
+    if not preserve_evidence_suffix:
+        route["evidence"] = list(dict.fromkeys([
+            *route["evidence"][:15], evidence,
+        ]))
+    else:
+        if not all(
+                isinstance(item, str) and ID_RE.fullmatch(item)
+                for item in preserve_evidence_suffix) \
+                or len(set(preserve_evidence_suffix)) \
+                != len(preserve_evidence_suffix):
+            raise RuntimeError("tier promotion evidence suffix is noncanonical")
+        if list(route["evidence"][-len(preserve_evidence_suffix):]) \
+                != list(preserve_evidence_suffix):
+            raise RuntimeError("tier promotion evidence suffix is not sealed")
+        prefix = route["evidence"][:-len(preserve_evidence_suffix)]
+        if set(prefix) & set(preserve_evidence_suffix) \
+                or evidence in route["evidence"]:
+            raise RuntimeError("tier promotion evidence suffix collides")
+        semantic = validate_semantic_outcome_evidence(
+            route["evidence"], prepared.domains, required=False)
+        semantic_token = semantic["token"] if semantic is not None else None
+        ordinary = [item for item in prefix if item != semantic_token]
+        reserved = [
+            evidence, *([semantic_token] if semantic_token is not None
+                         and semantic_token not in preserve_evidence_suffix else []),
+            *preserve_evidence_suffix,
+        ]
+        if len(reserved) > 16:
+            raise RuntimeError("tier promotion evidence suffix exceeds the route bound")
+        route["evidence"] = list(dict.fromkeys([
+            *ordinary[:16 - len(reserved)], *reserved,
+        ]))
+        final_evidence = route["evidence"]
+        if len(final_evidence) > 16 \
+                or final_evidence.count(evidence) != 1 \
+                or semantic_token is not None \
+                and final_evidence.count(semantic_token) != 1 \
+                or final_evidence[-len(preserve_evidence_suffix):] \
+                != list(preserve_evidence_suffix):
+            raise RuntimeError("tier promotion evidence postconditions failed")
     _validate_route(route, schema_version=prepared.schema_version)
     values = prepared.to_dict()
     values.pop("prepared_hash")
@@ -2900,6 +3721,12 @@ def prepare_invocation(request, *, instance_id, invocation_id, cwd=None,
             "evidence": ["invalid-config"],
             "block_reason": _config_block_reason(config_error),
         })
+    if decision["intent"] == "plan":
+        outcome_evidence = semantic_outcome_evidence(request, domains_result)
+        prior_evidence = [
+            item for item in decision["evidence"]
+            if not item.startswith(SEMANTIC_OUTCOME_EVIDENCE_ROOT)]
+        decision["evidence"] = [*prior_evidence[:15], outcome_evidence]
     _synchronize_block_reason(
         decision,
         category=("configuration" if config_error else

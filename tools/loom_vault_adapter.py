@@ -21,6 +21,177 @@ _GENERAL_SCOPE_RE = re.compile(
     r"\b(?:in general|across (?:all|every) projects?|"
     r"for (?:all|every|future) projects?)\b", re.I)
 
+_PLANNING_PREFERENCE_FIELDS = {
+    "id", "key", "effective_value", "effective_source", "stated_confidence",
+    "inferred_confidence", "domain", "task_class", "risk_class", "subject",
+    "retired_values",
+}
+_PLANNING_PREFERENCE_KEYS = {
+    "autonomy", "decision_batch_size", "report_detail", "stack",
+}
+_PLANNING_STORAGE_KEY_MAP = {
+    "report_style": "report_detail",
+    "decision_batching": "decision_batch_size",
+    "autonomy_default": "autonomy",
+    "stack_preference": "stack",
+}
+_PROJECT_ID = re.compile(r"p-[0-9a-f]{32}")
+
+
+def _canonical_uuid(value):
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value
+    except (ValueError, TypeError, AttributeError):
+        return False
+
+
+def _planning_risk(tier):
+    try:
+        return {"S": "low", "M": "medium", "L": "high", "XL": "high"}[tier]
+    except (KeyError, TypeError) as exc:
+        raise VaultAdapterError("planning preference tier is invalid") from exc
+
+
+def _validate_planning_scope(*, domains, project_id, tier, intent):
+    if intent != "plan":
+        raise VaultAdapterError("preference conflict projection is planning only")
+    if not isinstance(domains, (list, tuple)) or not domains or len(domains) > 16 \
+            or len(domains) != len(set(domains)) \
+            or any(not isinstance(domain, str)
+                   or re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", domain) is None
+                   for domain in domains) \
+            or not isinstance(project_id, str) \
+            or _PROJECT_ID.fullmatch(project_id) is None:
+        raise VaultAdapterError("planning preference projection scope is invalid")
+    return tuple(domains), _planning_risk(tier)
+
+
+def _valid_planning_preference_value(key, value):
+    return key in _PLANNING_PREFERENCE_KEYS \
+        and isinstance(value, str) \
+        and value == value.strip() \
+        and 1 <= len(value) <= 200 \
+        and "\n" not in value \
+        and "\r" not in value \
+        and all(character.isprintable() for character in value) \
+        and (key == "stack" or loom_memory.RAW_PATH_RE.search(value) is None)
+
+
+def _validate_planning_preference_record(record, *, domains, risk_class):
+    if not isinstance(record, dict) or set(record) != _PLANNING_PREFERENCE_FIELDS \
+            or not _canonical_uuid(record.get("id")) \
+            or record.get("key") not in _PLANNING_PREFERENCE_KEYS \
+            or not _valid_planning_preference_value(
+                record.get("key"), record.get("effective_value")) \
+            or record.get("effective_source") not in {
+                "stated", "inferred", "inferred-confirmed"} \
+            or record.get("subject") is not None:
+        raise VaultAdapterError("planning preference record is invalid")
+    stated = record.get("stated_confidence")
+    inferred = record.get("inferred_confidence")
+    if isinstance(stated, bool) or not isinstance(stated, (int, float)) \
+            or isinstance(inferred, bool) or not isinstance(inferred, (int, float)) \
+            or not 0 <= stated <= 1 or not 0 <= inferred <= 1 \
+            or record["effective_source"] == "stated" and (
+                stated != 1.0 or inferred != 0.0) \
+            or record["effective_source"] != "stated" and (
+                stated != 0.0 or inferred <= 0.0):
+        raise VaultAdapterError("planning preference confidence is invalid")
+    key = record["key"]
+    domain = record.get("domain")
+    task_class = record.get("task_class")
+    record_risk = record.get("risk_class")
+    if key == "stack":
+        valid_scope = domain in domains and task_class is None and record_risk is None
+    elif key == "autonomy":
+        valid_scope = domain is None and task_class == "plan" \
+            and record_risk == risk_class
+    else:
+        valid_scope = domain is None and task_class is None and record_risk is None
+    retired = record.get("retired_values")
+    if not valid_scope or not isinstance(retired, list) or len(retired) > 16 \
+            or len(retired) != len(set(retired)) \
+            or any(not _valid_planning_preference_value(key, item)
+                   for item in retired):
+        raise VaultAdapterError("planning preference scope or history is invalid")
+    return (key, domain if key == "stack" else None)
+
+
+def validate_planning_preference_projection(
+        projection, *, domains, project_id, tier, intent, owner_vault_id=None):
+    """Validate the closed public/private planning preference projection."""
+    domains, risk_class = _validate_planning_scope(
+        domains=domains, project_id=project_id, tier=tier, intent=intent)
+    if owner_vault_id is not None and not _canonical_uuid(owner_vault_id):
+        raise VaultAdapterError("planning preference owner identity is invalid")
+    if not isinstance(projection, dict) or set(projection) != {
+            "public_preferences", "conflict_keys", "private_conflict_evidence"}:
+        raise VaultAdapterError("planning preference projection fields are invalid")
+    public = projection["public_preferences"]
+    keys = projection["conflict_keys"]
+    private = projection["private_conflict_evidence"]
+    if not isinstance(public, list) or len(public) > 32 \
+            or not isinstance(keys, list) or keys != sorted(set(keys)) \
+            or any(key not in _PLANNING_PREFERENCE_KEYS for key in keys) \
+            or not isinstance(private, list) or len(private) > 128:
+        raise VaultAdapterError("planning preference projection values are invalid")
+
+    private_slots = set()
+    private_identities = set()
+    private_keys = set()
+    for item in private:
+        if not isinstance(item, dict) or set(item) != {
+                "conflict_id", "preference_key", "owner_vault_id", "domain",
+                "project_id", "task_class", "risk_class"} \
+                or not _canonical_uuid(item.get("conflict_id")) \
+                or not _canonical_uuid(item.get("owner_vault_id")) \
+                or owner_vault_id is not None \
+                and item.get("owner_vault_id") != owner_vault_id \
+                or item.get("preference_key") not in _PLANNING_PREFERENCE_KEYS \
+                or item.get("domain") not in domains \
+                or item.get("project_id") != project_id \
+                or item.get("task_class") != "plan" \
+                or item.get("risk_class") != risk_class:
+            raise VaultAdapterError("planning preference conflict evidence is invalid")
+        identity = (
+            item["conflict_id"], item["preference_key"], item["domain"])
+        if identity in private_identities:
+            raise VaultAdapterError("planning preference conflict evidence is duplicated")
+        private_identities.add(identity)
+        private_keys.add(item["preference_key"])
+        private_slots.add((
+            item["preference_key"],
+            item["domain"] if item["preference_key"] == "stack" else None))
+    if keys != sorted(private_keys):
+        raise VaultAdapterError("planning preference conflict keys do not match evidence")
+
+    public_slots = set()
+    neutral_slots = set()
+    preference_ids = set()
+    for item in public:
+        if isinstance(item, dict) and item.get("neutral_default") is True:
+            expected_fields = {"key", "neutral_default"}
+            if item.get("key") == "stack":
+                expected_fields.add("domain")
+            if set(item) != expected_fields \
+                    or item.get("key") not in _PLANNING_PREFERENCE_KEYS \
+                    or item.get("key") == "stack" and item.get("domain") not in domains:
+                raise VaultAdapterError("neutral planning preference is invalid")
+            slot = (item["key"], item.get("domain"))
+            if slot in neutral_slots:
+                raise VaultAdapterError("neutral planning preference is duplicated")
+            neutral_slots.add(slot)
+            continue
+        slot = _validate_planning_preference_record(
+            item, domains=domains, risk_class=risk_class)
+        if item["id"] in preference_ids or slot in public_slots:
+            raise VaultAdapterError("planning preference record is duplicated")
+        preference_ids.add(item["id"])
+        public_slots.add(slot)
+    if neutral_slots != private_slots or public_slots & private_slots:
+        raise VaultAdapterError("planning preference quarantine does not match evidence")
+    return projection
+
 
 def _domain_scope(statement, domains):
     matches = []
@@ -270,6 +441,88 @@ class VaultMemoryAdapter:
             }
         return sorted(values.values(), key=lambda item: (
             item["key"], item.get("domain") or "", item["id"]))
+
+    def project_planning_preferences(
+            self, *, preferences, domains, project_id, tier, intent):
+        """Separate usable planning preferences from private conflict evidence."""
+        domains, risk_class = _validate_planning_scope(
+            domains=domains, project_id=project_id, tier=tier, intent=intent)
+        if not isinstance(preferences, list) or len(preferences) > 32:
+            raise VaultAdapterError("planning preference records are invalid")
+        seen_preferences = set()
+        seen_slots = set()
+        for preference in preferences:
+            slot = _validate_planning_preference_record(
+                preference, domains=domains, risk_class=risk_class)
+            if preference["id"] in seen_preferences or slot in seen_slots:
+                raise VaultAdapterError("planning preference record is duplicated")
+            seen_preferences.add(preference["id"])
+            seen_slots.add(slot)
+        owner_vault_id = self.vault.identity()["owner_vault_id"]
+        if not _canonical_uuid(owner_vault_id):
+            raise VaultAdapterError("planning preference owner identity is invalid")
+        conflict_keys = set()
+        conflict_slots = set()
+        private_evidence = []
+        seen = set()
+        for domain in domains:
+            conflicts = self.vault.relevant_preference_conflicts(
+                domain=domain, project_id=project_id)
+            if not isinstance(conflicts, list) or len(conflicts) > 128:
+                raise VaultAdapterError("preference conflict records are invalid")
+            for conflict in conflicts:
+                if not isinstance(conflict, dict) or set(conflict) != {
+                        "conflict_id", "preference_key"} \
+                        or not _canonical_uuid(conflict.get("conflict_id")):
+                    raise VaultAdapterError("preference conflict record is invalid")
+                public_key = _PLANNING_STORAGE_KEY_MAP.get(conflict["preference_key"])
+                if public_key is None:
+                    raise VaultAdapterError(
+                        "preference conflict names an unsupported planning key")
+                identity = (conflict["conflict_id"], public_key, domain)
+                if identity in seen:
+                    raise VaultAdapterError("preference conflict record is duplicated")
+                seen.add(identity)
+                conflict_keys.add(public_key)
+                conflict_slots.add((
+                    public_key, domain if public_key == "stack" else None))
+                private_evidence.append({
+                    "conflict_id": conflict["conflict_id"],
+                    "preference_key": public_key,
+                    "owner_vault_id": owner_vault_id,
+                    "domain": domain,
+                    "project_id": project_id,
+                    "task_class": "plan",
+                    "risk_class": risk_class,
+                })
+        usable = [
+            item for item in preferences
+            if isinstance(item, dict) and (
+                item.get("key"),
+                item.get("domain") if item.get("key") == "stack" else None,
+            ) not in conflict_slots
+        ]
+        neutral_defaults = []
+        for key, domain in sorted(conflict_slots):
+            neutral = {"key": key, "neutral_default": True}
+            if domain is not None:
+                neutral["domain"] = domain
+            neutral_defaults.append(neutral)
+        public_preferences = [
+            *usable,
+            *neutral_defaults,
+        ]
+        projection = {
+            "public_preferences": public_preferences,
+            "conflict_keys": sorted(conflict_keys),
+            "private_conflict_evidence": sorted(
+                private_evidence,
+                key=lambda item: (
+                    item["preference_key"], item["domain"], item["conflict_id"])),
+        }
+        return validate_planning_preference_projection(
+            projection, domains=domains, project_id=project_id, tier=tier,
+            intent=intent, owner_vault_id=owner_vault_id)
 
     def relevant_preference_conflicts(self, *, domains, project_id):
         conflicts = {}

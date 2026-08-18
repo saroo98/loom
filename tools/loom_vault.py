@@ -39,6 +39,7 @@ MAX_DEVICE_HISTORY = 256
 MAX_QUARANTINE_BYTES = 64 * 1024 * 1024
 MAX_STATE_ENTITIES = 1024
 MAX_ENTITY_TYPE = 256
+EXECUTOR_GUARD_HEAD_ENTITY_TYPE = "executor-guard-head-v1"
 MAX_PLAN_REVISION_ARCHIVE_STORED_BYTES = 4 * 1024 * 1024
 PLAN_REVISION_ARCHIVE_CHUNK_BYTES = 512 * 1024
 MAX_PLAN_REVISION_ARCHIVE_PARTS = 8
@@ -84,6 +85,134 @@ class _ClosingConnection(sqlite3.Connection):
 def _canonical(value):
     return json.dumps(
         value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+
+
+def _hex64(value):
+    return isinstance(value, str) and len(value) == 64 \
+        and all(character in "0123456789abcdef" for character in value)
+
+
+def _validate_executor_guard_operation(value):
+    fields = {
+        "operation_id", "host_turn_sha256", "tool_name", "input_sha256",
+        "kind", "state", "supervisor_receipt",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or not all(_hex64(value.get(field)) for field in (
+                "operation_id", "host_turn_sha256", "input_sha256")) \
+            or not isinstance(value.get("tool_name"), str) \
+            or not 1 <= len(value["tool_name"]) <= 256 \
+            or value.get("kind") not in {"structured-write", "supervised-process"} \
+            or value.get("state") not in {"open", "closed"}:
+        raise VaultError("executor guard head operation is invalid")
+    receipt = value["supervisor_receipt"]
+    if value["kind"] == "structured-write" and receipt is not None:
+        raise VaultError("executor guard structured operation carries process evidence")
+    if value["kind"] == "supervised-process" \
+            and ((value["state"] == "open") != (receipt is None)):
+        raise VaultError("executor guard process operation state is invalid")
+    if receipt is not None and not isinstance(receipt, dict):
+        raise VaultError("executor guard process evidence is invalid")
+
+
+def _validate_executor_guard_head(
+        value, *, crypto, owner_vault_id, expected_project_id=None):
+    fields = {
+        "schema_version", "kind", "owner_vault_id", "action_id", "project_id",
+        "generation_id", "action_operation_id", "sequence",
+        "previous_head_sha256", "coverage_state", "host_session_sha256",
+        "coverage_failure", "operations", "freeze", "storage_parent_identity",
+        "guard_sha256", "guard_authentication",
+    }
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 3 \
+            or value.get("kind") != "loom-executor-guard-head-v1" \
+            or value.get("owner_vault_id") != owner_vault_id:
+        raise VaultError("executor guard head fields are invalid")
+    try:
+        if str(uuid.UUID(value["owner_vault_id"])) != value["owner_vault_id"] \
+                or str(uuid.UUID(value["action_id"])) != value["action_id"]:
+            raise ValueError("non-canonical identity")
+    except (KeyError, TypeError, ValueError, AttributeError) as exc:
+        raise VaultError("executor guard head identity is invalid") from exc
+    project_id = value.get("project_id")
+    generation_id = value.get("generation_id")
+    sequence = value.get("sequence")
+    previous = value.get("previous_head_sha256")
+    if not isinstance(project_id, str) or len(project_id) != 34 \
+            or not project_id.startswith("p-") \
+            or any(character not in "0123456789abcdef" for character in project_id[2:]) \
+            or (expected_project_id is not None and project_id != expected_project_id) \
+            or not isinstance(generation_id, str) or not 1 <= len(generation_id) <= 128 \
+            or any(character not in (
+                "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+                   for character in generation_id) \
+            or not _hex64(value.get("action_operation_id")) \
+            or type(sequence) is not int or sequence < 1 \
+            or (sequence == 1) != (previous is None) \
+            or (previous is not None and not _hex64(previous)):
+        raise VaultError("executor guard head identity or sequence is invalid")
+    if value.get("coverage_state") not in {"awaiting-host", "active"} \
+            or (value.get("host_session_sha256") is not None
+                and not _hex64(value["host_session_sha256"])) \
+            or (value["coverage_state"] == "active") \
+            != (value.get("host_session_sha256") is not None) \
+            or type(value.get("coverage_failure")) is not bool \
+            or not isinstance(value.get("operations"), list) \
+            or len(value["operations"]) > 64:
+        raise VaultError("executor guard head state is invalid")
+    seen = set()
+    for operation in value["operations"]:
+        _validate_executor_guard_operation(operation)
+        if operation["operation_id"] in seen:
+            raise VaultError("executor guard head operation is duplicated")
+        seen.add(operation["operation_id"])
+    parent = value.get("storage_parent_identity")
+    if not isinstance(parent, dict) or set(parent) != {
+            "platform", "path_sha256", "kind", "device", "inode"} \
+            or parent.get("kind") != "directory" \
+            or not isinstance(parent.get("platform"), str) or not parent["platform"] \
+            or not _hex64(parent.get("path_sha256")) \
+            or any(type(parent.get(field)) is not int for field in ("device", "inode")):
+        raise VaultError("executor guard head parent binding is invalid")
+    freeze = value.get("freeze")
+    if freeze is not None:
+        if not isinstance(freeze, dict) or set(freeze) != {
+                "operation_class", "reason_code", "subject_sha256",
+                "operation_count", "freeze_sha256"} \
+                or not isinstance(freeze.get("operation_class"), str) \
+                or not isinstance(freeze.get("reason_code"), str) \
+                or not 1 <= len(freeze["operation_class"]) <= 64 \
+                or not 1 <= len(freeze["reason_code"]) <= 64 \
+                or not _hex64(freeze.get("subject_sha256")) \
+                or freeze.get("operation_count") != len(value["operations"]):
+            raise VaultError("executor guard head freeze is invalid")
+        unsigned_freeze = {
+            key: item for key, item in freeze.items() if key != "freeze_sha256"}
+        if freeze.get("freeze_sha256") != hashlib.sha256(
+                _canonical(unsigned_freeze)).hexdigest():
+            raise VaultError("executor guard head freeze digest is invalid")
+    unsigned = {
+        key: item for key, item in value.items()
+        if key not in {"guard_sha256", "guard_authentication"}
+    }
+    guard_sha256 = hashlib.sha256(_canonical(unsigned)).hexdigest()
+    if value.get("guard_sha256") != guard_sha256:
+        raise VaultError("executor guard head content digest is invalid")
+    authentication = value.get("guard_authentication")
+    expected_authentication = {
+        "mode": "owner-vault-blind-index-v1",
+        "owner_vault_id": owner_vault_id,
+        "tag": crypto.blind_index(
+            EXECUTOR_GUARD_HEAD_ENTITY_TYPE,
+            ":".join((owner_vault_id, project_id, value["action_id"],
+                       str(sequence), previous or "absent", guard_sha256))),
+    }
+    if authentication != expected_authentication:
+        raise VaultError("executor guard head authentication is invalid")
+    if len(_canonical(value)) > 512 * 1024:
+        raise VaultError("executor guard head exceeds bound")
+    return json.loads(json.dumps(value))
 
 
 def _validate_plan_generation_archive_payload(payload, project_id):
@@ -1182,6 +1311,8 @@ class OwnerVault:
             raise VaultError("state entity identity is invalid")
         if len(entity_type) > 64 or len(entity_id) > 128:
             raise VaultError("state entity identity exceeds bound")
+        if entity_type == EXECUTOR_GUARD_HEAD_ENTITY_TYPE:
+            raise VaultError("executor guard head entity type is reserved")
         if len(_canonical(payload)) > 1024 * 1024:
             raise VaultError("state entity exceeds bound")
 
@@ -1196,6 +1327,100 @@ class OwnerVault:
                        "recomputed": 0, "quarantined": 0}
             self._apply_event(connection, event=event, body=body, receipt=receipt)
             return {"entity_type": entity_type, "entity_id": entity_id}
+
+        return self.run_transaction(write)
+
+    def _read_executor_guard_head_connection(self, connection, project_id):
+        metadata = self._metadata(connection)
+        row = connection.execute(
+            "SELECT * FROM state_entities WHERE entity_type=? AND entity_id=?",
+            (EXECUTOR_GUARD_HEAD_ENTITY_TYPE, project_id)).fetchone()
+        if row is None:
+            return None
+        aad = (
+            f"entity:{metadata['owner_vault_id']}:"
+            f"{EXECUTOR_GUARD_HEAD_ENTITY_TYPE}:{project_id}").encode()
+        try:
+            value = json.loads(self.crypto.open(row["ciphertext"], aad).decode("utf-8"))
+        except (ValueError, UnicodeError, json.JSONDecodeError) as exc:
+            raise VaultError("executor guard head authentication failed") from exc
+        value = _validate_executor_guard_head(
+            value, crypto=self.crypto, owner_vault_id=metadata["owner_vault_id"],
+            expected_project_id=project_id)
+        if row["source_sequence"] != value["sequence"]:
+            raise VaultError("executor guard head storage sequence is invalid")
+        return value
+
+    def read_executor_guard_head(self, project_id):
+        if not isinstance(project_id, str) or len(project_id) != 34 \
+                or not project_id.startswith("p-") \
+                or any(character not in "0123456789abcdef" for character in project_id[2:]):
+            raise VaultError("executor guard head project identity is invalid")
+        with self._connect() as connection:
+            return self._read_executor_guard_head_connection(connection, project_id)
+
+    def advance_executor_guard_head(
+            self, project_id, *, expected_predecessor_sha256, candidate):
+        if not isinstance(project_id, str) or len(project_id) != 34 \
+                or not project_id.startswith("p-") \
+                or any(character not in "0123456789abcdef" for character in project_id[2:]) \
+                or (expected_predecessor_sha256 is not None
+                    and not _hex64(expected_predecessor_sha256)):
+            raise VaultError("executor guard head CAS identity is invalid")
+
+        def write(connection):
+            metadata = self._metadata(connection)
+            checked = _validate_executor_guard_head(
+                candidate, crypto=self.crypto,
+                owner_vault_id=metadata["owner_vault_id"],
+                expected_project_id=project_id)
+            current = self._read_executor_guard_head_connection(connection, project_id)
+            if current == checked:
+                if checked["previous_head_sha256"] != expected_predecessor_sha256:
+                    raise VaultError("executor guard head idempotent predecessor is invalid")
+                return {"head": checked, "idempotent": True}
+            if current is None:
+                if expected_predecessor_sha256 is not None \
+                        or checked["sequence"] != 1 \
+                        or checked["previous_head_sha256"] is not None:
+                    raise VaultError("executor guard head predecessor is absent")
+                if connection.execute(
+                        "SELECT COUNT(*) FROM state_entities").fetchone()[0] \
+                        >= MAX_STATE_ENTITIES:
+                    raise VaultError("state entity bound reached before executor guard head")
+                if connection.execute(
+                        "SELECT COUNT(*) FROM state_entities WHERE entity_type=?",
+                        (EXECUTOR_GUARD_HEAD_ENTITY_TYPE,)).fetchone()[0] \
+                        >= MAX_STATE_ENTITIES:
+                    raise VaultError("executor guard head project bound reached")
+            else:
+                if current["guard_sha256"] != expected_predecessor_sha256 \
+                        or checked["previous_head_sha256"] != expected_predecessor_sha256 \
+                        or checked["sequence"] != current["sequence"] + 1:
+                    raise VaultError("executor guard head predecessor does not match")
+                for field in (
+                        "owner_vault_id", "project_id", "storage_parent_identity"):
+                    if checked[field] != current[field]:
+                        raise VaultError("executor guard head identity changed during CAS")
+            aad = (
+                f"entity:{metadata['owner_vault_id']}:"
+                f"{EXECUTOR_GUARD_HEAD_ENTITY_TYPE}:{project_id}").encode()
+            connection.execute(
+                "INSERT INTO state_entities(entity_type,entity_id,source_sequence,"
+                "source_event_id,source_device_id,ciphertext,updated_at) "
+                "VALUES(?,?,?,?,?,?,?) ON CONFLICT(entity_type,entity_id) DO UPDATE SET "
+                "source_sequence=excluded.source_sequence,"
+                "source_event_id=excluded.source_event_id,"
+                "source_device_id=excluded.source_device_id,"
+                "ciphertext=excluded.ciphertext,updated_at=excluded.updated_at",
+                (EXECUTOR_GUARD_HEAD_ENTITY_TYPE, project_id, checked["sequence"],
+                 "executor-guard-head:" + checked["guard_sha256"],
+                 metadata["device_id"],
+                 self.crypto.seal(_canonical(checked), aad), _stamp()))
+            observed = self._read_executor_guard_head_connection(connection, project_id)
+            if observed != checked:
+                raise VaultError("executor guard head durable reread does not match")
+            return {"head": observed, "idempotent": False}
 
         return self.run_transaction(write)
 
@@ -1737,6 +1962,8 @@ class OwnerVault:
         if not isinstance(entity_type, str) or not entity_type \
                 or type(limit) is not int or not 1 <= limit <= 512:
             raise VaultError("entity listing inputs are invalid")
+        if entity_type == EXECUTOR_GUARD_HEAD_ENTITY_TYPE:
+            raise VaultError("executor guard head entity type is reserved")
         identity = self.identity()["owner_vault_id"]
         with self._connect() as connection:
             rows = connection.execute(
@@ -2409,6 +2636,8 @@ class OwnerVault:
                     or len(entity_type) > 64 or len(entity_id) > 128 \
                     or len(_canonical(payload["value"])) > 1024 * 1024:
                 raise VaultError("state entity event exceeds its contract bounds")
+            if entity_type == EXECUTOR_GUARD_HEAD_ENTITY_TYPE:
+                raise VaultError("executor guard head events are reserved for local CAS authority")
             if connection.execute(
                     "SELECT 1 FROM tombstones WHERE record_id=?",
                     (entity_id,)).fetchone():
@@ -2433,11 +2662,17 @@ class OwnerVault:
                 "SELECT entity_id FROM state_entities WHERE entity_type=? "
                 "ORDER BY source_sequence DESC,entity_id LIMIT -1 OFFSET ?)",
                 (entity_type, entity_type, MAX_ENTITY_TYPE))
+            reserved_count = connection.execute(
+                "SELECT COUNT(*) FROM state_entities WHERE entity_type=?",
+                (EXECUTOR_GUARD_HEAD_ENTITY_TYPE,)).fetchone()[0]
+            ordinary_limit = max(0, MAX_STATE_ENTITIES - reserved_count)
             connection.execute(
-                "DELETE FROM state_entities WHERE (entity_type,entity_id) IN ("
+                "DELETE FROM state_entities WHERE entity_type!=? AND (entity_type,entity_id) IN ("
                 "SELECT entity_type,entity_id FROM state_entities "
+                "WHERE entity_type!=? "
                 "ORDER BY source_sequence DESC,entity_type,entity_id LIMIT -1 OFFSET ?)",
-                (MAX_STATE_ENTITIES,))
+                (EXECUTOR_GUARD_HEAD_ENTITY_TYPE,
+                 EXECUTOR_GUARD_HEAD_ENTITY_TYPE, ordinary_limit))
             receipt["added" if changed and existing is None else
                     "updated" if changed else "deduplicated"] += 1
             return

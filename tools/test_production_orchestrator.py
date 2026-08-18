@@ -7,6 +7,7 @@ import json
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,10 @@ import loom_fault_harness  # noqa: E402
 import loom_install  # noqa: E402
 import loom_improvement  # noqa: E402
 import loom_lifecycle  # noqa: E402
+import loom_lifecycle_kernel  # noqa: E402
+import loom_lifecycle_transition  # noqa: E402
+import loom_codex_lifecycle  # noqa: E402
+import loom_executor_guard  # noqa: E402
 import loom_lint  # noqa: E402
 import loom_adapter_protocol  # noqa: E402
 import loom_domain_discovery  # noqa: E402
@@ -38,10 +43,41 @@ import loom_proofline  # noqa: E402
 import loom_reliability  # noqa: E402
 import loom_release  # noqa: E402
 import loom_session  # noqa: E402
+import loom_windows_acl  # noqa: E402
 from test_loom_vault_v11 import TestCrypto  # noqa: E402
 
 
 TODAY = dt.datetime.now(dt.timezone.utc).date().isoformat()
+
+PRE_UX104_PLANNING_CONTROL_V1 = {
+    "schema_version": 1,
+    "primary_operation": "plan",
+    "relation": "new",
+    "prohibitions": [],
+    "explicitness": "defaulted",
+    "evidence": ["safe-new-default"],
+    "blocked": False,
+    "block_reason": None,
+    "control_sha256": (
+        "7aaf553efc41778311b4743cb6a1eb0f0f7c424afddca14c95c1a0a15ed0589a"),
+}
+
+
+def _sealed_preference(identifier, key, value, *, domain=None,
+                       task_class=None, risk_class=None):
+    return {
+        "id": identifier,
+        "key": key,
+        "effective_value": value,
+        "effective_source": "stated",
+        "stated_confidence": 1.0,
+        "inferred_confidence": 0.0,
+        "domain": domain,
+        "task_class": task_class,
+        "risk_class": risk_class,
+        "subject": None,
+        "retired_values": [],
+    }
 
 
 def _write(path, text):
@@ -554,7 +590,17 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 "-".join(("private", "fixture", "token")),
                 "-".join(("owner", "fixture", "token")),
             ], source_classification="public-release")
-        loom_install.install(cls.public, cls.installed_fixture)
+        installed = loom_install.install(cls.public, cls.installed_fixture)
+        cls.installed_fixture_check = {
+            key: installed[key]
+            for key in ("status", "install_id", "files_verified", "receipt_hash")
+        }
+        cls.fixture_dependencies = {
+            "install_check": loom_install.check,
+            "filter_drivers":
+                loom_orchestrator.loom_survey._configured_filter_drivers,
+            "run_git": loom_orchestrator.loom_survey.run_git,
+        }
         cls.repo_fixture = cls.fixture_root / "repo-fixture"
         (cls.repo_fixture / "src").mkdir(parents=True)
         _write(cls.repo_fixture / "src" / "app.py", "VALUE = 1\n")
@@ -564,6 +610,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if cls.fixture_dependencies["install_check"](cls.installed_fixture) \
+                != cls.installed_fixture_check:
+            raise AssertionError("the shared installed fixture changed during the test class")
         cls.fixture_temp.cleanup()
 
     def setUp(self):
@@ -577,17 +626,46 @@ class ProductionOrchestratorTests(unittest.TestCase):
         (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         self.repo = self.root / "target"
-        loom_fault_harness.clone_git_fixture(
-            self.repo_fixture, self.repo, self.home / "git-home")
+        self._copy_filesystem_fixture(self.repo)
+        self.runtime_patches = (
+            mock.patch.object(
+                loom_install, "check",
+                side_effect=loom_fault_harness.immutable_install_check(
+                    self.fixture_dependencies["install_check"],
+                    self.installed_fixture,
+                    self.installed_fixture_check)),
+            mock.patch.object(
+                loom_orchestrator.loom_survey, "_configured_filter_drivers",
+                side_effect=loom_fault_harness.filesystem_fixture_filter_drivers(
+                    self.fixture_dependencies["filter_drivers"], self.root)),
+            mock.patch.object(
+                loom_orchestrator.loom_survey, "run_git",
+                side_effect=loom_fault_harness.filesystem_fixture_git(
+                    self.fixture_dependencies["run_git"], self.root)),
+        )
+        for patcher in self.runtime_patches:
+            patcher.start()
         self.request = "Plan a financial double-entry accounting change to src/app.py"
         self.request_sequence = 0
 
     def tearDown(self):
+        for patcher in reversed(self.runtime_patches):
+            patcher.stop()
         if self.prior_legacy_test_backend is None:
             os.environ.pop("LOOM_TEST_ALLOW_LEGACY_BACKEND", None)
         else:
             os.environ["LOOM_TEST_ALLOW_LEGACY_BACKEND"] = self.prior_legacy_test_backend
         self.temp.cleanup()
+
+    @classmethod
+    def _copy_filesystem_fixture(cls, destination):
+        shutil.copytree(
+            cls.repo_fixture, destination,
+            ignore=shutil.ignore_patterns(".git"))
+
+    def _enable_git_fixture(self):
+        loom_fault_harness.initialize_git_fixture(
+            self.repo, self.home / "git-home")
 
     def cli(self, *args):
         values = list(map(str, args))
@@ -852,6 +930,20 @@ class ProductionOrchestratorTests(unittest.TestCase):
             install_root=self.installed)
         return action, completed
 
+    def arm_executor_guard(self, started, *, suffix="1"):
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-" + suffix,
+                "turn_id": "host-turn-" + suffix,
+                "tool_use_id": "start-" + suffix,
+                "tool_name": "mcp__loom__start", "tool_input": {},
+            }, lifecycle_control=True)
+        return path, action
+
     def test_legacy_test_backend_requires_exact_disposable_marker(self):
         marker = self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER
         self.assertTrue(loom_orchestrator._disposable_test_legacy_backend_allowed(
@@ -862,9 +954,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_installed_phase_8_request_uses_deep_target_route(self):
         request = (
-            "Phase 8 and 9 and 10 research is done and it's in the folders. "
-            "Read all of them, omit what is wrong, make a Loom plan for all three "
-            "phases separately and then start Phase 8's plan implementation."
+            "Plan three separate Loom implementation phases from the completed Phase 8, "
+            "9, and 10 research folders. Cover outcomes and requirements, architecture "
+            "boundaries, and verification evidence. Do not implement."
         )
         opened = self.cli(
             "invoke", "--request", request, "--cwd", self.repo,
@@ -872,7 +964,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             "--timeout-seconds", "300")
         self.assertEqual(0, opened.returncode, opened.stderr + opened.stdout)
         action = json.loads(opened.stdout)
-        self.assertEqual("L", action["tier"])
+        self.assertEqual("M", action["tier"])
         self.assertEqual(["llm-agent"], action["domains"])
         self.assertEqual(
             loom_orchestrator.PLAN_CONTRACT_SCHEMA_VERSION,
@@ -884,7 +976,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotIn("interaction-accessibility", active)
         self.assertNotIn("migration-release", active)
 
-    def test_explicit_no_file_modification_plan_leaves_project_unchanged(self):
+    def test_explicit_no_file_modification_returns_sealed_inline_plan(self):
+        self._enable_git_fixture()
         request = (
             "Produce a reviewable plan for adding a short 'Development notes' section "
             "to README.md in this disposable project. Do not implement the plan, modify "
@@ -898,9 +991,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
 
-        self.assertEqual("blocked", result["status"])
-        self.assertEqual("project-write-prohibited", result["code"])
-        self.assertIn("stopped before changing the project", result["user_message"])
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertIn("Understood outcome:", result["user_message"])
+        self.assertIn("Proposed sequence:", result["user_message"])
+        self.assertIn("Known constraints or uncertainty:", result["user_message"])
+        self.assertIn("Reason code: PROJECT_WRITES_PROHIBITED", result["user_message"])
+        self.assertEqual(1, result["user_message"].count("Safe next action:"))
+        self.assertRegex(result["receipt_hash"], r"^[0-9a-f]{64}$")
+        self.assertIsNone(result["terminal_authority"]["implementation_authorized"])
         self.assertFalse((self.repo / "plans").exists())
         self.assertEqual(before_manifest, loom_reliability.deterministic_manifest(self.repo))
         self.assertEqual(before_status, subprocess.run(
@@ -920,37 +1020,423 @@ class ProductionOrchestratorTests(unittest.TestCase):
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
 
-        self.assertEqual("blocked", result["status"])
-        self.assertEqual("project-write-prohibited", result["code"])
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
         self.assertFalse((self.repo / "plans").exists())
         self.assertEqual(before_manifest, loom_reliability.deterministic_manifest(self.repo))
 
-    def test_zero_project_write_detection_is_explicit_and_bounded(self):
-        blocked = (
-            "Plan this change but do not modify files.",
-            "Plan this change but do not implement or modify files.",
-            "Plan this change but do not implement it or modify project files.",
-            "Plan this change but do not implement this or modify the project files.",
-            "Plan this change but do not implement, modify files, or publish.",
-            "Plan this change with no project writes.",
-            "Plan this change without touching any files.",
-            "Plan this change and leave the project byte-for-byte unchanged.",
+    def test_inline_recovery_is_request_specific_without_prompt_or_project_leaks(self):
+        """Break caught: safe inline recovery is generic or echoes raw private wording."""
+        before = loom_reliability.deterministic_manifest(self.repo)
+        cases = (
+            (
+                "Plan accounting ledger validation with no project writes. "
+                "Private case velvet-otter.",
+                "accounting", "velvet-otter",
+            ),
+            (
+                "Plan accessible website navigation with no project writes. "
+                "Private case amber-lynx.",
+                "website", "amber-lynx",
+            ),
         )
-        allowed = (
-            "Plan a tool that does not modify files.",
-            "Plan read-only evidence handling.",
-            "Plan this change without modifying generated files.",
-            "Do not ask questions, modify files directly.",
-            "Do not merely describe the fix, modify files and test it.",
+        messages = []
+        for request, domain, private_marker in cases:
+            with self.subTest(domain=domain):
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                messages.append(result["user_message"])
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertIn(domain, result["user_message"])
+                self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+        self.assertNotEqual(messages[0], messages[1])
+
+    def test_inline_recovery_distinguishes_same_domain_semantic_outcomes(self):
+        """Break caught: same-domain recovery loses the requested outcome."""
+        before = loom_reliability.deterministic_manifest(self.repo)
+        cases = (
+            (
+                "Plan an accounting reconciliation workflow with no project writes. "
+                "Private marker cobalt-heron and owner value violet-7.",
+                "reconciliation", ("cobalt-heron", "violet-7"),
+            ),
+            (
+                "Plan an accounting tax-period calendar and filed-period lock with no "
+                "project writes. Private marker silver-marten and owner value amber-9.",
+                "tax-period", ("silver-marten", "amber-9"),
+            ),
         )
-        for request in blocked:
+        messages = []
+        for request, expected_focus, private_values in cases:
+            with self.subTest(expected_focus=expected_focus):
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                message = result["user_message"]
+                messages.append(message)
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertIn(expected_focus, message.casefold())
+                for private_value in private_values:
+                    self.assertNotIn(private_value, json.dumps(result, sort_keys=True))
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+        self.assertNotEqual(messages[0], messages[1])
+
+    def test_unanchored_requests_return_distinct_safe_requirement_capsules(self):
+        """Break caught: inline assistance is generic or persists ordinary wording."""
+        before = loom_reliability.deterministic_manifest(self.repo)
+        before_actions = sorted(
+            path.relative_to(self.home).as_posix()
+            for path in self.home.glob(
+                "instances/*/runtime/projects/*/orchestrations/*.json"))
+        cases = (
+            (
+                "I need an accounting reconciliation workflow. "
+                "Private marker copper-ibis.",
+                "reconciliation",
+                "copper-ibis",
+            ),
+            (
+                "How about adding an accounting tax-period calendar and filed-period "
+                "lock? Private marker indigo-tern.",
+                "tax-period calendar and filed-period lock/reopen authority",
+                "indigo-tern",
+            ),
+        )
+        messages = []
+
+        for request, expected_requirement, private_marker in cases:
+            with self.subTest(expected_requirement=expected_requirement):
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                message = result["user_message"]
+                messages.append(message)
+                self.assertEqual("completed", result["status"])
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertIn("Requirement capsule:", message)
+                self.assertIn(expected_requirement, message.casefold())
+                self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+                self.assertNotIn("action_path", result)
+                self.assertFalse((self.repo / "plans").exists())
+                self.assertEqual(before, loom_reliability.deterministic_manifest(self.repo))
+                self.assertEqual(
+                    before_actions,
+                    sorted(
+                        path.relative_to(self.home).as_posix()
+                        for path in self.home.glob(
+                            "instances/*/runtime/projects/*/orchestrations/*.json")))
+        self.assertNotEqual(messages[0], messages[1])
+
+    def test_installed_inline_capsules_distinguish_closed_same_domain_capabilities(self):
+        """Break caught: installed same-domain assistance collapses to generic output."""
+        before = loom_reliability.deterministic_manifest(self.repo)
+        before_actions = sorted(
+            path.relative_to(self.home).as_posix()
+            for path in self.home.glob(
+                "instances/*/runtime/projects/*/orchestrations/*.json"))
+        cases = (
+            (
+                "I need CSV export for inventory reports. Private marker sapphire-17.",
+                "tabular data export with explicit field and failure behavior",
+                "sapphire-17",
+            ),
+            (
+                "I need password reset and account recovery. Private marker topaz-23.",
+                "credential reset and account recovery behavior",
+                "topaz-23",
+            ),
+            (
+                "I need accessible search and keyboard navigation. "
+                "Private marker onyx-31.",
+                "accessible search and keyboard navigation behavior",
+                "onyx-31",
+            ),
+            (
+                "I need local backup and restore recovery. Private marker quartz-47.",
+                "backup, restore, integrity, and recovery behavior",
+                "quartz-47",
+            ),
+        )
+        messages = []
+
+        for request, expected_requirement, private_marker in cases:
+            with self.subTest(expected_requirement=expected_requirement):
+                completed = self.cli(
+                    "invoke", "--request", request, "--cwd", self.repo,
+                    "--home", self.home, "--install-root", self.installed)
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                result = json.loads(completed.stdout)
+                message = result["user_message"]
+                messages.append(message)
+                self.assertEqual("completed", result["status"])
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertIn(expected_requirement, message.casefold())
+                self.assertIn("semantic-outcome-v2.unclassified.", message)
+                self.assertNotIn(private_marker, json.dumps(result, sort_keys=True))
+                self.assertNotIn("action_path", result)
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+                self.assertFalse((self.repo / "plans").exists())
+                self.assertEqual(
+                    before_actions,
+                    sorted(
+                        path.relative_to(self.home).as_posix()
+                        for path in self.home.glob(
+                            "instances/*/runtime/projects/*/orchestrations/*.json")))
+
+        self.assertEqual(len(cases), len(set(messages)))
+
+    def test_installed_product_prefix_requests_preserve_all_authority_state(self):
+        """Break caught: installed prefix parsing mutates lifecycle or memory state."""
+        requests = (
+            "Cancel button styling.",
+            "Close this modal.",
+            "Keep going indicator.",
+            "Repair the plan parser.",
+            "Fix the stale plan template.",
+            "Remember button styling.",
+            "Forget password screen.",
+            "Show status page design.",
+        )
+        repo_before = loom_reliability.deterministic_manifest(self.repo)
+
+        for request in requests:
             with self.subTest(request=request):
-                self.assertTrue(
-                    loom_orchestrator._explicit_zero_project_write_requested(request))
-        for request in allowed:
-            with self.subTest(request=request):
-                self.assertFalse(
-                    loom_orchestrator._explicit_zero_project_write_requested(request))
+                completed = self.cli(
+                    "invoke", "--request", request, "--cwd", self.repo,
+                    "--home", self.home, "--install-root", self.installed)
+                self.assertEqual(0, completed.returncode, completed.stderr)
+                result = json.loads(completed.stdout)
+                self.assertEqual("completed", result["status"])
+                self.assertEqual("non-authoritative-plan", result["code"])
+                self.assertNotIn("action_path", result)
+                self.assertEqual(
+                    repo_before,
+                    loom_reliability.deterministic_manifest(self.repo))
+                self.assertFalse((self.repo / "plans").exists())
+                self.assertEqual(
+                    [], list(self.home.glob(
+                        "instances/*/runtime/projects/*/orchestrations/*.json")))
+                vault = self.home / "vault" / "owner.sqlite3"
+                if vault.exists():
+                    with sqlite3.connect(vault) as connection:
+                        self.assertEqual(
+                            0,
+                            connection.execute(
+                                "SELECT COUNT(*) FROM memory_records"
+                            ).fetchone()[0])
+                        self.assertEqual(
+                            0,
+                            connection.execute(
+                                "SELECT COUNT(*) FROM tombstones"
+                            ).fetchone()[0])
+
+    def test_no_write_inline_recovery_preserves_invalid_config_failure(self):
+        """Break caught: no-write recovery erases repository config authority."""
+        _write(
+            self.repo / "loom.config.json",
+            '{"use_profile":"yes","unknown":true}\n')
+
+        result = loom_orchestrator.invoke(
+            request=(
+                "Plan an accounting reconciliation workflow with no project writes."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("blocked", result["status"])
+        self.assertEqual("invalid_config", result["code"])
+        self.assertIn("config", result["user_message"].casefold())
+        self.assertEqual("invalid-config", result["block_reason"]["code"])
+        self.assertNotIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertFalse((self.repo / "plans").exists())
+
+    def test_no_write_inline_recovery_preserves_safety_and_intent_precedence(self):
+        """Break caught: safe recovery masks a higher-priority safety or intent gate."""
+        cases = (
+            (
+                "safety",
+                "Plan the release and then delete the old production data with no "
+                "project writes.",
+                "high_consequence_uncertain",
+                "high-consequence-uncertain",
+                "confirm scope, verification, and rollback",
+            ),
+            (
+                "contradiction",
+                "Plan a school attendance dashboard, then implement it immediately, "
+                "with no project writes.",
+                "plan_execution_contradiction",
+                "plan-execution-contradiction",
+                "Should any implementation begin only after you review that plan?",
+            ),
+        )
+        for name, request, code, reason_code, expected_detail in cases:
+            with self.subTest(name=name):
+                before = loom_reliability.deterministic_manifest(self.repo)
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                if name == "safety":
+                    self.assertEqual("blocked", result["status"])
+                    self.assertEqual(code, result["code"])
+                    self.assertEqual(
+                        reason_code, result["block_reason"]["code"])
+                    self.assertIn(expected_detail, result["user_message"])
+                    self.assertNotIn(
+                        "NON-AUTHORITATIVE PLAN", result["user_message"])
+                else:
+                    self.assertEqual("completed", result["status"])
+                    self.assertEqual("non-authoritative-plan", result["code"])
+                    self.assertIn(
+                        "NON-AUTHORITATIVE PLAN", result["user_message"])
+                    self.assertIn(
+                        "Understood outcome:", result["user_message"])
+                    self.assertNotIn("action_path", result)
+                self.assertEqual(
+                    before, loom_reliability.deterministic_manifest(self.repo))
+
+    def test_planning_conflict_uses_neutral_context_without_leaking_private_evidence(self):
+        """Break caught: a private preference conflict blocks planning or leaks values."""
+        instance_id = "00000000-0000-4000-8000-000000005110"
+        conflict_id = "00000000-0000-4000-8000-000000005111"
+        owner_id = "00000000-0000-4000-8000-000000005112"
+        secret_value = "private-owner-choice-never-public"
+
+        class Vault:
+            def identity(self):
+                return {"owner_vault_id": owner_id}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return [{
+                    "conflict_id": conflict_id,
+                    "preference_key": "stack_preference",
+                }]
+
+        projection_adapter = object.__new__(
+            loom_orchestrator.loom_vault_adapter.VaultMemoryAdapter)
+        projection_adapter.vault = Vault()
+
+        class ConflictMemory(loom_session.NoopMemoryAdapter):
+            def select_preferences(self, _context):
+                return [
+                    _sealed_preference(
+                        "00000000-0000-4000-8000-000000005113",
+                        "stack", secret_value, domain="accounting"),
+                    _sealed_preference(
+                        "00000000-0000-4000-8000-000000005114",
+                        "report_detail", "concise"),
+                ]
+
+            def relevant_preference_conflicts(self, *, domains, project_id):
+                return [{
+                    "conflict_id": conflict_id,
+                    "preference_key": "stack_preference",
+                }]
+
+            def project_planning_preferences(self, **arguments):
+                return projection_adapter.project_planning_preferences(**arguments)
+
+        with mock.patch.object(
+                loom_orchestrator, "_memory_backend",
+                return_value=(instance_id, ConflictMemory())):
+            result = loom_orchestrator.invoke(
+                request="Plan a small accounting change to src/app.py.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", result["status"])
+        self.assertNotEqual("preference-conflict", result.get("code"))
+        self.assertIn(
+            {"key": "stack", "domain": "accounting", "neutral_default": True},
+            result["context"]["preferences"])
+        self.assertTrue(any(
+            item.get("key") == "report_detail"
+            for item in result["context"]["preferences"]))
+        public = json.dumps(result, sort_keys=True)
+        self.assertNotIn(secret_value, public)
+        self.assertNotIn(conflict_id, public)
+        self.assertNotIn(owner_id, public)
+        _path, action, _security = loom_orchestrator._read_action(
+            result["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        private = action["host_result"]["planning_preference_conflicts"]
+        self.assertEqual(["stack"], private["conflict_keys"])
+        self.assertEqual(conflict_id, private["private_evidence"][0]["conflict_id"])
+        self.assertNotIn(
+            secret_value, json.dumps(private, sort_keys=True))
+
+    def test_action_read_rejects_unbound_or_value_bearing_conflict_evidence(self):
+        """Break caught: rehashed private conflict metadata crosses its sealed scope."""
+        instance_id = "00000000-0000-4000-8000-000000005130"
+        owner_id = "00000000-0000-4000-8000-000000005131"
+        conflict_id = "00000000-0000-4000-8000-000000005132"
+
+        class Vault:
+            def identity(self):
+                return {"owner_vault_id": owner_id}
+
+            def relevant_preference_conflicts(self, *, domain, project_id):
+                return [{
+                    "conflict_id": conflict_id,
+                    "preference_key": "stack_preference",
+                }]
+
+        adapter = object.__new__(
+            loom_orchestrator.loom_vault_adapter.VaultMemoryAdapter)
+        adapter.vault = Vault()
+
+        class ConflictMemory(loom_session.NoopMemoryAdapter):
+            def select_preferences(self, _context):
+                return [_sealed_preference(
+                    "00000000-0000-4000-8000-000000005133",
+                    "stack", "python", domain="accounting")]
+
+            def project_planning_preferences(self, **arguments):
+                return adapter.project_planning_preferences(**arguments)
+
+        with mock.patch.object(
+                loom_orchestrator, "_memory_backend",
+                return_value=(instance_id, ConflictMemory())):
+            opened = loom_orchestrator.invoke(
+                request="Plan a small accounting change to src/app.py.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+        path = Path(opened["action_path"])
+        base = json.loads(path.read_text(encoding="utf-8"))
+        conflict = base["host_result"]["planning_preference_conflicts"]
+        evidence = conflict["private_evidence"][0]
+        mutations = (
+            lambda value: value.update({"project_id": "p-" + "f" * 32}),
+            lambda value: value.update({"domain": "three-d"}),
+            lambda value: value.update({"preference_key": "invented"}),
+            lambda value: value.update({"conflict_id": "not-a-uuid"}),
+            lambda value: value.update({"risk_class": "low"}),
+            lambda value: value.update({"task_class": "execute"}),
+            lambda value: value.update({"value": "private-python"}),
+            lambda value: value.update({"unknown": True}),
+        )
+        for mutate in mutations:
+            with self.subTest(mutation=mutate):
+                action = json.loads(json.dumps(base))
+                mutate(action["host_result"]["planning_preference_conflicts"]
+                       ["private_evidence"][0])
+                action["action_hash"] = loom_orchestrator._action_hash(action)
+                path.write_text(json.dumps(action), encoding="utf-8")
+                with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+                    loom_orchestrator._read_action(
+                        path, owner_home=self.home, install_root=self.installed)
+                self.assertEqual("ACTION_CORRUPT", raised.exception.code)
+
+        action = json.loads(json.dumps(base))
+        action["host_result"]["planning_preference_conflicts"][
+            "private_evidence"].append(dict(evidence))
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as duplicate:
+            loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_CORRUPT", duplicate.exception.code)
 
     def test_installed_invoke_drives_real_gate_and_seals_receipt(self):
         opened = self.cli(
@@ -1398,6 +1884,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertIsNotNone(recovered_action["initial_pack_hash"])
         self.assertEqual(
             "completed", recovered_action["lifecycle_transition"]["status"])
+        recovered_guard = loom_executor_guard.read(
+            execution_action_path.parent, recovered_action)
+        self.assertEqual("awaiting-host", recovered_guard["coverage_state"])
         pointer = loom_orchestrator._read_active_pointer(
             execution_action_path.parent)
         self.assertEqual(execution_action_id, pointer["action_id"])
@@ -1553,6 +2042,16 @@ class ProductionOrchestratorTests(unittest.TestCase):
             revision["revision_context"]["prior_semantics"]["title"])
         self.assertRegex(
             revision["revision_context"]["archive_sha256"], r"^[0-9a-f]{64}$")
+        revision_action_path = Path(revision["action_path"])
+        self.assertTrue(revision_action_path.is_file())
+        archive_paths = sorted(
+            (revision_action_path.parent / "plan-revisions").glob("*.json"))
+        self.assertEqual(1, len(archive_paths))
+        archive = json.loads(archive_paths[0].read_text(encoding="utf-8"))
+        loom_orchestrator._validate_revision_archive_payload(archive)
+        self.assertEqual(
+            revision["revision_context"]["archive_sha256"],
+            archive["archive_sha256"])
 
         contract = revision["plan_contract"]
         revised_draft = {
@@ -1635,6 +2134,17 @@ class ProductionOrchestratorTests(unittest.TestCase):
             completed["plan_presentation"]["presentation_sha256"],
             revision["revision_context"]["parent_presentation_sha256"])
         self.assertEqual(request, revision["revision_context"]["request"])
+        _path, revised_action, _security = loom_orchestrator._read_action(
+            revision["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual(["accounting"], revised_action["domains"])
+        self.assertEqual(
+            ["semantic-outcome-v1.accounting.4"],
+            [
+                item for item in revised_action["prepared"][
+                    "route_contract"]["evidence"]
+                if item.startswith("semantic-outcome-")
+            ])
 
     def test_later_host_turn_recovery_rejects_project_drift(self):
         self.complete_machine_authored_plan()
@@ -1793,7 +2303,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_bound_revision_blocked_before_action_leaves_no_private_archive(self):
         action, completed = self.complete_machine_authored_plan()
         prior = completed["plan_presentation"]
-        archive_dir = Path(action["action_path"]).parent / "plan-revisions"
+        orchestration_dir = Path(action["action_path"]).parent
+        archive_dir = orchestration_dir / "plan-revisions"
+        orchestration_before = loom_reliability.exact_tree_manifest(
+            orchestration_dir)
+        plan_before = loom_reliability.exact_tree_manifest(self.repo / "plans")
+        pointer = orchestration_dir / "active.json"
+        self.assertFalse(pointer.exists())
         self.assertFalse(archive_dir.exists())
 
         with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
@@ -1806,6 +2322,35 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 install_root=self.installed)
 
         self.assertEqual("PLAN_DECISION_STALE", raised.exception.code)
+        self.assertFalse(archive_dir.exists())
+        self.assertFalse(pointer.exists())
+        self.assertEqual(
+            orchestration_before,
+            loom_reliability.exact_tree_manifest(orchestration_dir))
+        self.assertEqual(
+            plan_before,
+            loom_reliability.exact_tree_manifest(self.repo / "plans"))
+
+    def test_bound_revision_archive_waits_for_action_admission(self):
+        """Break caught: private revision history is written before action admission."""
+        action, completed = self.complete_machine_authored_plan()
+        archive_dir = Path(action["action_path"]).parent / "plan-revisions"
+        self.assertFalse(archive_dir.exists())
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "ACTION_ADMISSION_FAILED", "injected admission refusal")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+                loom_orchestrator.revise(
+                    action["action_path"],
+                    presentation_sha256=completed[
+                        "plan_presentation"]["presentation_sha256"],
+                    request="Change one verification check.",
+                    owner_home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("ACTION_ADMISSION_FAILED", raised.exception.code)
         self.assertFalse(archive_dir.exists())
 
     def test_exact_plan_start_returns_a_bounded_completion_contract(self):
@@ -1851,6 +2396,363 @@ class ProductionOrchestratorTests(unittest.TestCase):
             contract["evidence_capture"]["argv_prefix"][-3:])
         self.assertEqual(
             "--", contract["evidence_capture"]["verification_argv_separator"])
+
+    def test_authorized_continuation_is_closed_self_bound_and_non_authorizing(self):
+        """Break caught: a blocked deviation either dead-ends or grants new authority."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
+        action_path, sealed_action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        resolved = loom_plan_store.resolve(self.repo)
+        before_index = (
+            self.repo / "plans" / loom_plan_store.INDEX_NAME).read_bytes()
+        before_ledger = (resolved.generation_root / "lifecycle.json").read_bytes()
+        before_action = action_path.read_bytes()
+
+        continuation = loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual({
+            "schema_version", "authority_effect", "project_id", "generation_id",
+            "active_action_id", "plan_semantics_sha256",
+            "lifecycle_state_sha256", "observed_world_sha256",
+            "work_order_id", "outcome_sha256", "allowed_touches",
+            "acceptance_sha256", "negative_acceptance_sha256",
+            "evidence_requirements_sha256", "rejection_code",
+            "safe_next_operation", "continuation_sha256",
+        }, set(continuation))
+        self.assertEqual("none", continuation["authority_effect"])
+        self.assertEqual("WO-001", continuation["work_order_id"])
+        self.assertEqual(["src/app.py"], continuation["allowed_touches"])
+        self.assertEqual(
+            "continue-current-execution",
+            continuation["safe_next_operation"])
+        unsigned = {
+            key: value for key, value in continuation.items()
+            if key != "continuation_sha256"
+        }
+        expected_digest = hashlib.sha256(json.dumps(
+            unsigned, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+            allow_nan=False).encode("utf-8")).hexdigest()
+        self.assertEqual(expected_digest, continuation["continuation_sha256"])
+        self.assertEqual(
+            continuation,
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, continuation,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+                owner_home=self.home, install_root=self.installed))
+        self.assertEqual(
+            before_index,
+            (self.repo / "plans" / loom_plan_store.INDEX_NAME).read_bytes())
+        self.assertEqual(
+            before_ledger,
+            (resolved.generation_root / "lifecycle.json").read_bytes())
+        self.assertEqual(before_action, action_path.read_bytes())
+        reopened = loom_orchestrator._pending_action_result(sealed_action)
+        self.assertEqual(started["action_id"], reopened["action_id"])
+        self.assertEqual("WO-001", reopened["work_order"])
+
+    def test_authorized_continuation_rejects_forged_cross_project_and_stale_values(self):
+        """Break caught: a stale or cross-project projection is treated as authority."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        _path, sealed_action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        continuation = loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed)
+
+        malformed = {**continuation, "unexpected": True}
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.validate_authorized_continuation(malformed)
+        forged = {**continuation, "project_id": "p-" + "f" * 32}
+        forged.pop("continuation_sha256")
+        forged["continuation_sha256"] = hashlib.sha256(json.dumps(
+            forged, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+            allow_nan=False).encode("utf-8")).hexdigest()
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, forged,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+                owner_home=self.home, install_root=self.installed)
+        cross_generation = {
+            **continuation, "generation_id": "generation-" + "e" * 32}
+        cross_generation.pop("continuation_sha256")
+        cross_generation["continuation_sha256"] = hashlib.sha256(json.dumps(
+            cross_generation, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, cross_generation,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+                owner_home=self.home, install_root=self.installed)
+
+        envelope_root = Path(started["action_path"]).parent / \
+            "lifecycle-transitions"
+        unresolved = envelope_root / "task5-unresolved.json"
+        unresolved.write_text(
+            json.dumps({"status": "prepared"}) + "\n", encoding="utf-8")
+        self.assertIsNone(loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed))
+        unresolved.unlink()
+
+        (self.repo / "src" / "app.py").write_text(
+            "print('world changed')\n", encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, continuation,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("AUTHORIZED_CONTINUATION_STALE", caught.exception.code)
+
+        forged_code = {
+            **continuation, "rejection_code": "FORGED_EXECUTOR_PERMISSION"}
+        forged_code.pop("continuation_sha256")
+        forged_code["continuation_sha256"] = hashlib.sha256(json.dumps(
+            forged_code, sort_keys=True, separators=(",", ":"),
+            ensure_ascii=True, allow_nan=False).encode("utf-8")).hexdigest()
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, forged_code,
+                expected_rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+                owner_home=self.home, install_root=self.installed)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.verify_authorized_continuation(
+                sealed_action, continuation,
+                expected_rejection_code="OUTSIDE_PROJECT_TARGET",
+                owner_home=self.home, install_root=self.installed)
+
+        loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertIsNone(loom_orchestrator.authorized_continuation(
+            sealed_action, rejection_code="UNAUTHORIZED_PROJECT_TOUCH",
+            owner_home=self.home, install_root=self.installed))
+
+    def test_authorized_continuation_requires_canonical_resolved_envelopes(self):
+        """Break caught: a corrupt completed envelope is trusted by its status."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        source_root = Path(started["action_path"]).parent / \
+            "lifecycle-transitions"
+        source_envelopes = []
+        completed_envelope_paths = []
+        for path in source_root.glob("*.json"):
+            value = json.loads(path.read_text(encoding="utf-8"))
+            if value.get("status") == "completed":
+                completed_envelope_paths.append(path)
+                if "kind" not in value:
+                    source_envelopes.append(value)
+        self.assertTrue(source_envelopes)
+        self.assertTrue(completed_envelope_paths)
+        canonical = source_envelopes[-1]
+        probe = self.root / "envelope-probe"
+        transitions = probe / "lifecycle-transitions"
+        transitions.mkdir(parents=True)
+        path = transitions / "probe.json"
+
+        for index, source_path in enumerate(completed_envelope_paths):
+            with self.subTest(kind="renamed completed", source=source_path.name):
+                alias = transitions / f"renamed-{index}.json"
+                alias.write_bytes(source_path.read_bytes())
+                self.assertTrue(
+                    loom_orchestrator._unresolved_lifecycle_envelope(probe))
+                alias.unlink()
+
+        canonical_path = loom_lifecycle_transition._envelope_path(
+            transitions, canonical["command_id"])
+        canonical_bytes = json.dumps(canonical).encode("utf-8") + b"\n"
+        canonical_path.write_bytes(canonical_bytes)
+        self.assertFalse(
+            loom_orchestrator._unresolved_lifecycle_envelope(probe))
+        alias = transitions / "duplicate-command.json"
+        alias.write_bytes(canonical_bytes)
+        self.assertTrue(
+            loom_orchestrator._unresolved_lifecycle_envelope(probe))
+        canonical_path.unlink()
+        alias.unlink()
+
+        corrupt_completed = json.loads(json.dumps(canonical))
+        corrupt_completed["command_sha256"] = "0" * 64
+        corrupt_abandoned = json.loads(json.dumps(canonical))
+        corrupt_abandoned["status"] = "abandoned"
+        corrupt_abandoned["target_witness"]["authoritative_sha256"] = "0" * 64
+        bad_receipt = json.loads(json.dumps(canonical))
+        bad_receipt["receipt"]["command_id"] = "foreign-completion"
+        bad_receipt["receipt"]["receipt_sha256"] = \
+            loom_lifecycle_kernel.digest({
+                key: value for key, value in bad_receipt["receipt"].items()
+                if key != "receipt_sha256"})
+        cases = {
+            "corrupt completed": json.dumps(corrupt_completed),
+            "corrupt abandoned": json.dumps(corrupt_abandoned),
+            "foreign self-consistent receipt": json.dumps(bad_receipt),
+            "duplicate keys": '{"status":"completed","status":"abandoned"}',
+            "unknown kind": json.dumps({
+                "schema_version": 1, "kind": "unknown-v1",
+                "command_id": "unknown", "status": "completed"}),
+            "truncated": '{"schema_version":1',
+        }
+        for label, raw in cases.items():
+            with self.subTest(label=label):
+                path.write_text(raw + "\n", encoding="utf-8")
+                self.assertTrue(
+                    loom_orchestrator._unresolved_lifecycle_envelope(probe))
+
+        path.write_text(json.dumps({
+            "schema_version": 1,
+            "kind": "successor-activation-v1",
+            "command_id": "candidate-switch",
+            "status": "completed",
+            "projection_status": "pending",
+        }) + "\n", encoding="utf-8")
+        with mock.patch.object(
+                loom_orchestrator.loom_lifecycle_transition,
+                "_load_successor_envelope", return_value={
+                    "status": "completed", "projection_status": "pending"}):
+            self.assertTrue(
+                loom_orchestrator._unresolved_lifecycle_envelope(probe))
+
+    def test_real_hook_denial_preserves_exact_action_and_allowed_completion(self):
+        """Break caught: the hook denial has no real supported continuation."""
+        action, completed = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            action["action_path"],
+            presentation_sha256=completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        action_path = Path(started["action_path"])
+        _sealed_path, sealed_action, sealed_security = \
+            loom_orchestrator._read_action(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+        directory = action_path.parent
+        loom_executor_guard.observe_post(
+            directory, sealed_action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "real-hook-session", "turn_id": "start-turn",
+                "tool_use_id": "start-hook", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True, security=sealed_security)
+        resolved = loom_plan_store.resolve(self.repo)
+        control_paths = [
+            self.repo / "src" / "app.py",
+            self.repo / "plans" / loom_plan_store.INDEX_NAME,
+            resolved.generation_root / "lifecycle.json",
+            directory / "lifecycle-head-witness.json",
+            action_path,
+            directory / loom_orchestrator.ACTIVE_POINTER_FILE,
+        ]
+
+        def snapshot():
+            return {
+                str(path): path.read_bytes() if path.exists() else None
+                for path in control_paths
+            }
+
+        def hook(path, tool_use_id, *, event_name="PreToolUse"):
+            event = {
+                "hook_event_name": event_name,
+                "cwd": str(self.repo),
+                "session_id": "real-hook-session",
+                "turn_id": "real-hook-turn",
+                "tool_use_id": tool_use_id,
+                "tool_name": "Write",
+                "tool_input": {"file_path": path},
+            }
+            with mock.patch.object(
+                    loom_codex_lifecycle, "_active_action",
+                    return_value=(sealed_action, sealed_security)), \
+                    mock.patch.object(loom_codex_lifecycle, "_record"):
+                return loom_codex_lifecycle.handle(
+                    event, home=self.home, install_root=self.installed)
+
+        baseline = snapshot()
+        work_order = self.repo.joinpath(
+            *PurePosixPath(started[
+                "execution_completion_contract"]["work_order_path"]).parts)
+        denied_attempts = {
+            "outside touch": "docs/outside.py",
+            "acceptance weakening or omitted work":
+                work_order.relative_to(self.repo).as_posix(),
+            "architecture substitution": "architecture/alternate.py",
+            "invented extra work": "src/unplanned_extra.py",
+            "repair or refactor loophole": "repairs/shortcut.py",
+            "executor replanning": "plans/plan-semantics.json",
+        }
+        for ordinal, (label, path) in enumerate(denied_attempts.items()):
+            with self.subTest(label=label):
+                code, output = hook(path, f"denied-{ordinal}")
+                self.assertEqual(0, code)
+                self.assertEqual(
+                    "deny", output["hookSpecificOutput"]["permissionDecision"])
+                self.assertIn(
+                    "continue current execution",
+                    output["hookSpecificOutput"]["additionalContext"].lower())
+                self.assertEqual(baseline, snapshot())
+
+        premature = loom_orchestrator.complete(
+            action_path, owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("blocked", premature["status"])
+        self.assertEqual("execute-not-ready", premature["code"])
+        self.assertEqual(baseline, snapshot())
+
+        allowed_code, allowed_output = hook("src/app.py", "allowed-write")
+        self.assertEqual(0, allowed_code)
+        self.assertIsNone(allowed_output)
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        post_code, post_output = hook(
+            "src/app.py", "allowed-write", event_name="PostToolUse")
+        self.assertEqual(0, post_code)
+        self.assertIsNone(post_output)
+        after_allowed = snapshot()
+        self.assertNotEqual(baseline[str(self.repo / "src" / "app.py")],
+                            after_allowed[str(self.repo / "src" / "app.py")])
+        for path in control_paths[1:]:
+            self.assertEqual(baseline[str(path)], after_allowed[str(path)])
+
+        acceptance_weakening = loom_orchestrator.complete(
+            action_path, owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("blocked", acceptance_weakening["status"])
+        self.assertEqual("execute-not-ready", acceptance_weakening["code"])
+        self.assertEqual(after_allowed, snapshot())
+
+        contract = started["execution_completion_contract"]
+        text = work_order.read_text(encoding="utf-8")
+        text = text.replace("status: in-progress", "status: done")
+        text = text.replace("- [ ]", "- [x]")
+        text = text.replace(
+            contract["pending_evidence_text"],
+            "Evidence: isolated real-process verification exited 0.")
+        work_order.write_text(text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            Path(contract["evidence_capture"]["pack_path"]), self.repo,
+            contract["work_order_id"], medium="python-unittest",
+            command=[sys.executable, "-c", "print('verification passed')"])
+        sealed = loom_orchestrator.complete(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", sealed["status"])
+        self.assertEqual("execute-complete", sealed["code"])
 
     def test_exact_plan_start_completion_contract_closes_verified_work(self):
         action, completed = self.complete_machine_authored_plan()
@@ -2210,6 +3112,55 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
             self.assertEqual("PLAN_PROJECTION_INVALID", raised.exception.code)
 
+    def test_repair_supersession_waits_for_exact_open_operation_closure(self):
+        """Repair cannot retire a live executor while a guarded write is open."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action = self.arm_executor_guard(started)
+        write_event = {
+            "hook_event_name": "PreToolUse", "cwd": str(self.repo),
+            "session_id": "host-session-1", "turn_id": "host-turn-2",
+            "tool_use_id": "write-before-repair", "tool_name": "Write",
+            "tool_input": {"file_path": "src/app.py"},
+        }
+        loom_executor_guard.begin_operation(
+            path.parent, action, write_event,
+            operation_kind="structured-write")
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as pending:
+            loom_orchestrator.invoke(
+                request="Repair the broken Loom lifecycle.", cwd=self.repo,
+                home=self.home, install_root=self.installed)
+
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", pending.exception.code)
+        _path, still_active, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", still_active["status"])
+        self.assertEqual(
+            still_active["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "repair-supersede",
+            loom_executor_guard.read(path.parent, still_active)[
+                "freeze"]["reason_code"])
+
+        loom_executor_guard.observe_post(
+            path.parent, still_active,
+            {**write_event, "hook_event_name": "PostToolUse"})
+        repairing = loom_orchestrator.invoke(
+            request="Repair the broken Loom lifecycle.", cwd=self.repo,
+            home=self.home, install_root=self.installed)
+        self.assertEqual("action-required", repairing["status"])
+        self.assertEqual("repair", repairing["intent"])
+        _path, retired, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", retired["status"])
+
     def test_cancelled_attempt_can_be_repaired_and_resumed_without_replanning(self):
         """Break caught: explicit v3 repair falls into the historical pack reconciler."""
         plan_action, planned = self.complete_machine_authored_plan()
@@ -2218,13 +3169,14 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=planned[
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
         loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
         _write(self.repo / "src" / "app.py", "VALUE = 2\n")
 
         repairing = loom_orchestrator.invoke(
-            request="Repair the failed active action.", cwd=self.repo,
+            request="Repair the broken Loom lifecycle.", cwd=self.repo,
             home=self.home, install_root=self.installed)
 
         self.assertEqual("action-required", repairing["status"])
@@ -2270,6 +3222,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=planned[
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
         loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
@@ -2286,7 +3239,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 side_effect=interrupt_repair):
             with self.assertRaises(loom_orchestrator.OrchestratorError):
                 loom_orchestrator.invoke(
-                    request="Repair the failed active action.", cwd=self.repo,
+                    request="Repair the broken Loom lifecycle.", cwd=self.repo,
                     home=self.home, install_root=self.installed)
 
         transition_root = (
@@ -2335,12 +3288,13 @@ class ProductionOrchestratorTests(unittest.TestCase):
             presentation_sha256=planned[
                 "plan_presentation"]["presentation_sha256"],
             owner_home=self.home, install_root=self.installed)
+        self.arm_executor_guard(started)
         loom_orchestrator.cancel(
             started["action_path"], owner_home=self.home,
             install_root=self.installed)
         _write(self.repo / "src" / "app.py", "VALUE = 2\n")
         repairing = loom_orchestrator.invoke(
-            request="Repair the failed active action.", cwd=self.repo,
+            request="Repair the broken Loom lifecycle.", cwd=self.repo,
             home=self.home, install_root=self.installed)
         repair_result = self.root / "repair-recovery-result.json"
         _write(repair_result, json.dumps({
@@ -2424,8 +3378,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         replacement = loom_orchestrator.invoke(
             request=(
-                "Plan a new standalone financial accounting documentation feature "
-                "for README.md. "
+                "Plan a financial accounting documentation feature for README.md. "
                 "Planning only; do not implement."),
             cwd=self.repo, home=self.home, install_root=self.installed)
 
@@ -2506,6 +3459,221 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertIsNone(
             loom_orchestrator._read_active_pointer(action_path.parent))
 
+    def test_active_generation_cancel_freezes_without_terminal_host_proof(self):
+        """Break caught: generation cancellation erases a live executor authority."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        action_path = Path(started["action_path"])
+        guard_path, guarded = self.arm_executor_guard(started)
+        loom_executor_guard.begin_operation(
+            guard_path.parent, guarded, {
+                "hook_event_name": "PreToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-cancel",
+                "tool_use_id": "write-before-generation-cancel",
+                "tool_name": "Write",
+                "tool_input": {"file_path": "src/app.py"},
+            }, operation_kind="structured-write")
+        before = loom_plan_store.resolve(self.repo)
+        before_ledger = json.loads(
+            (before.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+
+        pending = loom_orchestrator.invoke(
+            request="Cancel the current Loom plan generation.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", pending["status"])
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", pending["code"])
+        after = loom_plan_store.resolve(self.repo)
+        self.assertEqual(before.generation_id, after.generation_id)
+        self.assertEqual(
+            before_ledger,
+            json.loads((after.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8")))
+        path, action, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", action["status"])
+        self.assertEqual(
+            action["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "generation-cancel",
+            loom_executor_guard.read(
+                path.parent, action)["freeze"]["reason_code"])
+
+    def test_active_generation_cancel_uses_exact_closed_host_guard(self):
+        """Break caught: no production path writes generation quiescence evidence."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
+
+        cancelled = loom_orchestrator.invoke(
+            request="Cancel the current Loom plan generation.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("generation-cancelled", cancelled["code"])
+        resolved = loom_plan_store.resolve(self.repo)
+        ledger = json.loads(
+            (resolved.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual("generation-cancelled", ledger["events"][-1]["event_type"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        _path, terminal, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", terminal["status"])
+        evidence = terminal["host_result"]["executor_quiescence"]
+        self.assertEqual("verified-host-terminal", evidence["case"])
+        loom_executor_guard.validate_evidence(
+            path.parent, terminal, evidence,
+            project_world_sha256=evidence["project_world_sha256"])
+
+    def test_terminal_generation_recovery_revalidates_frozen_host_evidence(self):
+        """Break caught: restart clears a prepared terminal transition unchecked."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
+        real_transition = loom_orchestrator.loom_lifecycle_transition.transition
+
+        def interrupt_terminal(*args, **kwargs):
+            if args[1]["relation"] == "cancel-generation":
+                kwargs["fault_at"] = "after-project-commit"
+            return real_transition(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_orchestrator.loom_lifecycle_transition, "transition",
+                side_effect=interrupt_terminal), \
+                self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.invoke(
+                request="Cancel the current Loom plan generation.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+
+        _path, prepared, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", prepared["status"])
+        self.assertEqual(
+            prepared["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "verified-host-terminal",
+            prepared["host_result"]["executor_quiescence"]["case"])
+
+        status = loom_orchestrator.invoke(
+            request="Status", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", status["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        _path, recovered, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", recovered["status"])
+        envelope = next(
+            value for value in (
+                json.loads(item.read_text(encoding="utf-8"))
+                for item in (path.parent / "lifecycle-transitions").glob("*.json"))
+            if value.get("command", {}).get("relation") == "cancel-generation")
+        self.assertEqual("completed", envelope["status"])
+
+    def test_terminal_generation_recovery_rejects_noncanonical_action_derivation(self):
+        """Recovery accepts only the sealed pending action or its exact terminal form."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, _action = self.arm_executor_guard(started)
+        real_write = loom_lifecycle_transition._write_envelope
+
+        def interrupt_completion(envelope_path, value):
+            if value.get("status") == "completed" \
+                    and value.get("command", {}).get("relation") == \
+                    "cancel-generation":
+                raise loom_lifecycle_transition.LifecycleTransitionError(
+                    "seeded envelope completion interruption")
+            return real_write(envelope_path, value)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "_write_envelope",
+                side_effect=interrupt_completion), \
+                self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.invoke(
+                request="Cancel the current Loom plan generation.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+
+        _path, terminal, security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", terminal["status"])
+        terminal["attempts"] += 1
+        loom_orchestrator._write_action(path, terminal, security)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Status", cwd=self.repo, home=self.home,
+                install_root=self.installed)
+        self.assertIn(
+            blocked.exception.code,
+            {"LIFECYCLE_PROJECTION_INVALID", "LIFECYCLE_TRANSITION_FAILED"})
+
+    def test_generation_cancel_validates_executor_projection_before_plan_write(self):
+        """Invalid private executor evidence cannot project a terminal plan first."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, _action = self.arm_executor_guard(started)
+        before = loom_reliability.exact_tree_manifest(
+            loom_plan_store.resolve(self.repo).generation_root)
+
+        with mock.patch.object(
+                loom_orchestrator, "_validate_executor_terminal_projection",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "LIFECYCLE_PROJECTION_INVALID",
+                    "seeded private projection rejection")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError):
+                loom_orchestrator.invoke(
+                    request="Cancel the current Loom plan generation.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(loom_reliability.exact_tree_manifests_equal(
+            before, loom_reliability.exact_tree_manifest(
+                loom_plan_store.resolve(self.repo).generation_root)))
+        self.assertEqual(
+            started["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+
     def test_exact_start_and_revision_race_has_one_live_attempt(self):
         """Start and revise serialize without splitting lifecycle authority."""
         plan_action, planned = self.complete_machine_authored_plan()
@@ -2580,8 +3748,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("pending", live_action["status"])
         self.assertEqual(accepted[0]["intent"], live_action["intent"])
 
-    def test_exact_start_and_generation_cancel_race_ends_cancelled(self):
-        """Concurrent start/cancel commands linearize to one terminal generation."""
+    def test_exact_start_and_generation_cancel_race_has_one_safe_linearization(self):
+        """Concurrent start/cancel either retires review or freezes live execution."""
         plan_action, planned = self.complete_machine_authored_plan()
         presentation = planned["plan_presentation"]["presentation_sha256"]
         real_resolve_intent = loom_orchestrator.loom_runtime.resolve_intent
@@ -2625,19 +3793,37 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 lambda operation: operation(),
                 (attempt_start, attempt_cancel)))
 
-        self.assertEqual(
-            1, sum(item.get("code") == "generation-cancelled"
-                   for item in outcomes), outcomes)
+        cancelled = [
+            item for item in outcomes
+            if item.get("code") == "generation-cancelled"]
         resolved = loom_plan_store.resolve(self.repo)
         ledger = json.loads(
             (resolved.generation_root / "lifecycle.json").read_text(
                 encoding="utf-8"))
         events = [item["event_type"] for item in ledger["events"]]
-        self.assertEqual(1, events.count("generation-cancelled"))
         self.assertLessEqual(events.count("implementation-authorized"), 1)
         self.assertLessEqual(events.count("work-order-started"), 1)
-        self.assertIsNone(loom_orchestrator._read_active_pointer(
-            Path(plan_action["action_path"]).parent))
+        directory = Path(plan_action["action_path"]).parent
+        pointer = loom_orchestrator._read_active_pointer(directory)
+        if cancelled:
+            self.assertEqual(1, len(cancelled), outcomes)
+            self.assertEqual(1, events.count("generation-cancelled"))
+            self.assertIsNone(pointer)
+        else:
+            waiting = [
+                item for item in outcomes
+                if item.get("code") == "EXECUTOR_QUIESCENCE_REQUIRED"]
+            self.assertEqual(1, len(waiting), outcomes)
+            self.assertEqual(0, events.count("generation-cancelled"))
+            self.assertIsNotNone(pointer)
+            _path, active, _security = loom_orchestrator._read_action(
+                directory / (pointer["action_id"] + ".json"),
+                owner_home=self.home, install_root=self.installed)
+            self.assertEqual("pending", active["status"])
+            self.assertEqual(
+                "generation-cancel",
+                loom_executor_guard.read(directory, active)[
+                    "freeze"]["reason_code"])
 
     def test_two_concurrent_new_plans_leave_one_live_owner_attempt(self):
         """Independent new requests serialize to one recoverable planning frontier."""
@@ -2742,8 +3928,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("action-required", replacement["status"])
         self.assertEqual("plan", replacement["intent"])
 
-    def test_explicit_new_plan_supersedes_an_active_generation_before_staging(self):
-        """Break caught: explicit standalone work is trapped behind an active action."""
+    def test_explicit_new_plan_stages_candidate_without_superseding_active_generation(self):
+        """Break caught: candidate planning terminalizes its predecessor before review."""
         plan_action, planned = self.complete_machine_authored_plan()
         started = loom_orchestrator.start(
             plan_action["action_path"],
@@ -2751,6 +3937,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
             owner_home=self.home, install_root=self.installed)
         old_action_path = Path(started["action_path"])
         old_generation = loom_plan_store.resolve(self.repo)
+        world_before = loom_orchestrator.loom_survey.workspace_snapshot(
+            self.repo, exclude_prefixes=("plans",)).state.state_hash
 
         replacement = loom_orchestrator.invoke(
             request=(
@@ -2760,30 +3948,3404 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
         self.assertEqual("action-required", replacement["status"])
         self.assertEqual("plan", replacement["intent"])
-        self.assertEqual(
-            "generation-superseded",
-            replacement["prior_generation_transition"]["code"])
+        self.assertNotIn("prior_generation_transition", replacement)
         self.assertEqual(
             old_generation.generation_id,
             loom_plan_store.resolve(self.repo).generation_id)
         old_ledger = json.loads(
             (old_generation.generation_root / "lifecycle.json").read_text(
                 encoding="utf-8"))
-        self.assertEqual(
-            "generation-superseded", old_ledger["events"][-1]["event_type"])
+        self.assertNotIn(
+            "generation-superseded",
+            [item["event_type"] for item in old_ledger["events"]])
+        pointer = loom_orchestrator._read_active_pointer(old_action_path.parent)
+        self.assertEqual(started["action_id"], pointer["action_id"])
         _old_path, old_action, _security = loom_orchestrator._read_action(
             old_action_path, owner_home=self.home, install_root=self.installed)
-        self.assertEqual("cancelled", old_action["status"])
-        pointer = loom_orchestrator._read_active_pointer(old_action_path.parent)
-        self.assertEqual(replacement["action_id"], pointer["action_id"])
+        self.assertEqual("pending", old_action["status"])
         _new_path, new_action, _new_security = loom_orchestrator._read_action(
             replacement["action_path"], owner_home=self.home,
             install_root=self.installed)
-        self.assertEqual(
-            new_action["generation_id"],
-            old_ledger["events"][-1]["payload"]["successor_generation_id"])
+        self.assertIn(
+            "planning-candidate-successor",
+            new_action["request_control"]["evidence"])
+        self.assertEqual("supersede-generation", new_action["request_control"]["relation"])
+        self.assertTrue(new_action["pack_seed"]["created_pack"])
         self.assertNotEqual(
             old_generation.generation_id, new_action["generation_id"])
+        candidate_pack = loom_orchestrator._action_pack_root(new_action)
+        self.assertFalse(candidate_pack.is_relative_to(self.repo))
+        self.assertTrue(candidate_pack.is_relative_to(self.home))
+        if os.name == "nt":
+            loom_windows_acl.verify_private_directory(candidate_pack)
+        else:
+            self.assertEqual(0, candidate_pack.stat().st_mode & 0o077)
+        world_after = loom_orchestrator.loom_survey.workspace_snapshot(
+            self.repo, exclude_prefixes=("plans",)).state.state_hash
+        self.assertEqual(world_before, world_after)
+
+        completion_contract = started["execution_completion_contract"]
+        work_order = self.repo.joinpath(
+            *PurePosixPath(completion_contract["work_order_path"]).parts)
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        work_order_text = work_order.read_text(encoding="utf-8")
+        work_order_text = work_order_text.replace(
+            "status: in-progress", "status: done").replace("- [ ]", "- [x]")
+        work_order_text = work_order_text.replace(
+            completion_contract["pending_evidence_text"],
+            "Evidence: isolated real-process verification exited 0.")
+        work_order.write_text(work_order_text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            Path(completion_contract["evidence_capture"]["pack_path"]), self.repo,
+            "WO-001", medium="python-unittest",
+            command=[sys.executable, "-c", "print('verified')"])
+        continued = loom_orchestrator.complete(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("execute-complete", continued["code"])
+
+    def test_candidate_private_stage_reliability_failures_preserve_predecessor(self):
+        """Break caught: candidate staging bypasses private ACL/race refusal."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        predecessor = loom_plan_store.resolve(self.repo)
+        before = loom_reliability.deterministic_manifest(self.repo)
+        reliability_failures = (
+            "owner-private ACL cannot be proven",
+            "candidate ancestor is a symlink or junction",
+            "candidate ancestor identity changed",
+            "private stage leaf already exists; refusing to reuse it",
+        )
+        for index, failure in enumerate(reliability_failures, 1):
+            with self.subTest(failure=failure), mock.patch.object(
+                    loom_reliability, "reserve_private_stage_leaf",
+                    side_effect=loom_reliability.ReliabilityError(failure)):
+                with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+                    loom_orchestrator.invoke(
+                        request=(
+                            "Plan a new standalone documentation feature for README.md, "
+                            "not a repair or continuation. Planning only; do not implement."),
+                        cwd=self.repo, home=self.home, install_root=self.installed,
+                        transport_invocation_id=(
+                            f"00000000-0000-4000-8000-{index:012d}"))
+                self.assertEqual("BASELINE_STAGING_CONFLICT", caught.exception.code)
+                self.assertEqual(
+                    predecessor.generation_id,
+                    loom_plan_store.resolve(self.repo).generation_id)
+                self.assertEqual(before, loom_reliability.deterministic_manifest(self.repo))
+        pointer = loom_orchestrator._read_active_pointer(
+            Path(started["action_path"]).parent)
+        self.assertEqual(started["action_id"], pointer["action_id"])
+
+    def test_successor_copy_rejects_identical_bytes_from_replaced_owner_stage(self):
+        source = self.root / "owner-stage"
+        source.mkdir()
+        (source / "plan.md").write_text("reviewed candidate\n", encoding="utf-8")
+        identity = loom_reliability.observe_root_identity(source)
+        original = self.root / "original-owner-stage"
+        source.rename(original)
+        shutil.copytree(original, source)
+
+        with self.assertRaisesRegex(
+                loom_orchestrator.OrchestratorError,
+                "SUCCESSOR_INSTALL_PREPARATION_FAILED"):
+            loom_orchestrator._copy_successor_install_stage(
+                source, self.root / "reserved-successor",
+                expected_source_identity=identity)
+
+        self.assertEqual(
+            "reviewed candidate\n",
+            source.joinpath("plan.md").read_text(encoding="utf-8"))
+        self.assertFalse((self.root / "reserved-successor").exists())
+
+    def test_partial_successor_copy_preserves_nonempty_reservation(self):
+        source = self.root / "owner-stage"
+        source.mkdir()
+        (source / "a.md").write_text("first\n", encoding="utf-8")
+        (source / "z.md").write_text("second\n", encoding="utf-8")
+        identity = loom_reliability.observe_root_identity(source)
+        destination = self.root / "reserved-successor"
+        original_copy = loom_orchestrator._copy_successor_entry
+        calls = []
+
+        def partial_copy(copy_source, reserved):
+            calls.append(Path(copy_source).name)
+            if len(calls) == 1:
+                return original_copy(copy_source, reserved)
+            raise shutil.Error([("source", "destination", "copy failed")])
+
+        with mock.patch.object(
+                loom_orchestrator, "_copy_successor_entry",
+                side_effect=partial_copy), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._copy_successor_install_stage(
+                source, destination, expected_source_identity=identity)
+
+        self.assertEqual(
+            "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertTrue(destination.exists())
+        self.assertEqual(
+            "first\n", destination.joinpath("a.md").read_text(
+                encoding="utf-8"))
+
+    def test_empty_successor_reservation_is_removed_with_rmdir(self):
+        source = self.root / "empty-failure-source"
+        source.mkdir()
+        (source / "plan.md").write_text(
+            "reviewed candidate\n", encoding="utf-8")
+        destination = self.root / "empty-failure-reservation"
+        with mock.patch.object(
+                loom_orchestrator, "_copy_successor_entry",
+                side_effect=shutil.Error([
+                    ("source", "destination", "copy failed")])), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._copy_successor_install_stage(
+                source, destination,
+                expected_source_identity=
+                loom_reliability.observe_root_identity(source))
+        self.assertEqual(
+            "SUCCESSOR_INSTALL_PREPARATION_FAILED", caught.exception.code)
+        self.assertFalse(os.path.lexists(destination))
+
+    def test_ambiguous_successor_reservation_is_preserved_and_blocks_cleanup(self):
+        source = self.root / "owner-stage"
+        source.mkdir()
+        (source / "plan.md").write_text("reviewed candidate\n", encoding="utf-8")
+        identity = loom_reliability.observe_root_identity(source)
+        destination = self.root / "reserved-successor"
+
+        def replace_reservation(_source, _destination):
+            destination.rmdir()
+            destination.mkdir()
+            (destination / "unrelated.txt").write_text(
+                "preserve ambiguous bytes\n", encoding="utf-8")
+            raise shutil.Error([("source", "destination", "copy failed")])
+
+        with mock.patch.object(
+                loom_orchestrator, "_copy_successor_entry",
+                side_effect=replace_reservation), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._copy_successor_install_stage(
+                source, destination, expected_source_identity=identity)
+
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertEqual(
+            "preserve ambiguous bytes\n",
+            destination.joinpath("unrelated.txt").read_text(encoding="utf-8"))
+
+    def test_successor_cleanup_preserves_injected_or_replaced_entries(self):
+        mutations = ("injected-child", "replaced-file", "changed-file",
+                     "directory-swap", "hardlink", "redirect")
+        for ordinal, mutation in enumerate(mutations):
+            with self.subTest(mutation=mutation):
+                source = self.root / f"owner-stage-{ordinal}"
+                nested = source / "nested"
+                nested.mkdir(parents=True)
+                (nested / "plan.md").write_text(
+                    "reviewed candidate\n", encoding="utf-8")
+                identity = loom_reliability.observe_root_identity(source)
+                destination = self.root / f"reserved-successor-{ordinal}"
+                copied = loom_orchestrator._copy_successor_install_stage(
+                    source, destination, expected_source_identity=identity)
+                target = destination / "nested" / "plan.md"
+                if mutation == "injected-child":
+                    (destination / "injected.txt").write_text(
+                        "untracked\n", encoding="utf-8")
+                elif mutation == "replaced-file":
+                    content = target.read_bytes()
+                    target.unlink()
+                    target.write_bytes(content)
+                elif mutation == "changed-file":
+                    target.write_text("changed bytes\n", encoding="utf-8")
+                elif mutation == "directory-swap":
+                    old = destination / "nested-old"
+                    (destination / "nested").rename(old)
+                    (destination / "nested").mkdir()
+                    (destination / "nested" / "plan.md").write_text(
+                        "reviewed candidate\n", encoding="utf-8")
+                elif mutation == "hardlink":
+                    os.link(target, destination / "second-name.md")
+                else:
+                    with mock.patch.object(
+                            loom_reliability, "_is_redirect",
+                            side_effect=lambda path, _target=target:
+                                Path(path) == _target):
+                        with self.assertRaises(
+                                loom_orchestrator.OrchestratorError) as caught:
+                            loom_orchestrator._remove_owned_successor_reservation(
+                                destination, copied["cleanup_ownership"])
+                    self.assertEqual(
+                        "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+                    self.assertTrue(destination.exists())
+                    continue
+
+                with self.assertRaises(
+                        loom_orchestrator.OrchestratorError) as caught:
+                    loom_orchestrator._remove_owned_successor_reservation(
+                        destination, copied["cleanup_ownership"])
+                self.assertEqual(
+                    "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+                self.assertTrue(destination.exists())
+
+    def test_successor_quarantine_revalidates_manifest_after_root_identity_aba(self):
+        source = self.root / "aba-owner-stage"
+        source.mkdir()
+        (source / "plan.md").write_text(
+            "reviewed candidate\n", encoding="utf-8")
+        destination = self.root / "aba-reserved-successor"
+        copied = loom_orchestrator._copy_successor_install_stage(
+            source, destination,
+            expected_source_identity=loom_reliability.observe_root_identity(
+                source))
+
+        shutil.rmtree(destination)
+        destination.mkdir()
+        (destination / "owner-recovery-required.txt").write_text(
+            "unowned replacement\n", encoding="utf-8")
+        collision = {
+            **copied["cleanup_ownership"],
+            "root_identity": loom_reliability.observe_root_identity(destination),
+        }
+        collision["ownership_sha256"] = loom_orchestrator._hash({
+            key: value for key, value in collision.items()
+            if key != "ownership_sha256"
+        })
+        owner_root = self.root / "owner-root"
+        owner_root.mkdir()
+        quarantine = owner_root / "project-state" / \
+            loom_orchestrator.RECOVERY_DIRECTORY / "action" / "reservation"
+
+        def prepare_recovery_root(_owner_root, recovery_root):
+            Path(recovery_root).mkdir(parents=True)
+            return Path(recovery_root)
+
+        with mock.patch.object(
+                loom_orchestrator, "_prepare_recovery_root",
+                side_effect=prepare_recovery_root), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._release_failed_successor_reservation(
+                destination, collision, quarantine=quarantine,
+                owner_root=owner_root)
+
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertEqual(
+            "unowned replacement\n",
+            destination.joinpath("owner-recovery-required.txt").read_text(
+                encoding="utf-8"))
+        self.assertFalse(os.path.lexists(quarantine))
+
+    def test_failed_copy_preserves_source_identical_unjournaled_entries(self):
+        for ordinal, mutation in enumerate(("file", "directory")):
+            with self.subTest(mutation=mutation):
+                source = self.root / f"copy-source-{ordinal}"
+                nested = source / "nested"
+                nested.mkdir(parents=True)
+                (nested / "plan.md").write_text(
+                    "reviewed candidate\n", encoding="utf-8")
+                identity = loom_reliability.observe_root_identity(source)
+                destination = self.root / f"copy-destination-{ordinal}"
+
+                def inject_then_fail(copy_source, copy_destination):
+                    copy_destination = Path(copy_destination)
+                    if mutation == "file":
+                        shutil.copy2(copy_source, copy_destination)
+                    else:
+                        copied_parent = copy_destination.parent
+                        copied_parent.rmdir()
+                        copied_parent.mkdir()
+                    raise shutil.Error([
+                        ("source", "destination", "copy failed")])
+
+                with mock.patch.object(
+                        loom_orchestrator, "_copy_successor_entry",
+                        side_effect=inject_then_fail), \
+                        self.assertRaises(
+                            loom_orchestrator.OrchestratorError) as caught:
+                    loom_orchestrator._copy_successor_install_stage(
+                        source, destination,
+                        expected_source_identity=identity)
+                self.assertEqual(
+                    "SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+                self.assertTrue(destination.exists())
+
+    def test_successor_cleanup_never_pathname_deletes_nonempty_reservation(self):
+        source = self.root / "unlink-race-source"
+        source.mkdir()
+        (source / "plan.md").write_text(
+            "reviewed candidate\n", encoding="utf-8")
+        destination = self.root / "unlink-race-destination"
+        copied = loom_orchestrator._copy_successor_install_stage(
+            source, destination,
+            expected_source_identity=loom_reliability.observe_root_identity(
+                source))
+        target = destination / "plan.md"
+        with mock.patch.object(
+                Path, "unlink",
+                side_effect=AssertionError(
+                    "nonempty successor cleanup must never pathname-delete")) \
+                as unlink, self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._remove_owned_successor_reservation(
+                destination, copied["cleanup_ownership"])
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+        self.assertEqual(0, unlink.call_count)
+        self.assertTrue(destination.exists())
+        self.assertEqual(
+            "reviewed candidate\n", target.read_text(encoding="utf-8"))
+
+    def test_successor_attempt_reservations_are_unique_and_bounded(self):
+        action = {
+            "action_id": "a" * 32,
+            "attempts": 0,
+            "max_attempts": 3,
+            "explicit_target": str(self.root),
+            "cwd": str(self.root),
+        }
+        observed = []
+        quarantines = []
+        for attempt in range(action["max_attempts"]):
+            action["attempts"] = attempt
+            observed.append(loom_orchestrator._successor_install_reservation(
+                self.root, action))
+            quarantines.append(
+                loom_orchestrator._successor_reservation_quarantine(
+                    self.root / "orchestrations" / "action.json", action))
+        self.assertEqual(3, len(set(observed)))
+        self.assertEqual(3, len(set(quarantines)))
+        self.assertEqual(
+            [
+                self.root / "plans" / (
+                    f".successor-{action['action_id']}-attempt-{attempt}")
+                for attempt in range(3)
+            ],
+            observed)
+        action["attempts"] = action["max_attempts"]
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as caught:
+            loom_orchestrator._successor_install_reservation(self.root, action)
+        self.assertEqual("SUCCESSOR_INSTALL_AMBIGUOUS", caught.exception.code)
+
+    def test_natural_replacement_plan_supersedes_changed_reviewable_generation(self):
+        """Break caught: changed-world recovery requires parser-specific wording."""
+        _plan_action, _planned = self.complete_machine_authored_plan()
+        old_generation = loom_plan_store.resolve(self.repo)
+        (self.repo / "external-world.txt").write_text(
+            "out-of-band world change\n", encoding="utf-8")
+
+        replacement = loom_orchestrator.invoke(
+            request=(
+                "Plan and present a fresh replacement reviewed against the "
+                "current world, explicitly superseding the stale unstarted plan "
+                "generation. Do not implement."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", replacement["status"])
+        self.assertEqual("plan", replacement["intent"])
+        _new_path, sealed_replacement, _security = \
+            loom_orchestrator._read_action(
+                replacement["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            "supersede-generation",
+            sealed_replacement["request_control"]["relation"])
+        self.assertIn(
+            "planning-current-world-replan",
+            sealed_replacement["request_control"]["evidence"])
+        self.assertNotIn("prior_generation_transition", replacement)
+        old_ledger = json.loads(
+            (old_generation.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+        self.assertNotIn(
+            "generation-superseded",
+            [item["event_type"] for item in old_ledger["events"]])
+        self.assertEqual(
+            old_generation.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_inert_lifecycle_language_creates_no_candidate_plan_state(self):
+        """Break caught: discussion, quotation, or negation stages a successor."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        index_path = self.repo / "plans" / loom_plan_store.INDEX_NAME
+        before_index = index_path.read_bytes()
+        before_generation = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        requests = (
+            ("Explain what a replacement plan would look like without creating one. "
+             "Keep the current plan unchanged.", "completed"),
+            ('The reviewer wrote "Create a fresh replacement plan." Explain whether '
+             "that would be safe; do not act on the quote.", "completed"),
+            ("The incident report says the owner requested a fresh replacement plan. "
+             "Summarize the report only; make no changes.", "action-required"),
+            ("Do not revise, replace, or create a new plan. Show the current plan.",
+             "completed"),
+        )
+
+        for request, expected_status in requests:
+            with self.subTest(request=request):
+                result = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+                self.assertEqual(expected_status, result["status"])
+                self.assertEqual(before_index, index_path.read_bytes())
+                current = loom_plan_store.resolve(self.repo)
+                self.assertEqual(predecessor.generation_id, current.generation_id)
+                self.assertEqual(
+                    before_generation,
+                    loom_reliability.exact_tree_manifest(
+                        current.generation_root))
+                matching = []
+                for path in self.home.glob(
+                        "instances/*/runtime/projects/*/orchestrations/*.json"):
+                    if re.fullmatch(r"[0-9a-f-]{36}\.json", path.name) is None:
+                        continue
+                    _path, action, _security = loom_orchestrator._read_action(
+                        path, owner_home=self.home, install_root=self.installed)
+                    if action["request"] == request:
+                        matching.append(action)
+                if expected_status == "completed":
+                    self.assertEqual("non-authoritative-plan", result["code"])
+                    self.assertNotIn("action_path", result)
+                    self.assertEqual([], matching)
+                else:
+                    self.assertEqual(1, len(matching))
+                    self.assertEqual(
+                        "read-only", matching[0]["request_control"]["relation"])
+                self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
+                if expected_status == "action-required":
+                    loom_orchestrator.cancel(
+                        result["action_path"], owner_home=self.home,
+                        install_root=self.installed)
+
+    def test_true_plan_authority_contradiction_returns_inline_provisional_without_mutation(self):
+        """Break caught: useful clarification stages or mutates plan authority."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        index_path = self.repo / "plans" / loom_plan_store.INDEX_NAME
+        before_index = index_path.read_bytes()
+        before_generation = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        action_directory = next(self.home.glob(
+            "instances/*/runtime/projects/*/orchestrations"))
+        before_actions = {
+            path.name: path.read_bytes()
+            for path in action_directory.glob("*.json")
+        }
+        request = (
+            "Create a new plan now. Do not create, revise, or replace the current "
+            "plan.")
+
+        result = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertIn("Understood outcome:", result["user_message"])
+        self.assertEqual(1, result["user_message"].count("?"))
+        self.assertNotIn("action_path", result)
+        self.assertEqual(before_index, index_path.read_bytes())
+        self.assertEqual(
+            before_generation,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+        self.assertEqual(
+            before_actions,
+            {path.name: path.read_bytes()
+             for path in action_directory.glob("*.json")})
+        self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
+
+    def test_changed_active_world_stages_non_authoritative_current_world_candidate(self):
+        """Break caught: stale active authority blocks safe candidate planning."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        predecessor = loom_plan_store.resolve(self.repo)
+        action_path = Path(started["action_path"])
+        pointer_path = action_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        witness_path = action_path.parent / "lifecycle-head-witness.json"
+        index_path = self.repo / "plans" / loom_plan_store.INDEX_NAME
+        authority_before = {
+            "index": index_path.read_bytes(),
+            "generation": loom_reliability.exact_tree_manifest(
+                predecessor.generation_root),
+            "witness": witness_path.read_bytes(),
+            "action": action_path.read_bytes(),
+            "pointer": pointer_path.read_bytes(),
+        }
+        _write(self.repo / "external-world.txt", "changed outside Loom\n")
+        request = (
+            "Plan a current-world double-entry direction in src/app.py only; do "
+            "not implement it.")
+
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", candidate["status"])
+        _path, candidate_action, _security = loom_orchestrator._read_action(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertIn(
+            "planning-current-world-replan",
+            candidate_action["request_control"]["evidence"])
+        self.assertTrue(candidate_action["pack_seed"]["created_pack"])
+        self.assertFalse(
+            loom_orchestrator._action_pack_root(candidate_action).is_relative_to(
+                self.repo))
+        self.assertEqual(authority_before["index"], index_path.read_bytes())
+        self.assertEqual(
+            authority_before["generation"],
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+        self.assertEqual(authority_before["witness"], witness_path.read_bytes())
+        self.assertEqual(authority_before["action"], action_path.read_bytes())
+        self.assertEqual(authority_before["pointer"], pointer_path.read_bytes())
+
+        _author_medium_action(candidate, request=request)
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED", blocked.exception.code)
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_changed_active_world_unanchored_request_returns_inline_assistance(self):
+        """Break caught: safe inline help is dead-ended by an active action."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        predecessor = loom_plan_store.resolve(self.repo)
+        action_path = Path(started["action_path"])
+        pointer_path = action_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        witness_path = action_path.parent / "lifecycle-head-witness.json"
+        index_path = self.repo / "plans" / loom_plan_store.INDEX_NAME
+        _write(self.repo / "external-world.txt", "changed outside Loom\n")
+        authority_before = {
+            "index": index_path.read_bytes(),
+            "generation": loom_reliability.exact_tree_manifest(
+                predecessor.generation_root),
+            "witness": witness_path.read_bytes(),
+            "action": action_path.read_bytes(),
+            "pointer": pointer_path.read_bytes(),
+        }
+
+        result = loom_orchestrator.invoke(
+            request=(
+                "The accounting requirements changed. Prepare a current-world "
+                "double-entry direction for discussion only."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertNotIn("action_path", result)
+        self.assertEqual(authority_before["index"], index_path.read_bytes())
+        self.assertEqual(
+            authority_before["generation"],
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+        self.assertEqual(authority_before["witness"], witness_path.read_bytes())
+        self.assertEqual(authority_before["action"], action_path.read_bytes())
+        self.assertEqual(authority_before["pointer"], pointer_path.read_bytes())
+        self.assertEqual([], list(self.repo.glob(".loom-plan-stage-*")))
+
+    def _make_open_pre_ux104_planning_action(self):
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        action = json.loads(path.read_text(encoding="utf-8"))
+        action["request_control"] = json.loads(json.dumps(
+            PRE_UX104_PLANNING_CONTROL_V1))
+        action["prepared"]["route_contract"]["evidence"] = [
+            item for item in action["prepared"]["route_contract"]["evidence"]
+            if not item.casefold().startswith("semantic-outcome-")]
+        prepared = dict(action["prepared"])
+        prepared.pop("prepared_hash")
+        action["prepared"]["prepared_hash"] = loom_orchestrator._hash(prepared)
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        path.write_text(json.dumps(action), encoding="utf-8")
+        return opened, path, action
+
+    def _interrupt_successor_pointer_before_publication(self):
+        """Build one exact receipt-bound successor with no published pointer."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def interrupt(source, destination, **kwargs):
+            nonlocal injected
+            if not injected \
+                    and kwargs.get("source_role") == "successor_pointer_stage" \
+                    and kwargs.get("destination_role") == "active_successor_pointer":
+                injected = True
+                raise loom_reliability.ReliabilityError(
+                    "injected before successor pointer publication")
+            return original_atomic(source, destination, **kwargs)
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace", side_effect=interrupt):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        receipt_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT)
+        stage_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_POINTER)
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        successor_path = old_path.parent / f"{receipt['successor_action_id']}.json"
+        return {
+            "opened": opened,
+            "old_path": old_path,
+            "old_action": old_action,
+            "request": request,
+            "pointer_path": old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE,
+            "receipt_path": receipt_path,
+            "stage_path": stage_path,
+            "receipt": receipt,
+            "successor_path": successor_path,
+        }
+
+    def _interrupt_pending_successor_before_receipt(self):
+        """Build one recovery-bound pending successor before receipt staging."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+
+        with mock.patch.object(
+                loom_orchestrator, "_publish_recovery_bound_active_pointer",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected after pending action write")):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_TEST_INTERRUPT", interrupted.exception.code)
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        bound = []
+        for path in old_path.parent.glob("*.json"):
+            if path.name == loom_orchestrator.ACTIVE_POINTER_FILE:
+                continue
+            action = json.loads(path.read_text(encoding="utf-8"))
+            binding = (action.get("host_result") or {}).get(
+                loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY)
+            if action["status"] not in loom_orchestrator.TERMINAL_ACTION_STATUSES \
+                    and binding is not None:
+                bound.append((path, action))
+        self.assertEqual(1, len(bound))
+        return {
+            "opened": opened,
+            "old_path": old_path,
+            "old_action": old_action,
+            "request": request,
+            "pointer_path": old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE,
+            "receipt_path": (
+                transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT),
+            "stage_path": (
+                transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_POINTER),
+            "successor_path": bound[0][0],
+            "successor": bound[0][1],
+        }
+
+    def test_fresh_plan_reprepares_pointer_backed_pre_ux104_action(self):
+        """Break caught: ACTION_REPREPARE_REQUIRED instructs an endless retry."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        fresh_request = "Plan a separate current-world README improvement."
+
+        fresh = loom_orchestrator.invoke(
+            request=fresh_request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", fresh["status"])
+        self.assertNotEqual(opened["action_id"], fresh["action_id"])
+        retired = json.loads(old_path.read_text(encoding="utf-8"))
+        self.assertEqual("superseded", retired["status"])
+        self.assertEqual("superseded", retired["recovery_receipt"]["reason"])
+        pointer = loom_orchestrator._read_active_pointer(old_path.parent)
+        self.assertEqual(fresh["action_id"], pointer["action_id"])
+        journal = loom_session._load_journal(
+            old_action["journal_path"], old_action["instance_id"],
+            old_action["project_id"])
+        events = [
+            item for item in journal["events"]
+            if item["operation_id"] == old_action["operation_id"]]
+        self.assertEqual("session-interrupted", events[-1]["kind"])
+
+    def test_fresh_plan_reprepares_unique_pointerless_pre_ux104_action(self):
+        """Break caught: restart recovery cannot discover a reprepare-only action."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        loom_orchestrator._clear_active_pointer(
+            old_path.parent, opened["action_id"])
+
+        fresh = loom_orchestrator.invoke(
+            request="Plan a separate current-world README improvement.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", fresh["status"])
+        retired = json.loads(old_path.read_text(encoding="utf-8"))
+        self.assertEqual("superseded", retired["status"])
+        pointer = loom_orchestrator._read_active_pointer(old_path.parent)
+        self.assertEqual(fresh["action_id"], pointer["action_id"])
+
+    def test_pre_ux104_reprepare_converges_after_interrupted_recovery(self):
+        """Break caught: a crash can retire the action before closing its session."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+        original_recover = loom_orchestrator._recover_plan_action
+
+        with mock.patch.object(
+                loom_orchestrator, "_recover_plan_action",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT", "injected recovery interruption")):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_TEST_INTERRUPT", interrupted.exception.code)
+        self.assertEqual("pending", json.loads(
+            old_path.read_text(encoding="utf-8"))["status"])
+        self.assertEqual(
+            opened["action_id"],
+            loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
+        journal = loom_session._load_journal(
+            old_action["journal_path"], old_action["instance_id"],
+            old_action["project_id"])
+        events = [
+            item for item in journal["events"]
+            if item["operation_id"] == old_action["operation_id"]]
+        self.assertEqual("session-interrupted", events[-1]["kind"])
+
+        with mock.patch.object(
+                loom_orchestrator, "_recover_plan_action", wraps=original_recover):
+            fresh = loom_orchestrator.invoke(
+                request=request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("action-required", fresh["status"])
+        self.assertEqual("superseded", json.loads(
+            old_path.read_text(encoding="utf-8"))["status"])
+        self.assertNotEqual(opened["action_id"], fresh["action_id"])
+
+    def test_pre_ux104_reprepare_preserves_changed_stage(self):
+        """Break caught: compatibility recovery guesses through changed seed bytes."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        stage = loom_orchestrator._action_pack_root(old_action)
+        _write(stage / "unsealed.txt", "owner bytes\n")
+        before_action = old_path.read_bytes()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        before_pointer = pointer_path.read_bytes()
+        journal_path = Path(old_action["journal_path"])
+        before_journal = journal_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_DECISION_REQUIRED", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_journal, journal_path.read_bytes())
+        self.assertEqual("owner bytes\n", (stage / "unsealed.txt").read_text(
+            encoding="utf-8"))
+
+    def test_pre_ux104_reprepare_preflights_quarantine_before_interrupting(self):
+        """Break caught: an invalid quarantine mutates the session before refusal."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        quarantine = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY /
+            old_action["action_id"] / "plans")
+        _write(quarantine / "foreign.txt", "not the sealed seed\n")
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        journal_path = Path(old_action["journal_path"])
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        before_journal = journal_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_DECISION_REQUIRED", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_journal, journal_path.read_bytes())
+        self.assertEqual(
+            "not the sealed seed\n",
+            (quarantine / "foreign.txt").read_text(encoding="utf-8"))
+
+    def test_pre_ux104_reprepare_revalidates_stage_identity_after_interrupt(self):
+        """Break caught: byte-identical stage replacement escapes recovery preflight."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        stage = loom_orchestrator._action_pack_root(old_action)
+        swapped = stage.with_name(stage.name + "-original")
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_interrupt = loom_session.SessionController.interrupt
+
+        def interrupt_then_replace(controller, opened, *, code, now=None):
+            result = original_interrupt(
+                controller, opened, code=code, now=now)
+            stage.rename(swapped)
+            shutil.copytree(swapped, stage)
+            return result
+
+        with mock.patch.object(
+                loom_session.SessionController, "interrupt",
+                new=interrupt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertTrue(stage.is_dir())
+        self.assertTrue(swapped.is_dir())
+
+    def test_pre_ux104_reprepare_revalidates_action_identity_after_interrupt(self):
+        """Break caught: byte-identical action replacement escapes preflight."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        swapped = old_path.with_name(old_path.stem + "-original.json")
+        before_action = old_path.read_bytes()
+        original_interrupt = loom_session.SessionController.interrupt
+
+        def interrupt_then_replace(controller, opened, *, code, now=None):
+            result = original_interrupt(
+                controller, opened, code=code, now=now)
+            old_path.rename(swapped)
+            shutil.copy2(swapped, old_path)
+            return result
+
+        with mock.patch.object(
+                loom_session.SessionController, "interrupt",
+                new=interrupt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_action, swapped.read_bytes())
+
+    def test_pre_ux104_reprepare_revalidates_pointer_identity_after_interrupt(self):
+        """Break caught: byte-identical pointer replacement escapes preflight."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = pointer_path.with_name(pointer_path.name + ".original")
+        before_pointer = pointer_path.read_bytes()
+        original_interrupt = loom_session.SessionController.interrupt
+
+        def interrupt_then_replace(controller, opened, *, code, now=None):
+            result = original_interrupt(
+                controller, opened, code=code, now=now)
+            pointer_path.rename(swapped)
+            shutil.copy2(swapped, pointer_path)
+            return result
+
+        with mock.patch.object(
+                loom_session.SessionController, "interrupt",
+                new=interrupt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_pointer, swapped.read_bytes())
+
+    def test_pre_ux104_reprepare_cas_rejects_action_replacement_before_source_move(self):
+        """Break caught: action replacement after second preflight is overwritten."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        stage = loom_orchestrator._action_pack_root(old_action)
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = old_path.with_name(old_path.stem + "-post-preflight.json")
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_prepare = loom_orchestrator._prepare_recovery_root
+        injected = False
+
+        def prepare_then_replace(owner_root, recovery_root):
+            nonlocal injected
+            result = original_prepare(owner_root, recovery_root)
+            if not injected:
+                injected = True
+                old_path.rename(swapped)
+                shutil.copy2(swapped, old_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_prepare_recovery_root",
+                side_effect=prepare_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_action, swapped.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertTrue(stage.is_dir())
+
+    def test_pre_ux104_reprepare_cas_rejects_pointer_replacement_before_source_move(self):
+        """Break caught: pointer replacement after second preflight is cleared."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        stage = loom_orchestrator._action_pack_root(old_action)
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = pointer_path.with_name(pointer_path.name + ".post-preflight")
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_prepare = loom_orchestrator._prepare_recovery_root
+        injected = False
+
+        def prepare_then_replace(owner_root, recovery_root):
+            nonlocal injected
+            result = original_prepare(owner_root, recovery_root)
+            if not injected:
+                injected = True
+                pointer_path.rename(swapped)
+                shutil.copy2(swapped, pointer_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_prepare_recovery_root",
+                side_effect=prepare_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_pointer, swapped.read_bytes())
+        self.assertTrue(stage.is_dir())
+
+    def test_pre_ux104_reprepare_cas_rejects_action_replacement_before_terminal_write(self):
+        """Break caught: a late action swap is overwritten after artifact recovery."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = old_path.with_name(old_path.stem + "-before-write.json")
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        original_receipt = loom_orchestrator._recovery_receipt
+        injected = False
+
+        def receipt_then_replace(*args, **kwargs):
+            nonlocal injected
+            result = original_receipt(*args, **kwargs)
+            if not injected:
+                injected = True
+                old_path.rename(swapped)
+                shutil.copy2(swapped, old_path)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_recovery_receipt",
+                side_effect=receipt_then_replace):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_action, swapped.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+
+    def test_pre_ux104_reprepare_cas_rejects_pointer_replacement_before_clear(self):
+        """Break caught: recovery reintroduces overwrite-then-clear ordering."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        original_write = loom_orchestrator._write_action
+        recovery_overwrites = []
+
+        def reject_recovery_overwrite(path, value, security=None):
+            if Path(path) == old_path and value.get("status") == "superseded":
+                recovery_overwrites.append(Path(path))
+                raise AssertionError("recovery must install by an exclusive move")
+            return original_write(path, value, security)
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action",
+                side_effect=reject_recovery_overwrite):
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual([], recovery_overwrites)
+        self.assertNotEqual(
+            opened["action_id"],
+            json.loads(pointer_path.read_text(encoding="utf-8"))["action_id"])
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_reprepare_cas_rechecks_pointer_immediately_before_unlink(self):
+        """Break caught: recovery clears its source with a destructive unlink."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        original_unlink = os.unlink
+        pointer_unlinks = []
+
+        def reject_pointer_unlink(path, *args, **kwargs):
+            if Path(path) == pointer_path:
+                pointer_unlinks.append(Path(path))
+                raise AssertionError("recovery must retire by an exclusive move")
+            return original_unlink(path, *args, **kwargs)
+
+        with mock.patch.object(os, "unlink", side_effect=reject_pointer_unlink):
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual([], pointer_unlinks)
+        self.assertNotEqual(
+            opened["action_id"],
+            json.loads(pointer_path.read_text(encoding="utf-8"))["action_id"])
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_reprepare_atomic_move_rejects_last_window_action_swap(self):
+        """Break caught: final action replacement destroys unexpected bytes."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        swapped = old_path.with_name(old_path.stem + "-atomic-race.json")
+        before_action = old_path.read_bytes()
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def replace_inside_atomic(source, destination, **kwargs):
+            nonlocal injected
+            if not injected and Path(source) == old_path \
+                    and Path(destination).name == "original-action.json":
+                injected = True
+                old_path.rename(swapped)
+                shutil.copy2(swapped, old_path)
+            return original_atomic(source, destination, **kwargs)
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=replace_inside_atomic):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_action, swapped.read_bytes())
+
+    def test_pre_ux104_reprepare_atomic_move_rejects_last_window_pointer_swap(self):
+        """Break caught: final pointer replacement destroys unexpected bytes."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        swapped = pointer_path.with_name(pointer_path.name + ".atomic-race")
+        before_pointer = pointer_path.read_bytes()
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def replace_inside_atomic(source, destination, **kwargs):
+            nonlocal injected
+            if not injected and Path(source) == pointer_path \
+                    and Path(destination).name == "active-pointer.json":
+                injected = True
+                pointer_path.rename(swapped)
+                shutil.copy2(swapped, pointer_path)
+            return original_atomic(source, destination, **kwargs)
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=replace_inside_atomic):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_pointer, swapped.read_bytes())
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_reprepare_resumes_after_original_action_is_retired(self):
+        """Break caught: a crash between no-replace action moves loses discovery."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def crash_after_retirement(source, destination, **kwargs):
+            nonlocal injected
+            outcome = original_atomic(source, destination, **kwargs)
+            if not injected and Path(source) == old_path \
+                    and Path(destination).name == "original-action.json":
+                injected = True
+                raise RuntimeError("crash after original action retirement")
+            return outcome
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=crash_after_retirement):
+            with self.assertRaisesRegex(
+                    RuntimeError, "original action retirement"):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertFalse(old_path.exists())
+        fresh = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / "control-transition")
+        self.assertEqual("action-required", fresh["status"])
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+        self.assertTrue((transition / "original-action.json").is_file())
+        self.assertFalse((transition / "target-action.json").exists())
+
+    def test_pre_ux104_reprepare_resumes_after_terminal_action_install(self):
+        """Break caught: a crash after terminal install leaves a stale pointer."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def crash_after_install(source, destination, **kwargs):
+            nonlocal injected
+            outcome = original_atomic(source, destination, **kwargs)
+            if not injected and Path(source).name == "target-action.json" \
+                    and Path(destination) == old_path:
+                injected = True
+                raise RuntimeError("crash after terminal action install")
+            return outcome
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=crash_after_install):
+            with self.assertRaisesRegex(RuntimeError, "terminal action install"):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+        fresh = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / "control-transition")
+        self.assertEqual("action-required", fresh["status"])
+        self.assertTrue((transition / "active-pointer.json").is_file())
+        self.assertFalse((transition / "target-action.json").exists())
+
+    def test_pre_ux104_reprepare_resumes_after_pointer_retirement(self):
+        """Break caught: a crash after pointer retirement cannot finish cleanly."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def crash_after_pointer(source, destination, **kwargs):
+            nonlocal injected
+            outcome = original_atomic(source, destination, **kwargs)
+            if not injected and Path(source) == pointer_path \
+                    and Path(destination).name == "active-pointer.json":
+                injected = True
+                raise RuntimeError("crash after pointer retirement")
+            return outcome
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=crash_after_pointer):
+            with self.assertRaisesRegex(RuntimeError, "pointer retirement"):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertFalse(pointer_path.exists())
+        fresh = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / "control-transition")
+        self.assertEqual("action-required", fresh["status"])
+        self.assertTrue((transition / "active-pointer.json").is_file())
+        self.assertEqual(
+            fresh["action_id"],
+            loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
+
+    def test_pre_ux104_fresh_pointer_publication_preserves_unexpected_pointer(self):
+        """Break caught: fresh publication replaces bytes created after retirement."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        foreign = {
+            "schema_version": 1,
+            "action_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "project_id": old_action["project_id"],
+            "state": "active",
+        }
+        foreign["pointer_hash"] = loom_orchestrator._pointer_hash(foreign)
+        foreign_bytes = loom_session._canonical_json(foreign) + b"\n"
+        original_write = loom_orchestrator._write_action
+        injected = False
+
+        def write_then_compete(path, value, security=None):
+            nonlocal injected
+            result = original_write(path, value, security)
+            if not injected and value["action_id"] != opened["action_id"] \
+                    and value["status"] == "initializing" \
+                    and not pointer_path.exists():
+                injected = True
+                loom_session._atomic_json(pointer_path, foreign)
+            return result
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action", side_effect=write_then_compete):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as blocked:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertTrue(injected)
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(foreign_bytes, pointer_path.read_bytes())
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_fresh_pointer_publication_crash_retry_converges(self):
+        """Break caught: a lost response after fresh pointer commit cannot retry safely."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        request = "Plan a separate current-world README improvement."
+        original_atomic = loom_reliability.atomic_rename_noreplace
+        injected = False
+
+        def crash_after_fresh_pointer(source, destination, **kwargs):
+            nonlocal injected
+            outcome = original_atomic(source, destination, **kwargs)
+            if not injected and Path(source).name == "successor-active-pointer.json" \
+                    and Path(destination) == pointer_path:
+                injected = True
+                raise RuntimeError("crash after fresh pointer publication")
+            return outcome
+
+        with mock.patch.object(
+                loom_reliability, "atomic_rename_noreplace",
+                side_effect=crash_after_fresh_pointer):
+            with self.assertRaisesRegex(
+                    RuntimeError, "fresh pointer publication"):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertTrue(injected)
+        committed = pointer_path.read_bytes()
+        committed_action_id = json.loads(
+            committed.decode("utf-8"))["action_id"]
+        self.assertNotEqual(opened["action_id"], committed_action_id)
+
+        fresh = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", fresh["status"])
+        self.assertEqual(committed, pointer_path.read_bytes())
+        self.assertEqual(committed_action_id, fresh["action_id"])
+        self.assertEqual(
+            fresh["action_id"],
+            loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
+        self.assertEqual(
+            "superseded", json.loads(old_path.read_text(encoding="utf-8"))["status"])
+
+    def test_pre_ux104_successor_pointer_prepublication_retry_converges(self):
+        """Break caught: pre-publication failure abandons the exact successor."""
+        case = self._interrupt_successor_pointer_before_publication()
+
+        self.assertFalse(case["pointer_path"].exists())
+        self.assertTrue(case["receipt_path"].is_file())
+        self.assertTrue(case["stage_path"].is_file())
+        self.assertEqual(
+            "superseded",
+            json.loads(case["old_path"].read_text(encoding="utf-8"))["status"])
+        self.assertTrue(case["successor_path"].is_file())
+
+        resumed = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(case["receipt"]["successor_action_id"], resumed["action_id"])
+        self.assertEqual(
+            resumed["action_id"],
+            loom_orchestrator._read_active_pointer(
+                case["old_path"].parent)["action_id"])
+        self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_pending_successor_without_receipt_rebinds_on_retry(self):
+        """Break caught: a pointerless pending successor is returned as usable."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+
+        with mock.patch.object(
+                loom_orchestrator, "_publish_recovery_bound_active_pointer",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected after pending action write")):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_TEST_INTERRUPT", interrupted.exception.code)
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        receipt_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT)
+        stage_path = (
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_POINTER)
+        self.assertFalse(pointer_path.exists())
+        self.assertFalse(receipt_path.exists())
+        self.assertFalse(stage_path.exists())
+        pending = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in old_path.parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(path.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual(1, len(pending))
+        successor_id = pending[0]["action_id"]
+
+        resumed = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(successor_id, resumed["action_id"])
+        self.assertEqual(
+            successor_id,
+            loom_orchestrator._read_active_pointer(old_path.parent)["action_id"])
+        self.assertTrue(receipt_path.is_file())
+        self.assertFalse(stage_path.exists())
+
+    def test_pre_ux104_bound_successor_precedes_stale_source_pointer(self):
+        """Break caught: a stale source pointer is cleared before bound recovery."""
+        case = self._interrupt_pending_successor_before_receipt()
+        pointer_value = loom_orchestrator._active_pointer_value(
+            action_id=case["opened"]["action_id"],
+            project_id=case["old_action"]["project_id"])
+        loom_session._atomic_json(case["pointer_path"], pointer_value)
+        before_pointer = case["pointer_path"].read_bytes()
+        before_successor = case["successor_path"].read_bytes()
+        before_actions = {
+            path.name for path in case["old_path"].parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+        }
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_pointer, case["pointer_path"].read_bytes())
+        self.assertEqual(before_successor, case["successor_path"].read_bytes())
+        self.assertEqual(
+            before_actions,
+            {
+                path.name for path in case["old_path"].parent.glob("*.json")
+                if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            })
+        self.assertFalse(case["receipt_path"].exists())
+        self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_bound_successor_precedes_unrelated_pending_pointer(self):
+        """Break caught: an unrelated pending pointer bypasses bound recovery."""
+        case = self._interrupt_pending_successor_before_receipt()
+        unrelated = json.loads(json.dumps(case["successor"]))
+        unrelated["action_id"] = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+        host_result = dict(unrelated["host_result"])
+        host_result.pop(loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY)
+        unrelated["host_result"] = host_result
+        planning_mode = loom_orchestrator._extract_planning_mode(
+            unrelated["request_control"])
+        unrelated["owner_message"] = loom_orchestrator.loom_message.build(
+            state="progress",
+            consequence=loom_orchestrator._action_consequence(
+                unrelated, use_domain_contract=True),
+            verification="pending", freshness="current",
+            changes_made=True, undo_status="unavailable",
+            summary=loom_orchestrator._planning_seed_summary(
+                unrelated["tier"], planning_mode),
+            next_action=(
+                "Have the agent finish the plan, then review it before any "
+                "project work starts."),
+            receipt_id="action-" + unrelated["action_id"])
+        unrelated["action_hash"] = loom_orchestrator._action_hash(unrelated)
+        unrelated_path = case["old_path"].parent / f"{unrelated['action_id']}.json"
+        unrelated_path.write_text(json.dumps(unrelated), encoding="utf-8")
+        loom_orchestrator._read_action(
+            unrelated_path, owner_home=self.home,
+            install_root=self.installed)
+        pointer_value = loom_orchestrator._active_pointer_value(
+            action_id=unrelated["action_id"], project_id=unrelated["project_id"])
+        loom_session._atomic_json(case["pointer_path"], pointer_value)
+        before_pointer = case["pointer_path"].read_bytes()
+        before_successor = case["successor_path"].read_bytes()
+        before_unrelated = unrelated_path.read_bytes()
+        before_actions = {
+            path.name for path in case["old_path"].parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+        }
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_pointer, case["pointer_path"].read_bytes())
+        self.assertEqual(before_successor, case["successor_path"].read_bytes())
+        self.assertEqual(before_unrelated, unrelated_path.read_bytes())
+        self.assertEqual(
+            before_actions,
+            {
+                path.name for path in case["old_path"].parent.glob("*.json")
+                if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            })
+        self.assertFalse(case["receipt_path"].exists())
+        self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_multiple_bound_successors_block_before_publication(self):
+        """Break caught: discovery guesses between two authenticated successors."""
+        case = self._interrupt_pending_successor_before_receipt()
+        duplicate = json.loads(json.dumps(case["successor"]))
+        duplicate["action_id"] = "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+        host_result = dict(duplicate["host_result"])
+        host_result.pop(loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY)
+        duplicate["host_result"] = host_result
+        planning_mode = loom_orchestrator._extract_planning_mode(
+            duplicate["request_control"])
+        duplicate["owner_message"] = loom_orchestrator.loom_message.build(
+            state="progress",
+            consequence=loom_orchestrator._action_consequence(
+                duplicate, use_domain_contract=True),
+            verification="pending", freshness="current",
+            changes_made=True, undo_status="unavailable",
+            summary=loom_orchestrator._planning_seed_summary(
+                duplicate["tier"], planning_mode),
+            next_action=(
+                "Have the agent finish the plan, then review it before any "
+                "project work starts."),
+            receipt_id="action-" + duplicate["action_id"])
+        source = json.loads(case["old_path"].read_text(encoding="utf-8"))
+        duplicate["host_result"][
+            loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY
+        ] = loom_orchestrator._successor_pointer_binding(
+            source["recovery_receipt"], duplicate)
+        duplicate["action_hash"] = loom_orchestrator._action_hash(duplicate)
+        duplicate_path = case["old_path"].parent / f"{duplicate['action_id']}.json"
+        duplicate_path.write_text(json.dumps(duplicate), encoding="utf-8")
+        loom_orchestrator._read_action(
+            duplicate_path, owner_home=self.home,
+            install_root=self.installed)
+        before_successor = case["successor_path"].read_bytes()
+        before_duplicate = duplicate_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertFalse(case["pointer_path"].exists())
+        self.assertEqual(before_successor, case["successor_path"].read_bytes())
+        self.assertEqual(before_duplicate, duplicate_path.read_bytes())
+        self.assertFalse(case["receipt_path"].exists())
+        self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_bound_successor_requires_sole_nonterminal_action(self):
+        """Break caught: bound recovery hides a second unbound pending action."""
+        case = self._interrupt_pending_successor_before_receipt()
+        unbound = json.loads(json.dumps(case["successor"]))
+        unbound["action_id"] = "dddddddd-dddd-4ddd-8ddd-dddddddddddd"
+        host_result = dict(unbound["host_result"])
+        host_result.pop(loom_orchestrator.SUCCESSOR_POINTER_BINDING_KEY)
+        unbound["host_result"] = host_result
+        planning_mode = loom_orchestrator._extract_planning_mode(
+            unbound["request_control"])
+        unbound["owner_message"] = loom_orchestrator.loom_message.build(
+            state="progress",
+            consequence=loom_orchestrator._action_consequence(
+                unbound, use_domain_contract=True),
+            verification="pending", freshness="current",
+            changes_made=True, undo_status="unavailable",
+            summary=loom_orchestrator._planning_seed_summary(
+                unbound["tier"], planning_mode),
+            next_action=(
+                "Have the agent finish the plan, then review it before any "
+                "project work starts."),
+            receipt_id="action-" + unbound["action_id"])
+        unbound["action_hash"] = loom_orchestrator._action_hash(unbound)
+        unbound_path = case["old_path"].parent / f"{unbound['action_id']}.json"
+        unbound_path.write_text(json.dumps(unbound), encoding="utf-8")
+        loom_orchestrator._read_action(
+            unbound_path, owner_home=self.home,
+            install_root=self.installed)
+        before_successor = case["successor_path"].read_bytes()
+        before_unbound = unbound_path.read_bytes()
+        before_actions = {
+            path.name for path in case["old_path"].parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+        }
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertFalse(case["pointer_path"].exists())
+        self.assertEqual(before_successor, case["successor_path"].read_bytes())
+        self.assertEqual(before_unbound, unbound_path.read_bytes())
+        self.assertEqual(
+            before_actions,
+            {
+                path.name for path in case["old_path"].parent.glob("*.json")
+                if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            })
+        self.assertFalse(case["receipt_path"].exists())
+        self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_pending_successor_binding_tamper_blocks(self):
+        """Break caught: a rehashed pending action can redirect its source binding."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+
+        with mock.patch.object(
+                loom_orchestrator, "_publish_recovery_bound_active_pointer",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected after pending action write")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        successor_paths = [
+            path for path in old_path.parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(path.read_text(encoding="utf-8"))["status"]
+            not in loom_orchestrator.TERMINAL_ACTION_STATUSES
+        ]
+        self.assertEqual(1, len(successor_paths))
+        successor_path = successor_paths[0]
+        successor = json.loads(successor_path.read_text(encoding="utf-8"))
+        binding = successor["host_result"]["successor_pointer_binding"]
+        binding["source_recovery_receipt_hash"] = "0" * 64
+        binding["binding_sha256"] = loom_orchestrator._hash({
+            key: value for key, value in binding.items()
+            if key != "binding_sha256"})
+        successor["action_hash"] = loom_orchestrator._action_hash(successor)
+        successor_path.write_text(json.dumps(successor), encoding="utf-8")
+        before = successor_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertIn(blocked.exception.code, {"ACTION_CORRUPT", "RECOVERY_RACE"})
+        self.assertEqual(before, successor_path.read_bytes())
+        self.assertFalse((
+            old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        self.assertFalse((
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT
+        ).exists())
+
+    def test_pre_ux104_successor_is_not_pending_before_binding_persists(self):
+        """A pre-binding interruption cannot expose a resumable successor."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+
+        with mock.patch.object(
+                loom_orchestrator, "_bind_recovery_bound_successor",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected before successor binding persistence")):
+            with self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+                loom_orchestrator.invoke(
+                    request="Plan a separate current-world README improvement.",
+                    cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        self.assertEqual("RECOVERY_TEST_INTERRUPT", interrupted.exception.code)
+        self.assertFalse((
+            old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+        successors = [
+            json.loads(path.read_text(encoding="utf-8"))
+            for path in old_path.parent.glob("*.json")
+            if path.name != loom_orchestrator.ACTIVE_POINTER_FILE
+            and json.loads(path.read_text(encoding="utf-8"))["action_id"]
+            != old_path.stem
+        ]
+        self.assertEqual(1, len(successors))
+        self.assertEqual("initializing", successors[0]["status"])
+        self.assertIsNone(successors[0]["host_result"])
+
+    def test_pre_ux104_pending_successor_source_receipt_mismatch_blocks(self):
+        """Break caught: a changed terminal receipt can authorize publication."""
+        opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        request = "Plan a separate current-world README improvement."
+
+        with mock.patch.object(
+                loom_orchestrator, "_publish_recovery_bound_active_pointer",
+                side_effect=loom_orchestrator.OrchestratorError(
+                    "RECOVERY_TEST_INTERRUPT",
+                    "injected after pending action write")):
+            with self.assertRaises(loom_orchestrator.OrchestratorError):
+                loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+
+        source = json.loads(old_path.read_text(encoding="utf-8"))
+        source["recovery_receipt"]["recovered_at"] = "2026-08-17T00:00:00Z"
+        receipt_body = dict(source["recovery_receipt"])
+        receipt_body.pop("receipt_hash")
+        source["recovery_receipt"]["receipt_hash"] = \
+            loom_orchestrator._hash(receipt_body)
+        source["action_hash"] = loom_orchestrator._action_hash(source)
+        old_path.write_text(json.dumps(source), encoding="utf-8")
+        before_source = old_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_source, old_path.read_bytes())
+        self.assertFalse((
+            old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE).exists())
+        transition = (
+            old_path.parent.parent / loom_orchestrator.RECOVERY_DIRECTORY
+            / opened["action_id"] / loom_orchestrator.RECOVERY_CONTROL_TRANSITION)
+        self.assertFalse((
+            transition / loom_orchestrator.RECOVERY_CONTROL_SUCCESSOR_RECEIPT
+        ).exists())
+
+    def test_pre_ux104_successor_pointer_tampered_receipt_blocks(self):
+        """Break caught: a rehashed successor receipt can redirect publication."""
+        case = self._interrupt_successor_pointer_before_publication()
+        receipt = dict(case["receipt"])
+        receipt["pointer_sha256"] = "0" * 64
+        receipt["receipt_hash"] = loom_orchestrator._hash({
+            key: value for key, value in receipt.items() if key != "receipt_hash"})
+        case["receipt_path"].write_text(json.dumps(receipt), encoding="utf-8")
+        before_receipt = case["receipt_path"].read_bytes()
+        before_stage = case["stage_path"].read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_receipt, case["receipt_path"].read_bytes())
+        self.assertEqual(before_stage, case["stage_path"].read_bytes())
+        self.assertFalse(case["pointer_path"].exists())
+
+    def test_pre_ux104_successor_pointer_action_mismatch_blocks(self):
+        """Break caught: a different authentic action inherits a stale receipt."""
+        case = self._interrupt_successor_pointer_before_publication()
+        successor = json.loads(case["successor_path"].read_text(encoding="utf-8"))
+        successor["attempts"] += 1
+        successor["action_hash"] = loom_orchestrator._action_hash(successor)
+        case["successor_path"].write_text(json.dumps(successor), encoding="utf-8")
+        before_action = case["successor_path"].read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request=case["request"], cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_RACE", blocked.exception.code)
+        self.assertEqual(before_action, case["successor_path"].read_bytes())
+        self.assertFalse(case["pointer_path"].exists())
+
+    def test_pre_ux104_successor_pointer_receipt_recreates_missing_stage(self):
+        """Break caught: a committed receipt cannot reconstruct its pointer stage."""
+        case = self._interrupt_successor_pointer_before_publication()
+        case["stage_path"].unlink()
+
+        resumed = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(case["receipt"]["successor_action_id"], resumed["action_id"])
+        self.assertEqual(
+            resumed["action_id"],
+            loom_orchestrator._read_active_pointer(
+                case["old_path"].parent)["action_id"])
+        self.assertFalse(case["stage_path"].exists())
+
+    def test_pre_ux104_published_successor_receipt_allows_authentic_action_evolution(self):
+        """Publication evidence cannot freeze later authenticated action progress."""
+        case = self._interrupt_successor_pointer_before_publication()
+        first_resume = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        successor_path = case["successor_path"]
+        successor = json.loads(successor_path.read_text(encoding="utf-8"))
+        successor["attempts"] += 1
+        successor["action_hash"] = loom_orchestrator._action_hash(successor)
+        successor_path.write_text(json.dumps(successor), encoding="utf-8")
+
+        resumed = loom_orchestrator.invoke(
+            request=case["request"], cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual(first_resume["action_id"], resumed["action_id"])
+        self.assertEqual(
+            resumed["action_id"],
+            loom_orchestrator._read_active_pointer(
+                case["old_path"].parent)["action_id"])
+
+    def test_pre_ux104_reprepare_rejects_other_action_corruption(self):
+        """Break caught: recovery-only compatibility bypasses normal validation."""
+        _opened, old_path, _old_action = \
+            self._make_open_pre_ux104_planning_action()
+        action = json.loads(old_path.read_text(encoding="utf-8"))
+        action["context"]["archived_count"] = -1
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        old_path.write_text(json.dumps(action), encoding="utf-8")
+        before = old_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("ACTION_CORRUPT", blocked.exception.code)
+        self.assertEqual(before, old_path.read_bytes())
+
+    def test_pre_ux104_reprepare_rejects_cross_field_control_without_interrupting(self):
+        """Break caught: a rehashed impossible legacy control reaches recovery writes."""
+        _opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        action = json.loads(old_path.read_text(encoding="utf-8"))
+        action["request_control"]["explicitness"] = "explicit"
+        unsigned = {
+            key: item for key, item in action["request_control"].items()
+            if key != "control_sha256"
+        }
+        action["request_control"]["control_sha256"] = \
+            loom_orchestrator.loom_runtime._sha(
+                loom_orchestrator.loom_runtime._canonical_json(unsigned))
+        action["action_hash"] = loom_orchestrator._action_hash(action)
+        old_path.write_text(json.dumps(action), encoding="utf-8")
+        pointer_path = old_path.parent / loom_orchestrator.ACTIVE_POINTER_FILE
+        journal_path = Path(old_action["journal_path"])
+        before_action = old_path.read_bytes()
+        before_pointer = pointer_path.read_bytes()
+        before_journal = journal_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("ACTION_CORRUPT", blocked.exception.code)
+        self.assertEqual(before_action, old_path.read_bytes())
+        self.assertEqual(before_pointer, pointer_path.read_bytes())
+        self.assertEqual(before_journal, journal_path.read_bytes())
+
+    def test_pre_ux104_reprepare_preserves_multiple_pointerless_actions(self):
+        """Break caught: compatibility recovery guesses between two actions."""
+        opened, old_path, old_action = \
+            self._make_open_pre_ux104_planning_action()
+        loom_orchestrator._clear_active_pointer(
+            old_path.parent, opened["action_id"])
+        duplicate = json.loads(json.dumps(old_action))
+        duplicate_id = "11111111-1111-4111-8111-111111111111"
+        duplicate["action_id"] = duplicate_id
+        duplicate["owner_message"] = loom_orchestrator.loom_message.build(
+            state="progress", consequence=loom_orchestrator._action_consequence(
+                duplicate, use_domain_contract=True),
+            verification="pending", freshness="current",
+            changes_made=True, undo_status="unavailable",
+            summary=loom_orchestrator._planning_seed_summary(
+                duplicate["tier"]),
+            next_action=(
+                "Have the agent finish the plan, then review it before "
+                "any project work starts."),
+            receipt_id="action-" + duplicate_id)
+        duplicate["action_hash"] = loom_orchestrator._action_hash(duplicate)
+        duplicate_path = old_path.with_name(duplicate_id + ".json")
+        duplicate_path.write_text(json.dumps(duplicate), encoding="utf-8")
+        before_old = old_path.read_bytes()
+        before_duplicate = duplicate_path.read_bytes()
+
+        with self.assertRaises(
+                loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.invoke(
+                request="Plan a separate current-world README improvement.",
+                cwd=self.repo, home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("RECOVERY_DECISION_REQUIRED", blocked.exception.code)
+        self.assertEqual(before_old, old_path.read_bytes())
+        self.assertEqual(before_duplicate, duplicate_path.read_bytes())
+        self.assertIsNone(loom_orchestrator._read_active_pointer(old_path.parent))
+
+    def test_semantic_owner_replanning_recovers_changed_reviewable_generation(self):
+        """Break caught: recovery accepts only a parser-specific replacement phrase."""
+        _plan_action, _planned = self.complete_machine_authored_plan()
+        (self.repo / "external-world.txt").write_text(
+            "out-of-band world change\n", encoding="utf-8")
+
+        replacement = loom_orchestrator.invoke(
+            request=(
+                "Plan a fresh proposal for the changed library accessibility "
+                "situation only; do not begin any work."),
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", replacement["status"])
+        self.assertEqual("plan", replacement["intent"])
+        self.assertNotIn("prior_generation_transition", replacement)
+        self.assertIsNone(replacement["work_order"])
+
+    def test_negated_alternative_design_keeps_the_reviewed_generation_unchanged(self):
+        """Break caught: a no-change design discussion mutates the current lifecycle."""
+        self.complete_machine_authored_plan()
+        before = loom_plan_store.resolve(self.repo)
+        before_manifest = loom_reliability.exact_tree_manifest(
+            before.generation_root)
+        before_lifecycle = (
+            before.generation_root / "lifecycle.json").read_bytes()
+        request = "Discuss another design but do not change the current plan."
+
+        result = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertNotIn("action_path", result)
+        self.assertFalse(result["owner_message"]["changes_made"])
+        after = loom_plan_store.resolve(self.repo)
+        self.assertEqual(before.generation_id, after.generation_id)
+        self.assertEqual(before_manifest, loom_reliability.exact_tree_manifest(
+            after.generation_root))
+        self.assertEqual(
+            before_lifecycle,
+            (after.generation_root / "lifecycle.json").read_bytes())
+        action_paths = sorted(self.home.glob(
+            "instances/*/runtime/projects/*/orchestrations/*.json"))
+        matching = []
+        for path in action_paths:
+            if re.fullmatch(r"[0-9a-f-]{36}\.json", path.name) is None:
+                continue
+            _path, action, _security = loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+            if action["request"] == request:
+                matching.append(action)
+        self.assertEqual([], matching)
+
+    def test_existing_reviewable_pack_activates_only_after_candidate_review(self):
+        """A reviewed candidate supersedes only its exact still-current predecessor."""
+        _action, _completed = self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        candidate_request = "Plan a small accounting accessibility enhancement."
+
+        candidate = loom_orchestrator.invoke(
+            request=candidate_request,
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", candidate["status"])
+        action = json.loads(Path(candidate["action_path"]).read_text(encoding="utf-8"))
+        self.assertIn("planning-candidate-successor", action["request_control"]["evidence"])
+        self.assertEqual("prepared", action["pack_seed"]["state"])
+        self.assertTrue(action["pack_seed"]["created_pack"])
+        self.assertTrue(_owned_pack(candidate).is_dir())
+        current = loom_plan_store.resolve(self.repo)
+        self.assertEqual(predecessor.generation_id, current.generation_id)
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(current.generation_root))
+
+        candidate_stage = _owned_pack(candidate)
+        _author_medium_action(candidate, request=candidate_request)
+        completed = loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        successor = loom_plan_store.resolve(self.repo)
+        self.assertNotEqual(predecessor.generation_id, successor.generation_id)
+        predecessor_ledger = json.loads(
+            (predecessor.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"))
+        self.assertEqual(
+            "generation-superseded",
+            predecessor_ledger["events"][-1]["event_type"])
+        self.assertEqual(
+            action["generation_id"], successor.generation_id)
+        self.assertFalse(candidate_stage.exists())
+
+    def test_active_executor_without_terminal_containment_keeps_candidate_pending(self):
+        """An action status cannot be mistaken for sealed executor quiescence."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a small accounting accessibility enhancement."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual(
+            "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED", blocked.exception.code)
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        pointer = loom_orchestrator._read_active_pointer(
+            Path(started["action_path"]).parent)
+        self.assertEqual(started["action_id"], pointer["action_id"])
+
+    def test_started_execution_initializes_guard_before_exposing_pointer(self):
+        """Break caught: execution begins with no durable host-operation ledger."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        guard = loom_executor_guard.read(path.parent, action)
+        self.assertEqual("awaiting-host", guard["coverage_state"])
+        pointer = loom_orchestrator._read_active_pointer(path.parent)
+        self.assertEqual(action["action_id"], pointer["action_id"])
+
+    def test_active_cancel_converges_when_host_never_admitted_mutation(self):
+        """A fresh frozen executor has exact zero-admission terminal evidence."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+
+        cancelled = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("cancelled", cancelled["status"])
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("cancelled", action["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        self.assertEqual(
+            "action-cancel",
+            loom_executor_guard.read(path.parent, action)["freeze"]["reason_code"])
+        self.assertEqual(
+            "host-never-admitted",
+            action["host_result"]["executor_quiescence"]["case"])
+
+    def test_action_cancel_retry_converges_after_evidence_action_write_crash(self):
+        """Break caught: guard freeze commits but a lost action write strands retirement."""
+        self._enable_git_fixture()
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path = Path(started["action_path"])
+        original_write = loom_orchestrator._write_action
+        injected = False
+
+        def fail_evidence_write(action_path, value, security=None):
+            nonlocal injected
+            evidence = (value.get("host_result") or {}).get(
+                "executor_quiescence")
+            if not injected and isinstance(evidence, dict):
+                injected = True
+                raise loom_orchestrator.OrchestratorError(
+                    "INJECTED_ACTION_WRITE", "injected after guard evidence")
+            return original_write(action_path, value, security)
+
+        with mock.patch.object(
+                loom_orchestrator, "_write_action",
+                side_effect=fail_evidence_write), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as crashed:
+            loom_orchestrator.cancel(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("INJECTED_ACTION_WRITE", crashed.exception.code)
+        _path, pending, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", pending["status"])
+        self.assertEqual(
+            pending["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "action-cancel",
+            loom_executor_guard.read(path.parent, pending)["freeze"][
+                "operation_class"])
+
+        cancelled = loom_orchestrator.cancel(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+
+    def test_terminal_subject_binds_exact_supersession_context(self):
+        """Different successor commands cannot reuse one executor freeze."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        _path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        first = loom_orchestrator._executor_terminal_subject(
+            action, "generation-supersede",
+            operation_context_sha256="a" * 64)
+        second = loom_orchestrator._executor_terminal_subject(
+            action, "generation-supersede",
+            operation_context_sha256="b" * 64)
+
+        self.assertNotEqual(first, second)
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator._executor_terminal_subject(
+                action, "generation-supersede")
+
+    def test_recovered_v3_action_uses_canonical_guard_security(self):
+        """Lifecycle recovery cannot silently create a legacy v2 guard projection."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        crypto = TestCrypto()
+
+        class FakeVault:
+            def __init__(self):
+                self.crypto = crypto
+
+            def identity(self):
+                return {"owner_vault_id": action["instance_id"]}
+
+        memory = object.__new__(
+            loom_orchestrator.loom_vault_adapter.VaultMemoryAdapter)
+        memory.vault = FakeVault()
+
+        with mock.patch.object(
+                loom_executor_guard, "initialize") as initialize:
+            loom_orchestrator._ensure_recovered_action_projection(
+                action, directory=path.parent, memory=memory,
+                work_order=action["work_order"],
+                receipt=action["lifecycle_transition"])
+
+        security = initialize.call_args.kwargs["security"]
+        self.assertIsInstance(security, loom_executor_guard.GuardSecurity)
+
+    def test_pre_guard_executor_upgrade_preserves_authority_without_synthesizing_proof(self):
+        """A pending legacy executor gets an explicit safe upgrade path, not fake proof."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        guard_path = loom_executor_guard.guard_path(path.parent, action)
+        guard_path.unlink()
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as upgrade:
+            loom_orchestrator.cancel(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual(
+            "EXECUTOR_GUARD_UPGRADE_REQUIRED", upgrade.exception.code)
+        _path, pending, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", pending["status"])
+        self.assertEqual(
+            pending["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertFalse(guard_path.exists())
+
+    def test_direct_completion_freezes_and_waits_for_exact_open_operation(self):
+        """Completion cannot bypass a write admitted before authority retirement."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action = self.arm_executor_guard(started)
+        write_event = {
+            "hook_event_name": "PreToolUse", "cwd": str(self.repo),
+            "session_id": "host-session-1", "turn_id": "host-turn-complete",
+            "tool_use_id": "write-before-complete", "tool_name": "Write",
+            "tool_input": {"file_path": "src/app.py"},
+        }
+        loom_executor_guard.begin_operation(
+            path.parent, action, write_event,
+            operation_kind="structured-write")
+        contract = started["execution_completion_contract"]
+        work_order = self.repo.joinpath(
+            *PurePosixPath(contract["work_order_path"]).parts)
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        text = work_order.read_text(encoding="utf-8")
+        text = text.replace("status: in-progress", "status: done")
+        text = text.replace("- [ ]", "- [x]")
+        text = text.replace(
+            contract["pending_evidence_text"],
+            "Evidence: isolated real-process verification exited 0.")
+        work_order.write_text(text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            Path(contract["evidence_capture"]["pack_path"]), self.repo,
+            contract["work_order_id"], medium="python-unittest",
+            command=[sys.executable, "-c", "print('verification passed')"])
+
+        with mock.patch.object(
+                loom_orchestrator, "_reopen",
+                side_effect=AssertionError("completion handler ran before quiescence")), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.complete(
+                path, owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", blocked.exception.code)
+        _path, pending, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", pending["status"])
+        self.assertEqual(
+            pending["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+        self.assertEqual(
+            "action-completion",
+            loom_executor_guard.read(path.parent, pending)["freeze"]["reason_code"])
+        loom_executor_guard.observe_post(
+            path.parent, pending,
+            {**write_event, "hook_event_name": "PostToolUse"})
+
+        completed = loom_orchestrator.complete(
+            path, now="2035-01-01T00:00:00Z",
+            owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("execute-complete", completed["code"])
+        _path, terminal, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", terminal["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        self.assertEqual(
+            "action-completion",
+            terminal["host_result"]["executor_quiescence"][
+                "freeze_operation_class"])
+
+    def test_executor_timeout_waits_for_open_operation_then_retires(self):
+        """Timeout cannot clear authority until the exact admitted write closes."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action = self.arm_executor_guard(started)
+        write_event = {
+            "hook_event_name": "PreToolUse", "cwd": str(self.repo),
+            "session_id": "host-session-1", "turn_id": "host-turn-timeout",
+            "tool_use_id": "write-before-timeout", "tool_name": "Write",
+            "tool_input": {"file_path": "src/app.py"},
+        }
+        loom_executor_guard.begin_operation(
+            path.parent, action, write_event,
+            operation_kind="structured-write")
+        expired = "2035-01-01T00:00:00Z"
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as waiting:
+            loom_orchestrator.complete(
+                path, now=expired, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", waiting.exception.code)
+        _path, pending, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("pending", pending["status"])
+        self.assertEqual(
+            pending["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as conflict:
+            loom_orchestrator.cancel(
+                path, now=expired, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            "EXECUTOR_TERMINAL_OPERATION_CONFLICT", conflict.exception.code)
+        self.assertIn("action-timeout", conflict.exception.message)
+        self.assertEqual(
+            pending["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+
+        loom_executor_guard.observe_post(
+            path.parent, pending,
+            {**write_event, "hook_event_name": "PostToolUse"})
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as timed_out:
+            loom_orchestrator.complete(
+                path, now=expired, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual("ACTION_TIMEOUT", timed_out.exception.code)
+        _path, terminal, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("expired", terminal["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        self.assertEqual(
+            "timed-out",
+            terminal["host_result"]["executor_quiescence"]["terminal_state"])
+
+    def test_executor_retry_ceiling_seals_failed_quiescence_before_pointer_clear(self):
+        """Terminal handler failure cannot bypass the frozen host ledger."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        action["attempts"] = action["max_attempts"] - 1
+        action = loom_orchestrator._write_action(path, action, security)
+        contract = started["execution_completion_contract"]
+        work_order = self.repo.joinpath(
+            *PurePosixPath(contract["work_order_path"]).parts)
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        text = work_order.read_text(encoding="utf-8")
+        text = text.replace("status: in-progress", "status: done")
+        text = text.replace("- [ ]", "- [x]")
+        text = text.replace(
+            contract["pending_evidence_text"],
+            "Evidence: isolated real-process verification exited 0.")
+        work_order.write_text(text, encoding="utf-8")
+        loom_lifecycle.capture_acceptance(
+            Path(contract["evidence_capture"]["pack_path"]), self.repo,
+            contract["work_order_id"], medium="python-unittest",
+            command=[sys.executable, "-c", "print('verification passed')"])
+
+        with mock.patch.object(
+                loom_orchestrator, "_reopen",
+                side_effect=loom_session.SessionInterrupted(
+                    "HANDLER_INTERRUPTED", "seeded terminal failure")), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as failed:
+            loom_orchestrator.complete(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("HANDLER_INTERRUPTED", failed.exception.code)
+        _path, terminal, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("failed", terminal["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        self.assertEqual(
+            "failed",
+            terminal["host_result"]["executor_quiescence"]["terminal_state"])
+
+    def test_frozen_executor_cannot_complete_around_pending_cancellation(self):
+        """Direct completion cannot bypass the durable authority-retirement freeze."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action = self.arm_executor_guard(started)
+        loom_executor_guard.begin_operation(
+            path.parent, action, {
+                "hook_event_name": "PreToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-frozen",
+                "tool_use_id": "write-frozen", "tool_name": "Write",
+                "tool_input": {"file_path": "src/app.py"},
+            }, operation_kind="structured-write")
+        pending = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("EXECUTOR_QUIESCENCE_REQUIRED", pending["code"])
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.complete(
+                started["action_path"], owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("EXECUTION_FROZEN", blocked.exception.code)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("pending", action["status"])
+        self.assertEqual(
+            action["action_id"],
+            loom_orchestrator._read_active_pointer(path.parent)["action_id"])
+
+    def test_closed_host_guard_writes_quiescence_then_cancels_exact_action(self):
+        """Break caught: only tests can populate host_result.executor_quiescence."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            path.parent, action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
+
+        cancelled = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("cancelled", cancelled["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(path.parent))
+        _path, sealed, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        evidence = sealed["host_result"]["executor_quiescence"]
+        self.assertEqual("verified-host-terminal", evidence["case"])
+        loom_executor_guard.validate_evidence(
+            path.parent, sealed, evidence,
+            project_world_sha256=evidence["project_world_sha256"])
+
+    def test_cancel_waits_for_preexisting_write_and_completes_after_exact_post(self):
+        """Break caught: cancellation treats a PreToolUse without PostToolUse as closed."""
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        path, action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        control = {
+            "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+            "session_id": "host-session-1", "turn_id": "host-turn-1",
+            "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+            "tool_input": {},
+        }
+        loom_executor_guard.observe_post(
+            path.parent, action, control, lifecycle_control=True)
+        pre = {
+            **control, "hook_event_name": "PreToolUse",
+            "tool_use_id": "write-1", "tool_name": "Write",
+            "tool_input": {"file_path": "src/app.py"},
+        }
+        loom_executor_guard.begin_operation(
+            path.parent, action, pre, operation_kind="structured-write")
+        pending = loom_orchestrator.cancel(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("action-required", pending["status"])
+        loom_executor_guard.observe_post(
+            path.parent, action, {**pre, "hook_event_name": "PostToolUse"})
+        completed = loom_orchestrator.cancel(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("cancelled", completed["status"])
+
+    def test_successor_executor_binding_detects_action_receipt_and_pointer_change(self):
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        action_path = Path(started["action_path"])
+        path, executor, security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        self.assertEqual(executor["instance_id"], instance_id)
+        witness_store = loom_orchestrator._lifecycle_witness_store(
+            memory, action_path.parent, executor["project_id"])
+        resolved, _semantics, ledger, _witness, state = \
+            loom_lifecycle_transition.observe(
+                self.repo, witness_store=witness_store)
+        receipt = loom_lifecycle_transition.loom_operation_supervisor.run(
+            operation_class="successor-executor-binding-test",
+            command=[sys.executable, "-c", "pass"], cwd=self.repo,
+            timeout=10, allowed_roots=[self.repo],
+            protected_roots=[resolved.generation_root])
+        raw = {
+            "case": "supervisor-terminal",
+            "action_id": executor["action_id"],
+            "project_id": executor["project_id"],
+            "generation_id": executor["generation_id"],
+            "action_operation_id": executor["operation_id"],
+            "supervisor_operation_id": receipt["operation_id"],
+            "project_world_sha256": state.expected_world_sha256,
+            "terminal_state": "completed",
+            "receipt_sha256": receipt["receipt_sha256"],
+            "supervisor_receipt": receipt,
+        }
+        raw["binding_sha256"] = loom_orchestrator.loom_lifecycle_kernel.digest(raw)
+        executor["host_result"] = {
+            **(executor.get("host_result") or {}),
+            "executor_quiescence": raw,
+        }
+        executor = loom_orchestrator._write_action(path, executor, security)
+        sealed = loom_orchestrator._successor_executor_quiescence(
+            state, ledger, directory=action_path.parent,
+            owner_home=self.home, install_root=self.installed)
+        self.assertEqual(executor["action_hash"], sealed["action_sha256"])
+        self.assertEqual("exact-action", sealed["pointer_expectation"])
+
+        changed = json.loads(json.dumps(executor))
+        changed["attempts"] += 1
+        changed = loom_orchestrator._write_action(path, changed, security)
+        rebound = loom_orchestrator._successor_executor_quiescence(
+            state, ledger, directory=action_path.parent,
+            owner_home=self.home, install_root=self.installed)
+        self.assertNotEqual(sealed, rebound)
+        self.assertEqual(changed["action_hash"], rebound["action_sha256"])
+
+        loom_orchestrator._clear_active_pointer(
+            action_path.parent, executor["action_id"])
+        pointer_rebound = loom_orchestrator._successor_executor_quiescence(
+            state, ledger, directory=action_path.parent,
+            owner_home=self.home, install_root=self.installed)
+        self.assertEqual("absent", pointer_rebound["pointer_expectation"])
+        self.assertNotEqual(rebound, pointer_rebound)
+
+        loom_orchestrator._write_active_pointer(
+            action_path.parent,
+            action_id="11111111-1111-4111-8111-111111111111",
+            project_id=executor["project_id"])
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator._successor_executor_quiescence(
+                state, ledger, directory=action_path.parent,
+                owner_home=self.home, install_root=self.installed)
+
+        loom_orchestrator._clear_active_pointer(
+            action_path.parent, "11111111-1111-4111-8111-111111111111")
+        stale = json.loads(json.dumps(changed))
+        stale["host_result"]["executor_quiescence"][
+            "action_operation_id"] = "stale-operation"
+        stale_raw = stale["host_result"]["executor_quiescence"]
+        stale_raw["binding_sha256"] = \
+            loom_orchestrator.loom_lifecycle_kernel.digest({
+            key: value for key, value in stale_raw.items()
+            if key != "binding_sha256"
+        })
+        loom_orchestrator._write_action(path, stale, security)
+        with self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator._successor_executor_quiescence(
+                state, ledger, directory=action_path.parent,
+                owner_home=self.home, install_root=self.installed)
+
+    def test_cancelled_execution_and_cleared_pointer_do_not_quiesce_active_generation(self):
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned["plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        started_path, started_action, _security = loom_orchestrator._read_action(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        loom_executor_guard.observe_post(
+            started_path.parent, started_action, {
+                "hook_event_name": "PostToolUse", "cwd": str(self.repo),
+                "session_id": "host-session-1", "turn_id": "host-turn-1",
+                "tool_use_id": "start-1", "tool_name": "mcp__loom__start",
+                "tool_input": {},
+            }, lifecycle_control=True)
+        cancelled = loom_orchestrator.cancel(
+            started["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("cancelled", cancelled["status"])
+        cancelled_action_bytes = started_path.read_bytes()
+        _cancelled_path, cancelled_action, _cancelled_security = \
+            loom_orchestrator._read_action(
+                started_path, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            "action-cancel",
+            cancelled_action["host_result"]["executor_quiescence"]
+            ["freeze_operation_class"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(
+            Path(started["action_path"]).parent))
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as blocked:
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual(
+            "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED", blocked.exception.code)
+        self.assertIn(
+            "Cancel the current Loom plan generation", blocked.exception.message)
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+        retired = loom_orchestrator.invoke(
+            request="Cancel the current Loom plan generation.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        self.assertEqual("generation-cancelled", retired["code"])
+        self.assertEqual(cancelled_action_bytes, started_path.read_bytes())
+        completed = loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        self.assertNotEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_successor_precommit_revalidates_executor_action_and_pointer(self):
+        plan_action, planned = self.complete_machine_authored_plan()
+        started = loom_orchestrator.start(
+            plan_action["action_path"],
+            presentation_sha256=planned[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        executor_path = Path(started["action_path"])
+        path, executor, security = loom_orchestrator._read_action(
+            executor_path, owner_home=self.home, install_root=self.installed)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        witness_store = loom_orchestrator._lifecycle_witness_store(
+            memory, executor_path.parent, executor["project_id"])
+        resolved, _semantics, _ledger, _witness, state = \
+            loom_lifecycle_transition.observe(
+                self.repo, witness_store=witness_store)
+        receipt = loom_lifecycle_transition.loom_operation_supervisor.run(
+            operation_class="successor-precommit-binding-test",
+            command=[sys.executable, "-c", "pass"], cwd=self.repo,
+            timeout=10, allowed_roots=[self.repo],
+            protected_roots=[resolved.generation_root])
+        raw = {
+            "case": "supervisor-terminal",
+            "action_id": executor["action_id"],
+            "project_id": executor["project_id"],
+            "generation_id": executor["generation_id"],
+            "action_operation_id": executor["operation_id"],
+            "supervisor_operation_id": receipt["operation_id"],
+            "project_world_sha256": state.expected_world_sha256,
+            "terminal_state": "completed",
+            "receipt_sha256": receipt["receipt_sha256"],
+            "supervisor_receipt": receipt,
+        }
+        raw["binding_sha256"] = loom_orchestrator.loom_lifecycle_kernel.digest(raw)
+        executor["host_result"] = {
+            **(executor.get("host_result") or {}),
+            "executor_quiescence": raw,
+        }
+        executor = loom_orchestrator._write_action(path, executor, security)
+
+        request = "Plan a new accounting accessibility change."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        original_activate = loom_lifecycle_transition.activate_successor
+
+        def clear_exact_pointer(*args, **kwargs):
+            loom_orchestrator._clear_active_pointer(
+                executor_path.parent, executor["action_id"])
+            return original_activate(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=clear_exact_pointer), \
+                self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            executor["generation_id"],
+            loom_plan_store.resolve(self.repo).generation_id)
+
+        loom_orchestrator._write_active_pointer(
+            executor_path.parent, action_id=executor["action_id"],
+            project_id=executor["project_id"])
+
+        def change_exact_action(*args, **kwargs):
+            _path, changed, current_security = loom_orchestrator._read_action(
+                executor_path, owner_home=self.home,
+                install_root=self.installed)
+            changed["attempts"] += 1
+            loom_orchestrator._write_action(
+                executor_path, changed, current_security)
+            return original_activate(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=change_exact_action), \
+                self.assertRaises(loom_orchestrator.OrchestratorError):
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual(
+            executor["generation_id"],
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_completed_successor_allows_an_ordinary_follow_up_invoke(self):
+        """Break caught: terminal successor recovery re-enters deleted owner stage."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        candidate_manifest = loom_reliability.exact_tree_manifest(
+            loom_orchestrator._stage_path(Path(candidate["action_path"])))
+        candidate_modes = {
+            entry["path"]: entry["mode"]
+            for entry in candidate_manifest["entries"]
+            if entry["kind"] == "file"
+        }
+
+        completed = loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("plan-complete", completed["code"])
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        active_modes = {
+            entry["path"]: entry["mode"]
+            for entry in active_manifest["entries"]
+            if entry["kind"] == "file"
+        }
+        self.assertEqual(
+            candidate_modes,
+            {path: active_modes[path] for path in candidate_modes})
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        follow_up = loom_orchestrator.invoke(
+            request="Plan a separate accounting documentation improvement.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("action-required", follow_up["status"])
+        self.assertEqual("plan", follow_up["intent"])
+        self.assertEqual(
+            active.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+
+    def test_terminal_successor_allows_status_with_unrelated_pending_pointer(self):
+        """Break caught: immutable history conflicts with later pending work."""
+        self.complete_machine_authored_plan()
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        action_path = Path(candidate["action_path"])
+        _path, completed, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        envelope_path = loom_lifecycle_transition._successor_envelope_path(
+            action_path.parent / "lifecycle-transitions",
+            completed["lifecycle_transition"]["command_id"])
+        completed_action_bytes = action_path.read_bytes()
+        envelope_bytes = envelope_path.read_bytes()
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+
+        follow_up = loom_orchestrator.invoke(
+            request="Plan a separate accounting documentation improvement.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        pointer = loom_orchestrator._read_active_pointer(action_path.parent)
+        self.assertEqual(follow_up["action_id"], pointer["action_id"])
+        self.assertNotEqual(completed["action_id"], pointer["action_id"])
+
+        status = loom_orchestrator.invoke(
+            request="Status", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", status["status"])
+        self.assertEqual(
+            follow_up["action_id"],
+            loom_orchestrator._read_active_pointer(
+                action_path.parent)["action_id"])
+        self.assertEqual(completed_action_bytes, action_path.read_bytes())
+        self.assertEqual(envelope_bytes, envelope_path.read_bytes())
+        self.assertEqual(
+            active.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertFalse(os.path.lexists(
+            loom_orchestrator._stage_path(action_path)))
+
+    def test_multiple_terminal_successors_remain_independently_verifiable(self):
+        """Break caught: old completion is compared with the newest generation."""
+        self.complete_machine_authored_plan()
+        terminal_actions = []
+        terminal_envelopes = []
+        for request in (
+                "Plan a new accounting accessibility plan.",
+                "Plan a separate accounting documentation improvement."):
+            candidate = loom_orchestrator.invoke(
+                request=request, cwd=self.repo, home=self.home,
+                install_root=self.installed)
+            _author_medium_action(candidate, request=request)
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+            action_path = Path(candidate["action_path"])
+            _path, completed, _security = loom_orchestrator._read_action(
+                action_path, owner_home=self.home, install_root=self.installed)
+            envelope_path = loom_lifecycle_transition._successor_envelope_path(
+                action_path.parent / "lifecycle-transitions",
+                completed["lifecycle_transition"]["command_id"])
+            terminal_actions.append((action_path, action_path.read_bytes()))
+            terminal_envelopes.append((
+                envelope_path, envelope_path.read_bytes()))
+
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+
+        status = loom_orchestrator.invoke(
+            request="Status", cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("completed", status["status"])
+        self.assertIsNone(loom_orchestrator._read_active_pointer(
+            terminal_actions[-1][0].parent))
+        for action_path, expected_bytes in terminal_actions:
+            self.assertEqual(expected_bytes, action_path.read_bytes())
+            self.assertFalse(os.path.lexists(
+                loom_orchestrator._stage_path(action_path)))
+        for envelope_path, expected_bytes in terminal_envelopes:
+            self.assertEqual(expected_bytes, envelope_path.read_bytes())
+        self.assertEqual(
+            active.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+
+    def test_terminal_successor_scan_rejects_corrupted_completed_evidence(self):
+        """Break caught: a naked terminal marker bypasses candidate verification."""
+        self.complete_machine_authored_plan()
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        loom_orchestrator.complete(
+            candidate["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        action_path = Path(candidate["action_path"])
+        _path, completed, security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        completed["result"] = {
+            **completed["result"], "code": "forged-plan-complete",
+        }
+        loom_orchestrator._write_action(action_path, completed, security)
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        envelope_path = loom_lifecycle_transition._successor_envelope_path(
+            action_path.parent / "lifecycle-transitions",
+            completed["lifecycle_transition"]["command_id"])
+        envelope_bytes = envelope_path.read_bytes()
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as rejected:
+            loom_orchestrator.invoke(
+                request="Plan a separate accounting documentation improvement.",
+                cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("LIFECYCLE_PROJECTION_INVALID", rejected.exception.code)
+        self.assertEqual(envelope_bytes, envelope_path.read_bytes())
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertIsNone(
+            loom_orchestrator._read_active_pointer(action_path.parent))
+        self.assertFalse(os.path.lexists(
+            loom_orchestrator._stage_path(action_path)))
+
+    def test_successor_recovery_after_exact_owner_stage_cleanup_is_idempotent(self):
+        """Break caught: recovery maps an absent owner stage onto active authority."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        owner_stage = loom_orchestrator._stage_path(action_path)
+        self.assertTrue(owner_stage.is_dir())
+        real_write_envelope = loom_lifecycle_transition._write_envelope
+        observed_cleanup_boundary = []
+
+        def interrupt_before_projection_completion(path, value):
+            if value.get("kind") == "successor-activation-v1" \
+                    and value.get("status") == "completed" \
+                    and value.get("projection_status") == "completed":
+                observed_cleanup_boundary.append(not os.path.lexists(owner_stage))
+                raise loom_lifecycle_transition.LifecycleTransitionInterrupted(
+                    "after-owner-stage-deletion")
+            return real_write_envelope(path, value)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "_write_envelope",
+                side_effect=interrupt_before_projection_completion), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual(
+            "LIFECYCLE_PROJECTION_INVALID", interrupted.exception.code)
+        self.assertEqual([True], observed_cleanup_boundary)
+        self.assertFalse(os.path.lexists(owner_stage))
+        _path, completed, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+        envelope_path = loom_lifecycle_transition._successor_envelope_path(
+            action_path.parent / "lifecycle-transitions",
+            completed["lifecycle_transition"]["command_id"])
+        interrupted_envelope = json.loads(
+            envelope_path.read_text(encoding="utf-8"))
+        self.assertEqual("completed", interrupted_envelope["status"])
+        self.assertEqual("pending", interrupted_envelope["projection_status"])
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)):
+            recovered = loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=completed["project_id"],
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual(1, len(recovered))
+        self.assertEqual("completed", recovered[0]["status"])
+        sealed_envelope = json.loads(envelope_path.read_text(encoding="utf-8"))
+        self.assertEqual("completed", sealed_envelope["projection_status"])
+        self.assertFalse(os.path.lexists(owner_stage))
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+
+    def test_successor_recovery_clears_only_its_exact_terminal_action_pointer(self):
+        """Break caught: a crash before pointer clear dead-ends committed authority."""
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        real_clear_pointer = loom_orchestrator._clear_active_pointer
+        observed_terminal_boundary = []
+
+        def interrupt_terminal_pointer_clear(directory, action_id):
+            _path, stored, _security = loom_orchestrator._read_action(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+            if action_id == candidate["action_id"] \
+                    and stored["status"] == "completed":
+                observed_terminal_boundary.append(True)
+                raise loom_lifecycle_transition.LifecycleTransitionInterrupted(
+                    "after-terminal-action-write")
+            return real_clear_pointer(directory, action_id)
+
+        with mock.patch.object(
+                loom_orchestrator, "_clear_active_pointer",
+                side_effect=interrupt_terminal_pointer_clear), \
+                self.assertRaises(
+                    loom_lifecycle_transition.LifecycleTransitionInterrupted):
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual([True], observed_terminal_boundary)
+        _path, completed, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", completed["status"])
+        self.assertEqual(
+            candidate["action_id"],
+            loom_orchestrator._read_active_pointer(action_path.parent)["action_id"])
+        active = loom_plan_store.resolve(self.repo)
+        active_manifest = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        predecessor_manifest = loom_reliability.exact_tree_manifest(
+            predecessor.generation_root)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        unrelated_action_id = "00000000-0000-4000-8000-000000000099"
+        loom_orchestrator._write_active_pointer(
+            action_path.parent, action_id=unrelated_action_id,
+            project_id=completed["project_id"])
+
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)), \
+                self.assertRaises(loom_orchestrator.OrchestratorError) as conflict:
+            loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=completed["project_id"],
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual("ACTION_POINTER_CONFLICT", conflict.exception.code)
+        self.assertEqual(
+            unrelated_action_id,
+            loom_orchestrator._read_active_pointer(action_path.parent)["action_id"])
+        loom_orchestrator._write_active_pointer(
+            action_path.parent, action_id=candidate["action_id"],
+            project_id=completed["project_id"])
+
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)):
+            recovered = loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=completed["project_id"],
+                owner_home=self.home, install_root=self.installed)
+
+        self.assertEqual(1, len(recovered))
+        self.assertEqual("completed", recovered[0]["status"])
+        self.assertIsNone(
+            loom_orchestrator._read_active_pointer(action_path.parent))
+        self.assertEqual(
+            active_manifest,
+            loom_reliability.exact_tree_manifest(active.generation_root))
+        self.assertEqual(
+            predecessor_manifest,
+            loom_reliability.exact_tree_manifest(predecessor.generation_root))
+
+    def test_successor_recovery_finishes_exact_action_after_authority_commit(self):
+        boundaries = (
+            "after-index-commit",
+            "after-predecessor-terminalization",
+            "after-witness",
+            "after-plan-projection",
+            "after-action-projection",
+            "after-envelope-completion",
+        )
+        original_activate = loom_lifecycle_transition.activate_successor
+
+        for ordinal, boundary in enumerate(boundaries):
+            with self.subTest(boundary=boundary):
+                if ordinal:
+                    self.home = self.root / f"home-{ordinal}"
+                    self.home.mkdir(parents=True)
+                    (self.home / loom_orchestrator.TEST_LEGACY_BACKEND_MARKER).write_bytes(
+                        loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
+                    self.repo = self.root / f"target-{ordinal}"
+                    self._copy_filesystem_fixture(self.repo)
+                self.complete_machine_authored_plan()
+                request = "Plan a new accounting accessibility plan."
+                candidate = loom_orchestrator.invoke(
+                    request=request, cwd=self.repo, home=self.home,
+                    install_root=self.installed)
+                _author_medium_action(candidate, request=request)
+
+                if boundary.startswith("after-") and boundary in {
+                        "after-index-commit",
+                        "after-predecessor-terminalization",
+                        "after-witness"}:
+                    def activate_with_fault(*args, **kwargs):
+                        kwargs["fault_at"] = boundary
+                        return original_activate(*args, **kwargs)
+                    patcher = mock.patch.object(
+                        loom_lifecycle_transition, "activate_successor",
+                        side_effect=activate_with_fault)
+                else:
+                    def inject_projection_fault(observed):
+                        if observed == boundary:
+                            raise loom_lifecycle_transition.LifecycleTransitionInterrupted(
+                                boundary)
+                    patcher = mock.patch.object(
+                        loom_orchestrator, "_successor_fault",
+                        side_effect=inject_projection_fault)
+                with patcher, self.assertRaises(
+                        loom_orchestrator.OrchestratorError) as interrupted:
+                    loom_orchestrator.complete(
+                        candidate["action_path"], owner_home=self.home,
+                        install_root=self.installed)
+                self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+
+                action_path = Path(candidate["action_path"])
+                _path, pending, _security = loom_orchestrator._read_action(
+                    action_path, owner_home=self.home,
+                    install_root=self.installed)
+                self.assertEqual("pending", pending["status"])
+                instance_id, memory = loom_orchestrator._memory_backend(
+                    self.home, self.installed, self.repo)
+                self.assertEqual(pending["instance_id"], instance_id)
+                with loom_reliability.exclusive_file_lock(
+                        loom_orchestrator._orchestration_lock(action_path.parent)):
+                    loom_orchestrator._recover_pending_v3_lifecycle(
+                        target=self.repo, directory=action_path.parent,
+                        memory=memory, project_id=pending["project_id"],
+                        owner_home=self.home, install_root=self.installed)
+
+                _path, completed, _security = loom_orchestrator._read_action(
+                    action_path, owner_home=self.home,
+                    install_root=self.installed)
+                self.assertEqual("completed", completed["status"])
+                self.assertEqual("installed", completed["pack_seed"]["state"])
+                self.assertEqual(
+                    "plan-complete", completed["result"]["code"])
+                self.assertIsNone(loom_orchestrator._read_active_pointer(
+                    action_path.parent))
+                self.assertEqual(
+                    completed["generation_id"],
+                    loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_precommit_failure_preserves_reservation_and_same_action_retries(self):
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        _path, candidate_action, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        source_index = (self.repo / "plans" / "active-generation.json").read_bytes()
+        source_ledger = (predecessor.generation_root / "lifecycle.json").read_bytes()
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        witness_store = loom_orchestrator._lifecycle_witness_store(
+            memory, action_path.parent, candidate_action["project_id"])
+        source_witness = witness_store.read()
+        source_pointer = loom_orchestrator._read_active_pointer(action_path.parent)
+        first_reservation = self.repo / "plans" / (
+            ".successor-" + candidate["action_id"] + "-attempt-0")
+        retry_reservation = self.repo / "plans" / (
+            ".successor-" + candidate["action_id"] + "-attempt-1")
+        first_quarantine = action_path.parent.parent / \
+            loom_orchestrator.RECOVERY_DIRECTORY / candidate["action_id"] / \
+            "successor-reservation-attempt-0"
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=loom_lifecycle_transition.LifecycleTransitionError(
+                    "precommit identity failed")), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+        self.assertFalse(os.path.lexists(first_reservation))
+        self.assertTrue(os.path.lexists(first_quarantine))
+        self.assertEqual(
+            source_index,
+            (self.repo / "plans" / "active-generation.json").read_bytes())
+        self.assertEqual(
+            source_ledger,
+            (predecessor.generation_root / "lifecycle.json").read_bytes())
+        self.assertEqual(source_witness, witness_store.read())
+        self.assertEqual(
+            source_pointer,
+            loom_orchestrator._read_active_pointer(action_path.parent))
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+        completed = loom_orchestrator.complete(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        self.assertFalse(os.path.lexists(first_reservation))
+        self.assertTrue(os.path.lexists(first_quarantine))
+        self.assertFalse(os.path.lexists(retry_reservation))
+        self.assertNotEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_precommit_ambiguous_reservation_is_preserved_for_owner_recovery(self):
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        reservation = self.repo / "plans" / (
+            ".successor-" + candidate["action_id"] + "-attempt-0")
+
+        def replace_reservation(_root, stage, _prepared, **_kwargs):
+            shutil.rmtree(stage)
+            stage.mkdir()
+            (stage / "owner-recovery-required.txt").write_text(
+                "ambiguous replacement\n", encoding="utf-8")
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "precommit identity failed")
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=replace_reservation), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                candidate["action_path"], owner_home=self.home,
+                install_root=self.installed)
+
+        self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+        self.assertEqual(
+            "ambiguous replacement\n",
+            (reservation / "owner-recovery-required.txt").read_text(
+                encoding="utf-8"))
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_preindex_abandonment_preserves_candidate_for_exact_retry(self):
+        self.complete_machine_authored_plan()
+        predecessor = loom_plan_store.resolve(self.repo)
+        request = "Plan a new accounting accessibility plan."
+        candidate = loom_orchestrator.invoke(
+            request=request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        _author_medium_action(candidate, request=request)
+        action_path = Path(candidate["action_path"])
+        original_activate = loom_lifecycle_transition.activate_successor
+
+        def activate_with_fault(*args, **kwargs):
+            kwargs["fault_at"] = "after-generation-install"
+            return original_activate(*args, **kwargs)
+
+        with mock.patch.object(
+                loom_lifecycle_transition, "activate_successor",
+                side_effect=activate_with_fault), self.assertRaises(
+                    loom_orchestrator.OrchestratorError) as interrupted:
+            loom_orchestrator.complete(
+                action_path, owner_home=self.home,
+                install_root=self.installed)
+        self.assertEqual("HANDLER_INTERRUPTED", interrupted.exception.code)
+
+        _path, pending, _security = loom_orchestrator._read_action(
+            action_path, owner_home=self.home, install_root=self.installed)
+        _instance_id, memory = loom_orchestrator._memory_backend(
+            self.home, self.installed, self.repo)
+        with loom_reliability.exclusive_file_lock(
+                loom_orchestrator._orchestration_lock(action_path.parent)):
+            recovered = loom_orchestrator._recover_pending_v3_lifecycle(
+                target=self.repo, directory=action_path.parent,
+                memory=memory, project_id=pending["project_id"],
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("abandoned", recovered[0]["status"])
+        self.assertEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+        completed = loom_orchestrator.complete(
+            action_path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("plan-complete", completed["code"])
+        self.assertNotEqual(
+            predecessor.generation_id,
+            loom_plan_store.resolve(self.repo).generation_id)
+
+    def test_corrupt_lifecycle_returns_sealed_inline_plan_without_exposing_bytes(self):
+        """Break caught: untrusted lifecycle storage prevents any useful planning output."""
+        plans = self.repo / "plans"
+        plans.mkdir()
+        (plans / "active-generation.json").write_text(
+            '{"schema_version":1,"schema_version":2}\n', encoding="utf-8")
+        secret = "private-conflict-value-never-expose"
+        (plans / "preserve-me.txt").write_text(secret + "\n", encoding="utf-8")
+        before = loom_reliability.exact_tree_manifest(plans)
+
+        result = loom_orchestrator.invoke(
+            request="Plan a safe accounting documentation update for README.md.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+
+        self.assertEqual("completed", result["status"])
+        self.assertEqual("non-authoritative-plan", result["code"])
+        self.assertIn("NON-AUTHORITATIVE PLAN", result["user_message"])
+        self.assertIn(
+            "Reason code: LIFECYCLE_AUTHORITY_UNTRUSTED",
+            result["user_message"])
+        self.assertNotIn(secret, json.dumps(result, sort_keys=True))
+        self.assertNotIn("action_path", result)
+        self.assertEqual(before, loom_reliability.exact_tree_manifest(plans))
+        self.assertFalse(any(self.repo.glob(".loom-plan-stage-*")))
+
+    def test_stale_plan_decision_reports_a_real_bounded_recovery_path(self):
+        """Break caught: a stale displayed plan hides its recovery requirement."""
+        action, completed = self.complete_machine_authored_plan()
+        _write(self.repo / "src" / "app.py", "VALUE = 2\n")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as stale:
+            loom_orchestrator.start(
+                action["action_path"],
+                presentation_sha256=completed[
+                    "plan_presentation"]["presentation_sha256"],
+                owner_home=self.home, install_root=self.installed)
+        self.assertEqual("PLAN_DECISION_STALE", stale.exception.code)
+        self.assertIn("changed", str(stale.exception))
+
+    def test_indeterminate_repair_scope_reports_a_real_bounded_recovery_path(self):
+        """Break caught: an empty active repair scope mutates the reviewed plan."""
+        repair_action, repair_completed = self.complete_machine_authored_plan()
+        loom_orchestrator.start(
+            repair_action["action_path"],
+            presentation_sha256=repair_completed[
+                "plan_presentation"]["presentation_sha256"],
+            owner_home=self.home, install_root=self.installed)
+        active = loom_plan_store.resolve(self.repo)
+        before_repair = loom_reliability.exact_tree_manifest(
+            active.generation_root)
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as indeterminate:
+            loom_orchestrator.invoke(
+                request="Repair the failed active action.", cwd=self.repo,
+                home=self.home, install_root=self.installed)
+        self.assertEqual("REPAIR_SCOPE_INDETERMINATE", indeterminate.exception.code)
+        self.assertIn(
+            "no exact product-world difference", str(indeterminate.exception))
+        self.assertEqual(before_repair, loom_reliability.exact_tree_manifest(
+            loom_plan_store.resolve(self.repo).generation_root))
 
     def test_revision_archive_and_encrypted_envelope_are_schema_valid(self):
         action, completed = self.complete_machine_authored_plan()
@@ -2954,6 +7516,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_completed_plan_replays_only_in_the_exact_unchanged_world(self):
         action, completed = self.complete_machine_authored_plan()
+        pack = _active_pack(self.repo)
+        before = loom_reliability.exact_tree_manifest(pack)
         replayed = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -2974,9 +7538,51 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertEqual("blocked", changed["status"])
         self.assertEqual("plan_decision_stale", changed["code"])
         self.assertNotIn("action_id", changed)
+        self.assertTrue(loom_reliability.exact_tree_manifests_equal(
+            before, loom_reliability.exact_tree_manifest(pack)))
+        self.assertIsNone(loom_orchestrator._read_active_pointer(action_directory))
         self.assertEqual(
             2, len(list(action_directory.glob(
                 "????????-????-????-????-????????????.json"))))
+
+    def test_completed_plan_manifest_only_drift_returns_sealed_stale_block(self):
+        action, _completed = self.complete_machine_authored_plan()
+        manifest = _active_pack(self.repo) / "MANIFEST.md"
+        mutated = manifest.read_bytes() + b"\n<!-- out-of-band manifest drift -->\n"
+        manifest.write_bytes(mutated)
+        action_directory = Path(action["action_path"]).parent
+
+        changed = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("blocked", changed["status"])
+        self.assertEqual("plan_decision_stale", changed["code"])
+        self.assertNotIn("action_id", changed)
+        self.assertNotIn("action_path", changed)
+        self.assertIsNone(loom_orchestrator._read_active_pointer(action_directory))
+        self.assertEqual(mutated, manifest.read_bytes())
+
+    def test_cancelled_completed_plan_same_request_starts_legitimate_new_plan(self):
+        action, _completed = self.complete_machine_authored_plan()
+        action_path = Path(action["action_path"])
+        sealed = action_path.read_bytes()
+        cancelled = loom_orchestrator.invoke(
+            request="Cancel the current reviewed Loom plan.",
+            cwd=self.repo, home=self.home, install_root=self.installed)
+        self.assertEqual("generation-cancelled", cancelled["code"])
+
+        replacement = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+
+        self.assertEqual("action-required", replacement["status"])
+        self.assertEqual("plan", replacement["intent"])
+        _path, replacement_action, _security = loom_orchestrator._read_action(
+            replacement["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        self.assertEqual("new", replacement_action["request_control"]["relation"])
+        self.assertEqual(sealed, action_path.read_bytes())
 
     def test_medium_whole_accounting_plan_requires_architecture_and_security(self):
         contract = loom_orchestrator._artifact_contract(
@@ -3197,6 +7803,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertFalse((self.repo / ".loom-history").exists())
 
     def test_machine_authoring_seals_semantic_unknown_domain_evidence(self):
+        self._enable_git_fixture()
         authority_text = (
             "Every glossary definition must cite AUTHORITY.md and retain the "
             "canonical term spelling.\n")
@@ -4459,6 +9066,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertNotIn(self.request.encode("utf-8"), raw)
 
         class FakeVault:
+            def __init__(self):
+                self.crypto = crypto
+
             def identity(self):
                 return {"owner_vault_id": owner}
 
@@ -4479,7 +9089,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_unknown_domain_is_promoted_out_of_the_small_lifecycle(self):
         opened = self.cli(
             "invoke", "--request",
-            "Develop a museum conservation protocol for water-damaged manuscripts",
+            "Plan a museum conservation protocol for water-damaged manuscripts",
             "--cwd", self.repo, "--home", self.home,
             "--install-root", self.installed)
 
@@ -4498,6 +9108,7 @@ class ProductionOrchestratorTests(unittest.TestCase):
         self.assertFalse((pending_pack / ".loom-small-lifecycle.json").exists())
 
     def test_named_opaque_domain_survives_known_cli_routing(self):
+        self._enable_git_fixture()
         _write(
             self.repo / "AUTHORITY.md",
             "# QuantaLex authority\n\n"
@@ -4672,8 +9283,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
     def test_research_plan_owner_message_uses_domain_consequence_and_plain_action(self):
         action = loom_orchestrator.invoke(
             request=(
-                "Create a research and writing plan for a cited comparison of "
-                "embedded databases, including source checks and review checkpoints. "
+                "Plan a cited research comparison of embedded databases, including "
+                "source checks and validation checkpoints. "
                 "Do not build software."),
             cwd=self.repo, home=self.home, install_root=self.installed)
 
@@ -4717,25 +9328,25 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_whole_domain_deliverables_receive_domain_aware_tiers(self):
         cases = (
-            ("Build a cross-platform command-line developer tool with config discovery, "
+            ("Plan a cross-platform command-line developer tool with config discovery, "
              "plugin loading, shell completion, package installers, and compatibility tests.",
              "cli", "L"),
-            ("Build an offline-first Android and iOS field inspection app with camera, GPS, "
+            ("Plan an offline-first Android and iOS field inspection app with camera, GPS, "
              "sync conflict resolution, accessibility, and signed store releases.",
              "android", "L"),
-            ("Build a streaming ETL and machine-learning pipeline with schema evolution, "
+            ("Plan a streaming ETL and machine-learning pipeline with schema evolution, "
              "backfills, data quality, drift monitoring, reproducible training, and rollback.",
              "data-etl", "L"),
-            ("Build desktop bookkeeping software with double-entry correctness, currency "
+            ("Plan desktop bookkeeping software with double-entry correctness, currency "
              "precision, tax rules, reconciliation, immutable audit trails, period close, "
              "migrations, and signed releases.", "accounting", "L"),
-            ("Design and validate firmware for a battery-powered sensor node with bootloader "
+            ("Plan firmware design and validation for a battery-powered sensor node with bootloader "
              "rollback, secure updates, power-loss recovery, hardware-in-loop tests, and "
              "manufacturing calibration.", "firmware-hardware", "L"),
-            ("Produce a publishable research study with three methods, statistical analysis, "
+            ("Plan a publishable research study with three methods, statistical analysis, "
              "source provenance, reproducible notebooks, limitations, and publication package.",
              "research", "L"),
-            ("Build a real-time 3D room configurator with renderer, spatial UX, asset pipeline, "
+            ("Plan a real-time 3D room configurator with renderer, spatial UX, asset pipeline, "
              "materials, collision, autosave, and a device performance matrix.",
              "realtime-3d", "L"),
         )
@@ -4825,8 +9436,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     def test_multi_phase_program_requires_every_milestone_and_atom_assignment(self):
         request = (
-            "Phase 8, Phase 9, and Phase 10 research is complete. Make three plans "
-            "and then implement Phase 8 in the Loom agent runtime.")
+            "Plan three implementation phases from the completed Phase 8, Phase 9, "
+            "and Phase 10 research. Cover outcomes and requirements, architecture "
+            "boundaries, and verification evidence. Do not implement.")
         opened = loom_orchestrator.invoke(
             request=request, cwd=self.repo, home=self.home,
             install_root=self.installed)
@@ -5007,6 +9619,103 @@ planning_obligations: [{obligations}]
         _path, restored, _security = loom_orchestrator._read_action(path)
         self.assertEqual("completed", restored["status"])
 
+    def test_pre_ux104_current_schema_plan_action_is_terminal_only_compatible(self):
+        """Break caught: a valid pre-mode current-schema action becomes corrupt."""
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        original = json.loads(path.read_text(encoding="utf-8"))
+        historical_open = json.loads(json.dumps(original))
+        historical_open["request_control"] = json.loads(json.dumps(
+            PRE_UX104_PLANNING_CONTROL_V1))
+        historical_open["prepared"]["route_contract"]["evidence"] = [
+            item for item in historical_open["prepared"]["route_contract"]["evidence"]
+            if not item.casefold().startswith("semantic-outcome-")]
+        historical_prepared = dict(historical_open["prepared"])
+        historical_prepared.pop("prepared_hash")
+        historical_open["prepared"]["prepared_hash"] = loom_orchestrator._hash(
+            historical_prepared)
+        historical_open["action_hash"] = loom_orchestrator._action_hash(
+            historical_open)
+        path.write_text(json.dumps(historical_open), encoding="utf-8")
+
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as open_error:
+            loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_REPREPARE_REQUIRED", open_error.exception.code)
+
+        malformed_open = json.loads(json.dumps(historical_open))
+        malformed_open["context"]["archived_count"] = -1
+        malformed_open["action_hash"] = loom_orchestrator._action_hash(
+            malformed_open)
+        path.write_text(json.dumps(malformed_open), encoding="utf-8")
+        with self.assertRaises(loom_orchestrator.OrchestratorError) as corrupt:
+            loom_orchestrator._read_action(
+                path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("ACTION_CORRUPT", corrupt.exception.code)
+
+        path.write_text(json.dumps(original), encoding="utf-8")
+        _author_medium_action(opened, request=self.request)
+        loom_orchestrator.complete(
+            opened["action_path"], owner_home=self.home,
+            install_root=self.installed)
+        terminal = json.loads(path.read_text(encoding="utf-8"))
+        terminal["request_control"] = json.loads(json.dumps(
+            PRE_UX104_PLANNING_CONTROL_V1))
+        terminal["prepared"] = json.loads(json.dumps(historical_open["prepared"]))
+        terminal["action_hash"] = loom_orchestrator._action_hash(terminal)
+        path.write_text(json.dumps(terminal), encoding="utf-8")
+
+        _path, restored, _security = loom_orchestrator._read_action(
+            path, owner_home=self.home, install_root=self.installed)
+        self.assertEqual("completed", restored["status"])
+
+    def test_action_read_rejects_noncanonical_or_duplicate_semantic_outcome_tokens(self):
+        """Break caught: rehashed forged outcome evidence survives action validation."""
+        opened = loom_orchestrator.invoke(
+            request=self.request, cwd=self.repo, home=self.home,
+            install_root=self.installed)
+        path = Path(opened["action_path"])
+        base = json.loads(path.read_text(encoding="utf-8"))
+        evidence = base["prepared"]["route_contract"]["evidence"]
+        ordinary = [
+            item for item in evidence
+            if not item.casefold().startswith("semantic-outcome-")]
+        for tokens in (
+                ["semantic-outcome-v1.accounting.-1"],
+                ["semantic-outcome-v1.accounting.+1"],
+                ["semantic-outcome-v1.accounting.01"],
+                ["semantic-outcome-v1.accounting.1 "],
+                ["semantic-outcome-v1.accounting.999999"],
+                ["semantic-outcome-v1.cli.0"],
+                ["semantic-outcome-v1.unknown.0"],
+                ["semantic-outcome-v2.accounting.owner-private-export"],
+                ["semantic-outcome-v2.cli.tabular-data-export"],
+                [
+                    "semantic-outcome-v1.accounting.0",
+                    "semantic-outcome-v1.accounting.generic",
+                ],
+                [
+                    "semantic-outcome-v1.accounting.0",
+                    "semantic-outcome-v2.accounting.tabular-data-export",
+                ]):
+            with self.subTest(tokens=tokens):
+                action = json.loads(json.dumps(base))
+                action["prepared"]["route_contract"]["evidence"] = [
+                    *ordinary[:14], *tokens]
+                prepared_body = dict(action["prepared"])
+                prepared_body.pop("prepared_hash")
+                action["prepared"]["prepared_hash"] = loom_orchestrator._hash(
+                    prepared_body)
+                action["action_hash"] = loom_orchestrator._action_hash(action)
+                path.write_text(json.dumps(action), encoding="utf-8")
+
+                with self.assertRaises(loom_orchestrator.OrchestratorError) as raised:
+                    loom_orchestrator._read_action(
+                        path, owner_home=self.home, install_root=self.installed)
+                self.assertEqual("ACTION_CORRUPT", raised.exception.code)
+
     def test_plan_contract_v4_terminal_is_readable_but_open_action_requires_reprepare(self):
         opened = loom_orchestrator.invoke(
             request=self.request, cwd=self.repo, home=self.home,
@@ -5146,7 +9855,7 @@ planning_obligations: [{obligations}]
 
     def test_composite_host_outcome_requires_domain_bound_stack_observations(self):
         opened = loom_orchestrator.invoke(
-            request="Build an ETL and machine-learning pipeline",
+            request="Plan an ETL and machine-learning pipeline",
             cwd=self.repo, home=self.home, install_root=self.installed)
         action = json.loads(Path(opened["action_path"]).read_text(encoding="utf-8"))
         self.assertEqual({"data-etl", "ml"}, set(action["domains"]))

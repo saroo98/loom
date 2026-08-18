@@ -14,6 +14,7 @@ import io
 import json
 import os
 import re
+import shutil
 import tempfile
 import uuid
 from pathlib import Path, PurePosixPath
@@ -63,6 +64,7 @@ import loom_survey
 import loom_transparency
 import loom_vault_adapter
 import loom_execution_chain
+import loom_executor_guard
 
 
 SCHEMA_VERSION = 1
@@ -104,6 +106,14 @@ MAX_ORCHESTRATION_ACTIONS = 256
 MAX_ORCHESTRATION_DIRECTORY_ENTRIES = 512
 ACTIVE_POINTER_FILE = "active-action.json"
 RECOVERY_DIRECTORY = "planning-recovery"
+RECOVERY_CONTROL_TRANSITION = "control-transition"
+RECOVERY_CONTROL_RECEIPT = "receipt.json"
+RECOVERY_CONTROL_TARGET_ACTION = "target-action.json"
+RECOVERY_CONTROL_ORIGINAL_ACTION = "original-action.json"
+RECOVERY_CONTROL_ACTIVE_POINTER = "active-pointer.json"
+RECOVERY_CONTROL_SUCCESSOR_POINTER = "successor-active-pointer.json"
+RECOVERY_CONTROL_SUCCESSOR_RECEIPT = "successor-pointer-receipt.json"
+SUCCESSOR_POINTER_BINDING_KEY = "successor_pointer_binding"
 MAX_RECOVERY_FILES = 8
 MAX_RECOVERY_FILE_BYTES = 256 * 1024
 MAX_RECOVERY_TOTAL_BYTES = MAX_RECOVERY_FILES * MAX_RECOVERY_FILE_BYTES
@@ -309,6 +319,12 @@ def _validate_action_path_authority(path, owner_home):
 
 
 def _plan_author_transaction_path(action):
+    if _uses_owner_candidate_stage(action):
+        action_path = _action_path(
+            action["owner_home"], action["instance_id"], action["project_id"],
+            action["action_id"])
+        return (_stage_path(action_path).parent /
+                f".loom-plan-transaction-{action['action_id']}.json")
     root = Path(action["explicit_target"] or action["cwd"]).resolve()
     return root / f".loom-plan-transaction-{action['action_id']}.json"
 
@@ -956,10 +972,32 @@ def _validate_legacy_plan_contract_v4(contract, *, action, prepared):
     return contract
 
 
-def _validate_action(value, path):
+def _is_canonical_pre_ux104_planning_control(control):
+    """Accept only the one historical writer output proven by repository history."""
+    return isinstance(control, dict) \
+        and control.get("schema_version") == 1 \
+        and control.get("primary_operation") == "plan" \
+        and control.get("relation") == "new" \
+        and control.get("prohibitions") == [] \
+        and control.get("explicitness") == "defaulted" \
+        and control.get("evidence") == ["safe-new-default"] \
+        and control.get("blocked") is False \
+        and control.get("block_reason") is None \
+        and control.get("control_sha256") == \
+        "7aaf553efc41778311b4743cb6a1eb0f0f7c424afddca14c95c1a0a15ed0589a"
+
+
+def _validate_action(
+        value, path, *, allow_pre_ux104_reprepare=False,
+        action_security=None):
+    if type(allow_pre_ux104_reprepare) is not bool:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "action compatibility mode is invalid")
     if not isinstance(value, dict):
         raise OrchestratorError("ACTION_CORRUPT", "action must be an object")
     original_schema_version = value.get("schema_version")
+    planning_mode = None
+    missing_planning_disposition = False
     if value.get("schema_version") == LEGACY_ACTION_SCHEMA_VERSION:
         if set(value) != ACTION_FIELDS_V7 \
                 or value.get("action_hash") != _action_hash(value) \
@@ -1058,6 +1096,26 @@ def _validate_action(value, path):
         except loom_runtime.RuntimeError as exc:
             raise OrchestratorError(
                 "ACTION_CORRUPT", f"sealed request control is invalid: {exc}") from exc
+        if value.get("intent") == "plan" \
+                and value["request_control"].get("explicitness") == "host-bound":
+            try:
+                _completion_planning_mode(value)
+            except OrchestratorError as exc:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT",
+                    f"sealed bound revision control is invalid: {exc}") from exc
+        elif value.get("intent") == "plan":
+            planning_tokens = [
+                item for item in value["request_control"]["evidence"]
+                if item.startswith("planning-")]
+            if not planning_tokens:
+                missing_planning_disposition = True
+            else:
+                try:
+                    planning_mode = _extract_planning_mode(value["request_control"])
+                except OrchestratorError as exc:
+                    raise OrchestratorError(
+                        "ACTION_CORRUPT", f"sealed planning mode is invalid: {exc}") from exc
     elif value["request_control"] is not None:
         raise OrchestratorError(
             "ACTION_CORRUPT", "historical action unexpectedly carries request control")
@@ -1157,7 +1215,7 @@ def _validate_action(value, path):
                      "not-needed" if message_builder is loom_message.v2_build
                      else "not-applicable"),
         summary=(
-            _planning_seed_summary(value["tier"])
+            _planning_seed_summary(value["tier"], planning_mode)
             if planning_metadata_changed
             else "Loom prepared the next safe frontier."),
         next_action=(
@@ -1267,6 +1325,37 @@ def _validate_action(value, path):
         raise OrchestratorError("ACTION_CORRUPT", "non-repair action carries repair scope")
     if value["host_result"] is not None and not isinstance(value["host_result"], dict):
         raise OrchestratorError("ACTION_CORRUPT", "host result is invalid")
+    successor_pointer_binding = (
+        value["host_result"].get(SUCCESSOR_POINTER_BINDING_KEY)
+        if isinstance(value["host_result"], dict) else None)
+    _validate_successor_pointer_binding(
+        successor_pointer_binding, action=value)
+    planning_conflicts = (
+        value["host_result"].get("planning_preference_conflicts")
+        if isinstance(value["host_result"], dict) else None)
+    if planning_conflicts is not None and value["intent"] != "plan":
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "non-planning action carries planning preference evidence")
+    if original_schema_version == ACTION_SCHEMA_VERSION and value["intent"] == "plan":
+        if planning_conflicts is not None and (
+                not isinstance(planning_conflicts, dict)
+                or set(planning_conflicts) != {"conflict_keys", "private_evidence"}):
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "planning preference evidence fields are invalid")
+        try:
+            loom_vault_adapter.validate_planning_preference_projection({
+                "public_preferences": value["context"]["preferences"],
+                "conflict_keys": (
+                    planning_conflicts["conflict_keys"]
+                    if planning_conflicts is not None else []),
+                "private_conflict_evidence": (
+                    planning_conflicts["private_evidence"]
+                    if planning_conflicts is not None else []),
+            }, domains=value["domains"], project_id=value["project_id"],
+                tier=value["tier"], intent=value["intent"])
+        except loom_vault_adapter.VaultAdapterError as exc:
+            raise OrchestratorError(
+                "ACTION_CORRUPT", f"planning preference evidence is invalid: {exc}") from exc
     if isinstance(value["host_result"], dict) and "plan_author" in value["host_result"]:
         if value["intent"] != "plan":
             raise OrchestratorError(
@@ -1286,6 +1375,26 @@ def _validate_action(value, path):
     if isinstance(value["host_result"], dict) and "plan_revision" in value["host_result"]:
         _validate_plan_revision_record(
             value["host_result"]["plan_revision"], action=value)
+    if isinstance(value["host_result"], dict) \
+            and "executor_quiescence" in value["host_result"]:
+        evidence = value["host_result"]["executor_quiescence"]
+        if not isinstance(evidence, dict):
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "executor quiescence evidence is invalid")
+        if evidence.get("case") in {
+                "verified-host-terminal", "host-never-admitted"}:
+            try:
+                loom_executor_guard.validate_evidence(
+                    Path(path).parent, value, evidence,
+                    project_world_sha256=evidence.get("project_world_sha256"),
+                    security=action_security)
+            except loom_executor_guard.GuardError as exc:
+                raise OrchestratorError(
+                    "ACTION_CORRUPT",
+                    "executor quiescence does not match its trusted host ledger") from exc
+        elif evidence.get("case") != "supervisor-terminal":
+            raise OrchestratorError(
+                "ACTION_CORRUPT", "executor quiescence evidence case is unsupported")
     if created >= expires \
             or any(not isinstance(value[field], str) or not Path(value[field]).is_absolute()
                    for field in ("owner_home", "install_root", "cwd", "journal_path")) \
@@ -1304,12 +1413,22 @@ def _validate_action(value, path):
     expected_journal = expected.parent.parent / loom_session.JOURNAL_FILE
     if Path(value["journal_path"]) != expected_journal:
         raise OrchestratorError("ACTION_PATH_MISMATCH", "session journal is not project-scoped")
+    if missing_planning_disposition \
+            and value["status"] not in TERMINAL_ACTION_STATUSES:
+        if not allow_pre_ux104_reprepare \
+                or not _is_canonical_pre_ux104_planning_control(
+                    value["request_control"]):
+            raise OrchestratorError(
+                "ACTION_REPREPARE_REQUIRED",
+                "an open pre-UX-104 planning action has no sealed disposition; invoke /loom "
+                "again against the current project state",
+                status="action-required")
     return value
 
 
-def _read_action(path, *, owner_home=None, install_root=None):
-    path = (_validate_action_path_authority(path, owner_home)
-            if owner_home is not None else _absolute(path, "action"))
+def _decode_action_document(path, *, owner_home=None, install_root=None):
+    """Authenticate one bounded action document without granting its pathname authority."""
+    path = _absolute(path, "action document")
     try:
         loom_memory._reject_link_ancestors(path, "orchestration action")
     except loom_memory.MemoryError as exc:
@@ -1351,11 +1470,34 @@ def _read_action(path, *, owner_home=None, install_root=None):
                 or Path(install_root).resolve() != Path(value.get("install_root", "")).resolve():
             raise OrchestratorError(
                 "ACTION_RUNTIME_MISMATCH", "action does not belong to this home and runtime")
-        security = (crypto, opened.identity()["owner_vault_id"])
-    return path, _validate_action(value, path), security
+        security = loom_executor_guard.GuardSecurity(
+            opened, crypto, opened.identity()["owner_vault_id"])
+    return value, security
 
 
-def _write_action(path, value, security=None):
+def _read_action(path, *, owner_home=None, install_root=None,
+                 allow_pre_ux104_reprepare=False):
+    path = (_validate_action_path_authority(path, owner_home)
+            if owner_home is not None else _absolute(path, "action"))
+    value, security = _decode_action_document(
+        path, owner_home=owner_home, install_root=install_root)
+    return path, _validate_action(
+        value, path,
+        allow_pre_ux104_reprepare=allow_pre_ux104_reprepare,
+        action_security=security), security
+
+
+def _is_pre_ux104_reprepare_action(action):
+    """Identify only the authenticated current-schema compatibility gap."""
+    return action.get("schema_version") == ACTION_SCHEMA_VERSION \
+        and action.get("intent") == "plan" \
+        and action.get("status") not in TERMINAL_ACTION_STATUSES \
+        and _is_canonical_pre_ux104_planning_control(
+            action.get("request_control"))
+
+
+def _action_storage_document(value, security=None):
+    """Return exact private on-disk action bytes without publishing them."""
     value = dict(value)
     value["action_hash"] = _action_hash(value)
     raw = json.dumps(value, sort_keys=True, separators=(",", ":"),
@@ -1363,14 +1505,22 @@ def _write_action(path, value, security=None):
     if len(raw) > MAX_ACTION_BYTES:
         raise OrchestratorError("ACTION_CAPACITY", "action exceeds its plaintext bound")
     if security is None:
-        loom_session._atomic_json(path, value)
+        stored = value
     else:
         crypto, owner_vault_id = security
         aad = f"action:{owner_vault_id}:{value['action_id']}".encode()
-        envelope = {"schema_version": 1, "kind": "loom-encrypted-action-v1",
-                    "action_id": value["action_id"], "owner_vault_id": owner_vault_id,
-                    "ciphertext": crypto.seal(raw, aad).decode("ascii")}
-        loom_session._atomic_json(path, envelope)
+        stored = {"schema_version": 1, "kind": "loom-encrypted-action-v1",
+                  "action_id": value["action_id"], "owner_vault_id": owner_vault_id,
+                  "ciphertext": crypto.seal(raw, aad).decode("ascii")}
+    encoded = loom_session._canonical_json(stored) + b"\n"
+    if len(encoded) > MAX_ENCRYPTED_ACTION_BYTES:
+        raise OrchestratorError("ACTION_CAPACITY", "stored action exceeds its byte bound")
+    return value, stored, encoded
+
+
+def _write_action(path, value, security=None):
+    value, stored, _encoded = _action_storage_document(value, security)
+    loom_session._atomic_json(path, stored)
     return value
 
 
@@ -1499,7 +1649,12 @@ def _open_lifecycle_private_projection(value, *, memory):
     expected_path = _action_path(
         action["owner_home"], action["instance_id"],
         action["project_id"], action["action_id"])
-    _validate_action(action, expected_path)
+    projection_security = (
+        (memory.vault.crypto, action["instance_id"])
+        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter)
+        else None)
+    _validate_action(
+        action, expected_path, action_security=projection_security)
     completion = payload["completion"]
     if value["operation"] == "complete":
         try:
@@ -1534,12 +1689,17 @@ def _pointer_hash(value):
     return _hash(body)
 
 
-def _write_active_pointer(directory, *, action_id, project_id):
+def _active_pointer_value(*, action_id, project_id):
     value = {
         "schema_version": 1, "action_id": action_id, "project_id": project_id,
         "state": "active",
     }
     value["pointer_hash"] = _pointer_hash(value)
+    return value
+
+
+def _write_active_pointer(directory, *, action_id, project_id):
+    value = _active_pointer_value(action_id=action_id, project_id=project_id)
     loom_session._atomic_json(_active_pointer_path(directory), value)
     return value
 
@@ -1578,7 +1738,8 @@ def _active_action_for_status(directory, *, owner_home, install_root):
             "RECOVERY_DECISION_REQUIRED",
             "the active pointer names a missing action; status is indeterminate")
     _path, action, _security = _read_action(
-        path, owner_home=owner_home, install_root=install_root)
+        path, owner_home=owner_home, install_root=install_root,
+        allow_pre_ux104_reprepare=True)
     if action["project_id"] != pointer["project_id"] \
             or action["action_id"] != pointer["action_id"]:
         raise OrchestratorError(
@@ -1653,7 +1814,13 @@ def _generation_status_projection_requested(request):
         request, re.I) is None
 
 
-def _clear_active_pointer(directory, action_id):
+def _clear_active_pointer(
+        directory, action_id, *, expected_controls=None, action_path=None):
+    if expected_controls is not None:
+        if action_path is None or Path(action_path).parent != Path(directory):
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery pointer guard is not action-scoped")
+        _require_recovery_controls(action_path, expected_controls)
     path = _active_pointer_path(directory)
     pointer = _read_active_pointer(directory)
     if pointer is None:
@@ -1661,6 +1828,8 @@ def _clear_active_pointer(directory, action_id):
     if pointer["action_id"] != action_id:
         raise OrchestratorError(
             "ACTION_POINTER_CONFLICT", "another action owns the active pointer")
+    if expected_controls is not None:
+        _require_recovery_controls(action_path, expected_controls)
     path.unlink()
     try:
         loom_reliability._sync_parent(path)
@@ -1681,13 +1850,36 @@ def _project_stage_path(action):
     return target / f".loom-plan-stage-{action['action_id']}"
 
 
+def _uses_owner_candidate_stage(action):
+    control = action.get("request_control")
+    evidence = control.get("evidence") if isinstance(control, dict) else None
+    if not isinstance(evidence, list):
+        return False
+    return [item for item in evidence if item.startswith("planning-")] in (
+        ["planning-candidate-successor"],
+        ["planning-current-world-replan"],
+    )
+
+
+def _prepared_stage_path(action):
+    if _uses_owner_candidate_stage(action):
+        action_path = _action_path(
+            action["owner_home"], action["instance_id"], action["project_id"],
+            action["action_id"])
+        return _stage_path(action_path)
+    return _project_stage_path(action)
+
+
 def _action_pack_root(action):
     """Resolve the exact plan projection owned by one action."""
     root = Path(action["explicit_target"] or action["cwd"])
     seed = action.get("pack_seed") or {}
     if action.get("intent") == "plan" and seed.get("created_pack") \
-            and seed.get("state") in {"recorded", "prepared"}:
-        stage = _project_stage_path(action)
+            and (seed.get("state") in {"recorded", "prepared"}
+                 or seed.get("state") == "installed"
+                 and action.get("lifecycle_transition") is not None
+                 and _uses_owner_candidate_stage(action)):
+        stage = _prepared_stage_path(action)
         if _path_present(stage):
             return stage
     plans = root / "plans"
@@ -1730,19 +1922,31 @@ def _recovery_manifest(path):
 
 
 def _seed_stage(action_path, action, prepared):
-    stage = _project_stage_path(action)
+    stage = _prepared_stage_path(action)
     if _path_present(stage):
         raise OrchestratorError(
             "BASELINE_STAGING_CONFLICT", "planning seed staging path already exists")
     target = Path(action["explicit_target"] or action["cwd"])
     try:
         target_identity = loom_reliability.observe_root_identity(target)
-        reserved = loom_reliability.reserve_directory_leaf(
-            target, stage.name, mode=0o755)
-        loom_reliability._validate_directory_object_continuity(
-            target, target_identity)
+        if _uses_owner_candidate_stage(action):
+            private_root = _orchestration_directory(
+                action["owner_home"], action["instance_id"],
+                action["project_id"])
+            relative_parent = stage.parent.relative_to(private_root)
+            private_parent = loom_reliability.ensure_private_directory(
+                private_root, relative_parent.parts)
+            stage_parent_identity = loom_reliability.observe_root_identity(private_parent)
+            reserved = loom_reliability.reserve_private_stage_leaf(
+                private_parent, [stage.name])
+            loom_reliability._validate_directory_object_continuity(
+                private_parent, stage_parent_identity)
+        else:
+            reserved = loom_reliability.reserve_directory_leaf(
+                target, stage.name, mode=0o755)
+        loom_reliability._validate_directory_object_continuity(target, target_identity)
         stage_identity = loom_reliability.observe_root_identity(reserved)
-    except loom_reliability.ReliabilityError as exc:
+    except (loom_reliability.ReliabilityError, loom_session.SessionError) as exc:
         raise OrchestratorError(
             "BASELINE_STAGING_CONFLICT",
             f"planning seed stage could not be reserved safely: {exc}") from exc
@@ -1983,7 +2187,951 @@ def _manifest_if_proven(path, expected, *, allow_subset=False):
     return None
 
 
-def _recover_plan_action(path, action, security, *, now, requested_reason=None):
+_RECOVERY_CONTROL_FIELDS = (
+    "action_sha256", "action_identity", "pointer_sha256", "pointer_identity",
+)
+
+
+def _observe_recovery_controls(path, *, failure_code="RECOVERY_RACE"):
+    """Capture exact action/pointer bytes and pathname identities as one CAS token."""
+    action_path = Path(path)
+    pointer_path = _active_pointer_path(action_path.parent)
+    try:
+        action_identity = loom_reliability.observe_root_identity(action_path)
+        pointer_present = _path_present(pointer_path)
+        pointer_identity = (
+            loom_reliability.observe_root_identity(pointer_path)
+            if pointer_present else None)
+        action_bytes = action_path.read_bytes()
+        pointer_bytes = pointer_path.read_bytes() if pointer_present else None
+        loom_reliability.validate_root_identity(action_path, action_identity)
+        if pointer_identity is not None:
+            loom_reliability.validate_root_identity(pointer_path, pointer_identity)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            failure_code,
+            f"recovery control bytes cannot be observed safely: {exc}") from exc
+    return {
+        "action_sha256": hashlib.sha256(action_bytes).hexdigest(),
+        "action_identity": action_identity,
+        "pointer_sha256": (
+            hashlib.sha256(pointer_bytes).hexdigest()
+            if pointer_bytes is not None else None),
+        "pointer_identity": pointer_identity,
+    }
+
+
+def _recovery_control_token(snapshot):
+    if not isinstance(snapshot, dict) \
+            or any(field not in snapshot for field in _RECOVERY_CONTROL_FIELDS):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "planning recovery control token is incomplete")
+    return {field: snapshot[field] for field in _RECOVERY_CONTROL_FIELDS}
+
+
+def _require_recovery_controls(path, expected, *, action=True, pointer=True):
+    """Fail before the next mutation unless the exact captured controls remain."""
+    observed = _observe_recovery_controls(path)
+    expected = _recovery_control_token(expected)
+    fields = []
+    if action:
+        fields.extend(("action_sha256", "action_identity"))
+    if pointer:
+        fields.extend(("pointer_sha256", "pointer_identity"))
+    if any(observed[field] != expected[field] for field in fields):
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "planning recovery action or pointer changed after preflight; every "
+            "remaining artifact was preserved")
+    return observed
+
+
+_RECOVERY_CONTROL_RECEIPT_FIELDS = {
+    "schema_version", "action_id", "project_id",
+    "source_action_sha256", "source_action_identity",
+    "source_pointer_sha256", "source_pointer_identity",
+    "target_action_sha256", "target_action_identity", "target_action_hash",
+    "receipt_hash",
+}
+_RECOVERY_SUCCESSOR_POINTER_RECEIPT_FIELDS = {
+    "schema_version", "source_action_id", "source_recovery_receipt_hash",
+    "project_id", "successor_action_id", "successor_action_hash",
+    "pointer_sha256", "receipt_hash",
+}
+_RECOVERY_SUCCESSOR_POINTER_BINDING_FIELDS = {
+    "schema_version", "source_action_id", "source_recovery_receipt_hash",
+    "project_id", "successor_action_id", "successor_projection_sha256",
+    "binding_sha256",
+}
+
+
+def _write_private_file_exclusive(path, payload):
+    """Create one bounded private transition object without replacing bytes."""
+    path = Path(path)
+    if not isinstance(payload, bytes) or not payload \
+            or len(payload) > MAX_ENCRYPTED_ACTION_BYTES:
+        raise OrchestratorError(
+            "RECOVERY_CAPACITY", "recovery control object exceeds its byte bound")
+    descriptor = None
+    try:
+        loom_reliability._absolute(
+            path.parent, "recovery control parent", must_exist=True)
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0),
+            0o600)
+        offset = 0
+        while offset < len(payload):
+            written = os.write(descriptor, payload[offset:])
+            if written <= 0:
+                raise OSError("recovery control write made no progress")
+            offset += written
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = None
+        loom_reliability._sync_parent(path)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            f"recovery control object could not be created safely: {exc}") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _recovery_control_receipt(expected_controls, candidate, target_path):
+    target_identity = loom_reliability.observe_root_identity(target_path)
+    target_bytes = target_path.read_bytes()
+    body = {
+        "schema_version": 1,
+        "action_id": candidate["action_id"],
+        "project_id": candidate["project_id"],
+        "source_action_sha256": expected_controls["action_sha256"],
+        "source_action_identity": expected_controls["action_identity"],
+        "source_pointer_sha256": expected_controls["pointer_sha256"],
+        "source_pointer_identity": expected_controls["pointer_identity"],
+        "target_action_sha256": hashlib.sha256(target_bytes).hexdigest(),
+        "target_action_identity": target_identity,
+        "target_action_hash": candidate["action_hash"],
+    }
+    return {**body, "receipt_hash": _hash(body)}
+
+
+def _load_recovery_control_receipt(transition, *, expected_project_id=None):
+    path = Path(transition) / RECOVERY_CONTROL_RECEIPT
+    try:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 64 * 1024:
+            raise ValueError("receipt is not a bounded regular file")
+        value = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+    except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery control receipt is invalid: {exc}") from exc
+    body = dict(value) if isinstance(value, dict) else {}
+    claimed = body.pop("receipt_hash", None)
+    try:
+        uuid.UUID(str(value.get("action_id")))
+        loom_reliability._validate_root_identity_token(
+            value.get("source_action_identity"))
+        loom_reliability._validate_root_identity_token(
+            value.get("target_action_identity"))
+        if value.get("source_pointer_identity") is not None:
+            loom_reliability._validate_root_identity_token(
+                value["source_pointer_identity"])
+    except (ValueError, TypeError, AttributeError,
+            loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery control receipt identities are invalid") from exc
+    if not isinstance(value, dict) or set(value) != _RECOVERY_CONTROL_RECEIPT_FIELDS \
+            or value.get("schema_version") != 1 \
+            or str(uuid.UUID(value["action_id"])) != value["action_id"] \
+            or re.fullmatch(r"p-[0-9a-f]{32}", str(value.get("project_id", ""))) is None \
+            or expected_project_id is not None \
+            and value["project_id"] != expected_project_id \
+            or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(field, ""))) is None
+                   for field in (
+                       "source_action_sha256", "target_action_sha256",
+                       "target_action_hash")) \
+            or (value["source_pointer_sha256"] is None) \
+            != (value["source_pointer_identity"] is None) \
+            or value["source_pointer_sha256"] is not None \
+            and re.fullmatch(
+                r"[0-9a-f]{64}", value["source_pointer_sha256"]) is None \
+            or claimed != _hash(body):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery control receipt is not self-consistent")
+    return value
+
+
+def _recovery_control_file_state(path, expected_sha256, expected_identity):
+    path = Path(path)
+    if not os.path.lexists(path):
+        return "absent"
+    try:
+        if path.is_symlink() or not path.is_file() \
+                or path.stat().st_size > MAX_ENCRYPTED_ACTION_BYTES:
+            return "unexpected"
+        observed = loom_reliability.observe_root_identity(path)
+        payload = path.read_bytes()
+        loom_reliability.validate_root_identity(path, observed)
+    except (OSError, loom_reliability.ReliabilityError):
+        return "unexpected"
+    return (
+        "expected"
+        if observed == expected_identity
+        and hashlib.sha256(payload).hexdigest() == expected_sha256
+        else "unexpected")
+
+
+def _atomic_recovery_control_move(source, destination, *, expected_identity,
+                                  source_role, destination_role):
+    try:
+        outcome = loom_reliability.atomic_rename_noreplace(
+            source, destination, expected_source_identity=expected_identity,
+            source_role=source_role, destination_role=destination_role)
+        return outcome.state
+    except loom_reliability.AtomicRenameReconciliationRequired as exc:
+        if exc.state["namespace_state"] == "committed":
+            return exc.state
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "recovery control move became ambiguous; all observable bytes were preserved") \
+            from exc
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "recovery control bytes changed in the final no-replace commit window") \
+            from exc
+
+
+def _validate_recovery_target_action(target_path, action_path, receipt,
+                                     *, owner_home, install_root):
+    try:
+        value, security = _decode_action_document(
+            target_path, owner_home=owner_home, install_root=install_root)
+        value = _validate_action(
+            value, action_path, action_security=security)
+    except OrchestratorError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "staged terminal action is not authentic") from exc
+    if value["action_id"] != receipt["action_id"] \
+            or value["project_id"] != receipt["project_id"] \
+            or value["action_hash"] != receipt["target_action_hash"] \
+            or value["status"] not in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "staged terminal action disagrees with its receipt")
+    return value
+
+
+def _exact_private_file_bytes(path, *, max_bytes, label):
+    """Read one private control file without accepting links or identity swaps."""
+    path = Path(path)
+    if not os.path.lexists(path):
+        return None
+    try:
+        if path.is_symlink() or not path.is_file() \
+                or path.stat().st_size > max_bytes:
+            raise ValueError(f"{label} is not a bounded regular file")
+        identity = loom_reliability.observe_root_identity(path)
+        payload = path.read_bytes()
+        loom_reliability.validate_root_identity(path, identity)
+    except (OSError, ValueError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"{label} cannot be inspected safely: {exc}") from exc
+    return payload, identity
+
+
+def _ensure_exact_private_file(path, payload, *, max_bytes, label):
+    """Create once, or accept only byte-identical already-created recovery state."""
+    observed = _exact_private_file_bytes(path, max_bytes=max_bytes, label=label)
+    if observed is None:
+        try:
+            _write_private_file_exclusive(path, payload)
+        except OrchestratorError:
+            observed = _exact_private_file_bytes(
+                path, max_bytes=max_bytes, label=label)
+            if observed is None or observed[0] != payload:
+                raise
+        else:
+            observed = _exact_private_file_bytes(
+                path, max_bytes=max_bytes, label=label)
+    if observed is None or observed[0] != payload:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"{label} contains unexpected bytes; it was preserved")
+    return observed[1]
+
+
+def _successor_binding_projection(action):
+    """Project the closed immutable identity of one recovery-bound successor."""
+    return {
+        "schema_version": action.get("schema_version"),
+        "action_id": action.get("action_id"),
+        "instance_id": action.get("instance_id"),
+        "project_id": action.get("project_id"),
+        "invocation_id": action.get("invocation_id"),
+        "operation_id": action.get("operation_id"),
+        "intent": action.get("intent"),
+        "generation_id": action.get("generation_id"),
+        "prepared_sha256": _hash(action.get("prepared")),
+    }
+
+
+def _successor_pointer_binding(recovery_receipt, action):
+    body = {
+        "schema_version": 1,
+        "source_action_id": recovery_receipt["action_id"],
+        "source_recovery_receipt_hash": recovery_receipt["receipt_hash"],
+        "project_id": action["project_id"],
+        "successor_action_id": action["action_id"],
+        "successor_projection_sha256": _hash(
+            _successor_binding_projection(action)),
+    }
+    return {**body, "binding_sha256": _hash(body)}
+
+
+def _validate_successor_pointer_binding(value, *, action):
+    """Validate a pending successor's exact terminal-predecessor authority."""
+    if value is None:
+        return None
+    body = dict(value) if isinstance(value, dict) else {}
+    claimed = body.pop("binding_sha256", None)
+    try:
+        source_id = str(uuid.UUID(str(value.get("source_action_id"))))
+        successor_id = str(uuid.UUID(str(value.get("successor_action_id"))))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "successor pointer binding identities are invalid") \
+            from exc
+    if not isinstance(value, dict) \
+            or set(value) != _RECOVERY_SUCCESSOR_POINTER_BINDING_FIELDS \
+            or value.get("schema_version") != 1 \
+            or source_id != value["source_action_id"] \
+            or successor_id != value["successor_action_id"] \
+            or source_id == successor_id \
+            or successor_id != action.get("action_id") \
+            or value.get("project_id") != action.get("project_id") \
+            or action.get("schema_version") != ACTION_SCHEMA_VERSION \
+            or action.get("intent") != "plan" \
+            or re.fullmatch(
+                r"p-[0-9a-f]{32}", str(value.get("project_id", ""))) is None \
+            or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(field, ""))) is None
+                   for field in (
+                       "source_recovery_receipt_hash",
+                       "successor_projection_sha256")) \
+            or value.get("successor_projection_sha256") != _hash(
+                _successor_binding_projection(action)) \
+            or claimed != _hash(body):
+        raise OrchestratorError(
+            "ACTION_CORRUPT", "successor pointer binding is not self-consistent")
+    return json.loads(json.dumps(value, sort_keys=True))
+
+
+def _bind_recovery_bound_successor(action, recovery_receipt):
+    """Authenticate one source receipt inside a fully resumable successor."""
+    if action.get("status") != "pending" \
+            or action.get("recovery_receipt") is not None:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "only a fresh pending successor can be recovery-bound")
+    bound = dict(action)
+    host_result = dict(bound.get("host_result") or {})
+    if SUCCESSOR_POINTER_BINDING_KEY in host_result:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer binding is already present")
+    host_result[SUCCESSOR_POINTER_BINDING_KEY] = \
+        _successor_pointer_binding(recovery_receipt, bound)
+    bound["host_result"] = host_result
+    bound["action_hash"] = _action_hash(bound)
+    _validate_successor_pointer_binding(
+        host_result[SUCCESSOR_POINTER_BINDING_KEY], action=bound)
+    return bound
+
+
+def _successor_pointer_receipt(recovery_receipt, action, pointer_bytes):
+    body = {
+        "schema_version": 1,
+        "source_action_id": recovery_receipt["action_id"],
+        "source_recovery_receipt_hash": recovery_receipt["receipt_hash"],
+        "project_id": action["project_id"],
+        "successor_action_id": action["action_id"],
+        "successor_action_hash": action["action_hash"],
+        "pointer_sha256": hashlib.sha256(pointer_bytes).hexdigest(),
+    }
+    return {**body, "receipt_hash": _hash(body)}
+
+
+def _load_successor_pointer_receipt(transition):
+    path = Path(transition) / RECOVERY_CONTROL_SUCCESSOR_RECEIPT
+    observed = _exact_private_file_bytes(
+        path, max_bytes=4 * 1024, label="successor pointer receipt")
+    if observed is None:
+        return None
+    try:
+        value = json.loads(
+            observed[0].decode("utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+    except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt is invalid") from exc
+    body = dict(value) if isinstance(value, dict) else {}
+    claimed = body.pop("receipt_hash", None)
+    try:
+        source_id = str(uuid.UUID(str(value.get("source_action_id"))))
+        successor_id = str(uuid.UUID(str(value.get("successor_action_id"))))
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt identities are invalid") from exc
+    if not isinstance(value, dict) \
+            or set(value) != _RECOVERY_SUCCESSOR_POINTER_RECEIPT_FIELDS \
+            or value.get("schema_version") != 1 \
+            or source_id != value["source_action_id"] \
+            or successor_id != value["successor_action_id"] \
+            or source_id == successor_id \
+            or re.fullmatch(r"p-[0-9a-f]{32}", str(value.get("project_id", ""))) is None \
+            or any(re.fullmatch(r"[0-9a-f]{64}", str(value.get(field, ""))) is None
+                   for field in (
+                       "source_recovery_receipt_hash", "successor_action_hash",
+                       "pointer_sha256")) \
+            or claimed != _hash(body):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt is not self-consistent")
+    return value
+
+
+def _reconcile_successor_pointer_publication(
+        transition, action_directory, control_receipt, terminal_action,
+        *, owner_home, install_root):
+    """Publish one receipt-bound successor pointer without replacing any bytes."""
+    transition = Path(transition)
+    action_directory = Path(action_directory)
+    stage_path = transition / RECOVERY_CONTROL_SUCCESSOR_POINTER
+    receipt = _load_successor_pointer_receipt(transition)
+    if receipt is None:
+        if os.path.lexists(stage_path):
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "a successor pointer stage exists without its binding receipt")
+        return None
+    source_recovery = terminal_action.get("recovery_receipt")
+    if not isinstance(source_recovery, dict) \
+            or receipt["source_action_id"] != control_receipt["action_id"] \
+            or receipt["source_action_id"] != terminal_action["action_id"] \
+            or receipt["source_recovery_receipt_hash"] != source_recovery.get(
+                "receipt_hash") \
+            or receipt["project_id"] != control_receipt["project_id"] \
+            or receipt["project_id"] != terminal_action["project_id"]:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer receipt is not bound to recovery")
+    pointer_value = _active_pointer_value(
+        action_id=receipt["successor_action_id"],
+        project_id=receipt["project_id"])
+    pointer_bytes = loom_session._canonical_json(pointer_value) + b"\n"
+    if hashlib.sha256(pointer_bytes).hexdigest() != receipt["pointer_sha256"]:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer bytes differ from their receipt")
+    pointer_path = _active_pointer_path(action_directory)
+    pointer_observed = _exact_private_file_bytes(
+        pointer_path, max_bytes=4 * 1024, label="active successor pointer")
+    stage_observed = _exact_private_file_bytes(
+        stage_path, max_bytes=4 * 1024, label="successor pointer stage")
+    if pointer_observed is not None and pointer_observed[0] != pointer_bytes:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "unexpected active pointer bytes were preserved")
+    if stage_observed is not None and stage_observed[0] != pointer_bytes:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "unexpected successor pointer stage was preserved")
+    successor_path = action_directory / f"{receipt['successor_action_id']}.json"
+    try:
+        _path, successor, _security = _read_action(
+            successor_path, owner_home=owner_home, install_root=install_root)
+    except OrchestratorError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer action is not authentic") from exc
+    if successor["project_id"] != receipt["project_id"]:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer action belongs to another project")
+    if pointer_observed is not None:
+        return pointer_value
+    if successor["action_hash"] != receipt["successor_action_hash"] \
+            or successor["status"] in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "unpublished successor differs from its receipt")
+    stage_identity = _ensure_exact_private_file(
+        stage_path, pointer_bytes, max_bytes=4 * 1024,
+        label="successor pointer stage")
+    try:
+        outcome = loom_reliability.atomic_rename_noreplace(
+            stage_path, pointer_path, expected_source_identity=stage_identity,
+            source_role="successor_pointer_stage",
+            destination_role="active_successor_pointer")
+        if outcome.state["namespace_state"] != "committed":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "successor pointer publication is ambiguous")
+    except loom_reliability.AtomicRenameReconciliationRequired as exc:
+        if exc.state["namespace_state"] != "committed":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "successor pointer publication is ambiguous") from exc
+    except OrchestratorError:
+        raise
+    except loom_reliability.ReliabilityError as exc:
+        observed = _exact_private_file_bytes(
+            pointer_path, max_bytes=4 * 1024, label="active successor pointer")
+        if observed is None or observed[0] != pointer_bytes:
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "successor pointer publication preserved a conflicting namespace") from exc
+    observed = _exact_private_file_bytes(
+        pointer_path, max_bytes=4 * 1024, label="active successor pointer")
+    if observed is None or observed[0] != pointer_bytes:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer publication did not verify exactly")
+    return pointer_value
+
+
+def _reconcile_recovered_action_transition(
+        transition, action_path, *, owner_home, install_root,
+        expected_project_id=None):
+    """Roll one published compatibility transition forward without replacement."""
+    transition = Path(transition)
+    action_path = Path(action_path)
+    receipt = _load_recovery_control_receipt(
+        transition, expected_project_id=expected_project_id)
+    if action_path.name != f"{receipt['action_id']}.json":
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery transition does not name its action path")
+    allowed = {
+        RECOVERY_CONTROL_RECEIPT, RECOVERY_CONTROL_TARGET_ACTION,
+        RECOVERY_CONTROL_ORIGINAL_ACTION, RECOVERY_CONTROL_ACTIVE_POINTER,
+        RECOVERY_CONTROL_SUCCESSOR_POINTER,
+        RECOVERY_CONTROL_SUCCESSOR_RECEIPT,
+    }
+    try:
+        entries = list(os.scandir(transition))
+    except OSError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery transition cannot be inspected: {exc}") from exc
+    if len(entries) > len(allowed) or any(
+            entry.name not in allowed or entry.is_symlink()
+            or not entry.is_file(follow_symlinks=False) for entry in entries):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery transition contains an unexpected object")
+    target_path = transition / RECOVERY_CONTROL_TARGET_ACTION
+    original_path = transition / RECOVERY_CONTROL_ORIGINAL_ACTION
+    pointer_backup = transition / RECOVERY_CONTROL_ACTIVE_POINTER
+
+    action_state = _recovery_control_file_state(
+        action_path, receipt["source_action_sha256"],
+        receipt["source_action_identity"])
+    target_at_action = _recovery_control_file_state(
+        action_path, receipt["target_action_sha256"],
+        receipt["target_action_identity"])
+    original_state = _recovery_control_file_state(
+        original_path, receipt["source_action_sha256"],
+        receipt["source_action_identity"])
+    target_state = _recovery_control_file_state(
+        target_path, receipt["target_action_sha256"],
+        receipt["target_action_identity"])
+    if original_state == "unexpected" or target_state == "unexpected" \
+            or action_state == target_at_action == "unexpected":
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery action namespace contains unexpected bytes")
+    if action_state == "expected" and original_state == "absent" \
+            and target_state == "expected":
+        _atomic_recovery_control_move(
+            action_path, original_path,
+            expected_identity=receipt["source_action_identity"],
+            source_role="legacy_action", destination_role="original_action")
+        action_state = "absent"
+        target_at_action = "absent"
+        original_state = "expected"
+    if action_state == "absent" and target_at_action == "absent" \
+            and original_state == "expected" and target_state == "expected":
+        _validate_recovery_target_action(
+            target_path, action_path, receipt,
+            owner_home=owner_home, install_root=install_root)
+        _atomic_recovery_control_move(
+            target_path, action_path,
+            expected_identity=receipt["target_action_identity"],
+            source_role="target_action", destination_role="terminal_action")
+        target_at_action = "expected"
+        target_state = "absent"
+    if not (target_at_action == "expected" and original_state == "expected"
+            and target_state == "absent"):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "recovery action transition is partial or ambiguous")
+    terminal_action = _validate_recovery_target_action(
+        action_path, action_path, receipt,
+        owner_home=owner_home, install_root=install_root)
+
+    pointer_path = _active_pointer_path(action_path.parent)
+    if receipt["source_pointer_sha256"] is not None:
+        pointer_backup_state = _recovery_control_file_state(
+            pointer_backup, receipt["source_pointer_sha256"],
+            receipt["source_pointer_identity"])
+        pointer_state = _recovery_control_file_state(
+            pointer_path, receipt["source_pointer_sha256"],
+            receipt["source_pointer_identity"])
+        if pointer_backup_state == "unexpected" \
+                or pointer_state == "unexpected" and pointer_backup_state == "absent":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery pointer namespace contains unexpected bytes")
+        if pointer_backup_state == "absent" and pointer_state == "expected":
+            _atomic_recovery_control_move(
+                pointer_path, pointer_backup,
+                expected_identity=receipt["source_pointer_identity"],
+                source_role="active_pointer", destination_role="retired_pointer")
+            pointer_backup_state = "expected"
+        if pointer_backup_state != "expected":
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery pointer transition is partial or ambiguous")
+    _reconcile_successor_pointer_publication(
+        transition, action_path.parent, receipt, terminal_action,
+        owner_home=owner_home, install_root=install_root)
+    return receipt
+
+
+def _stage_recovered_action_transition(
+        path, candidate, security, expected_controls):
+    """Publish a recoverable target, then retire old controls with no-replace moves."""
+    path = Path(path)
+    expected_controls = _recovery_control_token(expected_controls)
+    _require_recovery_controls(path, expected_controls)
+    recovery_root = path.parent.parent / RECOVERY_DIRECTORY / candidate["action_id"]
+    try:
+        owner_root = loom_reliability._absolute(
+            candidate["owner_home"], "recovery owner root", must_exist=True)
+        _prepare_recovery_root(owner_root, recovery_root)
+        transition = recovery_root / RECOVERY_CONTROL_TRANSITION
+        if os.path.lexists(transition):
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery control transition already exists")
+        stage = loom_reliability.reserve_private_stage_leaf(
+            recovery_root, [f".control-transition-{uuid.uuid4().hex}"])
+        candidate, _stored, target_bytes = _action_storage_document(
+            candidate, security)
+        target_path = stage / RECOVERY_CONTROL_TARGET_ACTION
+        _write_private_file_exclusive(target_path, target_bytes)
+        receipt = _recovery_control_receipt(
+            expected_controls, candidate, target_path)
+        _write_private_file_exclusive(
+            stage / RECOVERY_CONTROL_RECEIPT,
+            loom_session._canonical_json(receipt) + b"\n")
+        stage_identity = loom_reliability.observe_root_identity(stage)
+        _require_recovery_controls(path, expected_controls)
+        _atomic_recovery_control_move(
+            stage, transition, expected_identity=stage_identity,
+            source_role="control_stage", destination_role="control_transition")
+    except OrchestratorError:
+        raise
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery control transition could not be staged: {exc}") \
+            from exc
+    return _reconcile_recovered_action_transition(
+        transition, path, owner_home=candidate["owner_home"],
+        install_root=candidate["install_root"],
+        expected_project_id=candidate["project_id"])
+
+
+def _publish_recovery_bound_active_pointer(
+        directory, action_path, action, recovery_receipt):
+    """Bind a fresh pointer to one exact retired action and publish no-replace."""
+    directory = Path(directory)
+    action_path = Path(action_path)
+    if action_path.parent != directory or not isinstance(recovery_receipt, dict):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer publication is not action-scoped")
+    source_action_id = recovery_receipt.get("action_id")
+    if re.fullmatch(r"[0-9a-f-]{36}", str(source_action_id or "")) is None \
+            or source_action_id == action.get("action_id") \
+            or recovery_receipt.get("project_id") != action.get("project_id"):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer publication lacks exact recovery authority")
+    binding = _validate_successor_pointer_binding(
+        (action.get("host_result") or {}).get(SUCCESSOR_POINTER_BINDING_KEY),
+        action=action)
+    if binding is None \
+            or binding["source_action_id"] != source_action_id \
+            or binding["source_recovery_receipt_hash"] != recovery_receipt.get(
+                "receipt_hash") \
+            or binding["project_id"] != recovery_receipt.get("project_id") \
+            or binding["successor_action_id"] != action.get("action_id"):
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor action lacks its exact recovery binding")
+    transition = (
+        directory.parent / RECOVERY_DIRECTORY / source_action_id /
+        RECOVERY_CONTROL_TRANSITION)
+    control_receipt = _reconcile_recovered_action_transition(
+        transition, directory / f"{source_action_id}.json",
+        owner_home=action["owner_home"], install_root=action["install_root"],
+        expected_project_id=action["project_id"])
+    source_path, source_action, _source_security = _read_action(
+        directory / f"{source_action_id}.json",
+        owner_home=action["owner_home"], install_root=action["install_root"])
+    del source_path
+    validated_recovery = _validate_recovery_receipt(
+        recovery_receipt, action=source_action)
+    if validated_recovery != recovery_receipt \
+            or source_action.get("recovery_receipt") != recovery_receipt \
+            or source_action["status"] not in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer recovery receipt is not authentic")
+    _path, stored_action, _security = _read_action(
+        action_path, owner_home=action["owner_home"],
+        install_root=action["install_root"])
+    if stored_action != action or action["status"] in TERMINAL_ACTION_STATUSES:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor pointer action changed before publication")
+    pointer_value = _active_pointer_value(
+        action_id=action["action_id"], project_id=action["project_id"])
+    pointer_bytes = loom_session._canonical_json(pointer_value) + b"\n"
+    pointer_observed = _exact_private_file_bytes(
+        _active_pointer_path(directory), max_bytes=4 * 1024,
+        label="active successor pointer")
+    if pointer_observed is not None:
+        if pointer_observed[0] != pointer_bytes:
+            raise OrchestratorError(
+                "RECOVERY_RACE", "unexpected active pointer bytes were preserved")
+        reconciled = _reconcile_successor_pointer_publication(
+            transition, directory, control_receipt, source_action,
+            owner_home=action["owner_home"],
+            install_root=action["install_root"])
+        if reconciled is None:
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "active successor pointer lacks its publication receipt")
+        return reconciled
+    publication_receipt = _successor_pointer_receipt(
+        recovery_receipt, action, pointer_bytes)
+    receipt_bytes = loom_session._canonical_json(publication_receipt) + b"\n"
+    _ensure_exact_private_file(
+        transition / RECOVERY_CONTROL_SUCCESSOR_RECEIPT,
+        receipt_bytes, max_bytes=4 * 1024,
+        label="successor pointer receipt")
+    _ensure_exact_private_file(
+        transition / RECOVERY_CONTROL_SUCCESSOR_POINTER,
+        pointer_bytes, max_bytes=4 * 1024,
+        label="successor pointer stage")
+    return _reconcile_successor_pointer_publication(
+        transition, directory, control_receipt, source_action,
+        owner_home=action["owner_home"], install_root=action["install_root"])
+
+
+def _resume_recovery_bound_active_pointer(
+        directory, action_path, action, *, owner_home, install_root):
+    """Finish publication for one exact authenticated pointerless successor."""
+    binding = _validate_successor_pointer_binding(
+        (action.get("host_result") or {}).get(SUCCESSOR_POINTER_BINDING_KEY),
+        action=action)
+    if binding is None:
+        return False
+    source_path = Path(directory) / f"{binding['source_action_id']}.json"
+    try:
+        _path, source_action, _security = _read_action(
+            source_path, owner_home=owner_home, install_root=install_root)
+        recovery_receipt = _validate_recovery_receipt(
+            source_action.get("recovery_receipt"), action=source_action)
+    except OrchestratorError as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor binding source is not authentic") from exc
+    if recovery_receipt is None \
+            or source_action["status"] not in TERMINAL_ACTION_STATUSES \
+            or source_action["action_id"] != binding["source_action_id"] \
+            or source_action["project_id"] != binding["project_id"] \
+            or recovery_receipt.get("receipt_hash") != binding[
+                "source_recovery_receipt_hash"]:
+        raise OrchestratorError(
+            "RECOVERY_RACE", "successor binding differs from terminal recovery")
+    _publish_recovery_bound_active_pointer(
+        directory, action_path, action, recovery_receipt)
+    return True
+
+
+def _reconcile_legacy_control_transitions(
+        directory, *, owner_home, install_root, expected_project_id):
+    """Finish bounded transitions and return unconsumed successor recoveries."""
+    base = Path(directory).parent / RECOVERY_DIRECTORY
+    if not os.path.lexists(base):
+        return []
+    try:
+        if base.is_symlink() or not base.is_dir():
+            raise ValueError("recovery root is not a directory")
+        entries = list(os.scandir(base))
+    except (OSError, ValueError) as exc:
+        raise OrchestratorError(
+            "RECOVERY_RACE", f"recovery control root is unsafe: {exc}") from exc
+    if len(entries) > MAX_ORCHESTRATION_ACTIONS:
+        raise OrchestratorError(
+            "RECOVERY_CAPACITY", "recovery control scan exceeds its hard bound")
+    receipts = []
+    for entry in sorted(entries, key=lambda item: item.name):
+        if re.fullmatch(r"[0-9a-f-]{36}", entry.name) is None:
+            continue
+        transition = Path(entry.path) / RECOVERY_CONTROL_TRANSITION
+        if not os.path.lexists(transition):
+            continue
+        if entry.is_symlink() or not entry.is_dir(follow_symlinks=False) \
+                or transition.is_symlink() or not transition.is_dir():
+            raise OrchestratorError(
+                "RECOVERY_RACE", "recovery control transition path is unsafe")
+        action_path = Path(directory) / f"{entry.name}.json"
+        _reconcile_recovered_action_transition(
+            transition, action_path, owner_home=owner_home,
+            install_root=install_root,
+            expected_project_id=expected_project_id)
+        if os.path.lexists(
+                transition / RECOVERY_CONTROL_SUCCESSOR_RECEIPT):
+            continue
+        _path, terminal_action, _security = _read_action(
+            action_path, owner_home=owner_home, install_root=install_root)
+        recovery_receipt = _validate_recovery_receipt(
+            terminal_action.get("recovery_receipt"), action=terminal_action)
+        if recovery_receipt is not None \
+                and recovery_receipt["reason"] in {
+                    "interrupted-initialization", "expired", "superseded"}:
+            receipts.append(recovery_receipt)
+    return receipts
+
+
+def _preflight_plan_action_recovery(path, action, *, requested_reason=None):
+    """Prove the complete recovery surface without mutating session or artifacts."""
+    transaction_path = _plan_author_transaction_path(action)
+    if _path_present(transaction_path):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "planning recovery found an unfinished plan-author transaction; all "
+            "state was preserved")
+    target = Path(action["explicit_target"] or action["cwd"])
+    pack = target / "plans"
+    project_stage = _project_stage_path(action)
+    legacy_stage = _stage_path(path)
+    legacy_tombstone = target / f".loom-recovery-{action['action_id']}"
+    expected = action["pack_seed"].get("manifest")
+    recovery_root = Path(path).parent.parent / RECOVERY_DIRECTORY / action["action_id"]
+    try:
+        owner_root = loom_reliability._absolute(
+            action["owner_home"], "recovery owner root", must_exist=True)
+        recovery_root = loom_reliability._absolute(
+            recovery_root, "recovery destination")
+        target_root = loom_reliability._absolute(
+            target, "recovery project", must_exist=True)
+        project_state_root = loom_reliability._absolute(
+            recovery_root.parent.parent, "recovery project state", must_exist=True)
+    except loom_reliability.ReliabilityError as exc:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED", f"recovery location is unsafe: {exc}") from exc
+    if not recovery_root.is_relative_to(owner_root) \
+            or recovery_root == target_root or recovery_root.is_relative_to(target_root) \
+            or not recovery_root.is_relative_to(project_state_root) \
+            or recovery_root.relative_to(project_state_root).parts != (
+                RECOVERY_DIRECTORY, action["action_id"]):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED", "recovery destination is not owner-scoped")
+    quarantine = recovery_root / "plans"
+    revision_record = (action.get("host_result") or {}).get("plan_revision")
+    immutable_revision_stage = (
+        isinstance(revision_record, dict)
+        and revision_record.get("schema_version") == 2)
+    owner_candidate_stage = _uses_owner_candidate_stage(action)
+    if immutable_revision_stage and not _v3_revision_source_is_current(
+            action, target):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "the active revision source changed; the stage and active generation "
+            "were preserved")
+    candidates = [
+        ("plans", pack, False)
+        if not immutable_revision_stage and not owner_candidate_stage
+        and _path_present(pack) else None,
+        ("install-stage", project_stage, True)
+        if _path_present(project_stage) else None,
+        ("owner-stage", legacy_stage, True)
+        if _path_present(legacy_stage) else None,
+        ("legacy-tombstone", legacy_tombstone, True)
+        if _path_present(legacy_tombstone) else None,
+    ]
+    candidates = [item for item in candidates if item is not None]
+    quarantine_present = _path_present(quarantine)
+    quarantine_proof = (
+        _manifest_if_proven(quarantine, expected) if quarantine_present else None)
+    if quarantine_present and quarantine_proof is None:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "the existing recovery quarantine cannot be proven exact; it was preserved")
+    if quarantine_present and candidates \
+            and not (len(candidates) == 1
+                     and candidates[0][0] == "legacy-tombstone"):
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "both a recovery source and its quarantine exist; every artifact was preserved")
+    if len(candidates) > 1:
+        raise OrchestratorError(
+            "RECOVERY_DECISION_REQUIRED",
+            "multiple recovery sources exist; every source was preserved for inspection")
+    source_proof = None
+    if candidates:
+        source_path, source, allow_subset = candidates[0]
+        source_proof = _manifest_if_proven(
+            source, expected, allow_subset=allow_subset)
+        if source_proof is None and requested_reason != "cancelled":
+            raise OrchestratorError(
+                "RECOVERY_DECISION_REQUIRED",
+                f"{source_path} cannot be proven from the exact v2 seed; it was preserved")
+
+    def artifact_state(item_path, proof=None):
+        if not _path_present(item_path):
+            return {"present": False}
+        if proof is None:
+            try:
+                identity = loom_reliability.observe_root_identity(item_path)
+            except loom_reliability.ReliabilityError as exc:
+                raise OrchestratorError(
+                    "RECOVERY_DECISION_REQUIRED",
+                    f"recovery artifact identity is unsafe: {exc}") from exc
+            return {"present": True, "identity": identity, "manifest": None}
+        return {
+            "present": True,
+            "identity": proof["identity"],
+            "manifest": proof["manifest"],
+        }
+
+    controls = _observe_recovery_controls(
+        path, failure_code="RECOVERY_DECISION_REQUIRED")
+    source_states = {}
+    for label, item_path in {
+            "plans": pack,
+            "install-stage": project_stage,
+            "owner-stage": legacy_stage,
+            "legacy-tombstone": legacy_tombstone,
+            "quarantine": quarantine,
+            }.items():
+        proof = None
+        if quarantine_present and label == "quarantine":
+            proof = quarantine_proof
+        elif candidates and label == candidates[0][0]:
+            proof = source_proof
+        source_states[label] = artifact_state(item_path, proof)
+    return {
+        **controls,
+        "transaction_present": False,
+        "requested_reason": requested_reason,
+        "artifacts": source_states,
+    }
+
+
+def _recover_plan_action(path, action, security, *, now, requested_reason=None,
+                         preflight=None):
+    if preflight is not None:
+        current_preflight = _preflight_plan_action_recovery(
+            path, action, requested_reason=requested_reason)
+        if current_preflight != preflight:
+            raise OrchestratorError(
+                "RECOVERY_RACE",
+                "planning recovery inputs changed after preflight; every artifact "
+                "was preserved")
+        control_token = _recovery_control_token(preflight)
+    else:
+        control_token = _observe_recovery_controls(path)
     target = Path(action["explicit_target"] or action["cwd"])
     pack = target / "plans"
     project_stage = _project_stage_path(action)
@@ -2014,6 +3162,7 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
     immutable_revision_stage = (
         isinstance(revision_record, dict)
         and revision_record.get("schema_version") == 2)
+    owner_candidate_stage = _uses_owner_candidate_stage(action)
     if immutable_revision_stage and not _v3_revision_source_is_current(
             action, target):
         raise OrchestratorError(
@@ -2022,7 +3171,8 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
             "were preserved")
     present = [
         ("plans", pack)
-        if not immutable_revision_stage and _path_present(pack) else None,
+        if not immutable_revision_stage and not owner_candidate_stage
+        and _path_present(pack) else None,
         ("install-stage", project_stage) if _path_present(project_stage) else None,
         ("owner-stage", legacy_stage) if _path_present(legacy_stage) else None,
         ("legacy-tombstone", legacy_tombstone)
@@ -2049,6 +3199,7 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
                 "the legacy recovery tombstone cannot be proven from the sealed seed")
         _prepare_recovery_root(owner_root, recovery_root)
         auxiliary = recovery_root / "legacy-tombstone"
+        _require_recovery_controls(path, control_token)
         auxiliary_state = _atomic_quarantine_tree(
                 present[0][1], auxiliary,
                 expected_source_identity=tombstone_proof["identity"])
@@ -2093,6 +3244,7 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
                     f"{source_path} cannot be proven from the exact v2 seed; it was preserved")
         else:
             _prepare_recovery_root(owner_root, recovery_root)
+            _require_recovery_controls(path, control_token)
             moved = _atomic_quarantine_tree(
                 source, quarantine,
                 expected_source_identity=source_proof["identity"])
@@ -2162,13 +3314,14 @@ def _recover_plan_action(path, action, security, *, now, requested_reason=None):
         "cancelled": "cancelled",
     }[reason]
     candidate["action_hash"] = _action_hash(candidate)
-    _validate_action(candidate, path)
-    _write_action(path, candidate, security)
-    _clear_active_pointer(Path(path).parent, candidate["action_id"])
+    _validate_action(candidate, path, action_security=security)
+    _stage_recovered_action_transition(
+        path, candidate, security, control_token)
     return receipt
 
 
-def _legacy_active_actions(directory, *, owner_home, install_root):
+def _legacy_active_actions(directory, *, owner_home, install_root,
+                           allow_pre_ux104_reprepare=False):
     candidates = []
     entries = []
     inspected = 0
@@ -2191,14 +3344,37 @@ def _legacy_active_actions(directory, *, owner_home, install_root):
                 "RECOVERY_CAPACITY", "legacy active-action scan exceeds its hard bound")
     for path in sorted(entries, key=lambda item: item.name):
         _path, action, security = _read_action(
-            path, owner_home=owner_home, install_root=install_root)
+            path, owner_home=owner_home, install_root=install_root,
+            allow_pre_ux104_reprepare=allow_pre_ux104_reprepare)
         if action["status"] in {"initializing", "pending"}:
             candidates.append((_path, action, security))
     return candidates
 
 
+def _recovery_bound_successor_action(
+        directory, *, owner_home, install_root):
+    """Discover one exact recovery-bound successor before pointer routing."""
+    candidates = _legacy_active_actions(
+        directory, owner_home=owner_home, install_root=install_root,
+        allow_pre_ux104_reprepare=True)
+    bound = [
+        candidate for candidate in candidates
+        if isinstance(candidate[1].get("host_result"), dict)
+        and candidate[1]["host_result"].get(
+            SUCCESSOR_POINTER_BINDING_KEY) is not None
+    ]
+    if bound and len(candidates) != 1:
+        raise OrchestratorError(
+            "RECOVERY_RACE",
+            "a recovery-bound successor is not the sole nonterminal action")
+    return bound[0] if bound else None
+
+
+_COMPLETED_PLAN_REPLAY_STALE = object()
+
+
 def _completed_plan_replay(directory, prepared, target, *, request, cwd,
-                           owner_home, install_root):
+                           owner_home, install_root, lifecycle_state=None):
     """Return one completed plan only when its exact post-plan world still exists."""
     target = Path(target)
     plans = target / "plans"
@@ -2243,6 +3419,7 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
                 "RECOVERY_CAPACITY",
                 "completed-action replay scan exceeds its action bound")
     matches = []
+    stale_match = False
     for path in sorted(entries, key=lambda item: item.name):
         _path, action, _security = _read_action(
             path, owner_home=owner_home, install_root=install_root)
@@ -2257,13 +3434,18 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
                 or action.get("cwd") != str(cwd) \
                 or action.get("explicit_target") != str(target) \
                 or action.get("project_id") != prepared.project_id \
-                or action.get("survey_hash") != current_survey_hash \
                 or sealed.get("request_hash") != prepared.request_hash \
                 or sealed.get("intent") != prepared.intent \
                 or sealed.get("domains") != list(prepared.domains) \
                 or not isinstance(plan_author, dict) \
-                or plan_author.get("state") != "active" \
+                or plan_author.get("state") != "active":
+            continue
+        if action.get("survey_hash") != current_survey_hash \
                 or plan_author.get("manifest") != current_manifest:
+            stale_match = stale_match or (
+                lifecycle_state is not None
+                and lifecycle_state.generation_phase == "reviewable"
+                and lifecycle_state.generation_id == action.get("generation_id"))
             continue
         matches.append((
             str(plan_author.get("completed_at", "")),
@@ -2272,7 +3454,7 @@ def _completed_plan_replay(directory, prepared, target, *, request, cwd,
             result,
         ))
     if not matches:
-        return None
+        return _COMPLETED_PLAN_REPLAY_STALE if stale_match else None
     _completed_at, _action_id, action, result = max(
         matches, key=lambda item: (item[0], item[1]))
     presentation = result.get("plan_presentation")
@@ -2511,9 +3693,17 @@ def _action_matches_current_frontier(action, prepared, target, *, request, cwd):
 
 def _reconcile_active_action(*, owner_home, install_root, instance_id,
                              project_id, now, incoming_intent, request, cwd, target,
-                             memory, transport_invocation_id=None):
+                             memory, transport_invocation_id=None,
+                             candidate_planning=False):
     directory = _orchestration_directory(owner_home, instance_id, project_id)
     directory.mkdir(parents=True, exist_ok=True)
+    recovery_bound = _recovery_bound_successor_action(
+        directory, owner_home=owner_home, install_root=install_root)
+    if recovery_bound is not None:
+        recovery_path, recovery_action, _recovery_security = recovery_bound
+        _resume_recovery_bound_active_pointer(
+            directory, recovery_path, recovery_action,
+            owner_home=owner_home, install_root=install_root)
     pointer = _read_active_pointer(directory)
     if pointer is not None:
         if pointer["project_id"] != project_id:
@@ -2526,24 +3716,44 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                 "the active pointer names a missing action; its project effects cannot be "
                 "proven absent, so the pointer and project were preserved")
         _path, action, security = _read_action(
-            path, owner_home=owner_home, install_root=install_root)
+            path, owner_home=owner_home, install_root=install_root,
+            allow_pre_ux104_reprepare=True)
         if action["status"] in TERMINAL_ACTION_STATUSES:
             _clear_active_pointer(directory, action["action_id"])
-            return action.get("recovery_receipt"), None
+            return action.get("recovery_receipt"), None, False
         candidates = [(_path, action, security)]
     else:
         candidates = _legacy_active_actions(
-            directory, owner_home=owner_home, install_root=install_root)
+            directory, owner_home=owner_home, install_root=install_root,
+            allow_pre_ux104_reprepare=True)
         if not candidates:
-            return None, None
+            return None, None, False
         if len(candidates) != 1:
             raise OrchestratorError(
                 "RECOVERY_DECISION_REQUIRED", "multiple nonterminal actions require inspection")
     path, action, security = candidates[0]
+    if _is_pre_ux104_reprepare_action(action):
+        if incoming_intent is None \
+                or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
+            return None, None, False
+        if incoming_intent != "plan":
+            raise OrchestratorError(
+                "ACTION_REPREPARE_REQUIRED",
+                "the open pre-UX-104 planning action cannot resume under current "
+                "semantics; submit a fresh planning request or cancel it",
+                status="action-required")
+        preflight = _preflight_plan_action_recovery(
+            path, action, requested_reason="superseded")
+        controller, opened = _reopen(action)
+        controller.interrupt(opened, code="planning-reprepared", now=now)
+        receipt = _recover_plan_action(
+            path, action, security, now=now, requested_reason="superseded",
+            preflight=preflight)
+        return receipt, None, False
     _reconcile_plan_authoring(action)
     if incoming_intent is None \
             or incoming_intent in NONINTERFERING_ACTIVE_ACTION_INTENTS:
-        return None, None
+        return None, None, False
     if transport_invocation_id is not None \
             and action["invocation_id"] == transport_invocation_id \
             and action["status"] == "pending" \
@@ -2559,7 +3769,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
             raise OrchestratorError(exc.code, exc.message) from exc
         if _action_matches_current_frontier(
                 action, prepared, target, request=request, cwd=cwd):
-            return None, action
+            return None, action, False
         raise OrchestratorError(
             "TARGET_DRIFT",
             "a repeated transport operation no longer matches its sealed target state")
@@ -2581,7 +3791,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
                 action, prepared, target, request=request, cwd=cwd):
             # Host retries commonly carry a new transport request ID. Request,
             # project, and exact world identity are the idempotency authority.
-            return None, action
+            return None, action, False
     if incoming_intent == "repair" \
             and action["intent"] == "execute" \
             and action["status"] == "pending" \
@@ -2589,14 +3799,40 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         # Prove the active v3 generation has one bounded repair scope before
         # retiring the stale execution attempt.  The lifecycle ledger remains
         # authoritative and is changed only by the subsequent repair command.
-        _observe_v3_repair_scope(
+        repair_scope = _observe_v3_repair_scope(
             action, path, memory, require_action_world=False)
+        repair_context_sha256 = _hash({
+            "schema_version": 1,
+            "relation": "repair-active",
+            "request_sha256": hashlib.sha256(
+                request.encode("utf-8")).hexdigest(),
+            "source_state_sha256": repair_scope["state"].state_sha256,
+            "affected_scope_sha256": repair_scope["affected_scope_sha256"],
+        })
+        action, evidence, _frozen = _seal_trusted_executor_quiescence(
+            path, action, security, owner_home=owner_home,
+            install_root=install_root,
+            operation_class="repair-supersede",
+            reason_code="repair-supersede",
+            operation_context_sha256=repair_context_sha256)
+        if evidence is None:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "repair supersession is frozen safely while Loom waits for "
+                "the exact host operation to close; the current plan remains "
+                "authoritative and new mutation is denied",
+                status="action-required")
         controller, opened = _reopen(action)
         controller.interrupt(opened, code="repair-superseded", now=now)
         action["status"] = "cancelled"
         _write_action(path, action, security)
         _clear_active_pointer(directory, action["action_id"])
-        return None, None
+        return None, None, False
+    if incoming_intent == "plan" and candidate_planning \
+            and action["intent"] != "plan" and action["status"] == "pending" \
+            and loom_runtime._parse_time(now) <= loom_runtime._parse_time(
+                action["expires_at"]):
+        return None, None, True
     if action["intent"] != "plan" or not action["pack_seed"]["created_pack"]:
         raise OrchestratorError(
             "ACTION_IN_PROGRESS", "a non-planning action remains active for this project")
@@ -2606,7 +3842,7 @@ def _reconcile_active_action(*, owner_home, install_root, instance_id,
         raise OrchestratorError(
             "ACTION_IN_PROGRESS",
             "the current planning action must complete or be cancelled before this request")
-    return _recover_plan_action(path, action, security, now=now), None
+    return _recover_plan_action(path, action, security, now=now), None, False
 
 
 def _cancel_active_request(*, directory, request, owner_home, install_root, now):
@@ -2642,6 +3878,8 @@ def _cancel_active_request(*, directory, request, owner_home, install_root, now)
             "The named action is not the pending action for this project; nothing was cancelled.")
     result = _cancel_under_lock(
         path, now=now, owner_home=owner_home, install_root=install_root)
+    if result.get("status") == "action-required":
+        return result
     return {
         **result,
         "success": True,
@@ -2658,9 +3896,18 @@ def _transition_project_generation_terminal(
     if relation not in {"cancel-generation", "supersede-generation"}:
         raise OrchestratorError(
             "REQUEST_CONTROL_INVALID", "generation terminal relation is invalid")
+    if relation == "supersede-generation" and (
+            not isinstance(successor_generation_id, str)
+            or loom_lifecycle_kernel.SAFE_ID.fullmatch(
+                successor_generation_id) is None) \
+            or relation == "cancel-generation" \
+            and successor_generation_id is not None:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            "generation terminal successor identity is invalid")
     witness_store = _lifecycle_witness_store(memory, directory, project_id)
     try:
-        resolved, semantics, _ledger, _witness, state = \
+        resolved, semantics, ledger, _witness, state = \
             loom_lifecycle_transition.observe(
                 target, witness_store=witness_store)
     except loom_lifecycle_transition.LifecycleTransitionError as exc:
@@ -2671,24 +3918,160 @@ def _transition_project_generation_terminal(
         raise OrchestratorError(
             "PROJECT_CHANGED", "the active generation belongs to another project")
 
+    private_projection = None
+    if state.generation_phase == "active":
+        try:
+            executor_id = loom_lifecycle_transition._active_executor_action_id(
+                state, ledger)
+        except loom_lifecycle_transition.LifecycleTransitionError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "the active generation has no exact executor identity",
+                status="action-required") from exc
+        executor_path = Path(directory) / f"{executor_id}.json"
+        path, executor, security = _read_action(
+            executor_path, owner_home=owner_home,
+            install_root=install_root)
+        supersession_context_sha256 = (
+            _hash({
+                "schema_version": 1,
+                "relation": relation,
+                "command_id": command_id,
+                "source_state_sha256": state.state_sha256,
+                "successor_generation_id": successor_generation_id,
+            }) if relation == "supersede-generation" else None)
+        executor_preterminal = executor["status"] == "pending"
+        if executor_preterminal:
+            executor, evidence, frozen = _seal_trusted_executor_quiescence(
+                path, executor, security, owner_home=owner_home,
+                install_root=install_root,
+                operation_class=(
+                    "generation-cancel" if relation == "cancel-generation"
+                    else "generation-supersede"),
+                reason_code=(
+                    "generation-cancel" if relation == "cancel-generation"
+                    else "generation-supersede"),
+                operation_context_sha256=supersession_context_sha256)
+        elif executor["status"] == "cancelled" \
+                and relation == "cancel-generation":
+            evidence = (
+                executor.get("host_result", {}).get("executor_quiescence")
+                if isinstance(executor.get("host_result"), dict) else None)
+            try:
+                loom_executor_guard.validate_evidence(
+                    Path(directory), executor, evidence,
+                    project_world_sha256=state.expected_world_sha256,
+                    security=security)
+                frozen = loom_executor_guard.read(
+                    Path(directory), executor, security=security)
+            except (loom_executor_guard.GuardError,
+                    loom_executor_guard.GuardMissing) as exc:
+                raise OrchestratorError(
+                    "EXECUTOR_GUARD_INVALID",
+                    "the cancelled executor has no exact trusted quiescence evidence") \
+                    from exc
+            if evidence.get("terminal_state") != "cancelled" \
+                    or evidence.get("freeze_operation_class") != "action-cancel":
+                raise OrchestratorError(
+                    "EXECUTOR_GUARD_INVALID",
+                    "the cancelled executor quiescence evidence has the wrong terminal identity")
+        else:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "the active lifecycle executor is outside a resumable terminal state",
+                status="action-required")
+        if evidence is None:
+            return {
+                "status": "action-required",
+                "code": "EXECUTOR_QUIESCENCE_REQUIRED",
+                "success": False,
+                "project_id": project_id,
+                "generation_id": state.generation_id,
+                "action_id": executor["action_id"],
+                "freeze_sha256": frozen["freeze"]["freeze_sha256"],
+                "user_message": (
+                    "The generation transition is frozen safely while Loom "
+                    "waits for the exact host operation to close. The current "
+                    "plan remains authoritative and new mutation is denied."),
+            }
+        terminal_action = dict(executor)
+        terminal_action["status"] = (
+            "superseded" if relation == "supersede-generation"
+            else "cancelled")
+        private_projection = {
+            "schema_version": 2,
+            "operation": "executor-terminal",
+            "relation": relation,
+            "action_id": executor["action_id"],
+            "preterminal_action_sha256": executor["action_hash"],
+            "terminal_action_sha256": _action_hash(terminal_action),
+            "source_state_sha256": state.state_sha256,
+            "executor_quiescence": evidence,
+        }
+        # The lifecycle transition writes its target ledger before invoking
+        # project_projection.  Validate the owner-private projection while the
+        # orchestration lock still protects the exact source, then revalidate
+        # it in the callback to detect any intervening private-state change.
+        _validate_executor_terminal_projection(
+            private_projection, source_state=state, source_ledger=ledger,
+            directory=directory, owner_home=owner_home,
+            install_root=install_root, relation=relation,
+            require_preterminal=executor_preterminal)
+
     def project_terminal(_source_state, _decision, target_ledger):
         current = loom_plan_store.resolve(target)
         target_state = loom_lifecycle_kernel.fold(
             current.index, semantics, target_ledger, witness_store.read())
-        _write_v3_pack_projection(current.generation_root, target_state)
+        executor_projection = None
+        if state.generation_phase == "active":
+            executor_projection = _validate_executor_terminal_projection(
+                private_projection, source_state=_source_state,
+                source_ledger=ledger, directory=directory,
+                owner_home=owner_home, install_root=install_root,
+                relation=relation,
+                require_preterminal=executor_preterminal)
         pointer = _read_active_pointer(directory)
-        if pointer is None:
+        pointer_projection = None
+        pending_successor = False
+        if pointer is not None:
+            action_path = Path(directory) / f"{pointer['action_id']}.json"
+            pointer_projection = _read_action(
+                action_path, owner_home=owner_home,
+                install_root=install_root)
+            _path, pointer_action, _security = pointer_projection
+            pending_successor = pointer_action["project_id"] == project_id \
+                and pointer_action.get("generation_id") != state.generation_id \
+                and pointer_action.get("status") not in TERMINAL_ACTION_STATUSES \
+                and _extract_planning_mode(
+                    pointer_action.get("request_control")) in {
+                        "candidate-successor", "current-world-replan"}
+            if not pending_successor \
+                    and (pointer_action["project_id"] != project_id
+                         or pointer_action.get("generation_id") !=
+                         state.generation_id):
+                raise OrchestratorError(
+                    "ACTION_POINTER_CONFLICT",
+                    "the active action does not belong to the generation being retired")
+
+        # All private evidence and pointer identities are proven before the
+        # first projection write.  Recovery may finish a proven partial write,
+        # but invalid evidence can never project a terminal plan.
+        _write_v3_pack_projection(current.generation_root, target_state)
+        if executor_projection is not None:
+            executor_path, executor_action, executor_security = \
+                executor_projection
+            executor_action["status"] = (
+                "superseded" if relation == "supersede-generation"
+                else "cancelled")
+            _write_action(
+                executor_path, executor_action, executor_security)
+        if pointer_projection is None or pending_successor:
             return
-        action_path = Path(directory) / f"{pointer['action_id']}.json"
-        path, action, security = _read_action(
-            action_path, owner_home=owner_home, install_root=install_root)
-        if action["project_id"] != project_id \
-                or action.get("generation_id") != state.generation_id:
-            raise OrchestratorError(
-                "ACTION_POINTER_CONFLICT",
-                "the active action does not belong to the generation being retired")
+        path, action, security = pointer_projection
         if action["status"] not in TERMINAL_ACTION_STATUSES:
-            action["status"] = "cancelled"
+            action["status"] = (
+                "superseded" if relation == "supersede-generation"
+                else "cancelled")
             _write_action(path, action, security)
         _clear_active_pointer(directory, action["action_id"])
 
@@ -2714,6 +4097,7 @@ def _transition_project_generation_terminal(
             target, command, witness_store=witness_store,
             envelope_root=Path(directory) / "lifecycle-transitions",
             project_projection=project_terminal,
+            private_projection=private_projection,
             lock_path=_orchestration_lock(directory), _lock_held=True)
     except (
             loom_lifecycle_transition.LifecycleTransitionError,
@@ -3644,8 +5028,10 @@ def _reviewed_world_observation(
 
 def _staged_plan_world(action):
     root = Path(action["explicit_target"] or action["cwd"])
-    stage = _project_stage_path(action)
-    excluded = [stage]
+    stage = _prepared_stage_path(action)
+    excluded = []
+    if stage.is_relative_to(root):
+        excluded.append(stage)
     plans = root / "plans"
     if _path_present(plans):
         excluded.append(plans)
@@ -3891,7 +5277,8 @@ def _ensure_recovered_action_projection(
             "LIFECYCLE_PROJECTION_INVALID",
             "recovered action does not belong to the transition namespace")
     security = (
-        (memory.vault.crypto, candidate["instance_id"])
+        loom_executor_guard.GuardSecurity(
+            memory.vault, memory.vault.crypto, candidate["instance_id"])
         if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     if _path_present(path):
         _path, existing, _existing_security = _read_action(
@@ -3933,6 +5320,15 @@ def _ensure_recovered_action_projection(
             raise OrchestratorError(
                 "LIFECYCLE_PROJECTION_INVALID",
                 "recovered action could not be verified after write")
+    if candidate["intent"] in {"execute", "repair"} \
+            and candidate.get("generation_id") is not None:
+        try:
+            loom_executor_guard.initialize(
+                directory, candidate, security=security)
+        except loom_executor_guard.GuardError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_UNAVAILABLE",
+                "recovered executor guard could not be initialized safely") from exc
     pointer = _read_active_pointer(directory)
     expected_pointer = {
         "action_id": candidate["action_id"],
@@ -3957,12 +5353,78 @@ def _recover_pending_v3_lifecycle(
         return []
     witness_store = _lifecycle_witness_store(memory, directory, project_id)
 
-    def project_generation(prepared):
+    def project_generation(prepared, _receipt=None):
         resolved = loom_plan_store.resolve(target)
         state = loom_lifecycle_kernel.fold(
             prepared["index"], prepared["semantics"], prepared["ledger"],
             witness_store.read())
         _write_v3_pack_projection(resolved.generation_root, state)
+
+    def project_successor(prepared, receipt):
+        projection = prepared["candidate_projection"]
+        action_path = Path(directory) / f"{projection['action_id']}.json"
+        _path, candidate, _security = _read_action(
+            action_path, owner_home=owner_home, install_root=install_root)
+        if candidate["status"] == "completed":
+            if not _finalize_successor_projection(
+                    candidate, action_path, memory):
+                raise OrchestratorError(
+                    "LIFECYCLE_PROJECTION_INVALID",
+                    "completed successor projection lacks its exact transition")
+            return
+        if candidate["status"] != "pending":
+            raise OrchestratorError(
+                "LIFECYCLE_PROJECTION_INVALID",
+                "successor recovery found a non-recoverable candidate action")
+        _project_successor_action(
+            prepared=prepared, receipt=receipt, directory=directory,
+            owner_home=owner_home, install_root=install_root, memory=memory,
+            target=target)
+
+    def verify_terminal_successor(prepared, receipt):
+        projection = prepared["candidate_projection"]
+        action_path = Path(directory) / f"{projection['action_id']}.json"
+        _path, candidate, _security = _read_action(
+            action_path, owner_home=owner_home, install_root=install_root)
+        if candidate["action_id"] != projection["action_id"] \
+                or candidate["project_id"] != projection["project_id"] \
+                or candidate.get("generation_id") != projection["generation_id"] \
+                or candidate["status"] != "completed":
+            raise OrchestratorError(
+                "LIFECYCLE_PROJECTION_INVALID",
+                "terminal successor projection has no exact completed candidate")
+        _verify_completed_successor_projection(
+            candidate, action_path, prepared, receipt,
+            cleanup_owner_stage=False, recover_exact_pointer=False)
+
+    def recovered_projection(kind, envelope, result):
+        if kind != "successor-activation" or result["status"] == "abandoned":
+            return
+        prepared = envelope["prepared"]
+        projection = prepared["candidate_projection"]
+        action_path = Path(directory) / f"{projection['action_id']}.json"
+        _path, candidate, _security = _read_action(
+            action_path, owner_home=owner_home, install_root=install_root)
+        if candidate["action_id"] != projection["action_id"] \
+                or candidate["project_id"] != projection["project_id"] \
+                or candidate.get("generation_id") != projection["generation_id"]:
+            raise OrchestratorError(
+                "LIFECYCLE_PROJECTION_INVALID",
+                "successor recovery action identity does not match its envelope")
+        if envelope["projection_status"] == "completed":
+            verify_terminal_successor(
+                envelope["prepared"], envelope["receipt"])
+            return
+        if candidate["status"] == "completed":
+            _finalize_successor_projection(candidate, action_path, memory)
+            return
+        if candidate["status"] != "pending":
+            raise OrchestratorError(
+                "LIFECYCLE_PROJECTION_INVALID",
+                "successor recovery cannot complete a terminal candidate action")
+        _complete_under_lock(
+            action_path, now=projection["completion_instant"],
+            owner_home=owner_home, install_root=install_root)
 
     def recover_projection(envelope, source_state, decision, target_ledger, receipt):
         command = loom_lifecycle_kernel.lifecycle_command(envelope["command"])
@@ -4134,12 +5596,29 @@ def _recover_pending_v3_lifecycle(
                 action, directory=directory, memory=memory,
                 work_order=action["work_order"], receipt=receipt)
             return
-        if private is not None:
-            raise OrchestratorError(
-                "LIFECYCLE_PROJECTION_INVALID",
-                "non-action lifecycle transition carries private action state")
-        _write_v3_pack_projection(resolved.generation_root, target_state)
         if relation in {"cancel-generation", "supersede-generation"}:
+            executor_projection = None
+            if source_state.generation_phase == "active":
+                executor_projection = _validate_executor_terminal_projection(
+                    private, source_state=source_state,
+                    source_ledger=envelope["source_ledger"],
+                    directory=directory, owner_home=owner_home,
+                    install_root=install_root, relation=relation,
+                    require_preterminal=False)
+            elif private is not None:
+                raise OrchestratorError(
+                    "LIFECYCLE_PROJECTION_INVALID",
+                    "idle generation terminal transition carries executor state")
+            _write_v3_pack_projection(resolved.generation_root, target_state)
+            if executor_projection is not None:
+                executor_path, executor, executor_security = executor_projection
+                expected_terminal = (
+                    "superseded" if relation == "supersede-generation"
+                    else "cancelled")
+                if executor["status"] == "pending":
+                    executor["status"] = expected_terminal
+                    _write_action(
+                        executor_path, executor, executor_security)
             pointer = _read_active_pointer(directory)
             if pointer is None:
                 return
@@ -4157,6 +5636,12 @@ def _recover_pending_v3_lifecycle(
                     else "cancelled")
                 _write_action(path, action, security)
             _clear_active_pointer(directory, action["action_id"])
+            return
+        if private is not None:
+            raise OrchestratorError(
+                "LIFECYCLE_PROJECTION_INVALID",
+                "non-action lifecycle transition carries private action state")
+        _write_v3_pack_projection(resolved.generation_root, target_state)
 
     try:
         return loom_lifecycle_transition.recover_pending(
@@ -4164,8 +5649,11 @@ def _recover_pending_v3_lifecycle(
             envelope_root=envelope_root,
             lock_path=_orchestration_lock(directory),
             activation_projection=project_generation,
+            successor_projection=project_successor,
+            successor_terminal_verifier=verify_terminal_successor,
             legacy_projection=project_generation,
             recovery_projection=recover_projection,
+            recovered_projection=recovered_projection,
             _lock_held=True)
     except (
             OSError, UnicodeError, json.JSONDecodeError,
@@ -4556,6 +6044,95 @@ def _seal_v3_execution_completion(action, action_path, memory):
             f"v3 completion could not be sealed safely: {exc}") from exc
 
 
+def _preflight_v3_execution_completion(action, action_path, memory):
+    """Return a safe block reason before terminal session mutation, or None."""
+    root = Path(action["explicit_target"] or action["cwd"])
+    try:
+        resolved = loom_plan_store.resolve(root)
+        if resolved.index is None or resolved.index.generation_id != \
+                action.get("generation_id"):
+            raise OrchestratorError(
+                "COMPLETION_NOT_READY",
+                "the exact action generation is no longer active",
+                status="action-required")
+        semantics_value = json.loads(
+            (resolved.generation_root / "plan-semantics.json").read_text(
+                encoding="utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+        reviewed_world = loom_lifecycle_kernel.validate_reviewed_world_observation(
+            json.loads(
+                (resolved.generation_root / "reviewed-world.json").read_text(
+                    encoding="utf-8"),
+                object_pairs_hook=loom_lifecycle._strict_object))
+        witness_store = _lifecycle_witness_store(
+            memory, Path(action_path).parent, action["project_id"])
+        ledger_value = json.loads(
+            (resolved.generation_root / "lifecycle.json").read_text(
+                encoding="utf-8"),
+            object_pairs_hook=loom_lifecycle._strict_object)
+        state = loom_lifecycle_kernel.fold(
+            resolved.index, semantics_value, ledger_value,
+            witness_store.read())
+        work_order_path = resolved.generation_root / action["work_order"]
+        frontmatter, _body = loom_lint.parse_frontmatter(
+            work_order_path.read_text(encoding="utf-8"))
+        work_order_id = (frontmatter or {}).get("id")
+        if state.in_progress_work_order_id != work_order_id:
+            receipt = action.get("lifecycle_transition")
+            if isinstance(receipt, dict) \
+                    and receipt.get("status") == "completed" \
+                    and receipt.get("command_id") == \
+                    "complete-" + action["action_id"]:
+                return None
+            raise OrchestratorError(
+                "COMPLETION_NOT_READY",
+                "the exact action does not own the in-progress work order",
+                status="action-required")
+        prior = _v3_completion_records(
+            resolved.generation_root, state, reviewed_world)
+        try:
+            loom_gate.evaluate_work_order_completion(
+                resolved.generation_root, root, work_order_path,
+                project_id=action["project_id"],
+                generation_id=action["generation_id"],
+                reviewed_world_observation_sha256=reviewed_world[
+                    "observation_sha256"],
+                baseline_files=reviewed_world["files"],
+                prior_completions=prior)
+        except (ValueError, loom_lifecycle.LifecycleError) as exc:
+            return loom_block_reason.safe_text(
+                " ".join(str(exc).split())[:320],
+                "completion evidence was rejected and unsafe detail was withheld")
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError,
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_lifecycle.LifecycleError, ValueError) as exc:
+        if isinstance(exc, OrchestratorError):
+            raise
+        raise OrchestratorError(
+            "COMPLETION_NOT_READY",
+            "completion readiness could not be observed safely",
+            status="action-required") from exc
+    return None
+
+
+def _completion_not_ready_result(normalized_usage, message):
+    """Return an accurate nonterminal block while preserving the active action."""
+    findings = [message]
+    return {
+        "status": "blocked",
+        "code": "execute-not-ready",
+        "success": False,
+        "metrics": {},
+        "evidence_ids": ["gate-" + _hash(findings)[:24]],
+        "reversible_action_ids": [],
+        "usage": normalized_usage,
+        "user_message": "Execute blocked: " + message,
+    }
+
+
 def _seal_v3_repair_completion(action, action_path, memory):
     root = Path(action["explicit_target"] or action["cwd"])
     try:
@@ -4792,6 +6369,893 @@ def _activate_reviewed_generation(action, action_path, memory, instant):
         "reviewed_world": reviewed_world,
         "generation_root": resolved.generation_root,
         "generation_archive_sha256": generation_archive_sha256,
+    }
+
+
+def _successor_reservation_ownership(
+        path, expected_identity, *, manifest=None, created_paths=None):
+    """Seal the exact copied entries whose unchanged bytes may be cleaned."""
+    path = Path(path)
+    root_identity = loom_reliability._validate_directory_object_continuity(
+        path, expected_identity)
+    observed = loom_reliability.exact_tree_manifest(
+        path, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+        max_total_bytes=16 * 1024 * 1024)
+    if manifest is not None:
+        loom_reliability.validate_exact_tree_manifest(
+            manifest, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        expected_entries = {
+            item["path"]: item for item in manifest["entries"]
+            if item["path"] != "."
+        }
+        if any(expected_entries.get(item["path"]) != item
+               for item in observed["entries"] if item["path"] != "."):
+            raise loom_reliability.ReliabilityError(
+                "successor reservation contains bytes not proven by its source")
+    observed_paths = {
+        item["path"] for item in observed["entries"] if item["path"] != "."}
+    if created_paths is not None and observed_paths != set(created_paths):
+        raise loom_reliability.ReliabilityError(
+            "successor reservation contains an entry not recorded at creation")
+    identities = []
+    for entry in observed["entries"]:
+        relative = entry["path"]
+        candidate = path if relative == "." else path.joinpath(
+            *PurePosixPath(relative).parts)
+        parent = path if relative == "." else candidate.parent
+        identities.append({
+            "path": relative,
+            "kind": entry["kind"],
+            "identity": list(loom_reliability._stat_identity(candidate.lstat())),
+            "parent_path": (
+                "." if parent == path else parent.relative_to(path).as_posix()),
+            "parent_identity": list(
+                loom_reliability._stat_identity(parent.lstat())),
+        })
+    body = {
+        "schema_version": 1,
+        "root_identity": root_identity,
+        "manifest": observed,
+        "created_paths": sorted(observed_paths),
+        "entries": identities,
+    }
+    return {**body, "ownership_sha256": _hash(body)}
+
+
+def _validate_successor_reservation_ownership(path, ownership):
+    """Return the exact root identity only for the unchanged sealed tree."""
+    fields = {
+        "schema_version", "root_identity", "manifest", "entries",
+        "created_paths", "ownership_sha256",
+    }
+    if not isinstance(ownership, dict) or set(ownership) != fields \
+            or ownership.get("schema_version") != 1 \
+            or ownership["ownership_sha256"] != _hash({
+                key: value for key, value in ownership.items()
+                if key != "ownership_sha256"
+            }):
+        raise loom_reliability.ReliabilityError(
+            "successor cleanup ownership is invalid")
+    observed = _successor_reservation_ownership(
+        path, ownership["root_identity"], manifest=ownership["manifest"],
+        created_paths=ownership["created_paths"])
+    if observed != ownership:
+        raise loom_reliability.ReliabilityError(
+            "successor reservation ownership changed before cleanup")
+    return observed["root_identity"]
+
+
+def _remove_owned_successor_reservation(path, ownership):
+    """Remove only one exact empty reservation; preserve every nonempty tree."""
+    path = Path(path)
+    try:
+        _validate_successor_reservation_ownership(path, ownership)
+        path.rmdir()
+        loom_reliability._sync_parent(path)
+    except (OSError, loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the successor reservation could not be proven safe to clean; its "
+            "bytes were preserved and the prior plan remains current") from exc
+
+
+def _successor_install_reservation(root, action):
+    """Return one bounded private reservation name for the current attempt."""
+    attempts = action.get("attempts")
+    max_attempts = action.get("max_attempts")
+    if type(attempts) is not int or max_attempts != 3 \
+            or not 0 <= attempts < max_attempts:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the successor reservation attempt is outside its bounded retry "
+            "inventory; the prior plan remains current")
+    return Path(root) / "plans" / (
+        ".successor-" + action["action_id"] + "-attempt-" + str(attempts))
+
+
+def _successor_reservation_quarantine(action_path, action):
+    """Return the bounded owner-private evidence path for one failed attempt."""
+    _successor_install_reservation(
+        Path(action["explicit_target"] or action["cwd"]), action)
+    return Path(action_path).parent.parent / RECOVERY_DIRECTORY / \
+        action["action_id"] / (
+            "successor-reservation-attempt-" + str(action["attempts"]))
+
+
+def _quarantine_failed_successor_reservation(
+        path, ownership, *, quarantine=None, owner_root=None,
+        cause=None):
+    """Atomically detach one exact reservation without deleting its contents."""
+    if quarantine is None or owner_root is None:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the non-authoritative successor reservation was preserved; the "
+            "prior plan remains current and owner recovery is required") from cause
+    try:
+        root_identity = _validate_successor_reservation_ownership(
+            path, ownership)
+        quarantine = Path(quarantine)
+        _prepare_recovery_root(owner_root, quarantine.parent)
+        moved = _atomic_quarantine_tree(
+            path, quarantine, expected_source_identity=root_identity)
+    except (
+            OrchestratorError,
+            loom_reliability.ReliabilityError) as quarantine_error:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the non-authoritative successor reservation was preserved; the "
+            "prior plan remains current and owner recovery is required") \
+            from quarantine_error
+    if not moved:
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_AMBIGUOUS",
+            "the non-authoritative successor reservation was preserved; the "
+            "prior plan remains current and owner recovery is required") from cause
+    raise OrchestratorError(
+        "SUCCESSOR_INSTALL_AMBIGUOUS",
+        "the failed successor reservation was preserved privately; the prior "
+        "plan remains current and the exact bounded retry may continue") from cause
+
+
+def _release_failed_successor_reservation(
+        path, ownership, *, quarantine=None, owner_root=None):
+    """Remove an empty reservation or atomically preserve the whole tree."""
+    try:
+        _remove_owned_successor_reservation(path, ownership)
+        return
+    except OrchestratorError as cleanup_error:
+        _quarantine_failed_successor_reservation(
+            path, ownership, quarantine=quarantine,
+            owner_root=owner_root, cause=cleanup_error)
+
+
+def _copy_successor_entry(source, destination):
+    """Copy one regular file into an absent reservation leaf."""
+    if os.path.lexists(destination):
+        raise loom_reliability.ReliabilityError(
+            "successor copy target already exists")
+    return shutil.copy2(source, destination, follow_symlinks=False)
+
+
+def _copy_successor_tree(source, reserved, manifest, record_created):
+    """Copy a closed exact tree while journaling each completed creation."""
+    entries = [item for item in manifest["entries"] if item["path"] != "."]
+    directories = sorted(
+        (item for item in entries if item["kind"] == "directory"),
+        key=lambda item: (len(PurePosixPath(item["path"]).parts), item["path"]))
+    files = sorted(
+        (item for item in entries if item["kind"] == "file"),
+        key=lambda item: item["path"])
+    for entry in directories:
+        destination = reserved.joinpath(*PurePosixPath(entry["path"]).parts)
+        if os.path.lexists(destination):
+            raise loom_reliability.ReliabilityError(
+                "successor directory target already exists")
+        destination.mkdir(mode=entry["mode"])
+        os.chmod(destination, entry["mode"])
+        record_created(entry["path"])
+    for entry in files:
+        relative = PurePosixPath(entry["path"])
+        _copy_successor_entry(
+            source.joinpath(*relative.parts),
+            reserved.joinpath(*relative.parts))
+        record_created(entry["path"])
+    root_entry = manifest["entries"][0]
+    os.chmod(reserved, root_entry["mode"])
+
+
+def _copy_successor_install_stage(
+        source, destination, *, expected_source_identity,
+        reservation_quarantine=None, owner_root=None):
+    """Copy one sealed owner candidate to a no-replace same-volume reservation."""
+    source = Path(source)
+    destination = Path(destination)
+    reserved = None
+    reservation_identity = None
+    cleanup_ownership = None
+    before = None
+    created_paths = set()
+    try:
+        source_identity = loom_reliability.validate_root_identity(
+            source, expected_source_identity)
+        before = loom_reliability.exact_tree_manifest(
+            source, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        loom_reliability.validate_exact_tree_manifest(
+            before, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        reserved = loom_reliability.reserve_directory_leaf(
+            destination.parent, destination.name, mode=0o700)
+        if reserved != destination:
+            raise loom_reliability.ReliabilityError(
+                "successor reservation resolved unexpectedly")
+        reservation_identity = loom_reliability.observe_root_identity(reserved)
+
+        def record_created(relative):
+            nonlocal cleanup_ownership
+            created_paths.add(relative)
+            cleanup_ownership = _successor_reservation_ownership(
+                reserved, reservation_identity, manifest=before,
+                created_paths=created_paths)
+
+        _copy_successor_tree(source, reserved, before, record_created)
+        loom_reliability._validate_directory_object_continuity(
+            source, source_identity)
+        after = loom_reliability.exact_tree_manifest(
+            source, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        copied = loom_reliability.exact_tree_manifest(
+            reserved, max_entries=1024, max_file_bytes=2 * 1024 * 1024,
+            max_total_bytes=16 * 1024 * 1024)
+        if not loom_reliability.exact_tree_manifests_equal(
+                before, after, max_entries=1024,
+                max_file_bytes=2 * 1024 * 1024,
+                max_total_bytes=16 * 1024 * 1024) \
+                or not loom_reliability.exact_tree_manifests_equal(
+                    before, copied, max_entries=1024,
+                    max_file_bytes=2 * 1024 * 1024,
+                    max_total_bytes=16 * 1024 * 1024):
+            raise loom_reliability.ReliabilityError(
+                "successor copy differs from its sealed source")
+        cleanup_ownership = _successor_reservation_ownership(
+            reserved, reservation_identity, manifest=before,
+            created_paths=created_paths)
+        return {
+            "manifest": before,
+            "reservation_identity": cleanup_ownership["root_identity"],
+            "cleanup_ownership": cleanup_ownership,
+        }
+    except (OSError, shutil.Error, loom_reliability.ReliabilityError) as exc:
+        if reserved is not None and reservation_identity is not None \
+                and os.path.lexists(reserved):
+            try:
+                if cleanup_ownership is None:
+                    cleanup_ownership = _successor_reservation_ownership(
+                        reserved, reservation_identity, manifest=before,
+                        created_paths=created_paths)
+            except loom_reliability.ReliabilityError as cleanup_exc:
+                _quarantine_failed_successor_reservation(
+                    reserved, cleanup_ownership,
+                    quarantine=reservation_quarantine,
+                    owner_root=owner_root, cause=cleanup_exc)
+            _release_failed_successor_reservation(
+                reserved, cleanup_ownership,
+                quarantine=reservation_quarantine, owner_root=owner_root)
+        raise OrchestratorError(
+            "SUCCESSOR_INSTALL_PREPARATION_FAILED",
+            "the reviewed successor could not be reserved safely; the prior "
+            "plan remains current") from exc
+
+
+def _successor_quiescence_required():
+    raise OrchestratorError(
+        "SUCCESSOR_EXECUTOR_QUIESCENCE_REQUIRED",
+        "the reviewed successor remains pending. Complete the exact active Loom "
+        "work, or ask Loom: 'Cancel the current Loom plan generation.' Then "
+        "retry completion of this exact pending reviewed plan",
+        status="action-required")
+
+
+def _successor_executor_quiescence(
+        source_state, source_ledger, *, directory, owner_home, install_root):
+    if source_state.generation_phase == "reviewable":
+        return {
+            "case": "no-active-executor", "action_id": None,
+            "receipt_sha256": None,
+        }
+    if source_state.generation_phase == "terminal-cancelled":
+        return {
+            "case": "terminal-predecessor", "action_id": None,
+            "receipt_sha256": None,
+        }
+    if source_state.generation_phase != "active":
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "successor activation requires one exact live predecessor")
+    try:
+        action_id = loom_lifecycle_transition._active_executor_action_id(
+            source_state, source_ledger)
+    except loom_lifecycle_transition.LifecycleTransitionError:
+        _successor_quiescence_required()
+    try:
+        _path, executor, _security = _read_action(
+            Path(directory) / f"{action_id}.json",
+            owner_home=owner_home, install_root=install_root)
+    except OrchestratorError:
+        _successor_quiescence_required()
+    evidence = (
+        executor.get("host_result", {}).get("executor_quiescence")
+        if isinstance(executor.get("host_result"), dict) else None)
+    pointer = _read_active_pointer(directory)
+    pointer_expectation = "absent" if pointer is None else "exact-action"
+    if pointer is not None and pointer["action_id"] != action_id:
+        _successor_quiescence_required()
+    raw_fields = {
+        "case", "action_id", "project_id", "generation_id",
+        "action_operation_id", "supervisor_operation_id",
+        "project_world_sha256", "terminal_state", "receipt_sha256",
+        "supervisor_receipt", "binding_sha256",
+    }
+    if not isinstance(evidence, dict) or set(evidence) != raw_fields \
+            or evidence.get("action_id") != executor["action_id"] \
+            or evidence.get("project_id") != executor["project_id"] \
+            or evidence.get("generation_id") != executor.get("generation_id") \
+            or evidence.get("action_operation_id") != executor["operation_id"] \
+            or evidence.get("binding_sha256") != loom_lifecycle_kernel.digest({
+                key: value for key, value in evidence.items()
+                if key != "binding_sha256"
+            }):
+        _successor_quiescence_required()
+    bound = {
+        **{key: value for key, value in evidence.items()
+           if key != "binding_sha256"},
+        "action_sha256": executor["action_hash"],
+        "lifecycle_state_sha256": source_state.state_sha256,
+        "pointer_expectation": pointer_expectation,
+    }
+    bound["binding_sha256"] = loom_lifecycle_kernel.digest(bound)
+    return bound
+
+
+def _rebaseline_cancelled_successor_control(pack, root):
+    """Rebind only legacy gate metadata after an explicit generation cancel."""
+    pack = Path(pack)
+    root = Path(root)
+    lifecycle_path = pack / loom_gate.LIFECYCLE_FILE
+    try:
+        data = json.loads(lifecycle_path.read_text(encoding="utf-8"))
+        if [item.get("event") for item in data.get("events", [])] != [
+                "planning-started"]:
+            raise ValueError("pending successor gate is not rebaselinable")
+        state, current_files = loom_gate._stable_snapshot(root, pack)
+        prior_files = data.get("baseline_files")
+        if not isinstance(prior_files, dict):
+            raise ValueError("pending successor baseline is invalid")
+        changed = {
+            path for path in set(prior_files) | set(current_files)
+            if prior_files.get(path) != current_files.get(path)
+        }
+        if any(path != "plans" and not path.startswith("plans/")
+               for path in changed):
+            raise ValueError(
+                "product bytes changed while the successor was pending")
+        previous = json.loads(json.dumps(data, allow_nan=False))
+        event = loom_gate.make_event(
+            "planning-started", state,
+            baseline_snapshot_sha256=loom_gate._mapping_hash(current_files))
+        event["at"] = previous["events"][0]["at"]
+        event["event_hash"] = loom_gate._event_hash(event)
+        data["baseline_files"] = current_files
+        data["events"] = [event]
+        manifest_path, manifest_text = loom_gate._render_manifest(
+            pack, state, data["mode"])
+        loom_gate._write_lifecycle_and_manifest(
+            pack, data, manifest_path, manifest_text, previous)
+    except (OSError, UnicodeError, json.JSONDecodeError,
+            ValueError, loom_survey.SurveyError) as exc:
+        raise OrchestratorError(
+            "TARGET_DRIFT",
+            "the pending successor could not be rebound after the exact owner "
+            "cancellation") from exc
+
+
+def _successor_action_base_sha256(action):
+    body = json.loads(json.dumps(action, allow_nan=False))
+    body.pop("action_hash", None)
+    body.pop("lifecycle_transition", None)
+    body.pop("attempts", None)
+    body["status"] = "pending"
+    body["result"] = None
+    host = body.get("host_result")
+    if isinstance(host, dict):
+        host.pop("plan_author", None)
+        review = host.get("plan_review")
+        if isinstance(review, dict) and review.get("state") == "completed":
+            review["state"] = "authored"
+    seed = body.get("pack_seed")
+    if isinstance(seed, dict):
+        seed.pop("state", None)
+    return _hash(body)
+
+
+def _successor_completion_manifest_matches(prepared_manifest, final_manifest):
+    """Bind the authenticated final tree to its sealed pre-completion tree."""
+    if prepared_manifest == final_manifest:
+        return True
+    prepared_metadata = {
+        key: value for key, value in prepared_manifest.items()
+        if key not in {"entries", "root_sha256"}}
+    final_metadata = {
+        key: value for key, value in final_manifest.items()
+        if key not in {"entries", "root_sha256"}}
+    if prepared_metadata != final_metadata:
+        return False
+    prepared_entries = {
+        entry["path"]: entry for entry in prepared_manifest["entries"]}
+    final_entries = {
+        entry["path"]: entry for entry in final_manifest["entries"]}
+    if set(prepared_entries) != set(final_entries):
+        return False
+    changed = {
+        path for path in prepared_entries
+        if prepared_entries[path] != final_entries[path]}
+    return changed == {"proofline/completion-report.json"} \
+        and prepared_entries["proofline/completion-report.json"]["kind"] == "file" \
+        and final_entries["proofline/completion-report.json"]["kind"] == "file"
+
+
+def _verify_completed_successor_projection(
+        action, action_path, prepared, receipt, *, cleanup_owner_stage,
+        recover_exact_pointer):
+    """Verify one sealed completed target without consulting later authority."""
+    directory = Path(action_path).parent
+    _path, completed, _security = _read_action(
+        action_path, owner_home=action["owner_home"],
+        install_root=action["install_root"])
+    projection = prepared["candidate_projection"]
+    result = completed.get("result")
+    author = (
+        completed.get("host_result", {}).get("plan_author")
+        if isinstance(completed.get("host_result"), dict) else None)
+    if completed["action_id"] != projection["action_id"] \
+            or completed["project_id"] != projection["project_id"] \
+            or completed.get("generation_id") != projection["generation_id"] \
+            or completed["session_id"] != projection["session_id"] \
+            or completed["operation_id"] != projection["operation_id"] \
+            or completed["invocation_id"] != projection["invocation_id"] \
+            or _successor_action_base_sha256(completed) != projection[
+                "action_base_sha256"] \
+            or completed["status"] != "completed" \
+            or completed["pack_seed"]["state"] != "installed" \
+            or completed.get("lifecycle_transition") != receipt \
+            or not isinstance(result, dict) \
+            or result.get("session_id") != projection["session_id"] \
+            or result.get("operation_id") != projection["operation_id"] \
+            or result.get("invocation_id") != projection["invocation_id"] \
+            or result.get("project_id") != projection["project_id"] \
+            or result.get("intent") != "plan" \
+            or result.get("status") != "completed" \
+            or result.get("code") != "plan-complete" \
+            or not isinstance(author, dict) \
+            or author.get("action_id") != projection["action_id"] \
+            or author.get("completed_at") != projection["completion_instant"] \
+            or not _successor_completion_manifest_matches(
+                prepared["stage_manifest"], author.get("manifest")):
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "completed successor action/session evidence does not match")
+    pointer = _read_active_pointer(directory)
+    if pointer is not None:
+        exact_pointer = pointer["action_id"] == completed["action_id"] \
+            and pointer["project_id"] == completed["project_id"]
+        if exact_pointer and recover_exact_pointer:
+            _clear_active_pointer(directory, completed["action_id"])
+        elif exact_pointer or recover_exact_pointer \
+                or pointer["project_id"] != completed["project_id"]:
+            raise OrchestratorError(
+                "ACTION_POINTER_CONFLICT",
+                "completed successor conflicts with an active action pointer")
+    owner_stage = _stage_path(action_path)
+    if not os.path.lexists(owner_stage):
+        return
+    if not cleanup_owner_stage:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "completed successor owner stage unexpectedly reappeared")
+    loom_lifecycle_transition._remove_exact_generation(
+        owner_stage, projection["owner_stage_manifest"])
+
+
+def _finalize_successor_projection(action, action_path, memory):
+    transition_receipt = action.get("lifecycle_transition")
+    if not isinstance(transition_receipt, dict) \
+            or not str(transition_receipt.get("command_id", "")).startswith(
+                "review-successor-" + action["action_id"] + "-attempt-"):
+        return False
+    directory = Path(action_path).parent
+    envelope_root = directory / "lifecycle-transitions"
+
+    def verify(prepared, receipt):
+        _verify_completed_successor_projection(
+            action, action_path, prepared, receipt,
+            cleanup_owner_stage=True, recover_exact_pointer=True)
+
+    try:
+        loom_lifecycle_transition.complete_successor_projection(
+            envelope_root, transition_receipt["command_id"],
+            candidate_action_id=action["action_id"],
+            projection_verifier=verify)
+    except loom_lifecycle_transition.LifecycleTransitionError as exc:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "successor orchestration projection could not be finalized") from exc
+    return True
+
+
+def _successor_fault(_boundary):
+    """Test injection point for post-authority orchestration projection."""
+
+
+def _project_successor_action(
+        *, prepared, receipt, directory, owner_home, install_root, memory,
+        target, expected_action=None):
+    projection = prepared["candidate_projection"]
+    path = Path(directory) / f"{projection['action_id']}.json"
+    _path, current, security = _read_action(
+        path, owner_home=owner_home, install_root=install_root)
+    if expected_action is not None \
+            and current["action_hash"] != expected_action["action_hash"] \
+            and current.get("lifecycle_transition") != receipt:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "successor action changed before its authority projection")
+    if current["action_id"] != projection["action_id"] \
+            or current["project_id"] != projection["project_id"] \
+            or current.get("generation_id") != projection["generation_id"] \
+            or current["session_id"] != projection["session_id"] \
+            or current["operation_id"] != projection["operation_id"] \
+            or current["invocation_id"] != projection["invocation_id"] \
+            or hashlib.sha256(current["journal_path"].encode("utf-8")).hexdigest() \
+            != projection["journal_path_sha256"] \
+            or _successor_action_base_sha256(current) != projection[
+                "action_base_sha256"] \
+            or current["intent"] != "plan" \
+            or current["status"] != "pending" \
+            or current["result"] is not None \
+            or current["pack_seed"]["state"] not in {"prepared", "installed"} \
+            or current.get("lifecycle_transition") not in (None, receipt):
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "successor action/session projection does not match its sealed identity")
+    resolved = loom_plan_store.resolve(target)
+    state = loom_lifecycle_kernel.fold(
+        prepared["index"], prepared["semantics"], prepared["ledger"],
+        _lifecycle_witness_store(
+            memory, directory, projection["project_id"]).read())
+    _write_v3_pack_projection(resolved.generation_root, state)
+    _successor_fault("after-plan-projection")
+    manifest = loom_reliability.exact_tree_manifest(resolved.generation_root)
+    loom_reliability.validate_exact_tree_manifest(manifest)
+    if manifest["root_sha256"] != projection["stage_manifest_sha256"]:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "successor final plan projection differs from its sealed candidate")
+    plan_author = {
+        "schema_version": 1,
+        "action_id": current["action_id"],
+        "state": "active",
+        "manifest": manifest,
+        "archive_path": None,
+        "completed_at": projection["completion_instant"],
+        "undone_at": None,
+    }
+    existing_author = (
+        current.get("host_result", {}).get("plan_author")
+        if isinstance(current.get("host_result"), dict) else None)
+    if existing_author not in (None, plan_author):
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "successor action contains a different plan projection")
+    current["host_result"] = {
+        **(current.get("host_result") or {}),
+        "plan_author": plan_author,
+    }
+    current["pack_seed"] = {**current["pack_seed"], "state": "installed"}
+    current["lifecycle_transition"] = receipt
+    current = _write_action(path, current, security)
+    pointer = _read_active_pointer(directory)
+    allowed_pointer_ids = {current["action_id"]}
+    if prepared["executor_quiescence"]["case"] == "supervisor-terminal":
+        allowed_pointer_ids.add(prepared["executor_quiescence"]["action_id"])
+    if pointer is not None and pointer["action_id"] not in allowed_pointer_ids:
+        raise OrchestratorError(
+            "ACTION_POINTER_CONFLICT",
+            "successor projection encountered an unrelated active action")
+    if pointer is not None and pointer["action_id"] != current["action_id"]:
+        _clear_active_pointer(directory, pointer["action_id"])
+        pointer = None
+    if pointer is None:
+        _write_active_pointer(
+            directory, action_id=current["action_id"],
+            project_id=current["project_id"])
+    _successor_fault("after-action-projection")
+    return current, manifest
+
+
+def _resume_projected_successor(
+        action, action_path, memory, witness_store, root):
+    receipt = action.get("lifecycle_transition")
+    if not isinstance(receipt, dict) \
+            or not str(receipt.get("command_id", "")).startswith(
+                "review-successor-" + action["action_id"] + "-attempt-"):
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "projected successor does not carry its exact transition receipt")
+
+    def project(prepared, transition_receipt):
+        projected, manifest = _project_successor_action(
+            prepared=prepared, receipt=transition_receipt,
+            directory=Path(action_path).parent,
+            owner_home=action["owner_home"], install_root=action["install_root"],
+            memory=memory, target=root, expected_action=action)
+        action.clear()
+        action.update(projected)
+        return manifest
+
+    try:
+        result = loom_lifecycle_transition.recover_successor_activation(
+            root, receipt["command_id"], witness_store=witness_store,
+            envelope_root=Path(action_path).parent / "lifecycle-transitions",
+            lock_path=_orchestration_lock(Path(action_path).parent),
+            project_projection=project, _lock_held=True)
+        current = loom_plan_store.resolve(root)
+        manifest = loom_reliability.exact_tree_manifest(current.generation_root)
+        loom_reliability.validate_exact_tree_manifest(manifest)
+    except (
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError,
+            loom_reliability.ReliabilityError) as exc:
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "projected successor recovery failed closed") from exc
+    return {
+        "receipt": result["receipt"], "manifest": manifest,
+        "semantics": None, "reviewed_world": None,
+        "generation_root": current.generation_root,
+        "generation_archive_sha256": None,
+    }
+
+
+def _activate_reviewed_successor(action, action_path, memory, instant):
+    """Switch one exact reviewable/idle-active predecessor to a sealed candidate."""
+    root = Path(action["explicit_target"] or action["cwd"])
+    owner_stage = _action_pack_root(action)
+    if not _uses_owner_candidate_stage(action) \
+            or owner_stage != _stage_path(action_path):
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "successor activation requires the exact owner-held candidate stage")
+    review = (action.get("host_result") or {}).get("plan_review")
+    _validate_plan_review_record(review, action=action)
+    reviewed_world = _staged_plan_world(action)
+    if reviewed_world["state_sha256"] != action["survey_hash"]:
+        raise OrchestratorError(
+            "TARGET_DRIFT", "product bytes changed before successor activation")
+    witness_store = _lifecycle_witness_store(
+        memory, Path(action_path).parent, action["project_id"])
+    if action.get("lifecycle_transition") is not None:
+        return _resume_projected_successor(
+            action, action_path, memory, witness_store, root)
+    copied = None
+    install_stage = None
+    prepared = None
+    try:
+        resolved, source_semantics, source_ledger, source_witness, source_state = \
+            loom_lifecycle_transition._observe(root, witness_store)
+    except loom_lifecycle_transition.LifecycleTransitionError as exc:
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "the exact predecessor cannot be observed safely") from exc
+    if source_state.generation_phase not in {
+            "reviewable", "active", "terminal-cancelled"}:
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "successor activation requires one exact live predecessor")
+    quiescence = _successor_executor_quiescence(
+        source_state, source_ledger, directory=Path(action_path).parent,
+        owner_home=action["owner_home"], install_root=action["install_root"])
+    install_stage = _successor_install_reservation(root, action)
+    reservation_quarantine = _successor_reservation_quarantine(
+        action_path, action)
+    try:
+        semantics = loom_plan_presentation.compile_reviewed_semantics(
+            review["semantics"], project_id=action["project_id"],
+            generation_id=action["generation_id"],
+            revision=review["revision"],
+            reviewed_world_sha256=reviewed_world["state_sha256"],
+            reviewed_world_observation_sha256=reviewed_world[
+                "observation_sha256"],
+            plan_contract_sha256=action["plan_contract"]["contract_hash"],
+            domain_bindings_sha256=action["domain_contract"][
+                "route_digest"].removeprefix("sha256:"))
+        index = {
+            "schema_version": 1,
+            "project_id": action["project_id"],
+            "generation_id": action["generation_id"],
+            "storage_kind": "generation-dir",
+            "generation_path": f"plans/generations/{action['generation_id']}",
+        }
+        index["index_sha256"] = loom_lifecycle_kernel.digest(index)
+        legacy_name = (
+            ".loom-small-lifecycle.json"
+            if action["tier"] == "S" else loom_gate.LIFECYCLE_FILE)
+        legacy_path = owner_stage / legacy_name
+        legacy_sha256 = hashlib.sha256(legacy_path.read_bytes()).hexdigest()
+        owner_stage_identity = loom_reliability.observe_root_identity(
+            owner_stage)
+        copied = _copy_successor_install_stage(
+            owner_stage, install_stage,
+            expected_source_identity=owner_stage_identity,
+            reservation_quarantine=reservation_quarantine,
+            owner_root=action["owner_home"])
+        source_index = {
+            "schema_version": 1,
+            "project_id": resolved.index.project_id,
+            "generation_id": resolved.index.generation_id,
+            "storage_kind": resolved.index.storage_kind,
+            "generation_path": resolved.index.generation_path,
+            "index_sha256": resolved.index.index_sha256,
+        }
+        prepared = loom_lifecycle_transition.prepare_successor_authority(
+            install_stage, index_value=index, semantics_value=semantics,
+            reviewed_world_value=reviewed_world,
+            source_index=source_index, source_semantics=source_semantics,
+            source_ledger=source_ledger, source_witness=source_witness,
+            command_id=(
+                "review-successor-" + action["action_id"]
+                + "-attempt-" + str(action["attempts"])),
+            candidate_action_id=action["action_id"],
+            candidate_action_sha256=action["action_hash"],
+            project_world_sha256=reviewed_world["state_sha256"],
+            executor_quiescence=quiescence,
+            candidate_projection={
+                "schema_version": 1,
+                "action_id": action["action_id"],
+                "action_base_sha256": _successor_action_base_sha256(action),
+                "project_id": action["project_id"],
+                "generation_id": action["generation_id"],
+                "session_id": action["session_id"],
+                "operation_id": action["operation_id"],
+                "invocation_id": action["invocation_id"],
+                "journal_path_sha256": hashlib.sha256(
+                    action["journal_path"].encode("utf-8")).hexdigest(),
+                "completion_instant": _stamp(instant),
+                "owner_stage_manifest": copied["manifest"],
+            },
+            replace_lifecycle_sha256=legacy_sha256,
+            replace_lifecycle_name=legacy_name)
+        copied["cleanup_ownership"] = _successor_reservation_ownership(
+            install_stage, copied["reservation_identity"],
+            manifest=prepared["stage_manifest"])
+    except (
+            OSError, loom_plan_presentation.PresentationError,
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_reliability.ReliabilityError) as exc:
+        if copied is not None and os.path.lexists(install_stage):
+            _release_failed_successor_reservation(
+                install_stage, copied["cleanup_ownership"],
+                quarantine=reservation_quarantine,
+                owner_root=action["owner_home"])
+        if isinstance(exc, OrchestratorError):
+            raise
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "reviewed successor preparation failed closed; the prior plan "
+            "remains current") from exc
+
+    def precommit_validation(prepared_value):
+        current_world = _staged_plan_world(action)
+        _current_path, current_action, _security = _read_action(
+            action_path, owner_home=action["owner_home"],
+            install_root=action["install_root"])
+        try:
+            current_resolved, current_semantics, current_ledger, \
+                current_witness, current_state = \
+                loom_lifecycle_transition._observe(root, witness_store)
+        except loom_lifecycle_transition.LifecycleTransitionError as exc:
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "successor predecessor changed before commit") from exc
+        current_source_index = {
+            "schema_version": 1,
+            "project_id": current_resolved.index.project_id,
+            "generation_id": current_resolved.index.generation_id,
+            "storage_kind": current_resolved.index.storage_kind,
+            "generation_path": current_resolved.index.generation_path,
+            "index_sha256": current_resolved.index.index_sha256,
+        }
+        try:
+            current_quiescence = _successor_executor_quiescence(
+                current_state, current_ledger,
+                directory=Path(action_path).parent,
+                owner_home=action["owner_home"],
+                install_root=action["install_root"])
+        except OrchestratorError as exc:
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "successor executor changed before commit") from exc
+        current_pointer = _read_active_pointer(Path(action_path).parent)
+        if current_world["state_sha256"] != prepared_value[
+                "project_world_sha256"] \
+                or current_action["action_hash"] != prepared_value[
+                    "candidate_action_sha256"] \
+                or current_source_index != prepared_value["source_index"] \
+                or current_semantics != prepared_value["source_semantics"] \
+                or current_ledger != prepared_value["source_ledger"] \
+                or current_witness != prepared_value["source_witness"] \
+                or current_quiescence != prepared_value[
+                    "executor_quiescence"] \
+                or current_state.generation_phase == "reviewable" \
+                and current_pointer is not None \
+                and current_pointer["action_id"] != action["action_id"]:
+            raise loom_lifecycle_transition.LifecycleTransitionError(
+                "successor bound identity changed before commit")
+
+    def verify_projection(prepared_value, receipt):
+        projected, projected_manifest = _project_successor_action(
+            prepared=prepared_value, receipt=receipt,
+            directory=Path(action_path).parent,
+            owner_home=action["owner_home"], install_root=action["install_root"],
+            memory=memory, target=root, expected_action=action)
+        action.clear()
+        action.update(projected)
+        return projected_manifest
+
+    try:
+        envelope_root = Path(action_path).parent / "lifecycle-transitions"
+        result = loom_lifecycle_transition.activate_successor(
+            root, install_stage, prepared, witness_store=witness_store,
+            envelope_root=envelope_root,
+            lock_path=_orchestration_lock(Path(action_path).parent),
+            project_projection=verify_projection,
+            precommit_validation=precommit_validation, _lock_held=True)
+        _successor_fault("after-envelope-completion")
+        if result["status"] != "completed":
+            raise OrchestratorError(
+                "SUCCESSOR_ACTIVATION_RECOVERED_TO_SOURCE",
+                "the interrupted successor was recovered to the exact prior plan; "
+                "that plan remains current and the reviewed candidate remains "
+                "non-authoritative",
+                status="action-required")
+        current = loom_plan_store.resolve(root)
+        if current.index.index_sha256 != prepared["index"]["index_sha256"]:
+            raise OrchestratorError(
+                "GENERATION_ACTIVATION_INVALID",
+                "successor activation did not resolve to its sealed target")
+        manifest = loom_reliability.exact_tree_manifest(current.generation_root)
+        loom_reliability.validate_exact_tree_manifest(manifest)
+    except (
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError,
+            loom_reliability.ReliabilityError) as exc:
+        if copied is not None and install_stage is not None \
+                and os.path.lexists(install_stage) \
+                and loom_lifecycle_transition.successor_envelope_status(
+                    envelope_root, prepared["command_id"]) is None:
+            _release_failed_successor_reservation(
+                install_stage, copied["cleanup_ownership"],
+                quarantine=reservation_quarantine,
+                owner_root=action["owner_home"])
+        raise OrchestratorError(
+            "GENERATION_ACTIVATION_INVALID",
+            "reviewed successor activation failed closed; recover the sealed "
+            "transition before retrying") from exc
+    return {
+        "receipt": result["receipt"], "manifest": manifest,
+        "semantics": semantics, "reviewed_world": reviewed_world,
+        "generation_root": current.generation_root,
+        "generation_archive_sha256": None,
     }
 
 
@@ -5889,7 +8353,24 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
     intent = context.intent
     logs = []
     if intent == "plan":
-        if tier == "S":
+        recovered_successor = (
+            seal_plan_author is not None
+            and isinstance(host_result, dict)
+            and isinstance(host_result.get("plan_author"), dict)
+            and host_result["plan_author"].get("state") == "active")
+        recovered_reversible_action_ids = []
+        if recovered_successor:
+            recovered_reversible_action_ids = [
+                seal_plan_author(memory_adapter)]
+            seal_plan_author = None
+            try:
+                pack = loom_plan_store.resolve(root).generation_root
+            except loom_plan_store.PlanStoreError as exc:
+                raise OrchestratorError(
+                    "PLAN_STORE_INVALID",
+                    "recovered successor cannot resolve its exact active plan") from exc
+            findings = []
+        elif tier == "S":
             record, work_order = pack / ".loom-small-lifecycle.json", pack / "WO-001.md"
             findings = []
             try:
@@ -5934,7 +8415,7 @@ def _handler_result(context, root, owner_home, usage, work_order=None,
         if proofline_policy is not None:
             _refresh_proofline_completion(pack, root, proofline_policy)
         evidence = "pack-" + _pack_hash(pack)[:24]
-        reversible_action_ids = []
+        reversible_action_ids = recovered_reversible_action_ids
         presented_plan = pack / ("WO-001.md" if tier == "S" else "MANIFEST.md")
         if seal_plan_author is not None:
             reversible_action_ids = [seal_plan_author(memory_adapter)]
@@ -7199,6 +9680,10 @@ def _rebind_revision_prepared(prepared, prior_action):
     """Preserve the sealed plan's domains while observing the current world."""
     prior_domains = list(prior_action["domains"])
     prior_route = prior_action["prepared"]["route_contract"]
+    current_semantic = loom_runtime.validate_semantic_outcome_evidence(
+        prepared.route_contract["evidence"], prepared.domains, required=True)
+    prior_semantic = loom_runtime.validate_semantic_outcome_evidence(
+        prior_route["evidence"], prior_domains, required=False)
     values = prepared.to_dict()
     values.pop("prepared_hash")
     route = values["route_contract"]
@@ -7206,8 +9691,14 @@ def _rebind_revision_prepared(prepared, prior_action):
     route["requires_domain_discovery"] = bool(
         prior_route["requires_domain_discovery"]
         or not values["project_inspection"]["relevant_coverage_complete"])
+    ordinary = [
+        item for item in route["evidence"]
+        if item != current_semantic["token"]
+        and item != "bound-plan-revision"]
     route["evidence"] = list(dict.fromkeys([
-        *route["evidence"][:15], "bound-plan-revision",
+        *ordinary[:14],
+        *([prior_semantic["token"]] if prior_semantic is not None else []),
+        "bound-plan-revision",
     ]))
     values["route_contract"] = route
     return loom_runtime.PreparedInvocation.build(
@@ -7289,7 +9780,8 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
             "REQUEST_CONTROL_INVALID",
             "plan-store quarantine cannot share exact plan or revision authority")
     effective_transport_invocation_id = transport_invocation_id
-    prior_generation_transition = None
+    planning_state_override = None
+    preserve_active_pointer = False
     lifecycle_recovery = []
     try:
         with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
@@ -7297,6 +9789,9 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                 target=target, directory=directory, memory=memory,
                 project_id=project.project_id, owner_home=home,
                 install_root=install_root)
+            pending_legacy_recoveries = _reconcile_legacy_control_transitions(
+                directory, owner_home=home, install_root=install_root,
+                expected_project_id=project.project_id)
             if quarantine_requested:
                 command_identity = (
                     transport_invocation_id or str(uuid.uuid4()))
@@ -7329,15 +9824,22 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                 try:
                     (_resolved, _semantics, _ledger, _witness,
                      lifecycle_state) = loom_lifecycle_transition.observe(
-                        target, witness_store=witness_store)
+                         target, witness_store=witness_store)
                 except loom_lifecycle_transition.LifecycleTransitionError as exc:
-                    raise OrchestratorError(
-                        "INVALID_LIFECYCLE",
-                        f"indexed lifecycle authority cannot be observed safely: {exc}") \
-                        from exc
+                    if incoming_intent != "plan" or revision_context is not None:
+                        raise OrchestratorError(
+                            "INVALID_LIFECYCLE",
+                            "indexed lifecycle authority cannot be observed safely") from exc
+                    planning_state_override = {
+                        "generation_phase": "invalid",
+                        "state_error": "INVALID_LIFECYCLE",
+                    }
                 lifecycle_control = _sealed_request_control(
                     request,
-                    lifecycle_state=loom_lifecycle_kernel.project(lifecycle_state))
+                    lifecycle_state=(
+                        planning_state_override
+                        if planning_state_override is not None
+                        else loom_lifecycle_kernel.project(lifecycle_state)))
             if incoming_intent == "cancel":
                 if lifecycle_state is not None \
                         and lifecycle_control["relation"] == "cancel-generation":
@@ -7354,34 +9856,64 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                         directory=directory, request=request, owner_home=home,
                         install_root=install_root, now=instant)
             else:
-                if lifecycle_state is not None \
-                        and not lifecycle_state.generation_phase.startswith("terminal-") \
-                        and lifecycle_control["relation"] == "supersede-generation":
-                    effective_transport_invocation_id = (
-                        transport_invocation_id or str(uuid.uuid4()))
-                    successor_generation_id = _derived_generation_id(
-                        project.project_id, effective_transport_invocation_id)
-                    prior_generation_transition = \
-                        _transition_project_generation_terminal(
-                            directory=directory, target=target, memory=memory,
+                planning_mode = (
+                    _extract_planning_mode(lifecycle_control)
+                    if incoming_intent == "plan"
+                    and revision_context is None
+                    and lifecycle_control is not None
+                    else None)
+                candidate_planning = planning_mode in {
+                    "candidate-successor", "current-world-replan"}
+                if planning_mode == "inline-recovery":
+                    # Inline assistance creates no action and cannot consume or
+                    # replace the exact active-action pointer it is discussing.
+                    recovery = None
+                    reused_action = None
+                    preserve_active_pointer = True
+                else:
+                    recovery, reused_action, preserve_active_pointer = \
+                        _reconcile_active_action(
+                            owner_home=home, install_root=install_root,
+                            instance_id=instance_id,
                             project_id=project.project_id,
-                            relation="supersede-generation",
-                            command_id=(
-                                "supersede-generation:"
-                                + effective_transport_invocation_id),
-                            successor_generation_id=successor_generation_id,
-                            owner_home=home, install_root=install_root)
-                recovery, reused_action = _reconcile_active_action(
-                    owner_home=home, install_root=install_root, instance_id=instance_id,
-                    project_id=project.project_id, now=instant,
-                    incoming_intent=incoming_intent, request=request, cwd=cwd,
-                    target=target, memory=memory,
-                    transport_invocation_id=transport_invocation_id)
+                            now=instant, incoming_intent=incoming_intent,
+                            request=request, cwd=cwd, target=target, memory=memory,
+                            transport_invocation_id=transport_invocation_id,
+                            candidate_planning=candidate_planning)
+                    if incoming_intent == "plan" and pending_legacy_recoveries:
+                        reused_binding = None
+                        if reused_action is not None:
+                            reused_binding = _validate_successor_pointer_binding(
+                                (reused_action.get("host_result") or {}).get(
+                                    SUCCESSOR_POINTER_BINDING_KEY),
+                                action=reused_action)
+                        exact_reused_successor = (
+                            len(pending_legacy_recoveries) == 1
+                            and recovery is None
+                            and reused_action is not None
+                            and not preserve_active_pointer
+                            and reused_binding is not None
+                            and reused_binding["source_action_id"]
+                            == pending_legacy_recoveries[0]["action_id"]
+                            and reused_binding["source_recovery_receipt_hash"]
+                            == pending_legacy_recoveries[0]["receipt_hash"])
+                        if exact_reused_successor:
+                            pending_legacy_recoveries = []
+                        elif len(pending_legacy_recoveries) != 1 \
+                                or recovery is not None \
+                                or reused_action is not None \
+                                or preserve_active_pointer:
+                            raise OrchestratorError(
+                                "RECOVERY_RACE",
+                                "an unconsumed recovery cannot be bound to one successor")
+                        else:
+                            recovery = pending_legacy_recoveries[0]
                 if reused_action is not None:
                     result = _pending_action_result(reused_action)
                 else:
                     replay = None
-                    if incoming_intent == "plan" and revision_context is None:
+                    if incoming_intent == "plan" and revision_context is None \
+                            and planning_state_override is None:
                         try:
                             prepared = loom_runtime.prepare_invocation(
                                 request, instance_id=instance_id,
@@ -7393,8 +9925,10 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             raise OrchestratorError(exc.code, exc.message) from exc
                         replay = _completed_plan_replay(
                             directory, prepared, target, request=request, cwd=cwd,
-                            owner_home=home, install_root=install_root)
-                    if replay is not None:
+                            owner_home=home, install_root=install_root,
+                            lifecycle_state=lifecycle_state)
+                    replay_stale = replay is _COMPLETED_PLAN_REPLAY_STALE
+                    if replay is not None and not replay_stale:
                         result = replay
                     else:
                         result = _invoke_under_lock(
@@ -7406,17 +9940,16 @@ def invoke(*, request, cwd, home, install_root, explicit_target=None,
                             assurance=assurance,
                             expected_plan_decision=expected_plan_decision,
                             revision_context=revision_context,
-                            bound_intent=bound_intent)
+                            bound_intent=bound_intent,
+                            planning_state_override=planning_state_override,
+                            preserve_active_pointer=preserve_active_pointer,
+                            pointer_recovery_receipt=recovery,
+                            completed_plan_replay_stale=replay_stale)
     except loom_reliability.ReliabilityError as exc:
         raise OrchestratorError(
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
     if recovery is not None and isinstance(result, dict):
         result = {**result, "prior_recovery": recovery}
-    if prior_generation_transition is not None and isinstance(result, dict):
-        result = {
-            **result,
-            "prior_generation_transition": prior_generation_transition,
-        }
     if lifecycle_recovery and isinstance(result, dict):
         result = {
             **result,
@@ -7567,6 +10100,410 @@ def start(
             "PLAN_DECISION_STALE",
             "the exact displayed plan could not enter its existing execution authority")
     return result
+
+
+AUTHORIZED_CONTINUATION_FIELDS = {
+    "schema_version", "authority_effect", "project_id", "generation_id",
+    "active_action_id", "plan_semantics_sha256", "lifecycle_state_sha256",
+    "observed_world_sha256", "work_order_id", "outcome_sha256",
+    "allowed_touches", "acceptance_sha256", "negative_acceptance_sha256",
+    "evidence_requirements_sha256", "rejection_code", "safe_next_operation",
+    "continuation_sha256",
+}
+AUTHORIZED_CONTINUATION_REJECTION_CODES = {
+    "OUTSIDE_PROJECT_TARGET", "UNAUTHORIZED_PROJECT_TOUCH",
+    "WRITE_SCOPE_UNPROVEN", "PROCESS_MUTATION_UNPROVEN",
+    "TOOL_EFFECT_UNPROVEN", "EXECUTION_FROZEN",
+    "EXECUTOR_GUARD_UNPROVEN",
+}
+
+
+def validate_authorized_continuation(value):
+    """Validate one closed, non-authorizing execution-path projection."""
+    if not isinstance(value, dict) or set(value) != AUTHORIZED_CONTINUATION_FIELDS \
+            or value.get("schema_version") != 1 \
+            or value.get("authority_effect") != "none" \
+            or value.get("safe_next_operation") != "continue-current-execution":
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation fields are unknown or missing")
+    if not isinstance(value.get("project_id"), str) \
+            or re.fullmatch(r"p-[0-9a-f]{32}", value["project_id"]) is None \
+            or not isinstance(value.get("generation_id"), str) \
+            or loom_lifecycle_kernel.SAFE_ID.fullmatch(
+                value["generation_id"]) is None:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation subject identity is invalid")
+    try:
+        if str(uuid.UUID(str(value.get("active_action_id")))) != \
+                value["active_action_id"]:
+            raise ValueError
+    except (ValueError, TypeError, AttributeError) as exc:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation action identity is invalid") from exc
+    if not isinstance(value.get("work_order_id"), str) \
+            or loom_lifecycle_kernel.WORK_ORDER_ID.fullmatch(
+                value["work_order_id"]) is None:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation work-order identity is invalid")
+    for field in (
+            "plan_semantics_sha256", "lifecycle_state_sha256",
+            "observed_world_sha256", "outcome_sha256", "acceptance_sha256",
+            "negative_acceptance_sha256", "evidence_requirements_sha256",
+            "continuation_sha256"):
+        if not isinstance(value.get(field), str) \
+                or re.fullmatch(r"[0-9a-f]{64}", value[field]) is None:
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_INVALID",
+                "authorized continuation digest is invalid")
+    rejection_code = value.get("rejection_code")
+    if rejection_code not in AUTHORIZED_CONTINUATION_REJECTION_CODES:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation rejection identity is invalid")
+    touches = value.get("allowed_touches")
+    if not isinstance(touches, list) \
+            or not 1 <= len(touches) <= loom_lifecycle_kernel.MAX_TOUCH_PATTERNS \
+            or len(touches) != len(set(touches)):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation touch boundary is invalid")
+    for item in touches:
+        if not isinstance(item, str) or not item or len(item) > 300:
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_INVALID",
+                "authorized continuation touch boundary is invalid")
+        path = PurePosixPath(item)
+        if path.is_absolute() or item != path.as_posix() \
+                or any(part in {"", ".", ".."} for part in path.parts):
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_INVALID",
+                "authorized continuation touch boundary is invalid")
+    unsigned = {
+        key: item for key, item in value.items()
+        if key != "continuation_sha256"
+    }
+    if value["continuation_sha256"] != \
+            hashlib.sha256(_canonical_bytes(unsigned)).hexdigest():
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation digest does not match")
+    return value
+
+
+def _unresolved_lifecycle_envelope(directory):
+    """Validate every transition envelope and report any unresolved authority."""
+    root = Path(directory) / "lifecycle-transitions"
+    if not os.path.lexists(root):
+        return False
+    if root.is_symlink() or not root.is_dir():
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "lifecycle transition evidence is unsafe")
+    entries = list(root.iterdir())
+    if len(entries) > MAX_ORCHESTRATION_DIRECTORY_ENTRIES:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "lifecycle transition evidence exceeds its bound")
+    seen_command_ids = set()
+    for path in entries:
+        if path.is_symlink() or not path.is_file() or path.suffix != ".json" \
+                or path.stat().st_size > loom_lifecycle_transition.MAX_ENVELOPE_BYTES:
+            raise OrchestratorError(
+                "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                "lifecycle transition evidence is unsafe")
+        try:
+            envelope = loom_lifecycle_transition._load_json(
+                path, "lifecycle transition envelope",
+                loom_lifecycle_transition.MAX_ENVELOPE_BYTES)
+            if not isinstance(envelope, dict):
+                return True
+            command_id = envelope.get("command_id")
+            if not isinstance(command_id, str):
+                return True
+            kind = envelope.get("kind")
+            if kind == "generation-activation-v1":
+                expected_path = \
+                    loom_lifecycle_transition._activation_envelope_path(
+                        root, command_id)
+                validated = loom_lifecycle_transition._load_activation_envelope(
+                    path, command_id)
+            elif kind == "successor-activation-v1":
+                expected_path = \
+                    loom_lifecycle_transition._successor_envelope_path(
+                        root, command_id)
+                validated = loom_lifecycle_transition._load_successor_envelope(
+                    path, command_id)
+            elif kind == "legacy-root-adoption-v1":
+                expected_path = \
+                    loom_lifecycle_transition._legacy_adoption_envelope_path(
+                        root, command_id)
+                validated = loom_lifecycle_transition._load_legacy_adoption_envelope(
+                    path, command_id)
+            elif kind is None:
+                command = loom_lifecycle_kernel.lifecycle_command(
+                    envelope.get("command"))
+                command_id = command.command_id
+                expected_path = loom_lifecycle_transition._envelope_path(
+                    root, command_id)
+                validated = loom_lifecycle_transition._load_existing_envelope(
+                    path, command,
+                    private_projection=envelope.get("private_projection"))
+            else:
+                return True
+            if path.parent != root or expected_path.parent != root \
+                    or path != expected_path \
+                    or command_id in seen_command_ids:
+                return True
+            seen_command_ids.add(command_id)
+        except (
+                OSError, UnicodeError, json.JSONDecodeError,
+                loom_lifecycle.LifecycleError,
+                loom_lifecycle_kernel.LifecycleKernelError,
+                loom_lifecycle_transition.LifecycleTransitionError):
+            return True
+        if validated is None \
+                or validated.get("status") not in {"completed", "abandoned"}:
+            return True
+        if kind == "successor-activation-v1" \
+                and validated["status"] == "completed" \
+                and validated.get("projection_status") != "completed":
+            return True
+        if kind == "generation-activation-v1":
+            status = validated["status"]
+            expected = loom_lifecycle_transition._activation_receipt(
+                validated, status=status,
+                observation="target" if status == "completed" else "source",
+                projection_status=(
+                    "verified" if status == "completed"
+                    else "not-applicable"))
+            if validated.get("receipt") != expected:
+                return True
+        elif kind == "legacy-root-adoption-v1":
+            status = validated["status"]
+            expected = loom_lifecycle_transition._legacy_adoption_receipt(
+                validated, status=status,
+                observation="target" if status == "completed" else "source",
+                projection_status=(
+                    "verified" if status == "completed"
+                    else "not-applicable"))
+            if validated.get("receipt") != expected:
+                return True
+        elif kind is None:
+            receipt = validated.get("receipt")
+            expected_status = validated["status"]
+            expected_observation = (
+                "target" if expected_status == "completed" else "source")
+            expected_projection = (
+                "verified" if expected_status == "completed"
+                else "not-applicable")
+            bindings = {
+                "project_id": validated["source_ledger"]["project_id"],
+                "generation_id": validated["source_ledger"]["generation_id"],
+                "command_id": validated["command_id"],
+                "transition_id": validated["transition_id"],
+                "status": expected_status,
+                "source_authority_sha256": validated[
+                    "source_ledger"]["lifecycle_sha256"],
+                "target_authority_sha256": validated[
+                    "target_ledger"]["lifecycle_sha256"],
+                "source_witness_sha256": validated[
+                    "source_witness"]["witness_sha256"],
+                "target_witness_sha256": validated[
+                    "target_witness"]["witness_sha256"],
+                "observation": expected_observation,
+                "projection_status": expected_projection,
+                "findings": [],
+            }
+            if not isinstance(receipt, dict) or any(
+                    receipt.get(field) != item
+                    for field, item in bindings.items()):
+                return True
+    return False
+
+
+def _authorized_continuation(action, *, rejection_code, owner_home, install_root):
+    if not isinstance(action, dict) or action.get("status") != "pending" \
+            or action.get("intent") != "execute" \
+            or not isinstance(action.get("generation_id"), str):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action has no executable continuation")
+    home = _absolute(owner_home, "owner home", must_exist=True)
+    installed = _absolute(install_root, "installation root", must_exist=True)
+    root = _absolute(
+        action.get("explicit_target") or action.get("cwd"),
+        "active action target", must_exist=True)
+    if Path(action.get("owner_home", "")) != home \
+            or Path(action.get("install_root", "")) != installed:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action belongs to another runtime")
+    instance_id, memory = _memory_backend(home, installed, root)
+    if instance_id != action.get("instance_id"):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action owner identity changed")
+    try:
+        project = loom_runtime.resolve_project(
+            instance_id, explicit_target=root, cwd=root)
+    except loom_runtime.RuntimeBlocked as exc:
+        raise OrchestratorError(exc.code, exc.message) from exc
+    if project.project_id != action.get("project_id"):
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the active action project identity changed")
+    _bind_memory_project(memory, project)
+    directory = _orchestration_directory(home, instance_id, project.project_id)
+    action_path = directory / f"{action['action_id']}.json"
+    try:
+        with loom_reliability.exclusive_file_lock(_orchestration_lock(directory)):
+            pointer = _read_active_pointer(directory)
+            if pointer is None or pointer["action_id"] != action["action_id"] \
+                    or pointer["project_id"] != action["project_id"]:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "the exact execution action is no longer active")
+            _path, current_action, _security = _read_action(
+                action_path, owner_home=home, install_root=installed)
+            if current_action != action or current_action["status"] != "pending":
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "the exact execution action changed")
+            if _unresolved_lifecycle_envelope(directory):
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "a lifecycle transition requires recovery")
+            witness_store = _lifecycle_witness_store(
+                memory, directory, action["project_id"])
+            resolved, semantics_value, ledger, _witness, state = \
+                loom_lifecycle_transition.observe(
+                    root, witness_store=witness_store)
+            semantics = loom_lifecycle_kernel.validate_reviewed_plan_semantics(
+                semantics_value)
+            selected = state.in_progress_work_order_id
+            if resolved.index is None \
+                    or resolved.index.project_id != action["project_id"] \
+                    or resolved.index.generation_id != action["generation_id"] \
+                    or state.project_id != action["project_id"] \
+                    or state.generation_id != action["generation_id"] \
+                    or state.generation_phase != "active" \
+                    or state.transition_observation != "stable" \
+                    or state.authority_validity != "owned-valid" \
+                    or state.world_relation != "exact" \
+                    or state.semantic_relation != "exact-revision" \
+                    or state.action_relation != "pending" \
+                    or state.frontier != "selected" \
+                    or selected is None \
+                    or state.selected_work_order_id != selected \
+                    or state.blocked_work_order_id is not None \
+                    or state.blockers \
+                    or state.repair_action_id is not None:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "canonical lifecycle authority has no unique safe continuation")
+            final_event = ledger["events"][-1]
+            if final_event.get("event_type") not in {
+                    "work-order-started", "work-order-resumed"} \
+                    or (final_event.get("payload") or {}).get("action_id") != \
+                    action["action_id"] \
+                    or (final_event.get("payload") or {}).get("work_order_id") != selected:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "the active action is not the canonical work-order attempt")
+            work_orders = {dict(item)["id"]: dict(item)
+                           for item in semantics.work_orders}
+            work_order = work_orders.get(selected)
+            if work_order is None:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "reviewed work-order semantics are unavailable")
+            current_world = _reviewed_world_observation(
+                root, project_id=action["project_id"],
+                generation_id=action["generation_id"],
+                excluded_paths=(root / "plans",))
+            final_pointer = _read_active_pointer(directory)
+            _final_path, final_action, _final_security = _read_action(
+                action_path, owner_home=home, install_root=installed)
+            if final_pointer != pointer or final_action != current_action:
+                raise OrchestratorError(
+                    "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+                    "execution authority changed during continuation observation")
+    except (
+            OSError, UnicodeError, json.JSONDecodeError,
+            loom_plan_store.PlanStoreError,
+            loom_lifecycle_kernel.LifecycleKernelError,
+            loom_lifecycle_transition.LifecycleTransitionError,
+            loom_reliability.ReliabilityError) as exc:
+        if isinstance(exc, OrchestratorError):
+            raise
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_UNAVAILABLE",
+            "the exact execution continuation could not be observed safely") from exc
+    touches = list(work_order["touches"])
+    value = {
+        "schema_version": 1,
+        "authority_effect": "none",
+        "project_id": action["project_id"],
+        "generation_id": action["generation_id"],
+        "active_action_id": action["action_id"],
+        "plan_semantics_sha256": state.plan_semantics_sha256,
+        "lifecycle_state_sha256": state.state_sha256,
+        "observed_world_sha256": current_world["state_sha256"],
+        "work_order_id": selected,
+        "outcome_sha256": _hash({"outcome": work_order["outcome"]}),
+        "allowed_touches": touches,
+        "acceptance_sha256": _hash({
+            "acceptance": list(work_order["acceptance"])}),
+        "negative_acceptance_sha256": _hash({
+            "negative_acceptance": list(work_order["negative_acceptance"])}),
+        "evidence_requirements_sha256": _hash({
+            "tasks": list(work_order["tasks"]),
+            "acceptance": list(work_order["acceptance"]),
+            "negative_acceptance": list(work_order["negative_acceptance"]),
+        }),
+        "rejection_code": rejection_code,
+        "safe_next_operation": "continue-current-execution",
+    }
+    value["continuation_sha256"] = hashlib.sha256(
+        _canonical_bytes(value)).hexdigest()
+    return validate_authorized_continuation(value)
+
+
+def authorized_continuation(
+        action, *, rejection_code, owner_home, install_root):
+    """Return a fresh exact-path hint, or no hint when authority is ambiguous."""
+    try:
+        return _authorized_continuation(
+            action, rejection_code=rejection_code,
+            owner_home=owner_home, install_root=install_root)
+    except OrchestratorError:
+        return None
+
+
+def verify_authorized_continuation(
+        action, value, *, expected_rejection_code, owner_home, install_root):
+    """Reobserve and verify a projection without granting execution authority."""
+    if expected_rejection_code not in AUTHORIZED_CONTINUATION_REJECTION_CODES:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "expected continuation rejection identity is invalid")
+    validated = validate_authorized_continuation(value)
+    if validated["rejection_code"] != expected_rejection_code:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_INVALID",
+            "authorized continuation rejection identity does not match")
+    observed = _authorized_continuation(
+        action, rejection_code=expected_rejection_code,
+        owner_home=owner_home, install_root=install_root)
+    if observed != value:
+        raise OrchestratorError(
+            "AUTHORIZED_CONTINUATION_STALE",
+            "authorized continuation no longer matches exact lifecycle authority")
+    return value
 
 
 def revise(
@@ -7989,28 +10926,11 @@ def _pending_action_result(action, *, resolved_terminal_block=None,
     return result
 
 
-_ZERO_PROJECT_WRITE_PATTERNS = tuple(re.compile(pattern, re.I) for pattern in (
-    r"\bdo\s+not\s+"
-    r"(?:(?:implement|execute|apply)(?:\s+(?:it|this|the\s+(?:plan|changes?|work)))?"
-    r"\s*(?:,|\band\b|\bor\b)\s*)?"
-    r"(?:modify|change|write|create|touch)\s+(?:any\s+)?(?:the\s+)?"
-    r"(?:project(?:-local)?\s+)?files?\b",
-    r"\bdo\s+not\s+(?:modify|change|write|create|touch)\s+(?:the\s+)?project\b",
-    r"\bno\s+(?:project(?:-local)?\s+)?(?:file\s+)?writes?\b",
-    r"\bwithout\s+(?:modifying|changing|writing|creating|touching)\s+"
-    r"(?:any\s+)?files?\b",
-    r"\bleave\s+(?:the\s+)?project\s+(?:byte[- ]for[- ]byte\s+)?unchanged\b",
-))
-
-
-def _explicit_zero_project_write_requested(request):
-    """Return true only for an explicit owner prohibition on project-local writes."""
-    if not isinstance(request, str):
-        return False
-    return any(pattern.search(request) for pattern in _ZERO_PROJECT_WRITE_PATTERNS)
-
-
-def _planning_seed_summary(tier):
+def _planning_seed_summary(tier, planning_mode=None):
+    if planning_mode in {"candidate-successor", "current-world-replan"}:
+        return (
+            "Loom created a non-authoritative candidate plan stage; the current "
+            "generation remains authoritative until an explicit successor switch.")
     if tier == "S":
         return (
             "Loom created plans/.loom-small-lifecycle.json in the project; "
@@ -8045,12 +10965,221 @@ def _sealed_request_control(
             f"the lifecycle request control is invalid: {exc}") from exc
 
 
+_PLANNING_MODE_RELATIONS = {
+    "direct": "new",
+    "candidate-successor": "supersede-generation",
+    "current-world-replan": "supersede-generation",
+    "inline-recovery": "unclear",
+}
+
+
+def _extract_planning_mode(request_control):
+    """Extract one closed planning disposition from its sealed evidence carrier."""
+    try:
+        loom_runtime.validate_request_control(request_control)
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", f"planning mode control is invalid: {exc}") from exc
+    evidence = request_control.get("evidence")
+    tokens = [item for item in evidence if item.startswith("planning-")]
+    if len(tokens) != 1:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "planning mode evidence must contain exactly one token")
+    mode = tokens[0].removeprefix("planning-")
+    expected_relation = _PLANNING_MODE_RELATIONS.get(mode)
+    if expected_relation is None:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "planning mode evidence is unknown")
+    if request_control.get("primary_operation") != "plan" \
+            or request_control.get("explicitness") == "host-bound" \
+            or request_control.get("relation") != expected_relation:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "planning mode is incompatible with its relation")
+    return mode
+
+
+def _completion_planning_mode(action):
+    """Return an ordinary mode, or preserve one exact bound revision identity."""
+    request_control = action.get("request_control")
+    revision_record = (action.get("host_result") or {}).get("plan_revision")
+    if revision_record is None:
+        return _extract_planning_mode(request_control)
+    try:
+        loom_runtime.validate_request_control(request_control)
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            f"bound revision control is invalid: {exc}") from exc
+    if request_control.get("primary_operation") != "plan" \
+            or request_control.get("relation") != "revise-exact" \
+            or request_control.get("explicitness") != "host-bound" \
+            or request_control.get("evidence") != ["host-bound-control"] \
+            or request_control.get("blocked") \
+            or request_control.get("block_reason") is not None:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            "bound revision control does not match its exact sealed operation")
+    return None
+
+
+_USEFUL_PLANNING_REBIND_CODES = {
+    "current-world-replan": frozenset({
+        "ACTIVE_WORLD_CHANGED", "PLAN_DECISION_STALE", "STALE_LIFECYCLE",
+        "STALE_TIME"}),
+    "inline-recovery": frozenset({
+        "INVALID_LIFECYCLE", "CORRUPT_LIFECYCLE", "MUTATION_PROHIBITED"}),
+}
+_USEFUL_PLANNING_REBINDABLE_CODES = frozenset().union(
+    *_USEFUL_PLANNING_REBIND_CODES.values())
+_INLINE_RECOVERY_EVIDENCE_BY_ROUTE_CODE = {
+    "MUTATION_PROHIBITED": "inline-plan-project-writes-prohibited",
+    "INVALID_LIFECYCLE": "inline-plan-lifecycle-authority-untrusted",
+    "CORRUPT_LIFECYCLE": "inline-plan-lifecycle-authority-untrusted",
+}
+_INLINE_RECOVERY_REASON_BY_EVIDENCE = {
+    "inline-plan-project-writes-prohibited": "PROJECT_WRITES_PROHIBITED",
+    "inline-plan-lifecycle-authority-untrusted": "LIFECYCLE_AUTHORITY_UNTRUSTED",
+    "inline-plan-authority-unclear": "AUTHORITY_UNCLEAR",
+    "inline-plan-owner-assistance": "ASSISTANCE_ONLY",
+}
+
+
+def _rebind_useful_planning_prepared(
+        prepared, planning_mode, *, recovery_evidence=None):
+    """Allow sealed current-world or inline planning without granting execution."""
+    route_code = prepared.route_contract["code"]
+    allowed_codes = _USEFUL_PLANNING_REBIND_CODES.get(planning_mode, frozenset())
+    sealed_override = (
+        planning_mode == "inline-recovery"
+        and route_code in {"ROUTE_PLAN", "PLAN_EXECUTION_CONTRADICTION"}
+        and recovery_evidence in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS)
+    if route_code not in allowed_codes and not sealed_override:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            "planning recovery cannot replace this prepared route")
+    try:
+        semantic = loom_runtime.validate_semantic_outcome_evidence(
+            prepared.route_contract["evidence"], prepared.domains,
+            required=True)
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            f"sealed semantic outcome is invalid: {exc}") from exc
+    route_recovery_evidence = (
+        _INLINE_RECOVERY_EVIDENCE_BY_ROUTE_CODE.get(route_code)
+        if planning_mode == "inline-recovery" else None)
+    if recovery_evidence is None:
+        recovery_evidence = route_recovery_evidence
+    elif route_recovery_evidence is not None \
+            and route_recovery_evidence != recovery_evidence:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "inline planning recovery class disagrees")
+    if planning_mode == "inline-recovery" and recovery_evidence not in \
+            loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "inline planning recovery class is unsupported")
+    values = prepared.to_dict()
+    values.pop("prepared_hash")
+    route = values["route_contract"]
+    route.update({
+        "blocked": False,
+        "code": "ROUTE_PLAN",
+        "needs_owner": False,
+        "recommendation": "",
+        "block_reason": None,
+    })
+    ordinary = [
+        item for item in route["evidence"]
+        if item != semantic["token"]
+        and item != loom_session.USEFUL_PLANNING_RECOVERY_MARKER
+        and item not in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS]
+    route["evidence"] = (
+        [*ordinary[:13], semantic["token"],
+         loom_session.USEFUL_PLANNING_RECOVERY_MARKER, recovery_evidence]
+        if recovery_evidence is not None else
+        [*ordinary[:14], semantic["token"],
+         loom_session.USEFUL_PLANNING_RECOVERY_MARKER])
+    values["route_contract"] = route
+    return loom_runtime.PreparedInvocation.build(
+        **values, operation_fingerprint=prepared.operation_fingerprint)
+
+
+def _inline_recovery_message(reason_code, *, prepared, domain_contract):
+    constraints = {
+        "PROJECT_WRITES_PROHIBITED": (
+            "Persistent project plan files are prohibited, so this result cannot be "
+            "started or treated as project authority."),
+        "LIFECYCLE_AUTHORITY_UNTRUSTED": (
+            "The existing lifecycle authority cannot be trusted, so no plan identity "
+            "was created and no project plan bytes were changed."),
+        "AUTHORITY_UNCLEAR": (
+            "The request both preserves and changes plan authority, so this result "
+            "is provisional and cannot be started or treated as project authority."),
+        "ASSISTANCE_ONLY": (
+            "The request did not use Loom's closed direct planning command, so this "
+            "result is useful assistance only and created no plan authority."),
+    }
+    next_actions = {
+        "PROJECT_WRITES_PROHIBITED": (
+            "Remove the persistent project-write restriction and ask Loom to create a "
+            "persistent plan."),
+        "LIFECYCLE_AUTHORITY_UNTRUSTED": (
+            "Quarantine or repair the lifecycle store, then ask Loom for a fresh plan."),
+        "AUTHORITY_UNCLEAR": (
+            "Should Loom create a new reviewed plan while keeping the current plan "
+            "unchanged until that review?"),
+        "ASSISTANCE_ONLY": (
+            "Use a top-level `Plan ...` or `Create a plan ...` command when this "
+            "assistance should become a persistent reviewed plan."),
+    }
+    if reason_code not in constraints:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID", "inline recovery reason is unsupported")
+    inspection = loom_project_inspection.capsule(
+        loom_runtime._thaw(prepared.project_inspection))
+    domains = list(prepared.domains)
+    if domains != domain_contract.get("active_task_domains"):
+        raise OrchestratorError(
+            "DOMAIN_CONTRACT_INVALID", "inline planning domains are not sealed")
+    scope = " + ".join(domains)
+    coverage = domain_contract.get("coverage_state")
+    consequence = domain_contract.get("consequence", {}).get("class")
+    if coverage not in {"known", "partial", "unknown"} \
+            or consequence not in {"ordinary", "material", "high", "critical"}:
+        raise OrchestratorError(
+            "DOMAIN_CONTRACT_INVALID", "inline planning semantics are unavailable")
+    try:
+        semantic_outcome = loom_runtime.validate_semantic_outcome_evidence(
+            prepared.route_contract["evidence"], domains, required=True)
+    except loom_runtime.RuntimeError as exc:
+        raise OrchestratorError(
+            "REQUEST_CONTROL_INVALID",
+            f"sealed semantic outcome is invalid: {exc}") from exc
+    return (
+        "NON-AUTHORITATIVE PLAN\n"
+        f"Understood outcome: {semantic_outcome['label']} within the sealed {scope} "
+        f"scope and resolved {inspection['state']} project boundary.\n"
+        f"Requirement capsule: {semantic_outcome['label']} "
+        f"[domain={semantic_outcome['domain']}; evidence={semantic_outcome['token']}]\n"
+        "Proposed sequence:\n"
+        f"1. Bound facts with the sealed inspection and {coverage} domain coverage.\n"
+        f"2. Define {consequence}-consequence acceptance evidence.\n"
+        f"3. Order the {scope} work into reviewed steps before execution.\n"
+        f"Known constraints or uncertainty: {constraints[reason_code]}\n"
+        f"Reason code: {reason_code}\n"
+        f"Safe next action: {next_actions[reason_code]}")
+
+
 def _invoke_under_lock(*, request, cwd, home, install_root, target,
                        timeout_seconds, now, instance_id, memory,
                        transport_invocation_id=None, assurance=None,
                        expected_plan_decision=None, revision_context=None,
-                       bound_intent=None):
-    action_security = ((memory.vault.crypto, instance_id)
+                       bound_intent=None, planning_state_override=None,
+                       preserve_active_pointer=False,
+                       pointer_recovery_receipt=None,
+                       completed_plan_replay_stale=False):
+    action_security = (loom_executor_guard.GuardSecurity(
+        memory.vault, memory.vault.crypto, instance_id)
                        if isinstance(memory, loom_vault_adapter.VaultMemoryAdapter) else None)
     invocation_id = transport_invocation_id or str(uuid.uuid4())
     controller = loom_session.SessionController(
@@ -8115,6 +11244,122 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 terminal_receipt=opened.terminal_receipt,
                 resolved_terminal_block=opened.resolved_terminal_block,
             )
+    if planning_state_override is None and prepared.intent == "plan" \
+            and prepared.route_contract["code"] in {
+                "INVALID_LIFECYCLE", "CORRUPT_LIFECYCLE"}:
+        planning_state_override = {
+            "generation_phase": "invalid",
+            "state_error": "INVALID_LIFECYCLE",
+        }
+    if planning_state_override is None and prepared.intent == "plan" \
+            and revision_context is None and _path_present(target / "plans") \
+            and not os.path.lexists(
+                target / "plans" / loom_plan_store.INDEX_NAME):
+        planning_state_override = {
+            "generation_phase": "invalid",
+            "state_error": "INVALID_LIFECYCLE",
+        }
+    lifecycle_state = None
+    if planning_state_override is None \
+            and os.path.lexists(target / "plans" / loom_plan_store.INDEX_NAME):
+        witness_store = _lifecycle_witness_store(
+            memory,
+            _orchestration_directory(home, instance_id, prepared.project_id),
+            prepared.project_id)
+        try:
+            _resolved, _semantics, _ledger, _witness, lifecycle_state = \
+                loom_lifecycle_transition.observe(
+                    target, witness_store=witness_store)
+        except loom_lifecycle_transition.LifecycleTransitionError as exc:
+            if prepared.intent != "plan" or revision_context is not None:
+                raise OrchestratorError(
+                    "INVALID_LIFECYCLE",
+                    "indexed lifecycle authority cannot be observed safely") from exc
+            planning_state_override = {
+                "generation_phase": "invalid",
+                "state_error": "INVALID_LIFECYCLE",
+            }
+    request_control_state = (
+        planning_state_override
+        if planning_state_override is not None
+        else loom_lifecycle_kernel.project(lifecycle_state)
+        if lifecycle_state is not None else None)
+    if request_control_state is not None \
+            and prepared.intent == "plan" \
+            and prepared.route_contract["code"] in {
+                "ACTIVE_WORLD_CHANGED", "PLAN_DECISION_STALE",
+                "STALE_LIFECYCLE", "STALE_TIME"}:
+        request_control_state = {
+            **request_control_state,
+            "state_error": "STALE_LIFECYCLE",
+        }
+    request_control = _sealed_request_control(
+        request, expected_plan_decision=expected_plan_decision,
+        revision_context=revision_context,
+        lifecycle_state=request_control_state)
+    if completed_plan_replay_stale and not prepared.route_contract["blocked"]:
+        values = prepared.to_dict()
+        values.pop("prepared_hash")
+        stale_state = {
+            **request_control_state,
+            "state_error": "STALE_LIFECYCLE",
+        }
+        values["route_contract"] = loom_runtime._synchronize_block_reason(
+            loom_runtime._apply_lifecycle_request_policy(
+                values["route_contract"], stale_state, request_control),
+            category="lifecycle")
+        prepared = loom_runtime.PreparedInvocation.build(
+            **values, operation_fingerprint=prepared.operation_fingerprint)
+        opened = loom_session.OpenSession(
+            prepared=prepared,
+            session_id=opened.session_id,
+            operation_id=opened.operation_id,
+            journal_path=opened.journal_path,
+            started_at=opened.started_at,
+            terminal_receipt=opened.terminal_receipt,
+            resolved_terminal_block=opened.resolved_terminal_block,
+        )
+    planning_mode = None
+    if prepared.intent == "plan" \
+            and request_control["explicitness"] != "host-bound":
+        protected_block = completed_plan_replay_stale \
+            or prepared.route_contract["blocked"] \
+            and prepared.route_contract["code"] \
+            not in _USEFUL_PLANNING_REBINDABLE_CODES
+        if not protected_block:
+            planning_mode = _extract_planning_mode(request_control)
+        route_code = prepared.route_contract["code"]
+        recovery_rebind = (
+            planning_mode in {"current-world-replan", "inline-recovery"}
+            and route_code in _USEFUL_PLANNING_REBIND_CODES.get(
+                planning_mode, frozenset()))
+        sealed_inline_override = (
+            planning_mode == "inline-recovery"
+            and route_code in {"ROUTE_PLAN", "PLAN_EXECUTION_CONTRADICTION"})
+        if recovery_rebind or sealed_inline_override:
+            recovery_evidence = None
+            if planning_mode == "inline-recovery":
+                state_error = str(
+                    (request_control_state or {}).get("state_error", ""))
+                if state_error in {"INVALID_LIFECYCLE", "CORRUPT_LIFECYCLE"}:
+                    recovery_evidence = "inline-plan-lifecycle-authority-untrusted"
+                elif "mutation" in request_control["prohibitions"]:
+                    recovery_evidence = "inline-plan-project-writes-prohibited"
+                elif "semantic-clarification" in request_control["evidence"]:
+                    recovery_evidence = "inline-plan-authority-unclear"
+                elif "semantic-assistance" in request_control["evidence"]:
+                    recovery_evidence = "inline-plan-owner-assistance"
+            prepared = _rebind_useful_planning_prepared(
+                prepared, planning_mode, recovery_evidence=recovery_evidence)
+            opened = loom_session.OpenSession(
+                prepared=prepared,
+                session_id=opened.session_id,
+                operation_id=opened.operation_id,
+                journal_path=opened.journal_path,
+                started_at=opened.started_at,
+                terminal_receipt=opened.terminal_receipt,
+                resolved_terminal_block=opened.resolved_terminal_block,
+            )
     created_at = _stamp(now)
     domain_contract = loom_domain.select_domains(
         request, explicit=list(prepared.domains),
@@ -8139,8 +11384,20 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         except OrchestratorError as exc:
             if exc.code != "TIER_PROMOTION_REQUIRED":
                 raise
+            route_evidence = list(prepared.route_contract["evidence"])
+            recovery_evidence = [
+                item for item in route_evidence
+                if item in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS]
+            recovery_suffix = (
+                (loom_session.USEFUL_PLANNING_RECOVERY_MARKER,
+                 recovery_evidence[0])
+                if len(recovery_evidence) == 1
+                and route_evidence[-2:] == [
+                    loom_session.USEFUL_PLANNING_RECOVERY_MARKER,
+                    recovery_evidence[0]] else ())
             prepared = loom_runtime.promote_prepared_tier(
-                prepared, "M", evidence="tier-s-host-capsule-overflow")
+                prepared, "M", evidence="tier-s-host-capsule-overflow",
+                preserve_evidence_suffix=recovery_suffix)
             opened = loom_session.OpenSession(
                 prepared=prepared,
                 session_id=opened.session_id,
@@ -8151,9 +11408,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                 resolved_terminal_block=opened.resolved_terminal_block,
             )
     conflict_selector = getattr(memory, "relevant_preference_conflicts", None)
+    planning_preference_projector = getattr(
+        memory, "project_planning_preferences", None)
     conflicts = (conflict_selector(
         domains=prepared.domains, project_id=prepared.project_id)
-        if conflict_selector is not None else [])
+        if conflict_selector is not None
+        and (prepared.intent != "plan" or planning_preference_projector is None)
+        else [])
     if conflicts:
         keys = sorted({item["preference_key"] for item in conflicts})
         controller.handlers[prepared.intent] = lambda _context: {
@@ -8166,31 +11427,64 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared).to_dict()
-    if prepared.intent == "plan" and _explicit_zero_project_write_requested(request):
-        controller.handlers["plan"] = lambda _context: {
-            "status": "blocked",
-            "code": "project-write-prohibited",
-            "success": False,
-            "metrics": {},
-            "evidence_ids": [],
-            "reversible_action_ids": [],
-            "user_message": (
-                "Loom stopped before changing the project. Creating a persistent Loom plan "
-                "currently requires project-local planning files under plans/. Remove the "
-                "no-file-write constraint if you want those files created."),
+    context_capsule = controller.prepare_context(opened, request)
+    planning_preference_projection = None
+    if prepared.intent == "plan" and planning_preference_projector is not None:
+        planning_preference_projection = planning_preference_projector(
+            preferences=context_capsule["preferences"],
+            domains=prepared.domains,
+            project_id=prepared.project_id,
+            tier=prepared.route_contract["tier"],
+            intent="plan")
+        try:
+            loom_vault_adapter.validate_planning_preference_projection(
+                planning_preference_projection, domains=prepared.domains,
+                project_id=prepared.project_id,
+                tier=prepared.route_contract["tier"], intent="plan")
+        except loom_vault_adapter.VaultAdapterError as exc:
+            raise OrchestratorError(
+                "PREFERENCE_PROJECTION_INVALID",
+                f"planning preference conflict projection is invalid: {exc}") from exc
+        context_capsule = {
+            **context_capsule,
+            "preferences": planning_preference_projection["public_preferences"],
         }
-        return controller.run(
+    inline_recovery_reason = None
+    if planning_mode == "inline-recovery" \
+            and prepared.route_contract["code"] == "ROUTE_PLAN" \
+            and not prepared.route_contract["blocked"]:
+        recovery_evidence = [
+            item for item in prepared.route_contract["evidence"]
+            if item in loom_session.NON_AUTHORITATIVE_RECOVERY_EVIDENCE_IDS]
+        if len(recovery_evidence) != 1:
+            raise OrchestratorError(
+                "REQUEST_CONTROL_INVALID", "inline planning recovery class is not sealed")
+        inline_recovery_reason = _INLINE_RECOVERY_REASON_BY_EVIDENCE.get(
+            recovery_evidence[0])
+        if inline_recovery_reason is None:
+            raise OrchestratorError(
+                "REQUEST_CONTROL_INVALID", "inline planning recovery class is unsupported")
+    if inline_recovery_reason is not None:
+        reason_code = inline_recovery_reason
+        evidence_id = recovery_evidence[0]
+        controller.handlers["plan"] = lambda _context: {
+            "status": "completed",
+            "code": "non-authoritative-plan",
+            "success": True,
+            "metrics": {},
+            "evidence_ids": [evidence_id],
+            "reversible_action_ids": [],
+            "user_message": _inline_recovery_message(
+                reason_code, prepared=prepared, domain_contract=domain_contract),
+        }
+        result = controller.run(
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
-            prepared=prepared).to_dict()
-    if revision_archive is not None:
-        archive_sha256 = _persist_revision_archive(
-            memory, revision_archive)
-        if archive_sha256 != plan_revision["archive_sha256"]:
-            raise OrchestratorError(
-                "PLAN_REVISION_ARCHIVE_FAILED",
-                "the immutable revision archive identity changed before persistence")
-    context_capsule = controller.prepare_context(opened, request)
+            prepared=prepared, selected_context=context_capsule).to_dict()
+        result["resolved_terminal_block"] = loom_runtime._thaw(
+            opened.resolved_terminal_block)
+        result["session_environment"] = opened.environment()
+        return result
     expires_at = _stamp(
         loom_runtime._parse_time(created_at) + dt.timedelta(seconds=timeout_seconds))
     action_id = invocation_id
@@ -8199,24 +11493,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
     revision_uses_immutable_stage = (
         isinstance(plan_revision, dict)
         and plan_revision.get("schema_version") == 2)
-    lifecycle_state = None
-    if os.path.lexists(target / "plans" / loom_plan_store.INDEX_NAME):
-        witness_store = _lifecycle_witness_store(
-            memory, path.parent, prepared.project_id)
-        try:
-            _resolved, _semantics, _ledger, _witness, lifecycle_state = \
-                loom_lifecycle_transition.observe(
-                    target, witness_store=witness_store)
-        except loom_lifecycle_transition.LifecycleTransitionError as exc:
-            raise OrchestratorError(
-                "INVALID_LIFECYCLE",
-                f"indexed lifecycle authority cannot be observed safely: {exc}") from exc
-    request_control = _sealed_request_control(
-        request, expected_plan_decision=expected_plan_decision,
-        revision_context=revision_context,
-        lifecycle_state=(
-            loom_lifecycle_kernel.project(lifecycle_state)
-            if lifecycle_state is not None else None))
+    candidate_uses_immutable_stage = planning_mode in {
+        "candidate-successor", "current-world-replan"}
     generation_id = (
         (plan_revision or {}).get("generation_id")
         or (plan_decision or {}).get("generation_id")
@@ -8255,6 +11533,12 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                if plan_decision is not None else {}),
             **({"plan_revision": plan_revision}
                if plan_revision is not None else {}),
+            **({"planning_preference_conflicts": {
+                "conflict_keys": planning_preference_projection["conflict_keys"],
+                "private_evidence": planning_preference_projection[
+                    "private_conflict_evidence"],
+            }} if planning_preference_projection is not None
+                and planning_preference_projection["conflict_keys"] else {}),
         } or None),
         "plan_contract": None,
         "domain_contract": domain_contract,
@@ -8274,7 +11558,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             undo_status=("unavailable" if prepared.intent == "plan"
                          else "not-applicable"),
             summary=(
-                _planning_seed_summary(prepared.route_contract["tier"])
+                _planning_seed_summary(
+                    prepared.route_contract["tier"], planning_mode)
                 if prepared.intent == "plan"
                 else "Loom prepared the next safe frontier."),
             next_action=(
@@ -8287,7 +11572,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             "state": "recorded",
             "created_pack": (
                 not pack_present_at_start or revision_uses_immutable_stage
-                or rollover_uses_immutable_stage),
+                or rollover_uses_immutable_stage
+                or candidate_uses_immutable_stage),
             "kind": "small" if prepared.route_contract["tier"] == "S" else "planned",
             "manifest": None,
             "activation_atomic_rename": None,
@@ -8305,6 +11591,8 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             request, invocation_id=invocation_id, cwd=cwd,
             explicit_target=target, now=now, continue_open=True,
             prepared=prepared, selected_context=context_capsule)
+        if revision_archive is not None:
+            return receipt.to_dict()
         action["status"], action["result"] = "completed", receipt.to_dict()
         _write_action(path, action, action_security)
         return receipt.to_dict()
@@ -8351,6 +11639,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         action["status"], action["result"] = "completed", immediate.to_dict()
         _write_action(path, action, action_security)
         return immediate.to_dict()
+    if revision_archive is not None:
+        action = _write_action(path, action, action_security)
+        archive_sha256 = _persist_revision_archive(
+            memory, revision_archive)
+        if archive_sha256 != plan_revision["archive_sha256"]:
+            raise OrchestratorError(
+                "PLAN_REVISION_ARCHIVE_FAILED",
+                "the immutable revision archive identity changed after action admission")
     if prepared.intent == "plan":
         pack = target / "plans"
         if not action["pack_seed"]["created_pack"]:
@@ -8360,8 +11656,14 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
                     "a planning pack already exists; use resume or repair instead of mutating it")
             directory = path.parent
             action = _write_action(path, action, action_security)
-            _write_active_pointer(
-                directory, action_id=action_id, project_id=prepared.project_id)
+            recovery_bound_publication = (
+                not preserve_active_pointer
+                and pointer_recovery_receipt is not None)
+            if not preserve_active_pointer and not recovery_bound_publication:
+                if pointer_recovery_receipt is None:
+                    _write_active_pointer(
+                        directory, action_id=action_id,
+                        project_id=prepared.project_id)
             action["initial_pack_hash"] = _pack_hash(pack)
             action["pack_seed"] = {
                 **action["pack_seed"],
@@ -8369,12 +11671,23 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
             }
             action["plan_contract"] = _make_plan_contract(action, prepared)
             action["status"] = "pending"
+            if recovery_bound_publication:
+                action = _bind_recovery_bound_successor(
+                    action, pointer_recovery_receipt)
             action = _write_action(path, action, action_security)
+            if recovery_bound_publication:
+                _publish_recovery_bound_active_pointer(
+                    directory, path, action, pointer_recovery_receipt)
             return _pending_action_result(action)
         directory = path.parent
         action = _write_action(path, action, action_security)
-        _write_active_pointer(
-            directory, action_id=action_id, project_id=prepared.project_id)
+        recovery_bound_publication = (
+            not preserve_active_pointer and pointer_recovery_receipt is not None)
+        if not preserve_active_pointer and not recovery_bound_publication:
+            if pointer_recovery_receipt is None:
+                _write_active_pointer(
+                    directory, action_id=action_id,
+                    project_id=prepared.project_id)
         stage, manifest, stage_identity = _seed_stage(path, action, prepared)
         action["pack_seed"] = {**action["pack_seed"], "state": "prepared",
                                "manifest": manifest}
@@ -8382,7 +11695,13 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         action["remove_pristine_pack"] = True
         action["plan_contract"] = _make_plan_contract(action, prepared)
         action["status"] = "pending"
+        if recovery_bound_publication:
+            action = _bind_recovery_bound_successor(
+                action, pointer_recovery_receipt)
         action = _write_action(path, action, action_security)
+        if recovery_bound_publication:
+            _publish_recovery_bound_active_pointer(
+                directory, path, action, pointer_recovery_receipt)
     elif prepared.intent == "execute":
         pack = target / "plans"
         work_order_id, work_order_path = _prepare_execution_pack(
@@ -8444,6 +11763,15 @@ def _invoke_under_lock(*, request, cwd, home, install_root, target,
         action["initial_pack_hash"] = _pack_hash(Path(target) / "plans")
     action = _write_action(path, action, action_security)
     if prepared.intent != "plan":
+        if prepared.intent in {"execute", "repair"} \
+                and action.get("generation_id") is not None:
+            try:
+                loom_executor_guard.initialize(
+                    path.parent, action, security=action_security)
+            except loom_executor_guard.GuardError as exc:
+                raise OrchestratorError(
+                    "EXECUTOR_GUARD_UNAVAILABLE",
+                    "the exact host-operation guard could not be initialized") from exc
         _write_active_pointer(
             path.parent, action_id=action_id, project_id=prepared.project_id)
     return _pending_action_result(
@@ -8623,8 +11951,53 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
         raise OrchestratorError(
             "ACTION_TERMINAL", f"action is already {action['status']}",
             status=action["status"])
+    frozen_operation = None
+    if action["intent"] in {"execute", "repair"} \
+            and action.get("generation_id") is not None:
+        try:
+            guard = loom_executor_guard.read(
+                path.parent, action, security=action_security)
+        except loom_executor_guard.GuardMissing as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_UPGRADE_REQUIRED",
+                "this pre-guard executor remains authoritative; completion "
+                "cannot be certified by the upgraded runtime. Continue the "
+                "exact action under its original compatible host/runtime; "
+                "Loom will not infer prior process death",
+                status="action-required") from exc
+        except loom_executor_guard.GuardError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_INVALID",
+                "executor completion guard is invalid or unavailable") from exc
+        if guard["freeze"] is not None:
+            frozen_operation = guard["freeze"].get(
+                "operation_class", guard["freeze"]["reason_code"])
+        if frozen_operation is not None \
+                and frozen_operation not in {
+                    "action-completion", "action-timeout"}:
+            raise OrchestratorError(
+                "EXECUTION_FROZEN",
+                "executor completion is unavailable while exact authority "
+                "retirement is waiting for host-operation closure",
+                status="action-required")
     instant = loom_runtime._parse_time(now or dt.datetime.now(dt.timezone.utc))
-    if instant > loom_runtime._parse_time(action["expires_at"]):
+    if frozen_operation == "action-timeout" or (
+            frozen_operation != "action-completion"
+            and instant > loom_runtime._parse_time(action["expires_at"])):
+        if action["intent"] in {"execute", "repair"} \
+                and action.get("generation_id") is not None:
+            action, evidence, _frozen = _seal_trusted_executor_quiescence(
+                path, action, action_security,
+                owner_home=owner_home or action["owner_home"],
+                install_root=install_root or action["install_root"],
+                operation_class="action-timeout",
+                reason_code="action-timeout", terminal_state="timed-out")
+            if evidence is None:
+                raise OrchestratorError(
+                    "EXECUTOR_QUIESCENCE_REQUIRED",
+                    "executor timeout is frozen safely while Loom waits for "
+                    "the exact admitted host operation to close",
+                    status="action-required")
         controller, opened = _reopen(action)
         controller.interrupt(opened, code="orchestration-timeout", now=instant)
         if action["intent"] == "plan" and action["pack_seed"]["created_pack"]:
@@ -8662,6 +12035,28 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             **(action.get("host_result") or {}),
             **_read_host_outcome(result_path, action),
         }
+    if action["intent"] == "execute" and action.get("generation_id") is not None:
+        root = Path(action["explicit_target"] or action["cwd"])
+        instance_id, preflight_memory = _memory_backend(
+            Path(action["owner_home"]), Path(action["install_root"]), root)
+        if instance_id != action["instance_id"]:
+            raise OrchestratorError(
+                "OWNER_VAULT_CHANGED",
+                "the action owner vault no longer matches the active vault")
+        try:
+            project = loom_runtime.resolve_project(
+                instance_id, explicit_target=root, cwd=root)
+        except loom_runtime.RuntimeBlocked as exc:
+            raise OrchestratorError(exc.code, exc.message) from exc
+        if project.project_id != action["project_id"]:
+            raise OrchestratorError(
+                "PROJECT_CHANGED",
+                "the action project identity no longer matches the active target")
+        _bind_memory_project(preflight_memory, project)
+        completion_block = _preflight_v3_execution_completion(
+            action, path, preflight_memory)
+        if completion_block is not None:
+            return _completion_not_ready_result(normalized, completion_block)
     sealed = loom_runtime.PreparedInvocation.from_dict(action["prepared"])
     if action["intent"] == "repair" and action["tier"] == "S":
         project = loom_runtime.resolve_project(
@@ -8712,8 +12107,15 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
             and action["pack_seed"]["created_pack"] \
             and action["pack_seed"]["state"] == "prepared" \
             and action["generation_id"] is not None
+        projected_successor = action["intent"] == "plan" \
+            and action["pack_seed"]["created_pack"] \
+            and action["pack_seed"]["state"] == "installed" \
+            and action["generation_id"] is not None \
+            and action.get("lifecycle_transition") is not None \
+            and _completion_planning_mode(action) in {
+                "candidate-successor", "current-world-replan"}
         current = None
-        if staged_v3_plan:
+        if staged_v3_plan or projected_successor:
             current_world = _staged_plan_world(action)
             if current_world["state_sha256"] != action["survey_hash"]:
                 raise OrchestratorError(
@@ -8747,7 +12149,7 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
                 raise OrchestratorError(
                     "TARGET_DRIFT",
                     "project files changed while the displayed plan was being revised")
-        elif not staged_v3_plan and (
+        elif not staged_v3_plan and not projected_successor and (
                 current.survey_hash != action["survey_hash"]
                 or current.project_id != action["project_id"]
                 or current.intent != action["intent"]):
@@ -8757,16 +12159,47 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     validated_domain_bundle = None
     if action["intent"] == "plan":
         validated_domain_bundle = _validate_authored_plan(action)
+        if _completion_planning_mode(action) in {
+                "candidate-successor", "current-world-replan"}:
+            root = Path(action["explicit_target"] or action["cwd"])
+            instance_id, preflight_memory = _memory_backend(
+                action["owner_home"], action["install_root"], root)
+            if instance_id != action["instance_id"]:
+                raise OrchestratorError(
+                    "OWNER_VAULT_CHANGED",
+                    "the action owner vault no longer matches the active vault")
+            witness_store = _lifecycle_witness_store(
+                preflight_memory, path.parent, action["project_id"])
+            try:
+                _resolved, _semantics, predecessor_ledger, _witness, predecessor = \
+                    loom_lifecycle_transition.observe(
+                        root, witness_store=witness_store)
+            except loom_lifecycle_transition.LifecycleTransitionError as exc:
+                raise OrchestratorError(
+                    "GENERATION_ACTIVATION_INVALID",
+                    "the exact predecessor cannot be observed safely") from exc
+            if predecessor.generation_phase == "terminal-cancelled":
+                _rebaseline_cancelled_successor_control(
+                    _action_pack_root(action), root)
+            _successor_executor_quiescence(
+                predecessor, predecessor_ledger, directory=path.parent,
+                owner_home=action["owner_home"],
+                install_root=action["install_root"])
     seal_plan_author = None
     if action["intent"] == "plan" and action["pack_seed"]["created_pack"]:
         def seal_plan_author(memory_adapter):
             revision_record = (action.get("host_result") or {}).get(
                 "plan_revision")
+            planning_mode = _completion_planning_mode(action)
             activation = (
                 _activate_reviewed_revision(
                     action, path, memory_adapter, instant)
                 if isinstance(revision_record, dict)
                 and revision_record.get("schema_version") == 2
+                else _activate_reviewed_successor(
+                    action, path, memory_adapter, instant)
+                if planning_mode in {
+                    "candidate-successor", "current-world-replan"}
                 else _activate_reviewed_generation(
                     action, path, memory_adapter, instant))
             manifest = activation["manifest"]
@@ -8806,6 +12239,20 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
         def seal_repair_completion(memory_adapter):
             return _seal_v3_repair_completion(
                 action, path, memory_adapter)
+    if action["intent"] in {"execute", "repair"} \
+            and action.get("generation_id") is not None:
+        action, evidence, _frozen = _seal_trusted_executor_quiescence(
+            path, action, action_security,
+            owner_home=owner_home or action["owner_home"],
+            install_root=install_root or action["install_root"],
+            operation_class="action-completion",
+            reason_code="action-completion", terminal_state="completed")
+        if evidence is None:
+            raise OrchestratorError(
+                "EXECUTOR_QUIESCENCE_REQUIRED",
+                "executor completion is frozen safely while Loom waits for "
+                "the exact admitted host operation to close",
+                status="action-required")
     controller = _controller(
         action, usage=usage, seal_plan_author=seal_plan_author,
         seal_execution_completion=seal_execution_completion,
@@ -8818,6 +12265,20 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     except loom_session.SessionInterrupted as exc:
         action["attempts"] += 1
         if action["attempts"] >= action["max_attempts"]:
+            if action["intent"] in {"execute", "repair"} \
+                    and action.get("generation_id") is not None:
+                action, evidence, _frozen = _seal_trusted_executor_quiescence(
+                    path, action, action_security,
+                    owner_home=owner_home or action["owner_home"],
+                    install_root=install_root or action["install_root"],
+                    operation_class="action-completion",
+                    reason_code="action-completion", terminal_state="failed")
+                if evidence is None:
+                    raise OrchestratorError(
+                        "EXECUTOR_QUIESCENCE_REQUIRED",
+                        "executor failure remains pending until the exact "
+                        "admitted host operation closes",
+                        status="action-required") from exc
             action["status"] = "failed"
         _write_action(path, action, action_security)
         if action["status"] == "failed":
@@ -8862,8 +12323,9 @@ def _complete_under_lock(action_path, usage_path=None, *, result_path=None, now=
     if production_replay is not None:
         result["production_replay"] = production_replay
     action["status"], action["result"] = "completed", result
-    _write_action(path, action, action_security)
+    action = _write_action(path, action, action_security)
     _clear_active_pointer(path.parent, action["action_id"])
+    _finalize_successor_projection(action, path, controller.memory)
     if plan_host_projection is not None:
         return {**result, "plan_host_projection": plan_host_projection}
     return result
@@ -8883,6 +12345,209 @@ def cancel(action_path, *, now=None, owner_home=None, install_root=None):
             "ACTION_LOCK_UNAVAILABLE", f"project orchestration lock failed: {exc}") from exc
 
 
+def _validate_executor_terminal_projection(
+        value, *, source_state, source_ledger, directory, owner_home,
+        install_root, relation, require_preterminal):
+    fields = {
+        "schema_version", "operation", "relation", "action_id",
+        "preterminal_action_sha256", "terminal_action_sha256",
+        "source_state_sha256",
+        "executor_quiescence",
+    }
+    try:
+        expected_action_id = \
+            loom_lifecycle_transition._active_executor_action_id(
+                source_state, source_ledger)
+    except loom_lifecycle_transition.LifecycleTransitionError as exc:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal projection has no active lifecycle subject") from exc
+    if not isinstance(value, dict) or set(value) != fields \
+            or value.get("schema_version") != 2 \
+            or value.get("operation") != "executor-terminal" \
+            or value.get("relation") != relation \
+            or value.get("action_id") != expected_action_id \
+            or value.get("source_state_sha256") != source_state.state_sha256 \
+            or not isinstance(value.get("preterminal_action_sha256"), str) \
+            or re.fullmatch(
+                r"[0-9a-f]{64}", value["preterminal_action_sha256"]) is None \
+            or not isinstance(value.get("terminal_action_sha256"), str) \
+            or re.fullmatch(
+                r"[0-9a-f]{64}", value["terminal_action_sha256"]) is None:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal projection does not match lifecycle authority")
+    path, action, security = _read_action(
+        Path(directory) / f"{expected_action_id}.json",
+        owner_home=owner_home, install_root=install_root)
+    expected_terminal = (
+        "superseded" if relation == "supersede-generation" else "cancelled")
+    if action["project_id"] != source_state.project_id \
+            or action.get("generation_id") != source_state.generation_id \
+            or action["intent"] not in {"execute", "repair"} \
+            or action["status"] not in {"pending", expected_terminal}:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal action does not match its sealed projection")
+    if require_preterminal:
+        action_matches = action["status"] == "pending" \
+            and action["action_hash"] == value["preterminal_action_sha256"]
+    elif action["status"] == "pending":
+        action_matches = \
+            action["action_hash"] == value["preterminal_action_sha256"]
+    else:
+        action_matches = \
+            action["action_hash"] == value["terminal_action_sha256"]
+    if not action_matches:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal action digest is outside the sealed derivation")
+    evidence = value["executor_quiescence"]
+    try:
+        loom_executor_guard.validate_evidence(
+            directory, action, evidence,
+            project_world_sha256=source_state.expected_world_sha256,
+            security=security)
+    except loom_executor_guard.GuardError as exc:
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal evidence does not match its trusted host ledger") \
+            from exc
+    if evidence.get("terminal_state") != "cancelled":
+        raise OrchestratorError(
+            "LIFECYCLE_PROJECTION_INVALID",
+            "executor terminal evidence has the wrong terminal state")
+    return path, action, security
+
+
+def _executor_lifecycle_state(action, directory, *, owner_home, install_root):
+    target = Path(action["explicit_target"] or action["cwd"])
+    instance_id, memory = _memory_backend(owner_home, install_root, target)
+    if instance_id != action["instance_id"]:
+        raise OrchestratorError(
+            "ACTION_OWNER_MISMATCH", "executor belongs to another owner instance")
+    witness_store = _lifecycle_witness_store(
+        memory, directory, action["project_id"])
+    try:
+        _resolved, _semantics, ledger, _witness, state = \
+            loom_lifecycle_transition.observe(
+                target, witness_store=witness_store)
+        active_action_id = loom_lifecycle_transition._active_executor_action_id(
+            state, ledger)
+    except loom_lifecycle_transition.LifecycleTransitionError as exc:
+        raise OrchestratorError(
+            "INVALID_LIFECYCLE",
+            "executor lifecycle authority cannot be observed safely") from exc
+    if state.generation_phase != "active" \
+            or state.project_id != action["project_id"] \
+            or state.generation_id != action.get("generation_id") \
+            or active_action_id != action["action_id"]:
+        raise OrchestratorError(
+            "ACTION_IDENTITY_CHANGED",
+            "executor no longer matches the exact active lifecycle authority")
+    return state, ledger
+
+
+def _executor_terminal_subject(
+        action, operation_class, *, operation_context_sha256=None):
+    if operation_class not in {
+            "action-completion", "action-timeout", "action-cancel",
+            "generation-cancel", "generation-supersede", "repair-supersede"}:
+        raise OrchestratorError(
+            "EXECUTOR_TERMINAL_OPERATION_INVALID",
+            "executor terminal operation is unsupported")
+    context_required = operation_class in {
+        "generation-supersede", "repair-supersede"}
+    if context_required != (isinstance(operation_context_sha256, str)
+                            and re.fullmatch(
+                                r"[0-9a-f]{64}", operation_context_sha256)
+                            is not None):
+        raise OrchestratorError(
+            "EXECUTOR_TERMINAL_OPERATION_INVALID",
+            "executor terminal operation context is invalid")
+    return _hash({
+        "schema_version": 1,
+        "operation_class": operation_class,
+        "operation_context_sha256": operation_context_sha256,
+        "action_id": action["action_id"],
+        "project_id": action["project_id"],
+        "generation_id": action.get("generation_id"),
+        "action_operation_id": action["operation_id"],
+    })
+
+
+def _seal_trusted_executor_quiescence(
+        path, action, security, *, owner_home, install_root, operation_class,
+        reason_code, operation_context_sha256=None,
+        terminal_state="cancelled"):
+    directory = Path(path).parent
+    subject_sha256 = _executor_terminal_subject(
+        action, operation_class,
+        operation_context_sha256=operation_context_sha256)
+    existing = (
+        action.get("host_result", {}).get("executor_quiescence")
+        if isinstance(action.get("host_result"), dict) else None)
+    if isinstance(existing, dict) \
+            and existing.get("terminal_state") == terminal_state \
+            and existing.get("freeze_operation_class") == operation_class \
+            and existing.get("freeze_reason_code") == reason_code \
+            and existing.get("freeze_subject_sha256") == subject_sha256:
+        try:
+            loom_executor_guard.validate_evidence(
+                directory, action, existing,
+                project_world_sha256=existing.get("project_world_sha256"),
+                security=security)
+            frozen = loom_executor_guard.read(
+                directory, action, security=security)
+        except loom_executor_guard.GuardMissing as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_UPGRADE_REQUIRED",
+                "sealed executor evidence lost its trusted host-operation ledger",
+                status="action-required") from exc
+        except loom_executor_guard.GuardError as exc:
+            raise OrchestratorError(
+                "EXECUTOR_GUARD_INVALID",
+                "sealed executor evidence no longer matches its trusted guard") from exc
+        return action, existing, frozen
+    state, _ledger = _executor_lifecycle_state(
+        action, directory, owner_home=owner_home,
+        install_root=install_root)
+    try:
+        frozen = loom_executor_guard.freeze(
+            directory, action, reason_code=reason_code,
+            operation_class=operation_class,
+            subject_sha256=subject_sha256,
+            security=security)
+        evidence = loom_executor_guard.seal_quiescence(
+            directory, action,
+            project_world_sha256=state.expected_world_sha256,
+            terminal_state=terminal_state, security=security)
+    except loom_executor_guard.GuardPending:
+        return action, None, frozen
+    except loom_executor_guard.GuardMissing as exc:
+        raise OrchestratorError(
+            "EXECUTOR_GUARD_UPGRADE_REQUIRED",
+            "this pre-guard executor remains authoritative but has no trusted "
+            "host-operation ledger; Loom will not synthesize quiescence. "
+            "Finish the exact action under its original compatible host/runtime; this "
+            "upgraded runtime cannot infer prior process death",
+            status="action-required") from exc
+    except loom_executor_guard.GuardError as exc:
+        if "another exact terminal operation" in str(exc):
+            raise OrchestratorError(
+                "EXECUTOR_TERMINAL_OPERATION_CONFLICT",
+                str(exc), status="action-required") from exc
+        raise OrchestratorError(
+            "EXECUTOR_GUARD_INVALID",
+            "executor retirement guard is invalid or unsafe") from exc
+    action["host_result"] = {
+        **(action.get("host_result") or {}),
+        "executor_quiescence": evidence,
+    }
+    action = _write_action(path, action, security)
+    return action, evidence, frozen
+
+
 def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=None):
     path, action, action_security = _read_action(
         action_path, owner_home=owner_home, install_root=install_root)
@@ -8895,6 +12560,29 @@ def _cancel_under_lock(action_path, *, now=None, owner_home=None, install_root=N
         raise OrchestratorError(
             "ACTION_TERMINAL", f"action is already {action['status']}",
             status=action["status"])
+    executor_action = action["status"] == "pending" \
+        and action.get("generation_id") is not None \
+        and action["intent"] in {"execute", "repair"}
+    if executor_action:
+        action, evidence, frozen = _seal_trusted_executor_quiescence(
+            path, action, action_security,
+            owner_home=owner_home or action["owner_home"],
+            install_root=install_root or action["install_root"],
+            operation_class="action-cancel",
+            reason_code="action-cancel")
+        if evidence is None:
+            return {
+                "status": "action-required",
+                "code": "EXECUTOR_QUIESCENCE_REQUIRED",
+                "success": False,
+                "action_id": action["action_id"],
+                "session_id": action["session_id"],
+                "freeze_sha256": frozen["freeze"]["freeze_sha256"],
+                "user_message": (
+                    "Cancellation is frozen safely while Loom waits for the "
+                    "exact host operation to close. The current plan remains "
+                    "authoritative and no new mutation or process operation is allowed."),
+            }
     if action["status"] == "pending":
         controller, opened = _reopen(action)
         controller.interrupt(opened, code="owner-cancelled", now=now)

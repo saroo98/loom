@@ -848,6 +848,69 @@ class WorldFingerprintTests(RuntimeFixture):
 
 
 class PreparedInvocationTests(RuntimeFixture):
+    def prepared_with_protected_suffix(self, *, prefix=(), suffix=None):
+        suffix = suffix or ("protected-marker", "protected-class")
+        prepared = self.prepare("Plan a tiny Python command-line greeting tool.")
+        values = prepared.to_dict()
+        values.pop("prepared_hash")
+        route = values["route_contract"]
+        semantic = next(
+            item for item in route["evidence"]
+            if item.startswith(loom_runtime.SEMANTIC_OUTCOME_EVIDENCE_PREFIX))
+        route["tier"] = "S"
+        route["evidence"] = [*prefix, semantic, *suffix]
+        values["route_contract"] = route
+        return loom_runtime.PreparedInvocation.build(
+            **values, operation_fingerprint=prepared.operation_fingerprint)
+
+    def test_tier_promotion_protected_suffix_requires_exact_tuple_input(self):
+        """Break caught: falsey non-tuples silently select legacy promotion."""
+        prepared = self.prepared_with_protected_suffix()
+        for suffix in (None, []):
+            with self.subTest(suffix=suffix), self.assertRaisesRegex(
+                    loom_runtime.RuntimeError, "tuple"):
+                loom_runtime.promote_prepared_tier(
+                    prepared, "M", evidence="tier-promotion",
+                    preserve_evidence_suffix=suffix)
+
+    def test_tier_promotion_rejects_noncanonical_suffix_collisions(self):
+        """Break caught: deduplication can silently destroy a protected suffix."""
+        cases = (
+            ("unsafe-identity", (), ("protected identity",), "tier-promotion"),
+            ("duplicate-suffix", (),
+             ("protected-marker", "protected-marker"), "tier-promotion"),
+            ("prefix-collision", ("protected-marker",),
+             ("protected-marker", "protected-class"), "tier-promotion"),
+            ("promotion-collision", (),
+             ("protected-marker", "protected-class"), "protected-marker"),
+        )
+        for name, prefix, suffix, promotion in cases:
+            with self.subTest(name=name), self.assertRaises(
+                    loom_runtime.RuntimeError):
+                prepared = self.prepared_with_protected_suffix(
+                    prefix=prefix, suffix=suffix)
+                loom_runtime.promote_prepared_tier(
+                    prepared, "M", evidence=promotion,
+                    preserve_evidence_suffix=suffix)
+
+    def test_tier_promotion_preserves_exact_suffix_and_required_evidence(self):
+        prefix = tuple(f"ordinary-{index}" for index in range(13))
+        suffix = ("protected-marker", "protected-class")
+        prepared = self.prepared_with_protected_suffix(
+            prefix=prefix, suffix=suffix)
+
+        promoted = loom_runtime.promote_prepared_tier(
+            prepared, "M", evidence="tier-promotion",
+            preserve_evidence_suffix=suffix)
+
+        evidence = list(promoted.route_contract["evidence"])
+        semantic = loom_runtime.validate_semantic_outcome_evidence(
+            evidence, promoted.domains, required=True)
+        self.assertLessEqual(len(evidence), 16)
+        self.assertEqual(1, evidence.count("tier-promotion"))
+        self.assertEqual(1, evidence.count(semantic["token"]))
+        self.assertEqual(list(suffix), evidence[-len(suffix):])
+
     def test_exact_schema_hash_immutability_and_no_capability(self):
         prepared = self.prepare()
         data = prepared.to_dict()

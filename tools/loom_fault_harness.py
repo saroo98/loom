@@ -4,10 +4,12 @@
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 
 
@@ -109,17 +111,114 @@ def clone_git_fixture(source, destination, home):
     home.mkdir(parents=True, exist_ok=True)
     _run_fixture_git([
         "-c", "maintenance.auto=false", "-c", "gc.auto=0",
-        "clone", "--quiet", "--no-local", str(source), str(destination),
+        "clone", "--quiet", "--no-local",
+        "--config", "user.email=test@example.invalid",
+        "--config", "user.name=test",
+        "--config", "maintenance.auto=false",
+        "--config", "gc.auto=0",
+        str(source), str(destination),
     ], home=home)
-    for key, value in (
-            ("user.email", "test@example.invalid"),
-            ("user.name", "test"),
-            ("maintenance.auto", "false"),
-            ("gc.auto", "0")):
-        _run_fixture_git(
-            ["-C", str(destination), "config", "--local", key, value],
-            home=home)
     return destination
+
+
+def immutable_install_check(real_check, installed_root, verified):
+    """Reuse one exact immutable install proof inside a disposable test process."""
+    if not callable(real_check) or not isinstance(verified, dict) \
+            or set(verified) != {
+                "status", "install_id", "files_verified", "receipt_hash"} \
+            or verified.get("status") != "installed" \
+            or type(verified.get("files_verified")) is not int \
+            or verified["files_verified"] < 0 \
+            or not isinstance(verified.get("receipt_hash"), str) \
+            or re.fullmatch(r"[0-9a-f]{64}", verified["receipt_hash"]) is None:
+        raise FaultError("disposable installation proof is invalid")
+    try:
+        install_id = str(uuid.UUID(verified["install_id"]))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise FaultError("disposable installation proof is invalid") from exc
+    if install_id != verified["install_id"]:
+        raise FaultError("disposable installation proof is invalid")
+    installed = Path(os.path.abspath(installed_root))
+    if not installed.is_dir() or installed.is_symlink():
+        raise FaultError("disposable installation root is invalid")
+    installed_key = os.path.normcase(str(installed))
+    sealed = dict(verified)
+
+    def check(target):
+        candidate = Path(os.path.abspath(target))
+        if os.path.normcase(str(candidate)) == installed_key:
+            return dict(sealed)
+        return real_check(target)
+
+    return check
+
+
+def filesystem_fixture_git(real_run_git, fixture_root):
+    """Avoid spawning Git only for proven gitless paths in one temp fixture."""
+    if not callable(real_run_git):
+        raise FaultError("disposable Git runner is invalid")
+    fixture = Path(fixture_root).resolve(strict=True)
+    temporary = Path(tempfile.gettempdir()).resolve(strict=True)
+    try:
+        fixture.relative_to(temporary)
+    except ValueError as exc:
+        raise FaultError("disposable filesystem fixture is outside the temp root") from exc
+
+    def run_git(repo, *args, **kwargs):
+        candidate = Path(repo)
+        try:
+            candidate = candidate.resolve(strict=True)
+            candidate.relative_to(fixture)
+        except (OSError, RuntimeError, ValueError):
+            return real_run_git(repo, *args, **kwargs)
+        if 128 not in kwargs.get("allowed", (0,)):
+            return real_run_git(repo, *args, **kwargs)
+        current = candidate
+        while True:
+            if os.path.lexists(current / ".git"):
+                return real_run_git(repo, *args, **kwargs)
+            if current == fixture:
+                break
+            current = current.parent
+        binary = kwargs.get("binary", False)
+        empty = b"" if binary else ""
+        diagnostic = (
+            b"fatal: not a git repository\n"
+            if binary else "fatal: not a git repository\n")
+        return subprocess.CompletedProcess(
+            ["git", *map(str, args)], 128, empty, diagnostic)
+
+    return run_git
+
+
+def filesystem_fixture_filter_drivers(real_query, fixture_root):
+    """Skip Git filter discovery only inside one proven gitless temp fixture."""
+    if not callable(real_query):
+        raise FaultError("disposable Git filter query is invalid")
+    fixture = Path(fixture_root).resolve(strict=True)
+    temporary = Path(tempfile.gettempdir()).resolve(strict=True)
+    try:
+        fixture.relative_to(temporary)
+    except ValueError as exc:
+        raise FaultError("disposable filesystem fixture is outside the temp root") from exc
+
+    def configured_filter_drivers(repo, timeout=20):
+        candidate = Path(repo)
+        try:
+            candidate = candidate.resolve(strict=True)
+            candidate.relative_to(fixture)
+        except (OSError, RuntimeError, ValueError):
+            return real_query(repo, timeout=timeout)
+        current = candidate
+        while True:
+            if os.path.lexists(current / ".git"):
+                return real_query(repo, timeout=timeout)
+            if current == fixture:
+                break
+            current = current.parent
+        return ()
+
+    return configured_filter_drivers
 
 
 def _child_command(root):
@@ -261,6 +360,19 @@ def _install_invoke_faults(payload):
             os._exit(crash_code)
         return result
     loom_orchestrator._atomic_quarantine_tree = quarantine
+
+    original_recovery_move = loom_orchestrator._atomic_recovery_control_move
+    def recovery_move(*args, **kwargs):
+        result = original_recovery_move(*args, **kwargs)
+        destination_role = kwargs.get("destination_role")
+        if boundary == "after-recovery-action-write" \
+                and destination_role == "terminal_action":
+            os._exit(crash_code)
+        if boundary == "after-pointer-clear" \
+                and destination_role == "retired_pointer":
+            os._exit(crash_code)
+        return result
+    loom_orchestrator._atomic_recovery_control_move = recovery_move
 
     original_clear_pointer = loom_orchestrator._clear_active_pointer
     def clear_pointer(*args, **kwargs):

@@ -14,10 +14,18 @@ from pathlib import Path
 import loom_memory
 import loom_improvement
 import loom_message
+import loom_runtime
 import loom_session
 
 
 class SessionRuntimeTests(unittest.TestCase):
+    RECOVERY_MARKER = "useful-planning-recovery"
+    RECOVERY_EVIDENCE_IDS = {
+        "inline-plan-project-writes-prohibited",
+        "inline-plan-lifecycle-authority-untrusted",
+        "inline-plan-authority-unclear",
+    }
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name).resolve()
@@ -29,6 +37,37 @@ class SessionRuntimeTests(unittest.TestCase):
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def prepared_recovery(self, project, request, invocation_id, *, evidence_id):
+        prepared = loom_runtime.prepare_invocation(
+            request, instance_id=self.instance_id, invocation_id=invocation_id,
+            cwd=project, owner_home=self.owner_home,
+            now="2026-07-14T12:00:00Z")
+        values = prepared.to_dict()
+        values.pop("prepared_hash")
+        route = values["route_contract"]
+        route.update({
+            "intent": "plan", "blocked": False, "code": "ROUTE_PLAN",
+            "needs_owner": False, "recommendation": "", "block_reason": None,
+        })
+        ordinary = [
+            item for item in route["evidence"]
+            if item != self.RECOVERY_MARKER
+            and item not in self.RECOVERY_EVIDENCE_IDS]
+        route["evidence"] = [
+            *ordinary[:14], self.RECOVERY_MARKER, evidence_id]
+        values["route_contract"] = route
+        return loom_runtime.PreparedInvocation.build(
+            **values, operation_fingerprint=prepared.operation_fingerprint)
+
+    @staticmethod
+    def non_authoritative_result(evidence_id):
+        return {
+            "status": "completed", "code": "non-authoritative-plan",
+            "success": True, "metrics": {}, "evidence_ids": [evidence_id],
+            "reversible_action_ids": [],
+            "user_message": "Non-authoritative planning recovery material.",
+        }
 
     def test_one_request_dispatches_and_seals_a_receipt(self):
         observed = []
@@ -65,6 +104,112 @@ class SessionRuntimeTests(unittest.TestCase):
         self.assertEqual(observed[0], (
             "plan", receipt.project_id, receipt.session_id))
         self.assertEqual(5, receipt.owner_message["schema_version"])
+
+    def test_useful_planning_recovery_route_and_result_are_bidirectionally_bound(self):
+        """Break caught: either route or result can claim recovery without the other."""
+        recovery_evidence = "inline-plan-project-writes-prohibited"
+        invalid_cases = (
+            ("ordinary-route", False, {}),
+            ("blocked-status", True, {"status": "blocked", "success": False}),
+            ("unsuccessful-completion", True, {"success": False}),
+            ("reversible-action", True, {"reversible_action_ids": ["forged-action"]}),
+            ("result-path", True, {"result_path": "plans/forged/MANIFEST.md"}),
+            ("evidence-absent", True, {"evidence_ids": []}),
+            ("evidence-duplicated", True, {
+                "evidence_ids": [recovery_evidence, recovery_evidence]}),
+            ("evidence-unknown", True, {
+                "evidence_ids": ["inline-plan-unknown-recovery"]}),
+            ("evidence-mismatched", True, {
+                "evidence_ids": ["inline-plan-lifecycle-authority-untrusted"]}),
+            ("reverse-code-mismatch", True, {
+                "code": "plan-ready", "evidence_ids": []}),
+        )
+
+        for index, (name, exact_route, changes) in enumerate(invalid_cases, start=1):
+            with self.subTest(name=name):
+                project = self.root / f"recovery-{index}"
+                project.mkdir()
+                (project / "README.md").write_text("fixture\n", encoding="utf-8")
+                request = f"Build a {name} command-line tool"
+                invocation_id = f"00000000-0000-4000-8000-{400 + index:012d}"
+                if exact_route:
+                    prepared = self.prepared_recovery(
+                        project, request, invocation_id,
+                        evidence_id=recovery_evidence)
+                else:
+                    prepared = loom_runtime.prepare_invocation(
+                        request, instance_id=self.instance_id,
+                        invocation_id=invocation_id, cwd=project,
+                        owner_home=self.owner_home,
+                        now="2026-07-14T12:00:00Z")
+                result = {**self.non_authoritative_result(recovery_evidence), **changes}
+                controller = loom_session.SessionController(
+                    owner_home=self.owner_home, instance_id=self.instance_id,
+                    handlers={"plan": lambda _context, value=result: value},
+                    memory=loom_session.NoopMemoryAdapter())
+
+                with self.assertRaises(loom_session.SessionInterrupted) as raised:
+                    controller.run(
+                        request, invocation_id=invocation_id, cwd=project,
+                        prepared=prepared, continue_open=True,
+                        now="2026-07-14T12:00:00Z")
+
+                self.assertIsInstance(
+                    raised.exception.__cause__, loom_session.SessionBlocked)
+                self.assertEqual(
+                    "HANDLER_RESULT_INVALID", raised.exception.__cause__.code)
+
+    def test_exact_useful_planning_recovery_result_can_seal(self):
+        for index, recovery_evidence in enumerate(sorted(
+                self.RECOVERY_EVIDENCE_IDS), start=1):
+            with self.subTest(recovery_evidence=recovery_evidence):
+                project = self.root / f"valid-recovery-{index}"
+                project.mkdir()
+                (project / "README.md").write_text("fixture\n", encoding="utf-8")
+                request = f"Build a valid recovery {index} command-line tool"
+                invocation_id = f"00000000-0000-4000-8000-{490 + index:012d}"
+                prepared = self.prepared_recovery(
+                    project, request, invocation_id, evidence_id=recovery_evidence)
+                result = self.non_authoritative_result(recovery_evidence)
+                controller = loom_session.SessionController(
+                    owner_home=self.owner_home, instance_id=self.instance_id,
+                    handlers={"plan": lambda _context, value=result: value},
+                    memory=loom_session.NoopMemoryAdapter())
+
+                receipt = controller.run(
+                    request, invocation_id=invocation_id, cwd=project,
+                    prepared=prepared, continue_open=True,
+                    now="2026-07-14T12:00:00Z")
+
+                self.assertEqual("non-authoritative-plan", receipt.code)
+                self.assertFalse(receipt.owner_message["changes_made"])
+                self.assertIsNone(receipt.owner_message["result_path"])
+
+    def test_handler_authority_fields_remain_unknown(self):
+        """Break caught: handler output grows a second action or plan authority schema."""
+        for index, field in enumerate((
+                "action_id", "action_path", "generation_id", "plan_identity"), start=1):
+            with self.subTest(field=field):
+                project = self.root / f"unknown-field-{index}"
+                project.mkdir()
+                (project / "README.md").write_text("fixture\n", encoding="utf-8")
+                request = f"Build an unknown field {index} command-line tool"
+                invocation_id = f"00000000-0000-4000-8000-{500 + index:012d}"
+                controller = loom_session.SessionController(
+                    owner_home=self.owner_home, instance_id=self.instance_id,
+                    handlers={"plan": lambda _context, name=field: {
+                        "status": "completed", "code": "plan-ready", "success": True,
+                        "metrics": {}, "evidence_ids": [], "reversible_action_ids": [],
+                        name: "forged-authority",
+                    }}, memory=loom_session.NoopMemoryAdapter())
+
+                with self.assertRaises(loom_session.SessionInterrupted) as raised:
+                    controller.run(
+                        request, invocation_id=invocation_id, cwd=project,
+                        now="2026-07-14T12:00:00Z")
+
+                self.assertEqual(
+                    "HANDLER_RESULT_INVALID", raised.exception.__cause__.code)
 
     def test_status_and_why_reports_one_prior_receipt_without_ambiguity(self):
         controller = loom_session.SessionController(

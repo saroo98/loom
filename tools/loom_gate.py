@@ -15,6 +15,7 @@ import functools
 import json
 import os
 import re
+import stat
 import sys
 import tempfile
 import time
@@ -741,9 +742,17 @@ def _atomic_write(path, data):
 
 def _atomic_write_text(path, text):
     path = Path(path)
+    preserved_mode = None
+    if os.name == "posix" and os.path.lexists(path):
+        info = path.lstat()
+        if not stat.S_ISREG(info.st_mode) or int(info.st_nlink) != 1:
+            raise OSError("atomic text target is not one regular file")
+        preserved_mode = stat.S_IMODE(info.st_mode)
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{path.name}.", suffix=".tmp", dir=str(path.parent))
     try:
+        if preserved_mode is not None:
+            os.fchmod(fd, preserved_mode)
         with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
             stream.write(text)
             stream.flush()
