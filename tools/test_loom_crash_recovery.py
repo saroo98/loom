@@ -61,6 +61,66 @@ class CrashRecoveryTests(unittest.TestCase):
                     capture_output=True, text=True, check=True)
                 self.assertEqual(expected, observed.stdout.strip())
 
+    def test_disposable_runtime_shortcuts_are_exactly_scoped(self):
+        install_builder = getattr(
+            loom_fault_harness, "immutable_install_check", None)
+        git_builder = getattr(
+            loom_fault_harness, "filesystem_fixture_git", None)
+        self.assertIsNotNone(install_builder)
+        self.assertIsNotNone(git_builder)
+
+        with tempfile.TemporaryDirectory(prefix="loom-runtime-fixture-") as temporary:
+            root = Path(temporary)
+            installed = root / "installed"
+            installed.mkdir()
+            other_install = root / "other-install"
+            other_install.mkdir()
+            verified = {
+                "status": "installed",
+                "install_id": "11111111-1111-4111-8111-111111111111",
+                "files_verified": 17,
+                "receipt_hash": "a" * 64,
+            }
+            checked = []
+
+            def real_check(target):
+                checked.append(Path(target))
+                return {**verified, "status": "real"}
+
+            with self.assertRaises(loom_fault_harness.FaultError):
+                install_builder(
+                    real_check, installed,
+                    {**verified, "receipt_hash": "not-a-digest"})
+            fixture_check = install_builder(
+                real_check, installed, verified)
+            self.assertEqual(verified, fixture_check(installed))
+            self.assertEqual([], checked)
+            self.assertEqual("real", fixture_check(other_install)["status"])
+            self.assertEqual([other_install], checked)
+
+            project = root / "project"
+            project.mkdir()
+            git_calls = []
+
+            def real_git(repo, *args, **kwargs):
+                git_calls.append((Path(repo), args, kwargs))
+                return subprocess.CompletedProcess(
+                    ["git", *args], 0, "true\n", "")
+
+            fixture_git = git_builder(real_git, root)
+            missing = fixture_git(
+                project, "rev-parse", "--is-inside-work-tree",
+                allowed=(0, 128))
+            self.assertEqual(128, missing.returncode)
+            self.assertEqual([], git_calls)
+
+            (project / ".git").mkdir()
+            present = fixture_git(
+                project, "rev-parse", "--is-inside-work-tree",
+                allowed=(0, 128))
+            self.assertEqual(0, present.returncode)
+            self.assertEqual(1, len(git_calls))
+
 
 if __name__ == "__main__":
     unittest.main()

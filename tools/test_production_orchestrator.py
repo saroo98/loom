@@ -590,7 +590,15 @@ class ProductionOrchestratorTests(unittest.TestCase):
                 "-".join(("private", "fixture", "token")),
                 "-".join(("owner", "fixture", "token")),
             ], source_classification="public-release")
-        loom_install.install(cls.public, cls.installed_fixture)
+        installed = loom_install.install(cls.public, cls.installed_fixture)
+        cls.installed_fixture_check = {
+            key: installed[key]
+            for key in ("status", "install_id", "files_verified", "receipt_hash")
+        }
+        cls.fixture_dependencies = {
+            "install_check": loom_install.check,
+            "run_git": loom_orchestrator.loom_survey.run_git,
+        }
         cls.repo_fixture = cls.fixture_root / "repo-fixture"
         (cls.repo_fixture / "src").mkdir(parents=True)
         _write(cls.repo_fixture / "src" / "app.py", "VALUE = 1\n")
@@ -600,6 +608,9 @@ class ProductionOrchestratorTests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        if cls.fixture_dependencies["install_check"](cls.installed_fixture) \
+                != cls.installed_fixture_check:
+            raise AssertionError("the shared installed fixture changed during the test class")
         cls.fixture_temp.cleanup()
 
     def setUp(self):
@@ -614,10 +625,26 @@ class ProductionOrchestratorTests(unittest.TestCase):
             loom_orchestrator.TEST_LEGACY_BACKEND_MARKER_BYTES)
         self.repo = self.root / "target"
         self._copy_filesystem_fixture(self.repo)
+        self.runtime_patches = (
+            mock.patch.object(
+                loom_install, "check",
+                side_effect=loom_fault_harness.immutable_install_check(
+                    self.fixture_dependencies["install_check"],
+                    self.installed_fixture,
+                    self.installed_fixture_check)),
+            mock.patch.object(
+                loom_orchestrator.loom_survey, "run_git",
+                side_effect=loom_fault_harness.filesystem_fixture_git(
+                    self.fixture_dependencies["run_git"], self.root)),
+        )
+        for patcher in self.runtime_patches:
+            patcher.start()
         self.request = "Plan a financial double-entry accounting change to src/app.py"
         self.request_sequence = 0
 
     def tearDown(self):
+        for patcher in reversed(self.runtime_patches):
+            patcher.stop()
         if self.prior_legacy_test_backend is None:
             os.environ.pop("LOOM_TEST_ALLOW_LEGACY_BACKEND", None)
         else:
