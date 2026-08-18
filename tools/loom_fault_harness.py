@@ -191,6 +191,36 @@ def filesystem_fixture_git(real_run_git, fixture_root):
     return run_git
 
 
+def filesystem_fixture_filter_drivers(real_query, fixture_root):
+    """Skip Git filter discovery only inside one proven gitless temp fixture."""
+    if not callable(real_query):
+        raise FaultError("disposable Git filter query is invalid")
+    fixture = Path(fixture_root).resolve(strict=True)
+    temporary = Path(tempfile.gettempdir()).resolve(strict=True)
+    try:
+        fixture.relative_to(temporary)
+    except ValueError as exc:
+        raise FaultError("disposable filesystem fixture is outside the temp root") from exc
+
+    def configured_filter_drivers(repo, timeout=20):
+        candidate = Path(repo)
+        try:
+            candidate = candidate.resolve(strict=True)
+            candidate.relative_to(fixture)
+        except (OSError, RuntimeError, ValueError):
+            return real_query(repo, timeout=timeout)
+        current = candidate
+        while True:
+            if os.path.lexists(current / ".git"):
+                return real_query(repo, timeout=timeout)
+            if current == fixture:
+                break
+            current = current.parent
+        return ()
+
+    return configured_filter_drivers
+
+
 def _child_command(root):
     harness = Path(root).resolve() / "tools" / "loom_fault_harness.py"
     return [sys.executable, "-B", str(harness), "orchestrator-child"]

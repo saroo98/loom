@@ -597,6 +597,8 @@ class ProductionOrchestratorTests(unittest.TestCase):
         }
         cls.fixture_dependencies = {
             "install_check": loom_install.check,
+            "filter_drivers":
+                loom_orchestrator.loom_survey._configured_filter_drivers,
             "run_git": loom_orchestrator.loom_survey.run_git,
         }
         cls.repo_fixture = cls.fixture_root / "repo-fixture"
@@ -632,6 +634,10 @@ class ProductionOrchestratorTests(unittest.TestCase):
                     self.fixture_dependencies["install_check"],
                     self.installed_fixture,
                     self.installed_fixture_check)),
+            mock.patch.object(
+                loom_orchestrator.loom_survey, "_configured_filter_drivers",
+                side_effect=loom_fault_harness.filesystem_fixture_filter_drivers(
+                    self.fixture_dependencies["filter_drivers"], self.root)),
             mock.patch.object(
                 loom_orchestrator.loom_survey, "run_git",
                 side_effect=loom_fault_harness.filesystem_fixture_git(

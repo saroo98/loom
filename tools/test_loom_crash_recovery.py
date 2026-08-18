@@ -66,8 +66,11 @@ class CrashRecoveryTests(unittest.TestCase):
             loom_fault_harness, "immutable_install_check", None)
         git_builder = getattr(
             loom_fault_harness, "filesystem_fixture_git", None)
+        filter_builder = getattr(
+            loom_fault_harness, "filesystem_fixture_filter_drivers", None)
         self.assertIsNotNone(install_builder)
         self.assertIsNotNone(git_builder)
+        self.assertIsNotNone(filter_builder)
 
         with tempfile.TemporaryDirectory(prefix="loom-runtime-fixture-") as temporary:
             root = Path(temporary)
@@ -108,6 +111,15 @@ class CrashRecoveryTests(unittest.TestCase):
                     ["git", *args], 0, "true\n", "")
 
             fixture_git = git_builder(real_git, root)
+            filter_calls = []
+
+            def real_filters(repo, timeout=20):
+                filter_calls.append((Path(repo), timeout))
+                return ("fixture-driver",)
+
+            fixture_filters = filter_builder(real_filters, root)
+            self.assertEqual((), fixture_filters(project, timeout=7))
+            self.assertEqual([], filter_calls)
             missing = fixture_git(
                 project, "rev-parse", "--is-inside-work-tree",
                 allowed=(0, 128))
@@ -120,6 +132,9 @@ class CrashRecoveryTests(unittest.TestCase):
                 allowed=(0, 128))
             self.assertEqual(0, present.returncode)
             self.assertEqual(1, len(git_calls))
+            self.assertEqual(
+                ("fixture-driver",), fixture_filters(project, timeout=7))
+            self.assertEqual([(project, 7)], filter_calls)
 
 
 if __name__ == "__main__":
