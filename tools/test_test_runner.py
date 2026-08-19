@@ -108,6 +108,7 @@ class TestRunnerTests(unittest.TestCase):
             loom_suite_harness.validate_diagnostic_policy(unknown)
 
     def test_progress_checkpoint_is_closed_and_non_authorizing(self):
+        outer_progress_factory = loom_suite_harness.ProgressCheckpoint
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             (root / "test_progress.py").write_text(
@@ -129,6 +130,76 @@ class TestRunnerTests(unittest.TestCase):
             value["last_started_test"])
         self.assertEqual(value["last_started_test"], value["last_completed_test"])
         self.assertFalse(value["authorizing"])
+
+        class Fixture:
+            def __init__(self, test_id):
+                self.test_id = test_id
+
+            def id(self):
+                return self.test_id
+
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "progress.json"
+            progress = loom_test._StartDurableProgressCheckpoint(
+                checkpoint, selected_modules=None)
+            first = Fixture("test_progress.Progress.test_first")
+            second = Fixture("test_progress.Progress.test_second")
+
+            progress.started(first)
+            progress.completed(first)
+            after_completion = loom_suite_harness.load_progress_checkpoint(
+                checkpoint)
+            self.assertEqual(2, after_completion["checkpoint_sequence"])
+            self.assertEqual(0, after_completion["completed_test_count"])
+            self.assertEqual(first.id(), after_completion["last_started_test"])
+
+            progress.started(second)
+            second_started = loom_suite_harness.load_progress_checkpoint(
+                checkpoint)
+            self.assertEqual(3, second_started["checkpoint_sequence"])
+            self.assertEqual(1, second_started["completed_test_count"])
+            self.assertEqual(first.id(), second_started["last_completed_test"])
+            self.assertEqual(second.id(), second_started["last_started_test"])
+
+            progress.completed(second)
+            progress.finalize()
+            completed = loom_suite_harness.load_progress_checkpoint(checkpoint)
+            self.assertEqual(4, completed["checkpoint_sequence"])
+            self.assertEqual(2, completed["completed_test_count"])
+            self.assertEqual("completed", completed["status"])
+            self.assertEqual(second.id(), completed["last_completed_test"])
+
+        class Fixture(unittest.TestCase):
+            def id(self):
+                suffix = {
+                    "case_first": "test_first",
+                    "case_second": "test_second",
+                }[self._testMethodName]
+                return f"test_progress.Progress.{suffix}"
+
+            def case_first(self):
+                pass
+
+            def case_second(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "progress.json"
+            report = loom_test._execute_suite(
+                unittest.TestSuite([
+                    Fixture("case_first"), Fixture("case_second")]),
+                mode="modules", budget=None, verbosity=0,
+                selected_modules=["test_progress"],
+                progress_path=checkpoint)
+            value = loom_suite_harness.load_progress_checkpoint(checkpoint)
+        self.assertIs(
+            loom_suite_harness.ProgressCheckpoint,
+            outer_progress_factory)
+        self.assertTrue(report["successful"])
+        self.assertEqual(2, report["tests_run"])
+        self.assertEqual(4, value["checkpoint_sequence"])
+        self.assertEqual(2, value["completed_test_count"])
+        self.assertEqual("completed", value["status"])
 
     @staticmethod
     def _supervisor_receipt(primary_failure, *, survivors=True, protected=True,
