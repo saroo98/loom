@@ -47,7 +47,7 @@ jobs:
             --output tools/qualification-fault-receipt.json
           python -B tools/loom_qualification_v2.py verify-fault \
             --root . --receipt tools/qualification-fault-receipt.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-fault-v2-${{ github.run_id }}-${{ matrix.platform }}
           path: tools/qualification-fault-receipt.json
@@ -81,7 +81,7 @@ jobs:
           print(len({json.load(open(path,encoding='utf-8'))['platform'] for path in sys.argv[1:]}))
           PY
           )" -eq 3
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: qualification-fault-set-v2-${{ github.run_id }}
           path: qualification-faults/*/qualification-fault-receipt.json

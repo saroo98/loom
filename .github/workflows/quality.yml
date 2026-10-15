@@ -65,7 +65,7 @@ jobs:
           --registry ../contracts/truth-authorities-v1.json
           --shadow-bootstrap
           > truth-shadow-results.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: truth-authority-shadow
@@ -122,21 +122,21 @@ jobs:
         working-directory: tools
         shell: bash
         run: test -f fast-test-timings.json -a -f adapter-conformance.json -a -f performance-micro.json
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: fast-test-timings-${{ matrix.os }}-py${{ matrix.python }}
           path: tools/fast-test-timings.json
           retention-days: 7
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: adapter-conformance-${{ matrix.os }}-py${{ matrix.python }}
           path: tools/adapter-conformance.json
           retention-days: 7
           if-no-files-found: ignore
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
           name: performance-micro-${{ matrix.os }}-py${{ matrix.python }}
@@ -251,7 +251,7 @@ jobs:
           SOURCE_TREE="$(python -B -c 'import os; import loom_subject_identity as s; print(s.git_tree_inventory("..", os.environ["GITHUB_SHA"])["tree_sha256"])')"
           ARGS=(--cut "${{ runner.temp }}/loom-public-cut" --test-root "${{ runner.temp }}/loom-public-cut/tools" --exact-receipt exact-cut-ci.json --policy "${{ runner.temp }}/release-suite-certificate-policy-v1.json" --timing-profile ../contracts/release-suite-timing-profile-v1.json --source-tree-sha256 "$SOURCE_TREE" --output-root suite-shadow)
           python -B loom_suite_certificate.py run-cell "${ARGS[@]}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.suite-route.outputs.execution == 'serial-shadow'
         with:
           name: full-test-timings-${{ matrix.os }}-py${{ matrix.python }}
@@ -266,7 +266,7 @@ jobs:
             tools/suite-shadow/shadow-comparison.json
           retention-days: 7
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always() && steps.suite-route.outputs.execution == 'certificate'
         with:
           name: full-test-timings-${{ matrix.os }}-py${{ matrix.python }}
@@ -395,13 +395,13 @@ jobs:
             ARGS+=(--exact-receipt "$receipt")
           done
           python -B loom_qualification_v2.py "${ARGS[@]}"
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: quality-matrix-certificate
           path: tools/quality-matrix-certificate.json
           retention-days: 7
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: steps.suite-route.outputs.execution == 'serial-shadow'
         with:
           name: quality-candidate-evidence-v2
